@@ -106,10 +106,14 @@ export interface LocalAdoptionFsDeps extends MoveFsDeps {
   readFile(p: string): Promise<string>;
   writeFile(p: string, content: string): Promise<void>;
   /**
-   * 目标已存在时必须失败(EEXIST)而非覆盖的改名。库文件的提交 rename 必须走
-   * 这条:POSIX rename 会静默替换目标,而提交点若撞上窗口期出现的账号库,
-   * 覆盖即数据丢失。默认实现用 link+unlink(原子 EEXIST),不支持硬链接的
-   * 文件系统退化为「检查 + rename」。
+   * 目标已存在时必须失败(EEXIST)而非覆盖的「移动」。库文件的提交必须走这条:
+   * POSIX rename 会静默替换目标,提交点若撞上窗口期出现的账号库,覆盖即数据
+   * 丢失。默认实现 link+unlink(目标名创建原子 EEXIST),不支持硬链接的文件
+   * 系统退化为 copyFile(COPYFILE_EXCL)+unlink(同为原子独占建名)。注意这
+   * **不是单 syscall 的原子 rename**:两步之间进程崩溃会短暂残留「源目标双名」
+   * (link 路径为同 inode,copy 路径为两份内容)——双名状态下次登录的前置
+   * 探测按「账号库已存在(使用面非空)」跳过认领,不覆盖不丢数据,残留的
+   * local 名保持 local 模式可用,属已声明的可接受残余。
    */
   renameNoReplace(source: string, target: string): Promise<void>;
   /** 允许覆盖目标的原子改名(marker 的 tmp+rename 原子落盘用)。 */
