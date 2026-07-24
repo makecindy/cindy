@@ -28,6 +28,7 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import type { ModelAccessBalance } from '../../../shared/modelAccess';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import { formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
   PlanChangeTargetDialog,
@@ -102,23 +103,6 @@ function isSupportedPurchaseOption(
   return productKind === 'CREDIT_TOPUP'
     ? option.capability === 'ONE_TIME_PAYMENT'
     : SUPPORTED_SUBSCRIPTION_CAPABILITIES.has(option.capability);
-}
-
-function formatMoney(amount: string, currency: string): string {
-  const numeric = Number(amount);
-  if (!Number.isFinite(numeric)) return `${amount} ${currency.toUpperCase()}`;
-  try {
-    const fmt = new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    });
-    const digits = fmt.resolvedOptions().maximumFractionDigits ?? 2;
-    // Shift via exponential notation to avoid IEEE 754 mid-point errors (e.g. 1.005 → 1.00).
-    const rounded = Number(Math.round(Number(amount + 'e' + digits)) + 'e-' + digits);
-    return fmt.format(Number.isFinite(rounded) ? rounded : numeric);
-  } catch {
-    return `${amount} ${currency.toUpperCase()}`;
-  }
 }
 
 function currencyFractionDigits(currency: string): number {

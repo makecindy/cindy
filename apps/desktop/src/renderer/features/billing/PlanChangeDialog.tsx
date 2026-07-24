@@ -22,6 +22,10 @@ import type {
   BillingPaymentAction,
 } from '../../../shared/billing';
 import { billingApi } from './api';
+import {
+  formatBillingAmount as formatMoney,
+  formatBillingMinorAmount as formatPlanChangeMinorAmount,
+} from './money';
 import type { PlanChangeState } from './usePlanChange';
 
 export type PlanChangeCandidate = {
@@ -30,32 +34,6 @@ export type PlanChangeCandidate = {
   /** UI hint only; the server quote is the authority on the change type. */
   direction: 'UPGRADE' | 'DOWNGRADE';
 };
-
-export function formatPlanChangeMinorAmount(minor: number, currency: string): string {
-  try {
-    const fmt = new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    });
-    const digits = fmt.resolvedOptions().maximumFractionDigits ?? 2;
-    return fmt.format(minor / 10 ** digits);
-  } catch {
-    return `${minor} ${currency.toUpperCase()}`;
-  }
-}
-
-function formatMoney(amount: string, currency: string): string {
-  const numeric = Number(amount);
-  if (!Number.isFinite(numeric)) return `${amount} ${currency.toUpperCase()}`;
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    }).format(numeric);
-  } catch {
-    return `${amount} ${currency.toUpperCase()}`;
-  }
-}
 
 function formatEffectiveDate(iso: string): string {
   const timestamp = Date.parse(iso);
