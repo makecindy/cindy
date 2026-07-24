@@ -95,6 +95,11 @@ const NATIVE_RUNTIME_DEPS = [
   'picomatch',
   'is-glob',
   'is-extglob', // is-glob 的运行时依赖
+  // Windows 启动期 Claude orphan 扫描:直接走 Win32 Tool Help snapshot,
+  // 不再 spawn PowerShell(360 等安全软件会把启动期脚本子进程判成攻击)。
+  // N-API 二进制不需要 Electron rebuild；下面 bundleNativeDeps 只拷运行时
+  // JS + .node，避免把 npm 包里的 PDB / obj / 工程文件带进正式包。
+  '@vscode/windows-process-tree',
   // sharp (maker-core image-resizer 用): 主包 + libvips wrapper + 当前平台
   // 子包(在 bundleNativeDeps 里动态拼)。sharp 走 prebuilt 二进制路线,
   // 不需要 electron-rebuild — 它通过 N-API 兼容多 ABI, 直接 require 就能用。
@@ -311,6 +316,24 @@ function copySqliteVecBinary(buildPath: string, targetPlatform: string, targetAr
   console.log(`[forge:afterCopy] sqlite-vec ${platformDir}/${ext} -> ${dst}`);
 }
 
+function copyWindowsProcessTreeRuntime(src: string, dst: string): void {
+  const runtimeBinary = path.join(src, 'build', 'Release', 'windows_process_tree.node');
+  if (!fs.existsSync(runtimeBinary)) {
+    throw new Error(
+      `[forge:afterCopy] @vscode/windows-process-tree runtime missing: ${runtimeBinary}`,
+    );
+  }
+  fs.mkdirSync(path.join(dst, 'build', 'Release'), { recursive: true });
+  fs.cpSync(path.join(src, 'lib'), path.join(dst, 'lib'), {
+    recursive: true,
+    dereference: true,
+  });
+  for (const fileName of ['package.json', 'LICENSE']) {
+    fs.copyFileSync(path.join(src, fileName), path.join(dst, fileName));
+  }
+  fs.copyFileSync(runtimeBinary, path.join(dst, 'build', 'Release', 'windows_process_tree.node'));
+}
+
 function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch: string): void {
   const destModules = path.join(buildPath, 'node_modules');
   fs.mkdirSync(destModules, { recursive: true });
@@ -338,7 +361,11 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     // dir created before cpSync — cpSync only mkdir's the leaf.
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.rmSync(dst, { recursive: true, force: true });
-    fs.cpSync(src, dst, { recursive: true, dereference: true });
+    if (dep === '@vscode/windows-process-tree') {
+      copyWindowsProcessTreeRuntime(src, dst);
+    } else {
+      fs.cpSync(src, dst, { recursive: true, dereference: true });
+    }
     console.log(`[forge:afterCopy] bundled native dep: ${dep} <- ${src}`);
   }
   copyDiscordRuntimeDeps(destModules);

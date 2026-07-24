@@ -168,6 +168,10 @@ export default defineConfig(({ mode }) => {
           // node_modules; packaged app 由 forge.config 的 NATIVE_RUNTIME_DEPS + rebuild
           // 流程把它放到 app.asar.unpacked/node_modules/node-pty/build/Release/pty.node。
           'node-pty',
+          // Win32 Tool Help snapshot N-API binding。claude-orphan-reaper 在
+          // Windows 启动/退出时用它枚举 PID、PPID 与命令行，替代 PowerShell。
+          // forge.config 只携带该包的 runtime JS + .node。
+          '@vscode/windows-process-tree',
         ],
         // gray-matter 的 JS frontmatter 引擎用了 eval,我们只走 YAML 引擎,
         // 这条警告纯噪音。只屏蔽这一处,保留对其他新增 eval 的告警能力。

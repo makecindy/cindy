@@ -12,8 +12,8 @@
  *   On a normal quit, this must run before maker-core asks the SDK to abort the
  *   Claude session. Once the direct `claude` process is dead, its child tree is
  *   reparented to System/init and the PPID chain that proves ownership is gone.
- *   That is why bootstrap-electron registers this reaper in lifecycle's sync
- *   phase before the async `shutdown-maker` disposer.
+ *   That is why bootstrap-electron awaits this reaper at the start of
+ *   `shutdownMaker`, before asking maker-core to stop the active sessions.
  *
  * Safety guarantees:
  *   - Current-session cleanup only targets `claude` processes whose parent is
@@ -24,9 +24,13 @@
  *   - External Claude installs (for example `/usr/local/bin/claude`) do not
  *     contain the xdt-maker marker and are not historical-orphan candidates.
  *   - Scan / kill failures are best-effort and never block app startup or quit.
+ *   - Windows enumeration uses the Win32 Tool Help snapshot API through a
+ *     native N-API module. It must not launch PowerShell during app startup:
+ *     security products classify that child-process pattern as script attack.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { getAllProcesses, ProcessDataFlag, type IProcessInfo } from '@vscode/windows-process-tree';
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
@@ -86,57 +90,25 @@ interface ProcessRow {
   cmdLine: string;
 }
 
-function parseProcessLine(line: string): ProcessRow | null {
-  const parts = line.split('|');
-  if (parts.length < 3) return null;
-
-  const pid = Number.parseInt(parts[0]?.trim() ?? '', 10);
-  const ppid = Number.parseInt(parts[1]?.trim() ?? '', 10);
-  if (!Number.isFinite(pid) || !Number.isFinite(ppid)) return null;
-
-  return {
-    pid,
-    ppid,
-    cmdLine: parts.slice(2).join('|').trim(),
-  };
+function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
+  return new Promise((resolve, reject) => {
+    try {
+      getAllProcesses(resolve, ProcessDataFlag.CommandLine);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
 }
 
-function scanWindowsClaudeProcesses(): ProcessRow[] {
-  // 注意行尾的管道符:没有它,Get-CimInstance 与 ForEach-Object 会被 PowerShell
-  // 当成两条独立语句执行——前者输出格式化表格、后者拿不到管道输入,parse 永远
-  // 得到 0 行,收割器在 Windows 上整体失明(2026-07-14 实锤修复,曾静默失效)。
-  const script = [
-    'Get-CimInstance Win32_Process -Filter "Name=\'claude.exe\'" |',
-    'ForEach-Object {',
-    '  $cmd = ([string]$_.CommandLine) -replace "`r|`n", " "',
-    '  Write-Output ("{0}|{1}|{2}" -f $_.ProcessId, $_.ParentProcessId, $cmd)',
-    '}',
-  ].join('\n');
-
-  // 冷启动的 powershell.exe 经常超过 1.5s,超时会被上层吞成"扫到 0 个",
-  // 与真实空结果不可区分——放宽到 5s,宁可启动多等一拍也不要静默漏收割。
-  const stdout = execFileSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    { encoding: 'utf8', timeout: 5000, windowsHide: true },
-  );
-
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const rows = lines
-    .map(parseProcessLine)
-    .filter((row): row is ProcessRow => row !== null);
-  // 自检:有输出但一行都解析不出来 = 输出格式漂移(正是管道符缺失的症状形态)。
-  // 这类失效不会抛错、结果与"机器上没有 claude 进程"同形,只能靠这条 warn 暴露。
-  if (lines.length > 0 && rows.length === 0) {
-    log.warn('windows claude scan output unparseable; scan is likely broken', {
-      lineCount: lines.length,
-      firstLine: lines[0]?.slice(0, 120),
-    });
-  }
-  return rows;
+async function scanWindowsClaudeProcesses(): Promise<ProcessRow[]> {
+  const processes = await getWindowsProcessSnapshot();
+  return processes
+    .filter((proc) => proc.name.toLowerCase() === 'claude.exe')
+    .map((proc) => ({
+      pid: proc.pid,
+      ppid: proc.ppid,
+      cmdLine: proc.commandLine ?? '',
+    }));
 }
 
 function isClaudeCommandLine(cmdLine: string): boolean {
@@ -194,9 +166,9 @@ function scanPosixAllProcesses(): ScanResult {
   return { rows, childrenByParent };
 }
 
-function scanClaudeProcesses(): ScanResult {
+async function scanClaudeProcesses(): Promise<ScanResult> {
   if (process.platform === 'win32') {
-    return { rows: scanWindowsClaudeProcesses(), childrenByParent: new Map() };
+    return { rows: await scanWindowsClaudeProcesses(), childrenByParent: new Map() };
   }
   return scanPosixAllProcesses();
 }
@@ -276,15 +248,15 @@ function killProcessTree(pid: number, childrenByParent: Map<number, number[]>): 
 }
 
 /**
- * Synchronously reaps Claude Code process trees owned by this app instance, plus
- * historical xdt-maker bundled Claude processes whose parent has already died.
+ * Reaps Claude Code process trees owned by this app instance, plus historical
+ * Cindy-bundled Claude processes whose parent has already died.
  */
-export function reapClaudeOrphansSync(): ReaperResult {
+export async function reapClaudeOrphans(): Promise<ReaperResult> {
   const start = Date.now();
   let scan: ScanResult = { rows: [], childrenByParent: new Map() };
 
   try {
-    scan = scanClaudeProcesses();
+    scan = await scanClaudeProcesses();
   } catch (err) {
     log.debug('failed to scan claude processes', {
       error: err instanceof Error ? err.message : String(err),
