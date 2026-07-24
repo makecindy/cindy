@@ -25,6 +25,24 @@ const TCC_SETTINGS_URLS: Record<ProtectedFolderKind, string> = {
 
 const EPERM_PATTERNS = /operation not permitted|eperm/i;
 
+function containsPathOrDescendant(text: string, folderPath: string): boolean {
+  let index = text.indexOf(folderPath);
+  while (index !== -1) {
+    const nextCharacter = text[index + folderPath.length];
+    if (
+      nextCharacter === undefined ||
+      nextCharacter === '/' ||
+      nextCharacter === '\\' ||
+      nextCharacter === "'" ||
+      nextCharacter === '"'
+    ) {
+      return true;
+    }
+    index = text.indexOf(folderPath, index + folderPath.length);
+  }
+  return false;
+}
+
 /** Returns the folder kind if a macOS tool result contains EPERM + a protected path. */
 export function detectProtectedFolderEperm(
   text: string,
@@ -32,7 +50,7 @@ export function detectProtectedFolderEperm(
 ): ProtectedFolderKind | null {
   if (platform !== 'darwin' || !EPERM_PATTERNS.test(text)) return null;
   for (const [kind, folderPath] of Object.entries(PROTECTED_PATHS) as [ProtectedFolderKind, string][]) {
-    if (text.includes(folderPath)) return kind;
+    if (containsPathOrDescendant(text, folderPath)) return kind;
   }
   return null;
 }
