@@ -254,13 +254,13 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
-  it('installs a unique defaultInstall package disabled and records its release', async () => {
+  it('installs and enables a unique defaultInstall package and records its release', async () => {
     const item = summary({ defaultInstall: true });
     runtime.install.mockImplementation(async () => {
       const ghost = {
         manifest: manifest(),
         dir: '/userData/cindy-brain/cindy-test',
-        enabled: false,
+        enabled: true,
       };
       runtime.ghosts = [ghost];
       return ghost;
@@ -271,15 +271,61 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     expect(runtime.install).toHaveBeenCalledWith(
       expect.stringMatching(/\.cindy$/),
-      { ghostId: 'cindy-test', version: '1.0.0' },
+      {
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        initiallyEnabled: true,
+      },
     );
     expect(snapshot.items[0]).toMatchObject({
       installState: 'installed',
-      enabled: false,
+      enabled: true,
     });
     expect(h.ledger.installationForGhost('cindy-test')).toMatchObject({
       source: 'market',
       releaseId: 'release-1',
+    });
+  });
+
+  it('keeps a manual market install disabled by default', async () => {
+    const item = summary();
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: false,
+    });
+    const h = harness([item]);
+
+    await h.service.install(item.id);
+
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      {
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        initiallyEnabled: false,
+      },
+    );
+  });
+
+  it('does not re-enable an installed defaultInstall package disabled by the user', async () => {
+    const item = summary({ defaultInstall: true });
+    runtime.ghosts = [
+      {
+        manifest: manifest(),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: false,
+      },
+    ];
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+
+    const snapshot = await h.service.snapshot();
+
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(snapshot.items[0]).toMatchObject({
+      installState: 'installed',
+      enabled: false,
     });
   });
 

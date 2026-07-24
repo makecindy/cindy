@@ -232,7 +232,10 @@ export class PluginMarketService {
       return {
         ghost: await this.installDetail(
           plugin,
-          options?.allowPermissionExpansion === true,
+          {
+            allowPermissionExpansion:
+              options?.allowPermissionExpansion === true,
+          },
           owner,
           ledger,
         ),
@@ -286,7 +289,10 @@ export class PluginMarketService {
 
   private async installDetail(
     plugin: VisiblePluginDetail,
-    allowPermissionExpansion = false,
+    options: {
+      allowPermissionExpansion?: boolean;
+      initiallyEnabled?: boolean;
+    } = {},
     owner = captureCloudOwner(),
     ledger = this.ledgerForOwner(owner),
   ): Promise<InstalledGhost> {
@@ -309,7 +315,7 @@ export class PluginMarketService {
     if (
       existing &&
       diffGhostPermissionItems(existing.manifest, compatible.manifest).added.length > 0 &&
-      !allowPermissionExpansion
+      options.allowPermissionExpansion !== true
     ) {
       throw new Error('Plugin 更新增加了权限，需要用户确认');
     }
@@ -336,6 +342,7 @@ export class PluginMarketService {
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
+        initiallyEnabled: options.initiallyEnabled === true,
       });
       requireSameCloudOwner(owner);
       await this.withLedgerMutation(owner, () => {
@@ -478,7 +485,12 @@ export class PluginMarketService {
         await this.withMutation(summary.id, async () => {
           requireSameCloudOwner(owner);
           const detail = await this.api.detail(summary.id);
-          await this.installDetail(detail, false, owner, ledger);
+          await this.installDetail(
+            detail,
+            { initiallyEnabled: true },
+            owner,
+            ledger,
+          );
         });
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。

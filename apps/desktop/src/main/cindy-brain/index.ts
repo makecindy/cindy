@@ -1776,7 +1776,11 @@ export async function installAndDock(
  */
 export async function installOrUpdateMarketGhostPackage(
   cindyFilePath: string,
-  expected: { ghostId: string; version: string },
+  expected: {
+    ghostId: string;
+    version: string;
+    initiallyEnabled?: boolean;
+  },
 ): Promise<InstalledGhost> {
   const manager = getGhostManager();
   const inspected = await manager.inspect(cindyFilePath);
@@ -1795,8 +1799,10 @@ export async function installOrUpdateMarketGhostPackage(
 
   const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
   if (!installed) {
-    // 市场默认装入也保持沉睡；defaultInstall 不是运行授权。
-    return installAndDock(manager, cindyFilePath, { enable: false });
+    // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
+    return installAndDock(manager, cindyFilePath, {
+      enable: expected.initiallyEnabled === true,
+    });
   }
 
   const runtime = getGhostRuntime();
