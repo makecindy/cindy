@@ -58,11 +58,12 @@ function defaultDeps(): LegacyDevShortcutCleanupDeps {
 async function collectShortcutFiles(
   deps: LegacyDevShortcutCleanupDeps,
   rootDir: string,
+  shouldStop: () => boolean,
 ): Promise<string[]> {
   const shortcuts: string[] = [];
   const pending = [rootDir];
 
-  while (pending.length > 0) {
+  while (pending.length > 0 && !shouldStop()) {
     const dirPath = pending.pop()!;
     let entries: ShortcutDirEntry[];
     try {
@@ -71,7 +72,9 @@ async function collectShortcutFiles(
       // Start Menu may contain protected or concurrently removed directories.
       continue;
     }
+    if (shouldStop()) break;
     for (const entry of entries) {
+      if (shouldStop()) break;
       const entryPath = path.join(dirPath, entry.name);
       if (entry.isDirectory()) {
         pending.push(entryPath);
@@ -93,14 +96,19 @@ function isArgumentlessDevElectronShortcut(details: Electron.ShortcutDetails): b
 async function runCleanup(
   deps: LegacyDevShortcutCleanupDeps,
   appData: string,
+  shouldStop: () => boolean,
 ): Promise<void> {
   const startMenuDir = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs');
   let removed = 0;
 
+  if (shouldStop()) return;
   const knownShortcut = path.join(startMenuDir, 'XdtMakerDev.lnk');
   try {
-    if (await deps.exists(knownShortcut)) {
+    const exists = await deps.exists(knownShortcut);
+    if (shouldStop()) return;
+    if (exists) {
       await deps.unlink(knownShortcut);
+      if (shouldStop()) return;
       removed += 1;
     }
   } catch (err) {
@@ -109,16 +117,24 @@ async function runCleanup(
     });
   }
 
-  for (const shortcutPath of await collectShortcutFiles(deps, startMenuDir)) {
+  if (shouldStop()) return;
+  const shortcutFiles = await collectShortcutFiles(deps, startMenuDir, shouldStop);
+  if (shouldStop()) return;
+  for (const shortcutPath of shortcutFiles) {
+    if (shouldStop()) return;
     let details: Electron.ShortcutDetails;
     try {
       details = deps.readShortcut(shortcutPath);
     } catch {
       continue;
     }
+    // readShortcutLink is synchronous, so also compare the wall-clock deadline
+    // after each call; a busy main thread cannot rely on the timer firing first.
+    if (shouldStop()) return;
     if (!isArgumentlessDevElectronShortcut(details)) continue;
     try {
       await deps.unlink(shortcutPath);
+      if (shouldStop()) return;
       removed += 1;
     } catch (err) {
       deps.logger?.warn('failed to remove scanned legacy dev shortcut', {
@@ -127,6 +143,7 @@ async function runCleanup(
     }
   }
 
+  if (shouldStop()) return;
   if (removed > 0) {
     deps.logger?.info('legacy dev shortcut cleanup applied', { removed });
   }
@@ -147,18 +164,29 @@ export async function cleanupLegacyDevShortcuts(
   const appData = deps.appDataDir();
   if (!appData) return;
 
+  const deadlineAt = Date.now() + CLEANUP_TIMEOUT_MS;
+  let expired = false;
+  const expire = (): void => {
+    if (expired) return;
+    expired = true;
+    deps.logger?.warn('legacy dev shortcut cleanup timed out; continuing startup', {
+      timeoutMs: CLEANUP_TIMEOUT_MS,
+    });
+  };
+  const shouldStop = (): boolean => {
+    if (!expired && Date.now() >= deadlineAt) expire();
+    return expired;
+  };
   let timeoutHandle: NodeJS.Timeout | undefined;
   const timeout = new Promise<void>((resolve) => {
     timeoutHandle = setTimeout(() => {
-      deps.logger?.warn('legacy dev shortcut cleanup timed out; continuing startup', {
-        timeoutMs: CLEANUP_TIMEOUT_MS,
-      });
+      expire();
       resolve();
     }, CLEANUP_TIMEOUT_MS);
   });
 
   try {
-    await Promise.race([runCleanup(deps, appData), timeout]);
+    await Promise.race([runCleanup(deps, appData, shouldStop), timeout]);
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }

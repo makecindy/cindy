@@ -172,10 +172,18 @@ describe('cleanupLegacyDevShortcuts', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it('stops blocking startup when the Start Menu scan times out', async () => {
+  it('stops the pending Start Menu scan from resuming work after timeout', async () => {
     vi.useFakeTimers();
-    const { deps, logger } = makeHarness();
-    deps.readdir = () => new Promise(() => {});
+    const { deps, logger, removed } = makeHarness();
+    let finishReaddir: ((entries: ReturnType<typeof dirEntry>[]) => void) | undefined;
+    deps.readdir = () =>
+      new Promise((resolve) => {
+        finishReaddir = resolve;
+      });
+    const readShortcut = vi.fn(() => ({
+      target: 'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
+    }));
+    deps.readShortcut = readShortcut;
 
     const cleanup = cleanupLegacyDevShortcuts(deps);
     await vi.advanceTimersByTimeAsync(8_000);
@@ -185,5 +193,12 @@ describe('cleanupLegacyDevShortcuts', () => {
       'legacy dev shortcut cleanup timed out; continuing startup',
       { timeoutMs: 8_000 },
     );
+
+    finishReaddir?.([dirEntry('Electron.lnk', 'file')]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(readShortcut).not.toHaveBeenCalled();
+    expect(removed).toEqual([]);
   });
 });
