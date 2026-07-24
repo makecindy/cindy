@@ -79,6 +79,7 @@ export async function resolveMobileVoiceRecordingPermission(
 
   let openedSystemPrompt = false;
   if (!permission.granted) {
+    if (!options.isAppActive()) return 'cancelled';
     openedSystemPrompt = true;
     permission = await options.requestPermission();
     if (!options.isRequestCurrent()) return 'cancelled';

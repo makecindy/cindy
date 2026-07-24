@@ -30,6 +30,25 @@ describe('mobileVoiceStartup', () => {
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
+  it('does not open the system prompt after backgrounding during permission preflight', async () => {
+    const pendingPermission = deferred<{ granted: boolean }>();
+    const requestPermission = vi.fn(async () => ({ granted: true }));
+    let appActive = true;
+    const result = resolveMobileVoiceRecordingPermission({
+      getPermission: () => pendingPermission.promise,
+      requestPermission,
+      isRequestCurrent: () => true,
+      isAppActive: () => appActive,
+      waitForAppActive: async () => true,
+    });
+
+    appActive = false;
+    pendingPermission.resolve({ granted: false });
+
+    await expect(result).resolves.toBe('cancelled');
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
   it('waits for Android to publish active after the first permission prompt resolves', async () => {
     const pendingPermission = deferred<{ granted: boolean }>();
     const pendingForeground = deferred<boolean>();
