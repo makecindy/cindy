@@ -681,8 +681,9 @@ export function registerHookControlIpc(): void {
   });
 
   // Account teardown is orchestrated before its DB closes. This listener is a
-  // fail-closed backstop for signed-out/local sessions; activation still waits
-  // for app:ready-for-bot after the next owner DB is ready.
+  // fail-closed backstop for signed-out/local sessions; activation waits for
+  // the next owner DB readiness callback (with app:ready-for-bot as a
+  // compatibility retry).
   disposeAuthListener = authManager.onAuthStateChange(() => {
     if (!hookControlAvailable()) {
       void stopHookControlAccount().catch((err: unknown) => {
@@ -696,7 +697,7 @@ export function registerHookControlIpc(): void {
   log.info('hook-control ipc registered');
 }
 
-/** Called by app:ready-for-bot after the current account DB is ready. */
+/** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
   ensureInstances().manager.activateAccount();

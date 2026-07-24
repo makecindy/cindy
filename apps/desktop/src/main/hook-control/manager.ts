@@ -1465,6 +1465,21 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     send: (m: HookMessage) => boolean,
   ): void {
     if (!accountActive) {
+      if (msg.type === 'task.dispatch') {
+        log.info(
+          `task.dispatch rejected after account ingress closed: requestId=${msg.payload.requestId}`,
+        );
+        send(
+          makeTaskAck({
+            requestId: msg.payload.requestId,
+            result: 'rejected',
+            reason: 'disabled',
+            sessionId: null,
+            queuePosition: null,
+          }),
+        );
+        return;
+      }
       log.info(`hook frame dropped after account ingress closed: ${msg.type}`);
       return;
     }

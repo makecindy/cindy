@@ -157,6 +157,112 @@ describe('hook-control runtime capability gate', () => {
     expect(createTransport).not.toHaveBeenCalled();
     manager.dispose();
   });
+
+  it('cold-start activation connects an enabled Hook after the owner DB becomes ready', () => {
+    const dispose = vi.fn();
+    const createTransport = vi.fn((_opts: HookTransportOpts) => ({
+      send: () => true,
+      dispose,
+    }));
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://hook.example',
+        enabled: true,
+      }),
+      {
+        accountInitiallyActive: false,
+        isAvailable: () => true,
+        createTransport,
+      },
+    );
+
+    manager.sync();
+    expect(createTransport).not.toHaveBeenCalled();
+
+    manager.activateAccount();
+    expect(createTransport).toHaveBeenCalledOnce();
+    expect(manager.snapshot().status).toBe('connecting');
+
+    manager.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('leaving local mode reconnects only after a cloud account lifecycle activates', async () => {
+    let available = false;
+    const createTransport = vi.fn((_opts: HookTransportOpts) => ({
+      send: () => true,
+      dispose: () => {},
+    }));
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://hook.example',
+        enabled: true,
+      }),
+      {
+        accountInitiallyActive: false,
+        isAvailable: () => available,
+        createTransport,
+      },
+    );
+
+    manager.activateAccount();
+    expect(createTransport).not.toHaveBeenCalled();
+
+    await manager.deactivateAccount();
+    available = true;
+    manager.activateAccount();
+    expect(createTransport).toHaveBeenCalledOnce();
+
+    manager.dispose();
+  });
+
+  it('late dispatch during owner shutdown receives a structured disabled ack', async () => {
+    const transportOpts: HookTransportOpts[] = [];
+    const createTransport = vi.fn((opts: HookTransportOpts) => {
+      transportOpts.push(opts);
+      return {
+        send: () => true,
+        dispose: () => {},
+      };
+    });
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://hook.example',
+        enabled: true,
+      }),
+      { createTransport },
+    );
+    manager.sync();
+    await manager.deactivateAccount();
+
+    const staleOnMessage = transportOpts[0]?.onMessage;
+    if (!staleOnMessage) throw new Error('transport callback was not captured');
+    const sent: HookMessage[] = [];
+    staleOnMessage(
+      makeTaskDispatch({
+        requestId: 'late-owner-dispatch',
+        externalKey: 'slack:C1:1.1',
+        workspace: 'chat',
+        prompt: 'must not cross the owner boundary',
+      }),
+      (message) => {
+        sent.push(message);
+        return true;
+      },
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: 'task.ack',
+      payload: {
+        requestId: 'late-owner-dispatch',
+        result: 'rejected',
+        reason: 'disabled',
+      },
+    });
+
+    manager.dispose();
+  });
 });
 
 async function startServer(): Promise<{ wss: WebSocketServer; url: string }> {
