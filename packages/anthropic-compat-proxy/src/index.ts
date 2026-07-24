@@ -15,6 +15,13 @@
 
 export { createAnthropicCompatProxy } from './server.js';
 export {
+  createEnvOutboundProxyResolver,
+  hasProxyEnvConfig,
+  parseOutboundProxyUrl,
+  redactProxyUrlForLog,
+} from './outbound-proxy.js';
+export type { OutboundProxyResolver, OutboundProxyTarget } from './outbound-proxy.js';
+export {
   createInstructionsInjectionTransform,
   createInstructionsRegistry,
 } from './instructions-injection.js';

@@ -19,6 +19,7 @@
  */
 
 import { createAnthropicCompatProxy } from '../server.js';
+import { createEnvOutboundProxyResolver } from '../outbound-proxy.js';
 import { ALLOW_NON_LOOPBACK_ENV, resolveListenHost } from '../host-guard.js';
 
 interface ParsedArgs {
@@ -101,6 +102,9 @@ async function runServe(upstream: string, host?: string): Promise<void> {
   const handle = await createAnthropicCompatProxy({
     upstream,
     host: guard.host,
+    // CLI 场景(远端 cc-manager 等)按惯例吃代理环境变量:HTTPS_PROXY / HTTP_PROXY /
+    // ALL_PROXY / NO_PROXY。未设置 = 直连,行为与之前一致。
+    resolveOutboundProxy: createEnvOutboundProxyResolver(),
     logger: {
       // Send all logs to stderr; stdout reserved for the JSON listen line.
       info: (msg, ctx) => process.stderr.write(`[proxy][info] ${msg} ${JSON.stringify(ctx ?? {})}\n`),

@@ -61,6 +61,7 @@ import { composeResponseObservers } from './claude-rate-limit-headers-observer.j
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -1013,6 +1014,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
           }),
         ],
         logger: log,
+        // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
+        // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
+        resolveOutboundProxy: resolveDesktopOutboundProxy,
       });
       if (generation !== _disposeGeneration) {
         await handle.dispose().catch((err) => {

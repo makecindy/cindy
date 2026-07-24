@@ -12,6 +12,8 @@
 import type { Buffer } from 'node:buffer';
 import type { ServerResponse } from 'node:http';
 
+import type { OutboundProxyResolver } from './outbound-proxy.js';
+
 /**
  * 请求 transform 上下文。
  * - method/url/headers 是只读快照,transform 不应该尝试通过这些改写 outbound 请求
@@ -206,6 +208,14 @@ export interface ProxyOptions {
    * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
    */
   maxRequestBodyBytes?: number;
+  /**
+   * 可选: 出站(上游方向)代理解析器。per-request 以最终上游 origin 现取:返回
+   * http:// 代理地址 = 该请求经代理转发(https 上游走 CONNECT 隧道、http 上游走
+   * 绝对形式);返回 null / 抛错 = 直连(fail-open)。loopback 上游不会被调用。
+   * 宿主用它接系统代理(Electron resolveProxy)或代理环境变量
+   * (createEnvOutboundProxyResolver)。不传 = 永远直连,与扩展前字节级一致。
+   */
+  resolveOutboundProxy?: OutboundProxyResolver;
   /**
    * 可选: debug 级别下是否 dump 入站请求 body(截断到 64KiB)。默认 false ——
    * dev 的日志级别默认 trace,若默认 dump,agent 高并发场景(code-review 扇出 +
