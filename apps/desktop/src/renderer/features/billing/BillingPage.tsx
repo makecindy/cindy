@@ -101,10 +101,14 @@ function formatMoney(amount: string, currency: string): string {
   const numeric = Number(amount);
   if (!Number.isFinite(numeric)) return `${amount} ${currency.toUpperCase()}`;
   try {
-    return new Intl.NumberFormat(undefined, {
+    const fmt = new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency: currency.toUpperCase(),
-    }).format(numeric);
+    });
+    const digits = fmt.resolvedOptions().maximumFractionDigits ?? 2;
+    // Shift via exponential notation to avoid IEEE 754 mid-point errors (e.g. 1.005 → 1.00).
+    const rounded = Number(Math.round(Number(amount + 'e' + digits)) + 'e-' + digits);
+    return fmt.format(Number.isFinite(rounded) ? rounded : numeric);
   } catch {
     return `${amount} ${currency.toUpperCase()}`;
   }
