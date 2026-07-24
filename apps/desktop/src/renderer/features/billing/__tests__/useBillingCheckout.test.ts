@@ -46,7 +46,7 @@ describe('billing checkout phase projection', () => {
     });
   });
 
-  it('shows paid top-ups as completed without exposing fulfillment state', () => {
+  it('keeps paid top-ups crediting until fulfillment succeeds', () => {
     const base = {
       orderId: 'order_fixture',
       productCode: 'credit_topup',
@@ -58,10 +58,10 @@ describe('billing checkout phase projection', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
     };
-    expect(phaseForOrder(base)).toBe('COMPLETED');
-    expect(phaseForOrder({ ...base, fulfillmentStatus: 'PENDING' })).toBe('COMPLETED');
+    expect(phaseForOrder(base)).toBe('FULFILLING');
+    expect(phaseForOrder({ ...base, fulfillmentStatus: 'PENDING' })).toBe('FULFILLING');
     expect(phaseForOrder({ ...base, fulfillmentStatus: 'SUCCEEDED' })).toBe('COMPLETED');
-    expect(phaseForOrder({ ...base, fulfillmentStatus: 'FAILED' })).toBe('COMPLETED');
+    expect(phaseForOrder({ ...base, fulfillmentStatus: 'FAILED' })).toBe('FULFILLING');
   });
 
   it('shows active subscriptions as paid without exposing entitlement state', () => {
@@ -101,6 +101,61 @@ describe('billing checkout phase projection', () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it('keeps paid but unfulfilled top-ups recoverable without a payment action', () => {
+    expect(
+      isRecoverableTopup({
+        status: 'SUCCEEDED',
+        fulfillmentStatus: 'PENDING',
+        paymentAction: null,
+      }),
+    ).toBe(true);
+    expect(
+      isRecoverableTopup({
+        status: 'SUCCEEDED',
+        fulfillmentStatus: 'SUCCEEDED',
+        paymentAction: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps the checkout intent until paid top-up fulfillment succeeds', async () => {
+    const paidOrder = {
+      orderId: 'order_paid',
+      productCode: 'credit_topup',
+      offerCode: 'credit_topup_20',
+      amount: '20',
+      currency: 'cny',
+      status: 'SUCCEEDED' as const,
+      fulfillmentStatus: 'PENDING' as const,
+      paymentAction: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    };
+    api.createTopup.mockResolvedValue(paidOrder);
+    api.getOrder.mockResolvedValue({
+      ...paidOrder,
+      fulfillmentStatus: 'SUCCEEDED',
+    });
+    const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
+    await waitFor(() => expect(result.current.recovering).toBe(false));
+
+    await act(() =>
+      result.current.startTopup({
+        offerCode: 'credit_topup_20',
+        purchaseOptionId: 'listing_alipay',
+      }),
+    );
+
+    expect(result.current.state.phase).toBe('FULFILLING');
+    expect(readBillingCheckoutIntent(ACCOUNT_ID)).not.toBeNull();
+
+    await act(() => result.current.refreshActive());
+
+    expect(api.getOrder).toHaveBeenCalledWith('order_paid');
+    expect(result.current.state.phase).toBe('COMPLETED');
+    expect(readBillingCheckoutIntent(ACCOUNT_ID)).toBeNull();
   });
 
   it('replays an unresolved persisted purchase with the original request and key', async () => {

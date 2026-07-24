@@ -16,7 +16,14 @@ import {
 } from './checkoutIntent';
 
 export type BillingCheckoutPhase =
-  'IDLE' | 'CREATING' | 'AWAITING_PAYMENT' | 'COMPLETED' | 'FAILED' | 'EXPIRED' | 'CANCELED';
+  | 'IDLE'
+  | 'CREATING'
+  | 'AWAITING_PAYMENT'
+  | 'FULFILLING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'EXPIRED'
+  | 'CANCELED';
 
 export type BillingCheckoutState = {
   open: boolean;
@@ -47,7 +54,9 @@ function phaseForOrder(order: BillingPaymentOrder): BillingCheckoutPhase {
   if (order.status === 'FAILED') return 'FAILED';
   if (order.status === 'EXPIRED') return 'EXPIRED';
   if (order.status === 'CANCELED') return 'CANCELED';
-  if (order.status === 'SUCCEEDED') return 'COMPLETED';
+  if (order.status === 'SUCCEEDED') {
+    return order.fulfillmentStatus === 'SUCCEEDED' ? 'COMPLETED' : 'FULFILLING';
+  }
   return 'AWAITING_PAYMENT';
 }
 
@@ -65,9 +74,13 @@ function isTerminal(phase: BillingCheckoutPhase): boolean {
 
 function isRecoverableTopup(value: {
   status: string;
+  fulfillmentStatus?: string;
   paymentAction: { expiresAt: string } | null;
 }): boolean {
-  return (value.status === 'CREATED' || value.status === 'PENDING') && value.paymentAction !== null;
+  return (
+    ((value.status === 'CREATED' || value.status === 'PENDING') && value.paymentAction !== null) ||
+    (value.status === 'SUCCEEDED' && value.fulfillmentStatus !== 'SUCCEEDED')
+  );
 }
 
 function persistIntent(accountId: string | null, intent: BillingCheckoutIntentV1 | null): void {
@@ -520,7 +533,7 @@ export function useBillingCheckout(accountId: string | null) {
   }, [accountId, applyOrder, applySubscription, failCurrentOperation]);
 
   useEffect(() => {
-    if (!state.open || state.phase !== 'AWAITING_PAYMENT') return;
+    if (!state.open || (state.phase !== 'AWAITING_PAYMENT' && state.phase !== 'FULFILLING')) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshActive();
     }, 3_000);

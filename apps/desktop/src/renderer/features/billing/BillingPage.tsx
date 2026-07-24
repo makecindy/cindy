@@ -366,6 +366,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     currentSubscription !== null &&
     SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
   const canCheckout =
+    !checkout.recovering &&
     selected !== null &&
     selectedOption !== null &&
     !(

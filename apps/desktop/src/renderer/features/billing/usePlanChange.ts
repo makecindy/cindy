@@ -40,7 +40,7 @@ export type PlanChangeState = {
   stale: boolean;
 };
 
-export type PlanChangeSettledKind = 'APPLIED' | 'CANCELED' | 'SCHEDULED';
+export type PlanChangeSettledKind = 'APPLIED' | 'CANCELED' | 'SCHEDULED' | 'FAILED' | 'EXPIRED';
 
 const INITIAL_STATE: PlanChangeState = {
   open: false,
@@ -116,7 +116,9 @@ export function usePlanChange(
     if (
       change.status !== 'APPLIED' &&
       change.status !== 'CANCELED' &&
-      change.status !== 'SCHEDULED'
+      change.status !== 'SCHEDULED' &&
+      change.status !== 'FAILED' &&
+      change.status !== 'EXPIRED'
     )
       return;
     const settleKey = `${change.planChangeId}:${change.status}`;

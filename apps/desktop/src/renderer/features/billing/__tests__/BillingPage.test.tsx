@@ -67,6 +67,7 @@ describe('BillingPage remote catalog rendering', () => {
     checkout.startTopup.mockClear();
     checkout.startSubscription.mockClear();
     checkout.close.mockClear();
+    checkout.recovering = false;
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -441,6 +442,27 @@ describe('BillingPage remote catalog rendering', () => {
     });
   });
 
+  it('keeps checkout disabled until startup recovery finishes', async () => {
+    checkout.recovering = true;
+    const view = render(<BillingPage />);
+
+    fireEvent.click(screen.getByText('billing.settings.topupCard.action'));
+    fireEvent.click((await screen.findByText('Configured top-up')).closest('button')!);
+    fireEvent.click((await screen.findByText('alipay')).closest('button')!);
+    fireEvent.change(screen.getByPlaceholderText('billing.amount.placeholder'), {
+      target: { value: '10' },
+    });
+
+    const pay = screen.getByText('billing.actions.pay').closest('button')!;
+    expect(pay).toHaveProperty('disabled', true);
+    fireEvent.click(pay);
+    expect(checkout.startTopup).not.toHaveBeenCalled();
+
+    checkout.recovering = false;
+    view.rerender(<BillingPage />);
+    expect(pay).toHaveProperty('disabled', false);
+  });
+
   it('does not create a second subscription while one is still live', async () => {
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
       subscription: {
@@ -589,11 +611,11 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText('alipay')).toBeNull();
   });
 
-  it('shows a generic payment success message without fulfillment details', async () => {
+  it('shows a crediting state until top-up fulfillment succeeds', async () => {
     Object.assign(checkout.state, {
       open: true,
       kind: 'TOPUP',
-      phase: 'COMPLETED',
+      phase: 'FULFILLING',
       order: {
         orderId: 'order_paid',
         productCode: 'credit_topup',
@@ -611,10 +633,10 @@ describe('BillingPage remote catalog rendering', () => {
     render(<BillingPage />);
     await screen.findByText('billing.settings.subscriptionCard.empty');
 
-    expect(screen.getByText('billing.checkout.completedTitle')).toBeTruthy();
-    expect(screen.getByText('billing.checkout.paymentCompleted')).toBeTruthy();
-    expect(screen.queryByText('billing.checkout.fulfillingTitle')).toBeNull();
-    expect(screen.queryByText('billing.checkout.creditingBody')).toBeNull();
+    expect(screen.getByText('billing.checkout.fulfillingTitle')).toBeTruthy();
+    expect(screen.getByText('billing.checkout.creditingBody')).toBeTruthy();
+    expect(screen.queryByText('billing.checkout.completedTitle')).toBeNull();
+    expect(screen.queryByText('billing.checkout.paymentCompleted')).toBeNull();
   });
 
   it('allows an uncertain failed checkout to be dismissed for later recovery', async () => {

@@ -6974,6 +6974,7 @@
     "checkout": {
       "creatingTitle": "正在创建支付",
       "awaitingTitle": "等待支付",
+      "fulfillingTitle": "正在发放点数",
       "completedTitle": "支付成功",
       "failedTitle": "暂时无法完成",
       "expiredTitle": "支付已过期",
@@ -6988,6 +6989,7 @@
       "redirectHint": "请在支付页面完成操作，完成后返回 Cindy。",
       "openPayment": "打开支付页面",
       "refreshingAction": "正在获取支付方式…",
+      "creditingBody": "支付已完成，正在等待点数到账…",
       "paymentCompleted": "支付已完成。",
       "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
       "expiredBody": "支付链接已过期，请重新创建支付。",

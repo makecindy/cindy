@@ -87,6 +87,24 @@ describe('usePlanChange', () => {
     expect(readBillingPlanChangeIntent(ACCOUNT_ID)).toBeNull();
   });
 
+  it.each(['FAILED', 'EXPIRED'] as const)(
+    'notifies the parent when a pending plan change becomes %s',
+    async (status) => {
+      const onSettled = vi.fn();
+      api.quotePlanChange.mockResolvedValue(change());
+      api.confirmPlanChange.mockResolvedValue(change({ status: 'AWAITING_PAYMENT' }));
+      api.refreshPlanChange.mockResolvedValue(change({ status }));
+      const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, onSettled));
+
+      await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+      await act(() => result.current.confirm());
+      await act(() => result.current.refresh());
+
+      expect(result.current.state.phase).toBe(status);
+      expect(onSettled).toHaveBeenCalledWith(status);
+    },
+  );
+
   it('keeps the alipay QR from confirm and does not re-quote on refresh', async () => {
     const qr = {
       type: 'QR_CODE' as const,
