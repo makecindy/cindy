@@ -24,6 +24,7 @@ import { app, session } from 'electron';
 import {
   createEnvOutboundProxyResolver,
   hasProxyEnvConfig,
+  redactProxyUrlForLog,
   type OutboundProxyResolver,
 } from '@cindy/anthropic-compat-proxy';
 
@@ -66,7 +67,8 @@ const systemProxyCache = new Map<string, CachedResolution>();
 const lastLoggedByOrigin = new Map<string, string>();
 
 function logIfChanged(upstreamUrl: string, source: 'env' | 'system', value: string | null): void {
-  const rendered = value ?? 'direct';
+  // env 值可能是 http://user:pass@host 形态,持久化日志只允许脱敏形态(scheme://host:port)。
+  const rendered = value === null ? 'direct' : redactProxyUrlForLog(value);
   if (lastLoggedByOrigin.get(upstreamUrl) === `${source}:${rendered}`) return;
   lastLoggedByOrigin.set(upstreamUrl, `${source}:${rendered}`);
   log.info('outbound proxy resolved', { upstream: upstreamUrl, source, proxy: rendered });

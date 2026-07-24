@@ -5,6 +5,23 @@ const electronState = vi.hoisted(() => ({
   resolveProxy: vi.fn<(url: string) => Promise<string>>(async () => 'DIRECT'),
 }));
 
+const loggerState = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock('../logger-adapter.js', () => ({
+  createMakerLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: loggerState.info,
+    warn: loggerState.warn,
+    error: vi.fn(),
+    child: vi.fn(),
+    isDebugEnabled: () => false,
+  }),
+}));
+
 // 覆盖全局 electron stub 的 app.isReady / session.resolveProxy,其余成员沿用 stub
 // (logger 等模块还要用 app.getPath)。
 vi.mock('electron', async (importOriginal) => {
@@ -46,6 +63,8 @@ beforeEach(() => {
   electronState.ready = true;
   electronState.resolveProxy.mockReset();
   electronState.resolveProxy.mockResolvedValue('DIRECT');
+  loggerState.info.mockClear();
+  loggerState.warn.mockClear();
   resetOutboundProxyResolverStateForTest();
 });
 
@@ -85,6 +104,14 @@ describe('resolveDesktopOutboundProxy', () => {
     process.env.HTTPS_PROXY = 'http://127.0.0.1:6152';
     await expect(resolveDesktopOutboundProxy('https://chatgpt.com:443')).resolves.toBe('http://127.0.0.1:6152');
     expect(electronState.resolveProxy).not.toHaveBeenCalled();
+  });
+
+  it('returns credentialed env proxy verbatim but only logs the redacted form', async () => {
+    process.env.HTTPS_PROXY = 'http://user:sekret@127.0.0.1:6152';
+    await expect(resolveDesktopOutboundProxy('https://chatgpt.com:443')).resolves.toBe('http://user:sekret@127.0.0.1:6152');
+    const logged = JSON.stringify([...loggerState.info.mock.calls, ...loggerState.warn.mock.calls]);
+    expect(logged).not.toContain('sekret');
+    expect(logged).toContain('http://127.0.0.1:6152');
   });
 
   it('treats env NO_PROXY hits as direct without falling back to the system proxy', async () => {

@@ -21,6 +21,7 @@ import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'n
 
 import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
 import {
+  formatAuthority,
   isLoopbackHostname,
   OutboundProxyAgentPool,
   parseOutboundProxyUrl,
@@ -646,7 +647,7 @@ function forward(
       // http 上游:按 HTTP 代理惯例改发绝对形式请求给代理;Host 头保持指向真实上游。
       upstreamOptions.hostname = outboundProxy.target.hostname;
       upstreamOptions.port = outboundProxy.target.port;
-      upstreamOptions.path = `http://${actualTarget.hostname}:${actualTarget.port}${upstreamPath}`;
+      upstreamOptions.path = `http://${formatAuthority(actualTarget.hostname, actualTarget.port)}${upstreamPath}`;
       if (outboundProxy.target.authHeader) {
         (upstreamOptions.headers as Record<string, string>)['proxy-authorization'] = outboundProxy.target.authHeader;
       }
@@ -1027,9 +1028,11 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const resolver = opts.resolveOutboundProxy;
     if (!resolver) return undefined;
     if (isLoopbackHostname(target.hostname)) return undefined;
+    // IPv6 字面量上游要按 [addr]:port 拼 origin,否则 resolver 拿到非法 URL。
+    const upstreamOrigin = `${target.protocol}//${formatAuthority(target.hostname, target.port)}`;
     let raw: string | null | undefined;
     try {
-      raw = await resolver(`${target.protocol}//${target.hostname}:${target.port}`);
+      raw = await resolver(upstreamOrigin);
     } catch (err) {
       logger.warn?.('outbound proxy resolver threw — using direct connection', { reqId, err: String(err) });
       return undefined;
@@ -1047,7 +1050,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     logger.debug?.('using outbound proxy for upstream', {
       reqId,
       proxy: parsed.url,
-      upstream: `${target.protocol}//${target.hostname}:${target.port}`,
+      upstream: upstreamOrigin,
     });
     return {
       target: parsed,

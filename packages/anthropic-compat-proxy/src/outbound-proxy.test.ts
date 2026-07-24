@@ -6,6 +6,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import {
   createEnvOutboundProxyResolver,
+  formatAuthority,
   hasProxyEnvConfig,
   isLoopbackHostname,
   parseOutboundProxyUrl,
@@ -14,8 +15,9 @@ import {
 } from './outbound-proxy.js';
 
 // ─── 测试专用自签名证书(CN/SAN = upstream.test,有效期 100 年)────────────────
-// 仅供本测试文件的本地 TLS 桩使用,非任何真实凭证。客户端以 rejectAuthorized:false
-// 连接,证书内容本身不参与断言。
+// 仅供本测试文件的本地 TLS 桩使用,非任何真实凭证。客户端把它同时当 CA 用
+// (自签 = 自己就是根),配合 servername=upstream.test 走完整证书校验,
+// 不关闭 rejectUnauthorized。
 const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCs7jn9/xp6anHr
 73FSJP5Z4Z6rsqFmdp6x6P8737CUzK+HZPhLv1Csd0ssmVpr/01AkTP+Fo000cf5
@@ -92,6 +94,21 @@ describe('parseOutboundProxyUrl', () => {
     expect(parseOutboundProxyUrl('not a url')).toBeNull();
     expect(parseOutboundProxyUrl('')).toBeNull();
     expect(parseOutboundProxyUrl(undefined)).toBeNull();
+  });
+
+  it('never throws on malformed percent-encoding in userinfo (regression: URIError escaped fail-open)', () => {
+    const parsed = parseOutboundProxyUrl('http://user%GG:pa%ZZss@127.0.0.1:8080');
+    expect(parsed?.hostname).toBe('127.0.0.1');
+    // 解不开的按原文进 Basic,不抛 URIError。
+    expect(parsed?.authHeader).toBe(`Basic ${Buffer.from('user%GG:pa%ZZss').toString('base64')}`);
+  });
+});
+
+describe('formatAuthority', () => {
+  it('brackets IPv6 literals and leaves hostnames/IPv4 alone', () => {
+    expect(formatAuthority('2001:db8::1', 443)).toBe('[2001:db8::1]:443');
+    expect(formatAuthority('example.com', 8080)).toBe('example.com:8080');
+    expect(formatAuthority('10.0.0.1', 80)).toBe('10.0.0.1:80');
   });
 });
 
@@ -204,10 +221,14 @@ describe('TunnelingHttpsAgent', () => {
 
   function requestViaAgent(agent: TunnelingHttpsAgent, host: string, port: number): Promise<number> {
     return new Promise<number>((resolve, reject) => {
-      const req = httpsRequest({ host, port, path: '/probe', agent, rejectUnauthorized: false }, (res) => {
-        res.resume();
-        res.on('end', () => resolve(res.statusCode ?? 0));
-      });
+      // ca + servername:对测试自签证书走完整 TLS 校验(链 + 身份),不禁用证书验证。
+      const req = httpsRequest(
+        { host, port, path: '/probe', agent, ca: TEST_TLS_CERT, servername: 'upstream.test' },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode ?? 0));
+        },
+      );
       req.on('error', reject);
       req.end();
     });

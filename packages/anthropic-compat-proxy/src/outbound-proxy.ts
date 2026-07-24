@@ -52,8 +52,30 @@ export function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
+ * 拼 host:port authority。IPv6 字面量按 RFC 3986 加方括号 —— resolver URL、
+ * CONNECT 目标、绝对形式 URL 与 Host 头共用,裸拼 `v6:port` 会被代理当成非法目标。
+ */
+export function formatAuthority(hostname: string, port: number): string {
+  return hostname.includes(':') ? `[${hostname}]:${port}` : `${hostname}:${port}`;
+}
+
+/**
+ * userinfo 解码。decodeURIComponent 对非法百分号编码(如 `user%GG`)会抛 URIError;
+ * 解析器绝不能抛(在请求热路径上,抛了就是未处理 rejection 而非直连回退),
+ * 解不开就按用户原文使用。
+ */
+function safeDecodeUserinfo(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
  * 解析代理地址。只接受 http: 协议(CONNECT 隧道 / 绝对形式都建立在明文 HTTP 代理上);
  * https:(TLS-to-proxy)与 socks: 暂不支持,返回 null 由调用方回落直连。
+ * 任何输入都不抛错:解析失败一律返回 null。
  */
 export function parseOutboundProxyUrl(raw: string | null | undefined): OutboundProxyTarget | null {
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
@@ -71,8 +93,8 @@ export function parseOutboundProxyUrl(raw: string | null | undefined): OutboundP
   let authHeader: string | undefined;
   if (u.username) {
     // URL 里的 userinfo 是百分号编码的,先解码再进 Basic。
-    const user = decodeURIComponent(u.username);
-    const pass = u.password ? decodeURIComponent(u.password) : '';
+    const user = safeDecodeUserinfo(u.username);
+    const pass = u.password ? safeDecodeUserinfo(u.password) : '';
     authHeader = `Basic ${Buffer.from(`${user}:${pass}`, 'utf8').toString('base64')}`;
   }
   return { url: `http://${u.host}`, hostname: u.hostname, port, authHeader };
@@ -193,7 +215,7 @@ export class TunnelingHttpsAgent extends HttpsAgent {
     if (!callback) throw new Error('TunnelingHttpsAgent requires callback-style createConnection');
     const targetHost = options.host ?? 'localhost';
     const targetPort = Number(options.port) || 443;
-    const authority = `${targetHost}:${targetPort}`;
+    const authority = formatAuthority(targetHost, targetPort);
     let settled = false;
     const settle = (err: Error | null, stream?: Duplex): void => {
       if (settled) return;
@@ -263,7 +285,7 @@ export class OutboundProxyAgentPool {
 
   get(proxy: OutboundProxyTarget): TunnelingHttpsAgent {
     // authHeader 参与 key:同地址不同凭证不能共享隧道池。
-    const key = `${proxy.url} ${proxy.authHeader ?? ''}`;
+    const key = `${proxy.url} ${proxy.authHeader ?? ''}`;
     const existing = this.agents.get(key);
     if (existing) return existing;
     if (this.agents.size >= AGENT_POOL_MAX_ENTRIES) {
