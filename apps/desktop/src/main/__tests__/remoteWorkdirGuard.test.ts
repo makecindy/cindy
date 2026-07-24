@@ -35,7 +35,6 @@ import {
   checkRemoteWorkingDir,
   isRemoteWorkingDirAllowed,
   probeRemoteDirectory,
-  RemoteDirectoryProbePool,
 } from '../device-link/remote-workdir-guard.js';
 
 const asDir = async () => ({ isDirectory: () => true });
@@ -55,20 +54,23 @@ describe('isRemoteWorkingDirAllowed', () => {
 
   it('曾使用的本地路径仍探测当前可访问性', async () => {
     h.setStat(asDir);
-    expect(await isRemoteWorkingDirAllowed('/proj/a/')).toBe(true); // 尾斜杠归一后相等
+    expect(await isRemoteWorkingDirAllowed('/proj/a/', { stat: h.statSpy })).toBe(true);
     expect(h.statSpy).toHaveBeenCalledWith('/proj/a/');
   });
 
   it('本地会话目录不因历史记录绕过探测', async () => {
     h.setStat(asDir);
-    expect(await isRemoteWorkingDirAllowed('/proj/b')).toBe(true);
+    expect(await isRemoteWorkingDirAllowed('/proj/b', { stat: h.statSpy })).toBe(true);
     expect(h.statSpy).toHaveBeenCalledWith('/proj/b');
   });
 
   it('命中断线的已知本地目录时仍按业务超时拒绝', async () => {
     h.setStat(() => new Promise(() => undefined));
 
-    await expect(checkRemoteWorkingDir('/disconnected/share', { timeoutMs: 20 })).resolves.toEqual({
+    await expect(checkRemoteWorkingDir('/disconnected/share', {
+      stat: h.statSpy,
+      timeoutMs: 20,
+    })).resolves.toEqual({
       allowed: false,
       reason: 'timeout',
     });
@@ -76,28 +78,33 @@ describe('isRemoteWorkingDirAllowed', () => {
 
   it('被控端真实存在且是目录 → 放行(远程浏览新目录)', async () => {
     h.setStat(asDir);
-    expect(await isRemoteWorkingDirAllowed('/freshly/browsed/dir')).toBe(true);
+    expect(await isRemoteWorkingDirAllowed('/freshly/browsed/dir', { stat: h.statSpy })).toBe(true);
   });
 
   it('真实存在的 Cindy 托管 worktree → 放行', async () => {
     h.setStat(asDir);
-    expect(await isRemoteWorkingDirAllowed('/repo/.cindy-worktrees/auto-test')).toBe(true);
+    expect(
+      await isRemoteWorkingDirAllowed('/repo/.cindy-worktrees/auto-test', { stat: h.statSpy }),
+    ).toBe(true);
   });
 
   it('路径不存在 → 拒(挡伪造/笔误路径)', async () => {
     // 默认异步 stat 抛 ENOENT
-    expect(await isRemoteWorkingDirAllowed('/does/not/exist')).toBe(false);
+    expect(await isRemoteWorkingDirAllowed('/does/not/exist', { stat: h.statSpy })).toBe(false);
   });
 
   it('路径存在但是文件(非目录)→ 拒', async () => {
     h.setStat(asFile);
-    expect(await isRemoteWorkingDirAllowed('/some/file.txt')).toBe(false);
+    expect(await isRemoteWorkingDirAllowed('/some/file.txt', { stat: h.statSpy })).toBe(false);
   });
 
   it('异步探测 pending 时主线程仍可执行 timer,且按业务超时收敛', async () => {
     h.setStat(() => new Promise(() => undefined));
 
-    const check = checkRemoteWorkingDir('/disconnected/share', { timeoutMs: 20 });
+    const check = checkRemoteWorkingDir('/disconnected/share', {
+      stat: h.statSpy,
+      timeoutMs: 20,
+    });
     let eventLoopAdvanced = false;
     await new Promise<void>((resolve) => {
       setTimeout(() => {
@@ -108,65 +115,6 @@ describe('isRemoteWorkingDirAllowed', () => {
 
     expect(eventLoopAdvanced).toBe(true);
     await expect(check).resolves.toEqual({ allowed: false, reason: 'timeout' });
-  });
-
-  it('同一路径的并发探测复用一个底层 stat', async () => {
-    const pendingStat = vi.fn(() => new Promise<{ isDirectory(): boolean }>(() => undefined));
-    const pool = new RemoteDirectoryProbePool(pendingStat);
-
-    const first = probeRemoteDirectory('/disconnected/share', { pool, timeoutMs: 10 });
-    const second = probeRemoteDirectory('/disconnected/share/', { pool, timeoutMs: 10 });
-
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { allowed: false, reason: 'timeout' },
-      { allowed: false, reason: 'timeout' },
-    ]);
-    expect(pendingStat).toHaveBeenCalledTimes(1);
-  });
-
-  it('不同路径的底层 pending stat 不超过并发上限', async () => {
-    const pendingStat = vi.fn(() => new Promise<{ isDirectory(): boolean }>(() => undefined));
-    const pool = new RemoteDirectoryProbePool(pendingStat, 2);
-
-    const first = probeRemoteDirectory('/share/a', { pool, timeoutMs: 10 });
-    const second = probeRemoteDirectory('/share/b', { pool, timeoutMs: 10 });
-    await expect(probeRemoteDirectory('/share/c', { pool, timeoutMs: 10 })).resolves.toEqual({
-      allowed: false,
-      reason: 'unavailable',
-    });
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { allowed: false, reason: 'timeout' },
-      { allowed: false, reason: 'timeout' },
-    ]);
-    expect(pendingStat).toHaveBeenCalledTimes(2);
-  });
-
-  it('底层 stat 晚到拒绝后释放槽位且不产生 unhandled rejection', async () => {
-    let rejectFirst: ((reason: Error) => void) | undefined;
-    const statFn = vi.fn(
-      () =>
-        new Promise<{ isDirectory(): boolean }>((_resolve, reject) => {
-          rejectFirst = reject;
-        }),
-    );
-    const pool = new RemoteDirectoryProbePool(statFn, 1);
-
-    await expect(probeRemoteDirectory('/share/a', { pool, timeoutMs: 10 })).resolves.toEqual({
-      allowed: false,
-      reason: 'timeout',
-    });
-    await expect(probeRemoteDirectory('/share/b', { pool, timeoutMs: 10 })).resolves.toEqual({
-      allowed: false,
-      reason: 'unavailable',
-    });
-
-    rejectFirst?.(Object.assign(new Error('late offline'), { code: 'EHOSTUNREACH' }));
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    statFn.mockResolvedValueOnce({ isDirectory: () => true });
-    await expect(probeRemoteDirectory('/share/b', { pool, timeoutMs: 10 })).resolves.toEqual({
-      allowed: true,
-      source: 'filesystem',
-    });
   });
 
   it('区分不存在、非目录与网络不可达', async () => {
@@ -188,6 +136,15 @@ describe('isRemoteWorkingDirAllowed', () => {
       allowed: false,
       reason: 'not-directory',
     });
+    for (const code of ['ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE']) {
+      await expect(
+        probeRemoteDirectory('/invalid', {
+          stat: async () => {
+            throw Object.assign(new TypeError('invalid argument'), { code });
+          },
+        }),
+      ).resolves.toEqual({ allowed: false, reason: 'invalid' });
+    }
     await expect(
       probeRemoteDirectory('/offline', {
         stat: async () => {

@@ -327,8 +327,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // —— 远程文件浏览(右侧栏 / doc 模式,读写增删 + 文件名索引 + 非流式搜索)——
   // 单聚合 channel:被控端专用 handler(见 apps/desktop/src/main/file-browser/device-op.ts),
   // 不复用依赖 event.sender 的既有 file-browser handler。准入:
-  //  - workdir 参数经 remote-workdir-guard 同款收敛(已知会话 workdir / recents /
-  //    真实存在目录),挡伪造路径;路径穿越在 scanner 层拦(assertInsideWorkdir + realpath)。
+  //  - workdir 参数先实时探测被控端本地可访问性,再结合 SSH session 归属解析
+  //    唯一执行端点；本地 / SSH 或多 SSH 歧义时 fail closed。路径穿越在
+  //    scanner 层拦(assertInsideWorkdir + realpath)。
   //  - device-link 已是同账号 + remoteControlEnabled 显式 opt-in,控制端本就能在
   //    workingDir 跑 agent(任意读写/exec),文件浏览不扩大攻击面(fs:list-dir 同款论证)。
   //  - readFile 结果超帧限前被控端预判回结构化 oversize,不裸炸 FRAME_TOO_LARGE。
@@ -351,7 +352,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'learn:discard',
   'learn:cancel',
   // —— /cmd 远程(远程会话的 shell 命令在被控端 workingDir 执行才是正确语义)——
-  // handler 对 cwd 走 remote-workdir-guard 收敛(已知目录集合 / 真实存在目录),
+  // handler 对 cwd 走 remote-workdir-guard 实时可访问性探测,
   // 准入论证同 fs:list-dir:同账号 + 显式 opt-in 下控制端本就能驱动 agent 执行任意命令。
   'desktop-cmd:run',
   // —— Worktree(为被控端项目预建独立 git worktree;git/fs 语义在被控端执行才正确——

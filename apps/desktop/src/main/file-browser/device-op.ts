@@ -377,9 +377,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   }
   if (exec.kind === 'ambiguous') {
     // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
-    // throw 理由同上 guard 分支:renderer 需要 reject 才能走 loadError 通路。
+    // 详细归属只写本机日志,避免把 SSH host ID 等内部路由信息带回控制端。
     log.warn('remote-op workdir endpoint ambiguous', { op: args.op, workdir, reason: exec.reason });
-    throw new Error(`workdir endpoint ambiguous: ${exec.reason}`);
+    throwIpcError('INVALID_PARAMS', 'Remote working directory endpoint is ambiguous.');
   }
   if (exec.kind === 'local' && !guardResult.allowed) {
     log.warn('remote-op workdir rejected by guard', {
@@ -642,10 +642,18 @@ const localWatch = new WorkdirWatchManager((event) => {
 });
 const localWatchWorkdirs = new Set<string>();
 const sshWatchOffs = new Map<string, () => void>();
+/** 最新订阅意图；release / 立即重订阅时由正在启动的同一任务收敛到最新状态。 */
+const fsWatchDesired = new Set<string>();
 /** 启动窗口占位:dedup 判定与首个 await 之间的 TOCTOU 防护(见下)。 */
-const fsWatchStarting = new Set<string>();
+const fsWatchStarting = new Map<string, symbol>();
 
 async function onFsWatchSubscribed(workdir: string): Promise<void> {
+  fsWatchDesired.add(workdir);
+  await startFsWatchIfDesired(workdir);
+}
+
+async function startFsWatchIfDesired(workdir: string): Promise<void> {
+  if (!fsWatchDesired.has(workdir)) return;
   // dedup 必须把"正在启动"也算上:guard/exec 判定要过两个 await(后者查 DB),
   // 窗口内同 workdir 的第二次 subscribe(典型:重连 replay 撞上首次订阅)会
   // 双双通过 has 检查——SSH 嵌套分支就会重复注册 onHostEvent/onHostConnected,
@@ -654,21 +662,37 @@ async function onFsWatchSubscribed(workdir: string): Promise<void> {
   if (localWatchWorkdirs.has(workdir) || sshWatchOffs.has(workdir) || fsWatchStarting.has(workdir)) {
     return;
   }
-  fsWatchStarting.add(workdir);
+  const token = Symbol(workdir);
+  fsWatchStarting.set(workdir, token);
   try {
-    await onFsWatchSubscribedInner(workdir);
+    await onFsWatchSubscribedInner(workdir, token);
   } finally {
-    fsWatchStarting.delete(workdir);
+    if (fsWatchStarting.get(workdir) === token) fsWatchStarting.delete(workdir);
   }
 }
 
-async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
+function scheduleFsWatchReconcile(workdir: string): void {
+  const timer = setTimeout(() => {
+    // timer 排队后可能再次 release；reconcile 只消费当前意图，绝不重新
+    // 写回 desired，避免复活已释放 watcher。
+    if (fsWatchDesired.has(workdir)) void startFsWatchIfDesired(workdir);
+  }, 0);
+  timer.unref?.();
+}
+
+function isFsWatchStartCurrent(workdir: string, token: symbol): boolean {
+  return fsWatchDesired.has(workdir) && fsWatchStarting.get(workdir) === token;
+}
+
+async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise<void> {
   const guardResult = await checkRemoteWorkingDir(workdir);
+  if (!isFsWatchStartCurrent(workdir, token)) return;
   if (!guardResult.allowed && guardResult.reason === 'invalid') {
     log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
     return;
   }
   const exec = await resolveWorkdirExecution(workdir, guardResult);
+  if (!isFsWatchStartCurrent(workdir, token)) return;
   if (exec.kind === 'unavailable') {
     log.warn('device fs-watch skipped: workdir unavailable', { workdir, reason: exec.reason });
     return;
@@ -683,8 +707,12 @@ async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
   }
   if (exec.kind === 'local') {
     try {
-      localWatchWorkdirs.add(workdir);
       await localWatch.start(workdir, { hideMetaFiles: true });
+      if (!isFsWatchStartCurrent(workdir, token)) {
+        localWatch.stop(workdir);
+        return;
+      }
+      localWatchWorkdirs.add(workdir);
       log.info('device fs-watch started (local)', { workdir });
     } catch (err) {
       localWatchWorkdirs.delete(workdir);
@@ -704,20 +732,55 @@ async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
   const offReconnect = mgr.onHostConnected(hostId, () => {
     void mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true }).catch(() => undefined);
   });
-  sshWatchOffs.set(workdir, () => {
+  let listenersDisposed = false;
+  const disposeListeners = (): void => {
+    if (listenersDisposed) return;
+    listenersDisposed = true;
     offEvent();
     offReconnect();
+  };
+  const stopWatch = (): void => {
+    disposeListeners();
     void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
-  });
+  };
+  sshWatchOffs.set(workdir, stopWatch);
   try {
     await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+    const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
+    if (!isFsWatchStartCurrent(workdir, token) || !isRegistered) {
+      if (isRegistered) sshWatchOffs.delete(workdir);
+      // release 可能已在 watchStart 完成前发过 stop；完成后再发一次，保证
+      // daemon 不会留下刚启动成功的 watcher。
+      stopWatch();
+      // release 后若已立即重新订阅，旧启动先完成清理，再从全新监听器和
+      // watchStart 开始；setTimeout 确保外层 finally 已移除旧 token。
+      if (fsWatchDesired.has(workdir)) {
+        scheduleFsWatchReconcile(workdir);
+      }
+      return;
+    }
     log.info('device fs-watch started (ssh nested)', { workdir, hostId });
   } catch (err) {
+    const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
+    const isCurrent = isFsWatchStartCurrent(workdir, token);
+    if (!isCurrent || !isRegistered) {
+      if (isRegistered) sshWatchOffs.delete(workdir);
+      disposeListeners();
+      // release 后立即重订阅时，旧 watchStart 的失败不能吞掉新的订阅意图。
+      if (fsWatchDesired.has(workdir)) {
+        scheduleFsWatchReconcile(workdir);
+      }
+    }
+    // 当前订阅的初次启动失败时保留 stop/reconnect 监听；host 下次连接会
+    // 通过 offReconnect 对应回调重试 watchStart。
     log.warn('device fs-watch ssh start failed', { workdir, hostId, error: String(err) });
   }
 }
 
 function onFsWatchReleased(workdir: string): void {
+  // guard / DB lookup / watchStart 任一 await 结束后都读取最新订阅意图；
+  // 保留启动 token 可串行吸收紧随 release 到来的重订阅，避免同路径双启动。
+  fsWatchDesired.delete(workdir);
   if (localWatchWorkdirs.delete(workdir)) {
     localWatch.stop(workdir);
     log.info('device fs-watch stopped (local)', { workdir });

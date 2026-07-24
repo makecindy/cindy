@@ -16,6 +16,7 @@
  * 直击 Bug 1(远程浏览的新目录建会话):fresh 真实目录 → 放行到 handler;不存在路径 → 拒。
  */
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -71,7 +72,9 @@ beforeAll(() => {
   mkdirSync(managedWorktreeDir, { recursive: true });
 
   // 接入与生产相同的结构化 guard。
-  setRemoteWorkingDirGuard(checkRemoteWorkingDir);
+  // 此集成测试在纯 Node 中运行，显式注入真实异步 stat；utilityProcess 的
+  // 并发、超时与回收由 workdir-probe-host 专属测试覆盖。
+  setRemoteWorkingDirGuard((dir) => checkRemoteWorkingDir(dir, { stat }));
 });
 
 afterAll(() => {

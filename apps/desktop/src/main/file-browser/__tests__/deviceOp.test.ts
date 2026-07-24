@@ -26,7 +26,9 @@ const sshRequestMock = vi.fn();
 const dbRowsMock = vi.fn((): Array<{ remoteHostId: string | null }> => []);
 
 vi.mock('electron', () => ({
+  app: { once: vi.fn() },
   ipcMain: { handle: vi.fn() },
+  utilityProcess: { fork: vi.fn() },
 }));
 const uploadMock = vi.fn(async (p: string) => ({ key: `oss/${p.split('/').pop()}`, size: 4, contentType: 'text/plain' }));
 vi.mock('../../device-link/mediaTransfer.js', () => ({
@@ -285,11 +287,16 @@ describe('file-browser device-op', () => {
   it('ambiguous: workdir belonging to multiple SSH hosts is rejected, not guessed', async () => {
     guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
     dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }, { remoteHostId: 'host-2' }]);
-    // throw(而非 resolve {ok:false}):经 invoke error 信封让控制端 reject,
-    // 命中 renderer 既有 catch/loadError 通路(与 SSH 通道错误形态对齐)。
-    await expect(
-      handleRemoteOp({ op: 'listDir', workdir: '/remote/home/user/proj' }),
-    ).rejects.toThrow(/ambiguous/);
+    // 经结构化 IPC 错误让控制端 reject,但不泄露 SSH host ID 等内部路由细节。
+    let caught: unknown;
+    try {
+      await handleRemoteOp({ op: 'listDir', workdir: '/remote/home/user/proj' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String(caught)).toMatch(/\[INVALID_PARAMS\].*ambiguous/);
+    expect(String(caught)).not.toMatch(/host-[12]/);
     expect(sshRequestMock).not.toHaveBeenCalled();
   });
 
@@ -343,6 +350,137 @@ describe('file-browser device-op', () => {
       hideMetaFiles: true,
     });
     onFsWatchReleased(sshWorkdir);
+  });
+
+  it('watch: release while the guard is pending cancels the stale start', async () => {
+    let resolveGuard!: (result: RemoteWorkingDirCheckResult) => void;
+    guardMock.mockReturnValueOnce(
+      new Promise<RemoteWorkingDirCheckResult>((resolve) => {
+        resolveGuard = resolve;
+      }),
+    );
+
+    const starting = onFsWatchSubscribed(workdir);
+    onFsWatchReleased(workdir);
+    resolveGuard({ allowed: true, source: 'filesystem' });
+    await starting;
+
+    expect(sshRequestMock).not.toHaveBeenCalled();
+    await fsWriteFile(path.join(workdir, 'src', 'released.ts'), 'released\n', 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(pushSpy).not.toHaveBeenCalled();
+  });
+
+  it('watch: an immediate resubscribe while the guard is pending keeps one current start', async () => {
+    let resolveGuard!: (result: RemoteWorkingDirCheckResult) => void;
+    guardMock.mockReturnValueOnce(
+      new Promise<RemoteWorkingDirCheckResult>((resolve) => {
+        resolveGuard = resolve;
+      }),
+    );
+
+    const firstStart = onFsWatchSubscribed(workdir);
+    onFsWatchReleased(workdir);
+    await onFsWatchSubscribed(workdir);
+    resolveGuard({ allowed: true, source: 'filesystem' });
+    await firstStart;
+
+    await fsWriteFile(path.join(workdir, 'src', 'resubscribed.ts'), 'active\n', 'utf8');
+    await vi.waitFor(
+      () => {
+        expect(
+          pushSpy.mock.calls.some(
+            ([, payload]) => (payload as { relPath?: string }).relPath === 'src/resubscribed.ts',
+          ),
+        ).toBe(true);
+      },
+      { timeout: 3_000, interval: 50 },
+    );
+  });
+
+  it('watch: release during SSH watchStart stops a late successful watcher', async () => {
+    const sshWorkdir = '/remote/home/user/slow-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let resolveStart!: () => void;
+    const startPending = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    sshRequestMock.mockImplementation((_hostId: string, op: string) =>
+      op === 'watchStart' ? startPending : Promise.resolve({ ok: true }),
+    );
+
+    const starting = onFsWatchSubscribed(sshWorkdir);
+    await vi.waitFor(() => {
+      expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
+        workdir: sshWorkdir,
+        hideMetaFiles: true,
+      });
+    });
+    onFsWatchReleased(sshWorkdir);
+    resolveStart();
+    await starting;
+
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
+      workdir: sshWorkdir,
+    });
+  });
+
+  it('watch: release then resubscribe rebuilds SSH watch after the stale start rejects', async () => {
+    const sshWorkdir = '/remote/home/user/retry-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let rejectFirstStart!: (error: Error) => void;
+    const firstStart = new Promise<never>((_resolve, reject) => {
+      rejectFirstStart = reject;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart' && watchStartCount++ === 0) return firstStart;
+      return Promise.resolve({ ok: true });
+    });
+
+    const staleStart = onFsWatchSubscribed(sshWorkdir);
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(1);
+    });
+    onFsWatchReleased(sshWorkdir);
+    await onFsWatchSubscribed(sshWorkdir);
+    rejectFirstStart(new Error('connection reset'));
+    await staleStart;
+
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(2);
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  it('watch: a second release cancels an already scheduled SSH reconcile', async () => {
+    const sshWorkdir = '/remote/home/user/cancel-retry-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    let rejectFirstStart!: (error: Error) => void;
+    const firstStart = new Promise<never>((_resolve, reject) => {
+      rejectFirstStart = reject;
+    });
+    let watchStartCount = 0;
+    sshRequestMock.mockImplementation((_hostId: string, op: string) => {
+      if (op === 'watchStart' && watchStartCount++ === 0) return firstStart;
+      return Promise.resolve({ ok: true });
+    });
+
+    const staleStart = onFsWatchSubscribed(sshWorkdir);
+    await vi.waitFor(() => {
+      expect(watchStartCount).toBe(1);
+    });
+    onFsWatchReleased(sshWorkdir);
+    await onFsWatchSubscribed(sshWorkdir);
+    rejectFirstStart(new Error('connection reset'));
+    await staleStart;
+    onFsWatchReleased(sshWorkdir);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(watchStartCount).toBe(1);
   });
 
   // ── gzip(应用层压缩)────────────────────────────────────────────────────
