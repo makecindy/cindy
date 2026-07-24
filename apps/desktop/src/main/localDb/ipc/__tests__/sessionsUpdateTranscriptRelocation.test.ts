@@ -138,6 +138,19 @@ beforeEach(() => {
 });
 
 describe('local-db:sessions:update transcript relocation wiring', () => {
+  it('persists and broadcasts title-only patches to device-link subscribers', async () => {
+    await invokeUpdate('codex-local', { title: '排查远程标题同步' });
+
+    const persisted = h.sqlite!
+      .prepare('SELECT title FROM sessions WHERE id = ?')
+      .get('codex-local') as { title: string };
+    expect(persisted.title).toBe('排查远程标题同步');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { title: '排查远程标题同步' },
+    });
+  });
+
   it('broadcasts permission setting patches to every mounted client', async () => {
     await invokeUpdate('codex-local', { permissionMode: 'ask' });
 
