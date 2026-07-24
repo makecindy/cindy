@@ -150,6 +150,16 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain('todaySpend.codex.creditsShort');
   });
 
+  it('formats gateway quota amounts with the build-region currency', () => {
+    expect(source).toContain(
+      'formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION))',
+    );
+    expect(source).toContain(
+      'formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION))',
+    );
+    expect(source).not.toContain('formatCompactUsd(claudeQuota.');
+  });
+
   it('uses token and explicit empty-state fallbacks for Codex API sessions', () => {
     expect(source).toContain(
       'isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote',

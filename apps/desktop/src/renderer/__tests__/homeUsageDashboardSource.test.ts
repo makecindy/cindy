@@ -11,6 +11,10 @@ const dailyBarsSource = readFileSync(
   resolve(__dirname, '../components/new-chat/UsageDailyBars.tsx'),
   'utf8',
 );
+const heatmapSource = readFileSync(
+  resolve(__dirname, '../components/new-chat/UsageHeatmap.tsx'),
+  'utf8',
+);
 
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
@@ -54,6 +58,17 @@ describe('HomeUsageDashboard source contract', () => {
     );
     expect(source).not.toContain('return null;');
     expect(source).not.toContain('history.days.length === 0 && history.models.length === 0');
+  });
+
+  it('uses the build-region currency for empty chart cells', () => {
+    expect(heatmapSource).toContain(
+      'regionalCurrencyForRegion(CURRENT_CINDY_REGION)',
+    );
+    expect(dailyBarsSource).toContain(
+      'regionalCurrencyForRegion(CURRENT_CINDY_REGION)',
+    );
+    expect(heatmapSource).not.toContain("money.currency ?? 'USD'");
+    expect(dailyBarsSource).not.toContain("money.currency ?? 'USD'");
   });
 
   it('shows cached usage immediately while marking background refresh', () => {

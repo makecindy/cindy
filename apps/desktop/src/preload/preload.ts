@@ -4313,7 +4313,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:usage:claude-subscription'),
       /** provider-scoped 模型单价表，由 model-access /models 同次快照更新。 */
       getModelPricing: (): Promise<unknown | null> =>
-        ipcRenderer.invoke('maker:usage:model-pricing'),
+        ipcRenderer.invoke('maker:usage:model-pricing-v2'),
       onModelPricingChanged: fanOutMakerUsageModelPricing,
       /** 用量历史聚合 (首页仪表盘: 热力图 + streak + 按模型拆分, main 侧算好)。 */
       getHistory: (opts?: { days?: number; forceRefresh?: boolean }): Promise<unknown> =>

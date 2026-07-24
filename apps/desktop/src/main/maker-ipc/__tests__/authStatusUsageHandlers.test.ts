@@ -387,17 +387,44 @@ describe('maker usage IPC handlers', () => {
     expect(triggerClaudeAccountUsageRefresh).toHaveBeenCalledWith(true);
   });
 
-  it('reads model pricing through injected host dependency', async () => {
+  it('keeps the legacy device-link pricing channel flat and USD-only', async () => {
     const harness = new IpcHarness();
     const pricing = {
-      'claude-sonnet-4-6': { inputUsdPerMtok: 3, outputUsdPerMtok: 15 },
+      xd: {
+        'claude-sonnet-4-6': {
+          providerId: 'xd',
+          modelId: 'claude-sonnet-4-6',
+          currency: 'USD',
+          source: 'gateway',
+          approximate: false,
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+          cacheReadPerMtok: 0.3,
+        },
+        'claude-opus-4-6': {
+          providerId: 'xd',
+          modelId: 'claude-opus-4-6',
+          currency: 'CNY',
+          source: 'gateway',
+          approximate: false,
+          inputPerMtok: 5,
+          outputPerMtok: 25,
+        },
+      },
     };
     const readModelPricing = vi.fn().mockResolvedValue(pricing);
 
     registerMakerUsageHandlers(harness, makeUsageDeps({ readModelPricing }));
 
-    await expect(harness.invoke(MAKER_INVOKE.USAGE_MODEL_PRICING)).resolves.toEqual(pricing);
-    expect(readModelPricing).toHaveBeenCalledTimes(1);
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_MODEL_PRICING)).resolves.toEqual({
+      'claude-sonnet-4-6': {
+        inputUsdPerMtok: 3,
+        outputUsdPerMtok: 15,
+        cacheReadUsdPerMtok: 0.3,
+      },
+    });
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_MODEL_PRICING_V2)).resolves.toEqual(pricing);
+    expect(readModelPricing).toHaveBeenCalledTimes(2);
   });
 
   it('reads Codex reset credits and consumes only a UUID offer key', async () => {

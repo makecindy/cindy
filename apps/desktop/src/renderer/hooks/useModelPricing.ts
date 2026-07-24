@@ -11,6 +11,10 @@ let cache: ModelPricingCatalog | null = null;
 let cacheLoaded = false;
 let inflight: Promise<ModelPricingCatalog | null> | null = null;
 
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
 function isValidQuote(
   value: unknown,
   providerId: string,
@@ -24,12 +28,12 @@ function isValidQuote(
     (quote.currency === 'CNY' || quote.currency === 'USD') &&
     quote.source === 'gateway' &&
     quote.approximate === false &&
-    typeof quote.inputPerMtok === 'number' &&
-    Number.isFinite(quote.inputPerMtok) &&
-    quote.inputPerMtok >= 0 &&
-    typeof quote.outputPerMtok === 'number' &&
-    Number.isFinite(quote.outputPerMtok) &&
-    quote.outputPerMtok >= 0
+    isNonNegativeFinite(quote.inputPerMtok) &&
+    isNonNegativeFinite(quote.outputPerMtok) &&
+    (quote.cacheReadPerMtok === undefined ||
+      isNonNegativeFinite(quote.cacheReadPerMtok)) &&
+    (quote.cacheCreatePerMtok === undefined ||
+      isNonNegativeFinite(quote.cacheCreatePerMtok))
   );
 }
 

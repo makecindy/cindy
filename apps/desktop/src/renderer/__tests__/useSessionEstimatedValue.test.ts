@@ -19,6 +19,16 @@ function usdEstimate(amount: number): RegionalMoney {
   };
 }
 
+function legacyCnyEstimate(amount: number): RegionalMoney {
+  return {
+    amount,
+    currency: 'CNY',
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+  };
+}
+
 function assistantMessage(
   clientId: string,
   costUsd?: number,
@@ -103,6 +113,15 @@ describe('resolveEstimatedValueTurnCostEntry', () => {
       turnCostIsEstimate: true,
       turnUsageDetails: GPT_DETAILS,
     })?.money.amount).toBeCloseTo(2.011);
+  });
+
+  it('corrects stale legacy estimates after their CN fixed-FX projection', () => {
+    expect(resolveEstimatedValueTurnCostEntry({
+      clientId: 'stale-cn',
+      turnMoney: legacyCnyEstimate(8.76 * 6.7),
+      turnCostIsEstimate: true,
+      turnUsageDetails: GPT_DETAILS,
+    })?.money.amount).toBeCloseTo(2.011 * 6.7);
   });
 
   it('preserves realtime live pricing estimates that do not match stale full-cache formulas', () => {

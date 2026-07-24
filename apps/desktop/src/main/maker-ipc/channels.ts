@@ -226,8 +226,10 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
-  // 模型单价表 (Model Access model-groups 投影, main 端账号级内存缓存) — 模型选择器展示用
+  // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
+  // Desktop renderer v2:provider-scoped + currency-aware 模型单价表。
+  USAGE_MODEL_PRICING_V2: 'maker:usage:model-pricing-v2',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},

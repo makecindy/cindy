@@ -20,6 +20,39 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
+export interface LegacyUsdModelPrice {
+  inputUsdPerMtok: number;
+  outputUsdPerMtok: number;
+  cacheReadUsdPerMtok?: number;
+  cacheCreateUsdPerMtok?: number;
+}
+
+export type LegacyUsdModelPricingMap = Record<string, LegacyUsdModelPrice>;
+
+/**
+ * device-link v1 兼容投影。旧控制端只能表达扁平 USD 价格，因此只投影真实 USD quote；
+ * CNY 不能反算或写进 *Usd，旧端按既有“无价隐藏”语义降级。
+ */
+export function toLegacyUsdModelPricing(
+  pricing: ModelPricingMap | null,
+): LegacyUsdModelPricingMap | null {
+  const out: LegacyUsdModelPricingMap = {};
+  for (const [modelId, quote] of Object.entries(pricing?.xd ?? {})) {
+    if (quote.currency !== 'USD') continue;
+    out[modelId] = {
+      inputUsdPerMtok: quote.inputPerMtok,
+      outputUsdPerMtok: quote.outputPerMtok,
+      ...(quote.cacheReadPerMtok !== undefined
+        ? { cacheReadUsdPerMtok: quote.cacheReadPerMtok }
+        : {}),
+      ...(quote.cacheCreatePerMtok !== undefined
+        ? { cacheCreateUsdPerMtok: quote.cacheCreatePerMtok }
+        : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /** usage handler 需要的 host-level 查询与刷新能力。 */
 export interface MakerUsageHandlerDeps {
   readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTodayUsage>;
@@ -89,8 +122,13 @@ export function registerMakerUsageHandlers(
     return await deps.readClaudeSubscriptionUsageSnapshot();
   });
 
-  // 模型单价表 — 失败时 null, renderer 据此隐藏价格 tooltip。
+  // device-link v1:保留旧扁平 USD 形状，不能把 CNY 伪装成 *Usd。
   registry.handle(MAKER_INVOKE.USAGE_MODEL_PRICING, async () => {
+    return toLegacyUsdModelPricing(await deps.readModelPricing());
+  });
+
+  // Desktop renderer v2:provider-scoped、带币种和约值语义的完整价格目录。
+  registry.handle(MAKER_INVOKE.USAGE_MODEL_PRICING_V2, async () => {
     return await deps.readModelPricing();
   });
 

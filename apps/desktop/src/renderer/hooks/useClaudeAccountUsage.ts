@@ -28,14 +28,15 @@
 import { useEffect, useState } from 'react';
 
 export interface ClaudeAccountUsageSnapshot {
-  /** 月度周期跨客户端累计 USD。 */
+  /** 月度周期跨客户端累计，保持 Gateway 部署区域的原生金额。 */
   spend: number;
-  /** 月度周期上限 USD。 */
+  /** 月度周期上限，保持 Gateway 部署区域的原生金额。 */
   maxBudget: number;
   /** 下次月度 reset 时间 ISO8601。 */
   budgetResetAt?: string | null;
   /**
-   * 今日 (UTC 日) 跨客户端累计 USD, 来自 LiteLLM /user/daily/activity 的
+   * 今日 (UTC 日) 跨客户端累计，保持 Gateway 部署区域的原生金额，来自
+   * LiteLLM /user/daily/activity 的
    * results[0].metrics.spend。null 表示该端点暂时不可用 (跟 cycle 是独立 fetch),
    * 此时消费方应隐藏 daily 段。
    */

@@ -19,6 +19,7 @@ import {
   normalizeRegionalMoney,
   regionalCurrencyForRegion,
   regionalizeUsd,
+  USD_TO_CNY_FIXED_RATE,
   type MoneyEstimateReason,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
@@ -61,13 +62,27 @@ function correctStaleUsdEstimate(
   turnUsageDetails: unknown,
   model?: string,
 ): RegionalMoney {
-  if (money.currency !== 'USD') return money;
+  const reasons = money.estimateReasons ?? [];
+  const isLegacyCnyProjection =
+    money.currency === 'CNY' &&
+    reasons.includes('legacy-usd') &&
+    reasons.includes('fixed-fx');
+  if (money.currency !== 'USD' && !isLegacyCnyProjection) return money;
+  const amountUsd = isLegacyCnyProjection
+    ? money.amount / USD_TO_CNY_FIXED_RATE
+    : money.amount;
   const corrected = resolveStaleCodexSubscriptionValueEstimate(
-    money.amount,
+    amountUsd,
     normalizeTurnUsageDetails(turnUsageDetails),
     model,
   );
-  return corrected == null ? money : { ...money, amount: corrected };
+  if (corrected == null) return money;
+  return {
+    ...money,
+    amount: isLegacyCnyProjection
+      ? corrected * USD_TO_CNY_FIXED_RATE
+      : corrected,
+  };
 }
 
 function legacyEstimateMoney(costUsd: number): RegionalMoney | null {

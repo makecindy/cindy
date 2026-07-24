@@ -17,7 +17,7 @@
  *   且 todaySpend 已是本 user 当日全部用量, 该指标冗余, 2026-06-21 移除。
  *
  * 设计取舍 (与 usageBroadcaster.ts 拆开的理由):
- *   - usageBroadcaster.ts 原本职责 = 本机 SQLite 累加的"今日 USD" + Codex token, 是
+ *   - usageBroadcaster.ts 原本职责 = 本机 SQLite 累加的"今日金额" + Codex token, 是
  *     turn 收尾的"记账"层。账号配额是"账号画像"层, 来源是 HTTP API 而非 SDK turn delta —
  *     两件事不同步 (前者写 SQLite + 同步广播, 后者 fire-and-forget + 节流), 强行混在
  *     一个文件里会让 broadcaster 的 turn-done 路径多一个 IO side-effect。
@@ -53,16 +53,17 @@ export const USAGE_CLAUDE_ACCOUNT_CHANGED = 'usage:claude-account-changed';
 
 export interface ClaudeAccountUsageSnapshot {
   /**
-   * 当前周期(网关部署为 30d / 月度) 跨所有客户端 + 所有 API key 的累计花费 USD,
-   * 来自 LiteLLM user.spend。不只本机本壳。
+   * 当前周期(网关部署为 30d / 月度) 跨所有客户端 + 所有 API key 的累计花费,
+   * 来自 Gateway user.spend，数值保持部署区域原生金额。不只本机本壳。
    */
   spend: number;
-  /** 周期内预算上限 USD (来自 LiteLLM user.max_budget)。 */
+  /** 周期内预算上限，保持 Gateway 原值 (来自 user.max_budget)。 */
   maxBudget: number;
   /** 下次重置时间 ISO8601 (来自 user.budget_reset_at)。 */
   budgetResetAt?: string | null;
   /**
-   * 今日 (UTC 日) 跨所有客户端累计 USD, 来自 LiteLLM /user/daily/activity 的
+   * 今日 (UTC 日) 跨所有客户端累计金额，保持 Gateway 原值，来自
+   * LiteLLM /user/daily/activity 的
    * results[0].metrics.spend。null = 端点暂时拉不到 (跟 cycle 是两个独立 fetch,
    * 任一可能失败); chip 的 daily 段会因此变 unavailable。
    */
@@ -194,7 +195,7 @@ async function fetchOnce(): Promise<ClaudeAccountUsageSnapshot | null> {
     if (!cycle) return null;
     const todaySpend = dailyActivity ? resolveDailyActivitySpend(dailyActivity).todaySpend : null;
     log.info(
-      `refreshed cycle=$${cycle.spend.toFixed(2)}/$${cycle.maxBudget.toFixed(2)} today=${todaySpend == null ? 'n/a' : `$${todaySpend.toFixed(2)}`} resetAt=${cycle.budgetResetAt ?? 'n/a'}`,
+      `refreshed cycle=${cycle.spend.toFixed(2)}/${cycle.maxBudget.toFixed(2)} today=${todaySpend == null ? 'n/a' : todaySpend.toFixed(2)} resetAt=${cycle.budgetResetAt ?? 'n/a'}`,
     );
     return {
       spend: cycle.spend,

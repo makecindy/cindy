@@ -57,6 +57,9 @@ export function formatMoney(money: RegionalMoney): string {
 export function formatTurnCostMoney(money: RegionalMoney): string {
   const symbol = money.currency === 'CNY' ? '¥' : '$';
   const approximate = money.approximate ? '≈' : '';
+  if (money.amount === 0) {
+    return `${approximate}${symbol}0.00`;
+  }
   if (money.amount >= 0.01) {
     return `${approximate}${symbol}${money.amount.toFixed(2)}`;
   }
