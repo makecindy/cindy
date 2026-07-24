@@ -19,12 +19,14 @@ describe('renderOrcaLeadSystemPrompt', () => {
     'If the user assigns a task to a generic Orca Worker but no worker exists, say so and ask whether to create one; the assignment itself is not authorization to create it.';
   const multiRoleReadinessBoundary =
     'For a multi-role request, resolve every requested role or label before dispatching any task; if any target is missing or its creation approval is unresolved, dispatch nothing, report all missing targets, and ask first.';
+  const multiRoleBatchBoundary =
+    'For a fully resolved multi-role request, issue every required Orca dispatch in one parallel tool-call batch';
   const sendDispatchSignals =
     'Treat send_to_worker as dispatched only when its payload has ok=true and wake_kind=resumed, already-active, or queued.';
   const createDispatchSignals =
     'Treat create_worker, and each created result from create_workers, as dispatched only when it has dispatched=true, a queued_message_id, or dispatch_outcome.kind=session-dispatch with dispatch_outcome.dispatched=true (including dispatch_outcome.wakeKind=queued).';
   const batchResultRule =
-    'After create_workers returns, always relay user_report verbatim when present and summarize every per-item result or error.';
+    'After a multi-role tool-call batch returns, always relay create_workers.user_report verbatim when present, summarize every create_workers per-item result or error, and report every other failed/no-dispatch tool result.';
 
   it('routes explicit Worker assignments through Orca before considering native subagents', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
@@ -55,11 +57,15 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(sendDispatchSignals);
     expect(prompt).toContain(createDispatchSignals);
     expect(prompt).toContain(batchResultRule);
+    expect(prompt).toContain(multiRoleBatchBoundary);
     expect(prompt).toContain(
-      'If at least one result has the concrete dispatch signals above, end the turn immediately after that single batch report',
+      'send_to_worker for existing targets, create_worker for exactly one authorized new target, and one create_workers call for 2+ authorized new targets.',
     );
     expect(prompt).toContain(
-      'Otherwise, report the result and do not wait or poll.',
+      'If any task has the concrete dispatch signals above, end the turn immediately after that single combined result report.',
+    );
+    expect(prompt).toContain(
+      'If every task dispatched and no create_workers report is required, produce ZERO output.',
     );
     expect(prompt).not.toContain(
       'After create_worker, create_workers, or send_to_worker returns, your turn is OVER.',
@@ -77,6 +83,9 @@ describe('renderOrcaLeadSystemPrompt', () => {
     );
     expect(prompt).toContain(
       'Silence is tied to the concrete dispatch signals above, not merely to calling a tool.',
+    );
+    expect(prompt).toContain(
+      'For a fully resolved multi-role request, issue all required Orca dispatches together in the one parallel tool-call batch described above',
     );
     expect(prompt).not.toContain('when the tool result says a task was accepted or queued');
   });
