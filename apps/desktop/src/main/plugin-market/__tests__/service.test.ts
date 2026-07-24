@@ -14,6 +14,7 @@ const runtime = vi.hoisted(() => ({
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
   accountGhostAvailable: true,
+  boundaryPending: false,
   session: {
     mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
     dataOwnerId: 'user-1' as string | null,
@@ -31,7 +32,7 @@ vi.mock('../../authManager.js', () => ({
 }));
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
-  isAppSessionBoundaryPending: vi.fn(() => false),
+  isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
     path.join(os.tmpdir(), 'owners', runtime.session.dataOwnerId ?? 'local', ...parts),
   ),
@@ -68,6 +69,7 @@ afterEach(() => {
   runtime.uninstall.mockReset();
   runtime.builtinRemoved.clear();
   runtime.accountGhostAvailable = true;
+  runtime.boundaryPending = false;
   runtime.session = {
     mode: 'cloud',
     dataOwnerId: 'user-1',
@@ -221,6 +223,17 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'authentication-required',
+    });
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  it('uses a switching reason while the account boundary is pending', async () => {
+    runtime.boundaryPending = true;
+    const h = harness([summary()]);
+
+    await expect(h.service.snapshot()).resolves.toEqual({
+      items: [],
+      unavailableReason: 'session-switching',
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });

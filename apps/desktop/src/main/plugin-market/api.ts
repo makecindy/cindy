@@ -7,8 +7,8 @@ import {
   type PluginDownloadResponse,
 } from '@cindy/plugin-protocol';
 
-import { getClientEndpoint } from '../clientEndpointsService';
-import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient';
+import { getClientEndpoint } from '../clientEndpointsService.js';
+import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
 
 type Fetcher = <T>(
   apiPath: string,

@@ -168,7 +168,12 @@ export class PluginMarketService {
     try {
       owner = captureMarketOwner();
     } catch {
-      return { items: [], unavailableReason: 'authentication-required' };
+      return {
+        items: [],
+        unavailableReason: isAppSessionBoundaryPending()
+          ? 'session-switching'
+          : 'authentication-required',
+      };
     }
     if (!getClientEndpoint('pluginApiBaseUrl')) {
       return { items: [], unavailableReason: 'not-configured' };

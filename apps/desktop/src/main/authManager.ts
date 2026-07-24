@@ -944,7 +944,12 @@ function clearAuth(
      * removeSafe 会把别人的新 token 删掉,把对方也踢成半死。
      */
     preservePersistedRefreshToken?: boolean;
-    /** Defer changing the active owner until the enclosing teardown completes. */
+    /**
+     * Clear auth fields immediately, but defer publishing the signed-out
+     * owner until the enclosing teardown completes. Owner-bound consumers are
+     * blocked while the boundary is pending so they cannot enter a temporary
+     * namespace during teardown.
+     */
     deferSessionCommit?: boolean;
   } = {},
 ): void {

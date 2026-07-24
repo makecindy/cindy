@@ -1805,7 +1805,7 @@ export async function installOrUpdateMarketGhostPackage(
     nodeAuthorizationWebContents?: WebContents;
   },
 ): Promise<InstalledGhost> {
-  const releaseMutation = beginGhostMutation();
+  let releaseMutation: (() => void) | null = null;
   try {
     const manager = getGhostManager();
     const inspected = await manager.inspect(cindyFilePath);
@@ -1841,6 +1841,11 @@ export async function installOrUpdateMarketGhostPackage(
         );
       }
     }
+    // Hold the owner-stability lease only for the actual Ghost filesystem
+    // mutation. Node authorization is an unbounded user interaction; keeping
+    // the lease across it would block account teardown indefinitely if the
+    // dialog is left unanswered.
+    releaseMutation = beginGhostMutation();
     if (!installed) {
       // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
       return installAndDock(manager, cindyFilePath, {
@@ -1878,7 +1883,7 @@ export async function installOrUpdateMarketGhostPackage(
     spawnIfResident(result.ghost);
     return result.ghost;
   } finally {
-    releaseMutation();
+    releaseMutation?.();
   }
 }
 
