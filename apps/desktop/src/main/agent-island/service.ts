@@ -616,8 +616,12 @@ export class AgentIslandService {
       this.deferredCompletions.delete(hydrated.sessionId);
     }
     if (process.platform === 'darwin' && event.type === 'tool_result_full') {
-      const data = event.data as { fullText?: string } | undefined;
-      const folderKind = data?.fullText ? detectProtectedFolderEperm(data.fullText) : null;
+      const data = event.data as { fullText?: string; isError?: boolean } | undefined;
+      // Codex marks successful results explicitly; Claude Code currently omits isError.
+      // Skip only a known success so Claude Code EPERM output still receives guidance.
+      const folderKind = data?.isError !== false && data?.fullText
+        ? detectProtectedFolderEperm(data.fullText)
+        : null;
       if (folderKind && shouldShowEpermGuidance(folderKind)) {
         void this.showFolderEpermGuidance(folderKind).catch((error: unknown) => {
           releaseEpermGuidance(folderKind);

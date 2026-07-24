@@ -1459,7 +1459,6 @@ describe('AgentIslandService native publishing', () => {
         data: {
           toolUseId: 'tool-1',
           fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Desktop/blocked.txt'`,
-          isError: true,
         },
       };
 
@@ -1512,6 +1511,36 @@ describe('AgentIslandService native publishing', () => {
         mainWindow,
         expect.objectContaining({ message: 'Cindy cannot access your Documents folder' }),
       );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('does not show protected-folder guidance for an explicitly successful tool result', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish: vi.fn(() => true) },
+      });
+
+      service.handleAgentEvent(
+        { sessionId: 's1', agentKind: 'codex' },
+        {
+          type: 'tool_result_full',
+          source: 'codex',
+          data: {
+            toolUseId: 'tool-1',
+            fullText: `Log excerpt: EPERM under '${process.env.HOME}/Desktop/blocked.txt'`,
+            isError: false,
+          },
+        },
+      );
+      await Promise.resolve();
+
+      expect(mocks.showMessageBox).not.toHaveBeenCalled();
+      expect(mocks.openExternal).not.toHaveBeenCalled();
     } finally {
       platformSpy.mockRestore();
     }
