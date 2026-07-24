@@ -251,6 +251,18 @@ function createChatBridgeDecision(
             : [existing, instructions].filter(Boolean).join('\n\n'),
         };
       }
+      // localHandler 在 transform 链**之前**执行(引擎按路由决策短路),跨来源恢复的
+      // 加密压缩块不会被 createCrossProviderCompactionCompatTransform 处理;而 bridge
+      // 的翻译层遇到 compaction 项会按不支持的输入 400(Greptile P1 第二轮)。Chat
+      // bridge 目标上游定义上永远不是 ChatGPT,这里无条件做同一份替换。
+      const compactionSafe = replaceEncryptedCompactionItems(body);
+      if (compactionSafe) {
+        log.info('replaced encrypted compaction history for chat-bridge upstream', {
+          providerId,
+          upstreamBase: route.routing.upstream,
+        });
+        body = compactionSafe;
+      }
       return handler.handle({ parsedBody: body, res });
     },
   };
@@ -627,39 +639,50 @@ function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
   }
 }
 
+/**
+ * 把 body.input 里**确实携带加密内容**的压缩项替换为明文占位 user message。
+ * 返回 null = 无压缩项,零改写。透明转发路径(transform 链)与 Chat bridge
+ * localHandler 路径共用——两条路都可能重放跨来源恢复的加密压缩历史。
+ *
+ * 只替换 encrypted_content 非空的项(codex wire 上 Compaction.encrypted_content
+ * 必填、ContextCompaction 可选):未来若出现可读/非加密的 compaction 变体,
+ * 不在「上游解不开」的问题域内,原样透传交给目标上游/翻译层自行处理。
+ */
+function replaceEncryptedCompactionItems(body: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+  let changed = false;
+  const input = body.input.map((item) => {
+    if (
+      isPlainObject(item) &&
+      (item.type === 'compaction' || item.type === 'context_compaction') &&
+      typeof item.encrypted_content === 'string' &&
+      item.encrypted_content.length > 0
+    ) {
+      changed = true;
+      return {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: COMPACTION_UNAVAILABLE_NOTE }],
+      };
+    }
+    return item;
+  });
+  return changed ? { ...body, input } : null;
+}
+
 export function createCrossProviderCompactionCompatTransform(): RequestTransform {
   return (body, ctx) => {
-    if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
     // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
     // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
     if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
-    let changed = false;
-    const input = body.input.map((item) => {
-      // 只替换**确实携带加密内容**的压缩项(codex wire 上 Compaction.encrypted_content
-      // 必填、ContextCompaction 可选):未来若出现可读/非加密的 compaction 变体,
-      // 不在“上游解不开”的问题域内,原样透传交给目标上游自行处理。
-      if (
-        isPlainObject(item) &&
-        (item.type === 'compaction' || item.type === 'context_compaction') &&
-        typeof item.encrypted_content === 'string' &&
-        item.encrypted_content.length > 0
-      ) {
-        changed = true;
-        return {
-          type: 'message',
-          role: 'user',
-          content: [{ type: 'input_text', text: COMPACTION_UNAVAILABLE_NOTE }],
-        };
-      }
-      return item;
-    });
-    if (!changed) return null;
+    const replaced = replaceEncryptedCompactionItems(body);
+    if (!replaced) return null;
     log.info('replaced encrypted compaction history for non-ChatGPT upstream', {
       reqId: ctx.reqId,
       upstreamBase: ctx.upstreamBase,
       threadId: selectedThreadIdFromHeaders(ctx.headers),
     });
-    return { ...body, input };
+    return replaced;
   };
 }
 
