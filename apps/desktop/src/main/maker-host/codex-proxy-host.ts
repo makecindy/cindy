@@ -635,9 +635,14 @@ export function createCrossProviderCompactionCompatTransform(): RequestTransform
     if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
     let changed = false;
     const input = body.input.map((item) => {
+      // 只替换**确实携带加密内容**的压缩项(codex wire 上 Compaction.encrypted_content
+      // 必填、ContextCompaction 可选):未来若出现可读/非加密的 compaction 变体,
+      // 不在“上游解不开”的问题域内,原样透传交给目标上游自行处理。
       if (
         isPlainObject(item) &&
-        (item.type === 'compaction' || item.type === 'context_compaction')
+        (item.type === 'compaction' || item.type === 'context_compaction') &&
+        typeof item.encrypted_content === 'string' &&
+        item.encrypted_content.length > 0
       ) {
         changed = true;
         return {

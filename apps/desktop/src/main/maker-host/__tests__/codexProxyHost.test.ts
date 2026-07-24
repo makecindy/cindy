@@ -223,6 +223,16 @@ describe('createCrossProviderCompactionCompatTransform', () => {
       { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
     )).toBeNull();
   });
+
+  it('不携带加密内容的 compaction 变体原样透传(只处理"上游解不开"的加密块)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'gpt-5.5', input: [{ type: 'context_compaction', id: 'cc_2' }, { type: 'compaction', encrypted_content: '' }] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
+  });
 });
 
 describe('decideCodexRoute', () => {
