@@ -8,6 +8,23 @@ const usd = (value: number) =>
   new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(value);
 const jpy = (value: number) =>
   new Intl.NumberFormat(undefined, { style: 'currency', currency: 'JPY' }).format(value);
+const exactUsd = (whole: bigint, fraction: bigint) => {
+  const formatter = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+  });
+  const resolved = formatter.resolvedOptions();
+  const localizedFraction = new Intl.NumberFormat(resolved.locale, {
+    numberingSystem: resolved.numberingSystem,
+    useGrouping: false,
+    minimumIntegerDigits: 2,
+    maximumFractionDigits: 0,
+  }).format(fraction);
+  return formatter
+    .formatToParts(whole)
+    .map((part) => (part.type === 'fraction' ? localizedFraction : part.value))
+    .join('');
+};
 
 describe('formatBillingAmount', () => {
   it('rounds decimal midpoints half away from zero without IEEE 754 drift', () => {
@@ -22,6 +39,12 @@ describe('formatBillingAmount', () => {
 
   it('never renders negative zero', () => {
     expect(formatBillingAmount('-0.001', 'usd')).toBe(usd(0));
+  });
+
+  it('preserves cents when the currency-scaled value exceeds Number.MAX_SAFE_INTEGER', () => {
+    const amount = '999999999999999.94';
+    expect(formatBillingAmount(amount, 'usd')).toBe(exactUsd(999999999999999n, 94n));
+    expect(formatBillingAmount(amount, 'usd')).not.toBe(usd(Number(amount)));
   });
 
   it('falls back to the raw amount when the value is not numeric', () => {
@@ -39,5 +62,11 @@ describe('formatBillingMinorAmount', () => {
 
   it('handles zero-decimal currencies', () => {
     expect(formatBillingMinorAmount(120, 'jpy')).toBe(jpy(120));
+  });
+
+  it('preserves every minor unit up to Number.MAX_SAFE_INTEGER', () => {
+    expect(formatBillingMinorAmount(Number.MAX_SAFE_INTEGER, 'usd')).toBe(
+      exactUsd(90071992547409n, 91n),
+    );
   });
 });
