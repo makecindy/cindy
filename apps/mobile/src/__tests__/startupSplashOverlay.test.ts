@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { darkColors, lightColors } from "@/theme/tokens";
+import { darkColors, lightColors, motionDuration } from "@/theme/tokens";
 
 /**
  * 启动 splash 覆盖层契约:启动闸门链全程共用根部一个常驻 splash 实例。
@@ -42,13 +44,23 @@ describe("startup splash overlay", () => {
     expect(layout).toContain("if (auth.initialized) releaseSplash();");
   });
 
-  it("fades out with a one-shot compositor-only opacity animation", () => {
+  it("fades the Android native-frame bridge before releasing the outer overlay", () => {
     const overlay = read("src/components/StartupSplashOverlay.tsx");
 
     expect(overlay).toContain("useNativeDriver: true");
     expect(overlay).toContain("StyleSheet.absoluteFill");
     expect(overlay).toContain("<CenteredScreen");
     expect(overlay).toContain('variant="splash"');
+    expect(overlay).toContain("nativeSplashHeroAsset");
+    expect(overlay).toContain("colors.brandSplashBackground");
+    expect(overlay).toContain("height: 128");
+    expect(overlay).toContain("width: 128");
+    expect(overlay).toContain("duration: motionDuration.fast");
+    expect(motionDuration.fast).toBe(150);
+    expect(overlay).toContain(
+      "if (releaseRequested && !nativeBridgeMounted) setReleased(true);",
+    );
+    expect(overlay).toContain("handoffContext?.state.reducedMotion");
   });
 
   it("keeps iOS unchanged while Android uses a theme-independent brand anchor", () => {
@@ -96,13 +108,74 @@ describe("startup splash overlay", () => {
     // Android 12 无 icon background 的安全圆直径是 192dp。prebuild 后对 288dp
     // splashscreen_logo 做 alpha 像素扫描,这份 hero 在 imageWidth=128 时的最远不透明
     // 像素半径为 53.6dp(<96dp)。锁住资产字节,后续换图必须重新做安全圆验证并更新契约。
-    const heroSha256 = createHash("sha256")
-      .update(
-        readFileSync(resolve(process.cwd(), "assets/login/login-hero@2x.png")),
-      )
-      .digest("hex");
-    expect(heroSha256).toBe(
+    const heroSha256 = (file: string) =>
+      createHash("sha256")
+        .update(readFileSync(resolve(process.cwd(), file)))
+        .digest("hex");
+    expect(heroSha256("assets/login/login-hero@2x.png")).toBe(
       "4e0ce24b482ac28e1160ded2166a29a0054f497c5f63a21b7211805e9aa3ff01",
+    );
+    // JS bridge 的无倍率 require 在高密度设备会选 @3x，亦需锁住同构资产。
+    expect(heroSha256("assets/login/login-hero@3x.png")).toBe(
+      "d3cb03089d71e8f6cb6402ebce78009e5a72555380f81eaf932b74d96be0e8da",
+    );
+  });
+
+  it("generates a dedicated Android splash icon and the same light/night brand background", () => {
+    const nodeRequire = createRequire(import.meta.url);
+    const expoCli = nodeRequire.resolve("expo/bin/cli");
+    const introspected = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [expoCli, "config", "--type", "introspect", "--json"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, NODE_ENV: "development" },
+        },
+      ),
+    ) as {
+      _internal: {
+        modResults: {
+          android: {
+            colors: { resources: { color: AndroidResource[] } };
+            colorsNight: { resources: { color: AndroidResource[] } };
+            styles: { resources: { style: AndroidStyle[] } };
+          };
+        };
+      };
+    };
+    const android = introspected._internal.modResults.android;
+    const splashStyle = android.styles.resources.style.find(
+      (style) => style.$.name === "Theme.App.SplashScreen",
+    );
+    const splashItems = Object.fromEntries(
+      (splashStyle?.item ?? []).map((item) => [item.$.name, item._]),
+    );
+    const colorValue = (resources: AndroidResource[]) =>
+      resources.find((color) => color.$.name === "splashscreen_background")?._;
+
+    expect(splashItems.windowSplashScreenAnimatedIcon).toBe(
+      "@drawable/splashscreen_logo",
+    );
+    expect(splashItems.windowSplashScreenBackground).toBe(
+      "@color/splashscreen_background",
+    );
+    expect(colorValue(android.colors.resources.color)).toBe(
+      lightColors.brandSplashBackground,
+    );
+    expect(colorValue(android.colorsNight.resources.color)).toBe(
+      darkColors.brandSplashBackground,
     );
   });
 });
+
+interface AndroidResource {
+  _: string;
+  $: { name: string };
+}
+
+interface AndroidStyle {
+  $: { name: string };
+  item?: AndroidResource[];
+}
