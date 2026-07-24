@@ -13,10 +13,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => {
   const selectResults: unknown[][] = [];
   let throwOnSelect = false;
-  // 默认:文件系统里什么都不存在(statSync 抛错)→ DB-only 用例行为与旧版一致。
-  let statImpl: (p: string) => { isDirectory(): boolean } = () => {
-    throw new Error('ENOENT');
+  // 默认:文件系统里什么都不存在→ DB-only 用例行为与旧版一致。
+  let statImpl: (p: string) => Promise<{ isDirectory(): boolean }> = async () => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' });
   };
+  const statSpy = vi.fn((p: string) => statImpl(p));
   const fakeDb = {
     select: () => {
       if (throwOnSelect) throw new Error('db down');
@@ -29,16 +30,19 @@ const h = vi.hoisted(() => {
     setThrow: (v: boolean) => {
       throwOnSelect = v;
     },
-    setStat: (fn: (p: string) => { isDirectory(): boolean }) => {
+    setStat: (fn: (p: string) => Promise<{ isDirectory(): boolean }>) => {
       statImpl = fn;
     },
-    callStat: (p: string) => statImpl(p),
+    statSpy,
   };
 });
 
-vi.mock('node:fs', () => ({ statSync: (p: string) => h.callStat(p) }));
+vi.mock('node:fs/promises', () => ({ stat: (p: string) => h.statSpy(p) }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
-vi.mock('../localDb/schema', () => ({ sessions: { workingDir: 'wd' }, recentWorkdirs: { path: 'p' } }));
+vi.mock('../localDb/schema', () => ({
+  sessions: { workingDir: 'wd' },
+  recentWorkdirs: { path: 'p' },
+}));
 vi.mock('../../shared/workingDir', () => ({
   normalizeWorkingDirForStorage: (p: string | null | undefined) => {
     if (!p) return null;
@@ -50,16 +54,21 @@ vi.mock('../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
 
-import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard.js';
+import {
+  checkRemoteWorkingDir,
+  isRemoteWorkingDirAllowed,
+  probeRemoteDirectory,
+} from '../device-link/remote-workdir-guard.js';
 
-const asDir = () => ({ isDirectory: () => true });
-const asFile = () => ({ isDirectory: () => false });
+const asDir = async () => ({ isDirectory: () => true });
+const asFile = async () => ({ isDirectory: () => false });
 
 beforeEach(() => {
   h.selectResults.length = 0;
   h.setThrow(false);
-  h.setStat(() => {
-    throw new Error('ENOENT');
+  h.statSpy.mockClear();
+  h.setStat(async () => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' });
   });
 });
 
@@ -71,6 +80,7 @@ describe('isRemoteWorkingDirAllowed', () => {
   it('命中最近工作目录(分隔符/尾斜杠归一)→ 放行(不查 fs)', async () => {
     h.selectResults.push([{ path: '/proj/a' }]);
     expect(await isRemoteWorkingDirAllowed('/proj/a/')).toBe(true); // 尾斜杠归一后相等
+    expect(h.statSpy).not.toHaveBeenCalled();
   });
 
   it('最近目录未命中但命中已有会话目录 → 放行', async () => {
@@ -117,5 +127,44 @@ describe('isRemoteWorkingDirAllowed', () => {
     h.setThrow(true);
     // 默认 statSync 抛 ENOENT
     expect(await isRemoteWorkingDirAllowed('/proj/a')).toBe(false);
+  });
+
+  it('异步探测 pending 时主线程仍可执行 timer,且按业务超时收敛', async () => {
+    h.selectResults.push([]);
+    h.selectResults.push([]);
+    h.setStat(() => new Promise(() => undefined));
+
+    const check = checkRemoteWorkingDir('/disconnected/share', { timeoutMs: 20 });
+    let eventLoopAdvanced = false;
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        eventLoopAdvanced = true;
+        resolve();
+      }, 0);
+    });
+
+    expect(eventLoopAdvanced).toBe(true);
+    await expect(check).resolves.toEqual({ allowed: false, reason: 'timeout' });
+  });
+
+  it('区分不存在、非目录与网络不可达', async () => {
+    await expect(
+      probeRemoteDirectory('/missing', {
+        stat: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        },
+      }),
+    ).resolves.toEqual({ allowed: false, reason: 'not-found' });
+    await expect(probeRemoteDirectory('/file', { stat: asFile })).resolves.toEqual({
+      allowed: false,
+      reason: 'not-directory',
+    });
+    await expect(
+      probeRemoteDirectory('/offline', {
+        stat: async () => {
+          throw Object.assign(new Error('offline'), { code: 'EHOSTUNREACH' });
+        },
+      }),
+    ).resolves.toEqual({ allowed: false, reason: 'unavailable' });
   });
 });

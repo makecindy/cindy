@@ -4,7 +4,11 @@
   },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
-    "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
+    "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
+    "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
+    "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
+    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",

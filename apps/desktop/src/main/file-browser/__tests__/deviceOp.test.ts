@@ -8,16 +8,21 @@
  *   5. watch 订阅生命周期:onFsWatchSubscribed → 真实 fs 变更 → push 出口收到事件
  */
 
-import { mkdtemp, mkdir, rm, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat as fsStat, writeFile as fsWriteFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
 
 const pushSpy = vi.fn();
-const guardMock = vi.fn(async (_dir: string) => true);
+const guardMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>(async () => ({
+  allowed: true,
+  source: 'known',
+}));
+const probeMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>();
 const sshRequestMock = vi.fn();
 const dbRowsMock = vi.fn((): Array<{ remoteHostId: string | null }> => []);
 
@@ -28,9 +33,14 @@ const uploadMock = vi.fn(async (p: string) => ({ key: `oss/${p.split('/').pop()}
 vi.mock('../../device-link/mediaTransfer.js', () => ({
   uploadLocalFile: (p: string) => uploadMock(p),
 }));
-vi.mock('../../device-link/remote-workdir-guard.js', () => ({
-  isRemoteWorkingDirAllowed: (dir: string) => guardMock(dir),
-}));
+vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../device-link/remote-workdir-guard.js')>();
+  return {
+    ...actual,
+    checkRemoteWorkingDir: (dir: string) => guardMock(dir),
+    probeRemoteDirectory: (dir: string) => probeMock(dir),
+  };
+});
 vi.mock('../../device-link/dispatch.js', () => ({
   pushToTopicSubscribers: (channel: string, payload: unknown) => pushSpy(channel, payload),
 }));
@@ -75,7 +85,17 @@ describe('file-browser device-op', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    guardMock.mockResolvedValue(true);
+    guardMock.mockResolvedValue({ allowed: true, source: 'known' });
+    probeMock.mockImplementation(async (dir: string) => {
+      try {
+        const entry = await fsStat(dir);
+        return entry.isDirectory()
+          ? { allowed: true as const, source: 'filesystem' as const }
+          : { allowed: false as const, reason: 'not-directory' as const };
+      } catch {
+        return { allowed: false as const, reason: 'not-found' as const };
+      }
+    });
     dbRowsMock.mockReturnValue([]);
     workdir = await mkdtemp(path.join(os.tmpdir(), 'device-op-'));
     await mkdir(path.join(workdir, 'src'));
@@ -90,9 +110,19 @@ describe('file-browser device-op', () => {
 
   it('rejects invalid args and guard-denied workdir', async () => {
     expect(await handleRemoteOp({ op: 'listDir', workdir: '' })).toMatchObject({ ok: false });
-    guardMock.mockResolvedValue(false);
-    await expect(handleRemoteOp({ op: 'listDir', workdir })).rejects.toThrow(/not allowed/);
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    await expect(handleRemoteOp({ op: 'listDir', workdir })).rejects.toThrow(
+      /REMOTE_WORKDIR_NOT_FOUND/,
+    );
     expect(guardMock).toHaveBeenCalledWith(workdir);
+  });
+
+  it('known network workdir whose async endpoint probe times out is rejected clearly', async () => {
+    probeMock.mockResolvedValue({ allowed: false, reason: 'timeout' });
+
+    await expect(handleRemoteOp({ op: 'listDir', workdir })).rejects.toThrow(
+      /REMOTE_WORKDIR_UNAVAILABLE/,
+    );
   });
 
   it('local listDir / readFile / stat match local handler shapes', async () => {
@@ -269,7 +299,7 @@ describe('file-browser device-op', () => {
   });
 
   it('watch: guard-denied workdir never starts watching', async () => {
-    guardMock.mockResolvedValue(false);
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
     await onFsWatchSubscribed(workdir);
     await fsWriteFile(path.join(workdir, 'src', 'nope.ts'), 'n\n', 'utf8');
     await new Promise((r) => setTimeout(r, 250));

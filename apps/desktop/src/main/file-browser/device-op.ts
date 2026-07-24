@@ -8,7 +8,7 @@
  * 过旧"占位。
  *
  * 安全:
- *  - workdir 参数经 `isRemoteWorkingDirAllowed` 收敛(recents → 已有会话
+ *  - workdir 参数经 `checkRemoteWorkingDir` 收敛(recents → 已有会话
  *    workdir → 真实存在目录)。判据顺序对嵌套至关重要:被控端 SSH remote
  *    会话的 workdir 是远端路径,只能靠"已有会话 workdir"命中,fs 存在性
  *    检查对它必然 false。
@@ -32,7 +32,6 @@
  * watch;断链清理/重连重放天然覆盖)。事件经 pushToTopicSubscribers 推回。
  */
 
-import { statSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { gzip as gzipCb, gunzip as gunzipCb } from 'node:zlib';
@@ -64,7 +63,13 @@ import { WorkdirWatchManager } from '@cindy/remote-file-service';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard.js';
+import {
+  checkRemoteWorkingDir,
+  probeRemoteDirectory,
+  remoteWorkingDirRejectionToIpcError,
+  type RemoteWorkingDirCheckResult,
+} from '../device-link/remote-workdir-guard.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
 import * as subscriptions from '../device-link/subscriptions.js';
@@ -161,7 +166,8 @@ interface RemoteOpArgs {
 type WorkdirExecution =
   | { kind: 'local' }
   | { kind: 'ssh'; hostId: string }
-  | { kind: 'ambiguous'; reason: string };
+  | { kind: 'ambiguous'; reason: string }
+  | { kind: 'unavailable'; reason: 'unavailable' | 'timeout' };
 
 /**
  * 判定执行位置。按 workdir 反查天然有歧义面:同一绝对路径可能同时是本地
@@ -172,13 +178,12 @@ type WorkdirExecution =
  * 无歧义时:本地真实目录 → local;唯一 SSH 归属 → ssh;都不命中属边缘态
  * (会话记录的目录已被删),按 local 执行让底层报 ENOENT,错误可读。
  */
-async function resolveWorkdirExecution(workdir: string): Promise<WorkdirExecution> {
-  let isLocalDir = false;
-  try {
-    isLocalDir = statSync(workdir).isDirectory();
-  } catch {
-    // 非本地目录
-  }
+async function resolveWorkdirExecution(
+  workdir: string,
+  knownProbe?: RemoteWorkingDirCheckResult,
+): Promise<WorkdirExecution> {
+  const localProbe = knownProbe ?? (await probeRemoteDirectory(workdir));
+  const isLocalDir = localProbe.allowed;
   let sshHosts: string[] = [];
   try {
     const db = getDbClient().drizzle;
@@ -189,7 +194,10 @@ async function resolveWorkdirExecution(workdir: string): Promise<WorkdirExecutio
     sshHosts = rows.map((r) => r.remoteHostId).filter((h): h is string => !!h);
   } catch (err) {
     log.warn('workdir execution lookup failed', { error: String(err) });
-    // 查询失败:退回本地语义(与旧行为一致);isLocalDir=false 时底层 ENOENT 可读。
+    if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+      return { kind: 'unavailable', reason: localProbe.reason };
+    }
+    // 查询失败:退回本地语义(与旧行为一致);明确不存在时由底层返回可读错误。
     return { kind: 'local' };
   }
   if (isLocalDir && sshHosts.length > 0) {
@@ -203,6 +211,9 @@ async function resolveWorkdirExecution(workdir: string): Promise<WorkdirExecutio
       kind: 'ambiguous',
       reason: `workdir belongs to multiple SSH hosts [${sshHosts.join(', ')}]`,
     };
+  }
+  if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+    return { kind: 'unavailable', reason: localProbe.reason };
   }
   if (isLocalDir) return { kind: 'local' };
   if (sshHosts.length === 1) return { kind: 'ssh', hostId: sshHosts[0] };
@@ -354,13 +365,19 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   if (args.op === 'caps') {
     return { ok: true as const, gzip: true as const };
   }
-  if (!(await isRemoteWorkingDirAllowed(args.workdir))) {
-    log.warn('remote-op workdir rejected by guard', { op: args.op, workdir: args.workdir });
+  const guardResult = await checkRemoteWorkingDir(args.workdir);
+  if (!guardResult.allowed) {
+    log.warn('remote-op workdir rejected by guard', {
+      op: args.op,
+      workdir: args.workdir,
+      reason: guardResult.reason,
+    });
     // throw(而非 resolve {ok:false}):经 invoke error 信封让 renderer 侧
     // reject,命中既有 catch/loadError 通路——listDir/stat 等成功形状不是
     // {ok} 的 op,resolve 错误对象会被当数据用(坏渲染且无错误提示),与
     // SSH 通道(throwRemoteFsIpcError 抛出)行为对齐。
-    throw new Error(`workdir not allowed: ${args.workdir}`);
+    const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+    throwIpcError(rejection.code, rejection.message);
   }
 
   // writeFile 内容的 gzip 形态在入口统一解码:本地与 SSH 二跳分支拿到的都是
@@ -380,9 +397,16 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     }
   }
 
-  const exec = await resolveWorkdirExecution(args.workdir);
+  const exec = await resolveWorkdirExecution(
+    args.workdir,
+    guardResult.source === 'filesystem' ? guardResult : undefined,
+  );
   const workdir = args.workdir;
 
+  if (exec.kind === 'unavailable') {
+    const rejection = remoteWorkingDirRejectionToIpcError(exec.reason);
+    throwIpcError(rejection.code, rejection.message);
+  }
   if (exec.kind === 'ambiguous') {
     // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
     // throw 理由同上 guard 分支:renderer 需要 reject 才能走 loadError 通路。
@@ -642,11 +666,19 @@ async function onFsWatchSubscribed(workdir: string): Promise<void> {
 }
 
 async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
-  if (!(await isRemoteWorkingDirAllowed(workdir))) {
-    log.warn('fs-watch subscribe rejected by guard', { workdir });
+  const guardResult = await checkRemoteWorkingDir(workdir);
+  if (!guardResult.allowed) {
+    log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
     return;
   }
-  const exec = await resolveWorkdirExecution(workdir);
+  const exec = await resolveWorkdirExecution(
+    workdir,
+    guardResult.source === 'filesystem' ? guardResult : undefined,
+  );
+  if (exec.kind === 'unavailable') {
+    log.warn('device fs-watch skipped: workdir unavailable', { workdir, reason: exec.reason });
+    return;
+  }
   if (exec.kind === 'ambiguous') {
     log.warn('device fs-watch skipped: workdir endpoint ambiguous', { workdir, reason: exec.reason });
     return;

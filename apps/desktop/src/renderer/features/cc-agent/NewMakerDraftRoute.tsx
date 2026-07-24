@@ -125,6 +125,7 @@ import {
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -1653,7 +1654,23 @@ export function NewMakerDraftRoute() {
           });
         } catch (err) {
           log.error('[draft send]', err);
-          toast.error(t('ccAgent.draft.createSessionFailed'));
+          const code = extractIpcError(err)?.code;
+          switch (code) {
+            case 'REMOTE_WORKDIR_INVALID':
+              toast.error(t('ipcError.REMOTE_WORKDIR_INVALID'));
+              break;
+            case 'REMOTE_WORKDIR_NOT_FOUND':
+              toast.error(t('ipcError.REMOTE_WORKDIR_NOT_FOUND'));
+              break;
+            case 'REMOTE_WORKDIR_NOT_DIRECTORY':
+              toast.error(t('ipcError.REMOTE_WORKDIR_NOT_DIRECTORY'));
+              break;
+            case 'REMOTE_WORKDIR_UNAVAILABLE':
+              toast.error(t('ipcError.REMOTE_WORKDIR_UNAVAILABLE'));
+              break;
+            default:
+              toast.error(t('ccAgent.draft.createSessionFailed'));
+          }
         } finally {
           setWtCreating(false);
           sendInFlightRef.current = false;

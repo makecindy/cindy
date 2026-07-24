@@ -56,6 +56,10 @@ import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/inde
 import { setBroadcastTapListener } from './broadcast-tap';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
+import {
+  remoteWorkingDirRejectionToIpcError,
+  type RemoteWorkingDirCheckResult,
+} from './remote-workdir-guard';
 
 const log = createLogger('device-link-dispatch');
 
@@ -102,12 +106,14 @@ const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = ne
   ['worktree:create', 'baseRepo'],
 ]);
 
-/** host 注入的 workingDir 校验器(null = 未注入,放行;测试默认不注入故行为不变) */
-let workingDirGuard: ((dir: string) => boolean | Promise<boolean>) | null = null;
+type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
+
+/** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
+let workingDirGuard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null = null;
 
 /** 注入远程 create/fork 的 workingDir 校验器(register.ts 在 maker 就绪后接入)。 */
 export function setRemoteWorkingDirGuard(
-  guard: ((dir: string) => boolean | Promise<boolean>) | null,
+  guard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null,
 ): void {
   workingDirGuard = guard;
 }
@@ -938,13 +944,25 @@ export async function runInvoke(
   const guardedField = PATH_GUARDED_CHANNELS.get(payload.channel);
   if (guardedField && workingDirGuard) {
     const dir = extractGuardedPath(payload.args ?? [], guardedField);
-    if (dir && !(await workingDirGuard(dir))) {
+    const guardResult = dir ? await workingDirGuard(dir) : true;
+    if (guardResult === false) {
       log.warn(`blocked remote ${payload.channel} to unknown ${guardedField} from ${shortId(src)}: ${dir}`);
       return {
         ok: false,
         error: {
           code: 'CHANNEL_NOT_ALLOWED',
           message: `${guardedField} not allowed for remote ${payload.channel}`,
+        },
+      };
+    }
+    if (guardResult !== true && !guardResult.allowed) {
+      const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+      log.warn(`blocked remote ${payload.channel} for ${guardedField} reason ${guardResult.reason} from ${shortId(src)}`);
+      return {
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message: `[${rejection.code}] ${rejection.message}`,
         },
       };
     }

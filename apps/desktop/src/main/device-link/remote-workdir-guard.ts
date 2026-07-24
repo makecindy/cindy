@@ -24,7 +24,9 @@
  * 路径仍一律不放行。
  */
 
-import { statSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
+
+import type { IpcErrorCode } from '../../shared/ipc-errors';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions, recentWorkdirs } from '../localDb/schema';
@@ -33,25 +35,124 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 
 const log = createLogger('device-link-workdir-guard');
 
+/** 网络目录探测不能占满 device-link 默认 invoke 的整个等待窗口。 */
+export const REMOTE_WORKDIR_PROBE_TIMEOUT_MS = 5_000;
+
+interface DirectoryStatLike {
+  isDirectory(): boolean;
+}
+
+export type RemoteDirectoryStat = (dir: string) => Promise<DirectoryStatLike>;
+
+export type RemoteWorkingDirRejectionReason =
+  'invalid' | 'not-found' | 'not-directory' | 'unavailable' | 'timeout';
+
+export type RemoteWorkingDirCheckResult =
+  | { allowed: true; source: 'known' | 'filesystem' }
+  | { allowed: false; reason: RemoteWorkingDirRejectionReason };
+
+export interface RemoteDirectoryProbeOptions {
+  stat?: RemoteDirectoryStat;
+  timeoutMs?: number;
+}
+
+function classifyStatError(err: unknown): RemoteWorkingDirRejectionReason {
+  const code =
+    err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
+      ? (err as { code: string }).code
+      : '';
+  if (code === 'ENOENT' || code === 'ENOTDIR') return 'not-found';
+  if (code === 'EINVAL' || code === 'ENAMETOOLONG') return 'invalid';
+  return 'unavailable';
+}
+
+/**
+ * 在 libuv worker 上异步探测目录,并在业务超时到期后先行收敛请求。
+ * `fs.stat` 本身不支持 AbortSignal,故晚到的 SMB 结果只会被忽略;它不会阻塞
+ * Electron 主线程,也不会形成 unhandled rejection。
+ */
+export async function probeRemoteDirectory(
+  dir: string,
+  options: RemoteDirectoryProbeOptions = {},
+): Promise<RemoteWorkingDirCheckResult> {
+  const statDirectory = options.stat ?? stat;
+  const timeoutMs = options.timeoutMs ?? REMOTE_WORKDIR_PROBE_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const probe = statDirectory(dir).then<RemoteWorkingDirCheckResult, RemoteWorkingDirCheckResult>(
+    (entry) =>
+      entry.isDirectory()
+        ? { allowed: true, source: 'filesystem' }
+        : { allowed: false, reason: 'not-directory' },
+    (err) => ({ allowed: false, reason: classifyStatError(err) }),
+  );
+  const timeout = new Promise<RemoteWorkingDirCheckResult>((resolve) => {
+    timer = setTimeout(() => resolve({ allowed: false, reason: 'timeout' }), timeoutMs);
+    timer.unref?.();
+  });
+  return await Promise.race([probe, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /** 该 workingDir 是否在被控端已知目录集合内,或在被控端真实存在的目录。 */
-export async function isRemoteWorkingDirAllowed(dir: string): Promise<boolean> {
+export async function checkRemoteWorkingDir(
+  dir: string,
+  probeOptions: RemoteDirectoryProbeOptions = {},
+): Promise<RemoteWorkingDirCheckResult> {
   const target = normalizeWorkingDirForStorage(dir);
-  if (!target) return false;
+  if (!target) return { allowed: false, reason: 'invalid' };
   try {
     const db = getDbClient().drizzle;
     const recents = await db.select({ path: recentWorkdirs.path }).from(recentWorkdirs);
-    if (recents.some((r) => normalizeWorkingDirForStorage(r.path) === target)) return true;
+    if (recents.some((r) => normalizeWorkingDirForStorage(r.path) === target)) {
+      return { allowed: true, source: 'known' };
+    }
     const rows = await db.select({ workingDir: sessions.workingDir }).from(sessions);
-    if (rows.some((r) => normalizeWorkingDirForStorage(r.workingDir) === target)) return true;
+    if (rows.some((r) => normalizeWorkingDirForStorage(r.workingDir) === target)) {
+      return { allowed: true, source: 'known' };
+    }
   } catch (err) {
     // DB 查询失败不直接拒:继续走「目录是否真实存在」兜底(下面),仍能挡掉不存在 / 非目录。
     log.warn('workingDir guard db query failed, falling back to fs check', err);
   }
   // 远程浏览选定的新目录:接受被控端上真实存在的目录(挡掉不存在路径 / 文件冒充目录)。
-  try {
-    return statSync(dir).isDirectory();
-  } catch {
-    // 不存在 / 无权访问 / 非法路径 → 不放行。
-    return false;
+  return await probeRemoteDirectory(dir, probeOptions);
+}
+
+/** 旧布尔调用方的兼容包装;需要结构化错误的边界应直接调用 checkRemoteWorkingDir。 */
+export async function isRemoteWorkingDirAllowed(dir: string): Promise<boolean> {
+  return (await checkRemoteWorkingDir(dir)).allowed;
+}
+
+/** 将 guard 拒绝原因收敛为稳定 IPC 错误,不向控制端暴露被控端绝对路径。 */
+export function remoteWorkingDirRejectionToIpcError(reason: RemoteWorkingDirRejectionReason): {
+  code: IpcErrorCode;
+  message: string;
+} {
+  switch (reason) {
+    case 'invalid':
+      return { code: 'REMOTE_WORKDIR_INVALID', message: 'Remote working directory is invalid.' };
+    case 'not-found':
+      return {
+        code: 'REMOTE_WORKDIR_NOT_FOUND',
+        message: 'Remote working directory does not exist.',
+      };
+    case 'not-directory':
+      return {
+        code: 'REMOTE_WORKDIR_NOT_DIRECTORY',
+        message: 'Remote working directory is not a directory.',
+      };
+    case 'timeout':
+      return {
+        code: 'REMOTE_WORKDIR_UNAVAILABLE',
+        message:
+          'Remote working directory check timed out. Reconnect the network drive and try again.',
+      };
+    case 'unavailable':
+      return {
+        code: 'REMOTE_WORKDIR_UNAVAILABLE',
+        message:
+          'Remote working directory is unavailable. Reconnect the network drive and try again.',
+      };
   }
 }
