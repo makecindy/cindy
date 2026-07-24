@@ -42,30 +42,30 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(resolveLoginStage(750, 2000).designHeight).toBe(1800);
   });
 
-  it('短屏档 1334:cindy/slogan/word/loginY 逐字段等于 wave3.5 旧表', () => {
+  it('短屏档 1334:cindy/slogan/word/loginY 逐字段等于 wave3.5 旧表(2026-07-24 拍板整体上移 40 设计px,hero 不动)', () => {
     const layout = resolveLoginStage(375, 667); // scale 0.5 → dh 1334
     expect(layout.designHeight).toBe(1334);
     expectBox(layout.cindy, { x: 75, y: 107, w: 599, h: 720 });
-    expectBox(layout.slogan, { x: 462.55, y: 480.33, w: 254.01, h: 72.8 });
-    expectBox(layout.word, { x: 199, y: 594.48, w: 352.93, h: 120.54 });
-    expect(layout.loginY).toBe(734);
+    expectBox(layout.slogan, { x: 462.55, y: 440.33, w: 254.01, h: 72.8 });
+    expectBox(layout.word, { x: 199, y: 554.48, w: 352.93, h: 120.54 });
+    expect(layout.loginY).toBe(694);
   });
 
-  it('长屏档 1624:双区统一 y=116 的 long 表逐字段命中', () => {
+  it('长屏档 1624:双区统一 y=116 的 long 表逐字段命中(2026-07-24 拍板整体上移 40 设计px,hero 不动)', () => {
     const layout = resolveLoginStage(375, 812); // scale 0.5 → dh 1624
     expect(layout.designHeight).toBe(1624);
     expectBox(layout.cindy, { x: 0, y: 116, w: 750, h: 902 });
-    expectBox(layout.slogan, { x: 387, y: 686, w: 321, h: 92 });
-    expectBox(layout.word, { x: 175, y: 814, w: 401, h: 137 });
-    expect(layout.loginY).toBe(973);
+    expectBox(layout.slogan, { x: 387, y: 646, w: 321, h: 92 });
+    expectBox(layout.word, { x: 175, y: 774, w: 401, h: 137 });
+    expect(layout.loginY).toBe(933);
   });
 
   it('两档间 lerp:designHeight=1479 中点全字段线性插值(含 loginY)', () => {
     const layout = resolveLoginStage(750, 1479); // scale 1 → dh 1479,t=0.5
     expectBox(layout.cindy, { x: 37.5, y: 111.5, w: 674.5, h: 811 });
-    expectBox(layout.slogan, { x: 424.775, y: 583.165, w: 287.505, h: 82.4 });
-    expectBox(layout.word, { x: 187, y: 704.24, w: 376.965, h: 128.77 });
-    expect(layout.loginY).toBeCloseTo(853.5, 6);
+    expectBox(layout.slogan, { x: 424.775, y: 543.165, w: 287.505, h: 82.4 });
+    expectBox(layout.word, { x: 187, y: 664.24, w: 376.965, h: 128.77 });
+    expect(layout.loginY).toBeCloseTo(813.5, 6);
   });
 
   it('两档外超长:designHeight clamp 1800 → t=1 长屏几何原样', () => {
@@ -77,10 +77,10 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(layout.loginY).toBe(LOGIN_STAGE_LONG.loginY);
   });
 
-  it('两档外短屏:功能区优先 v 压缩视觉区,loginY=max(0,dh-600)', () => {
-    // dh=1000:v=(1000-600)/734≈0.5449591;视觉区以 (375,0) 为锚缩放
+  it('两档外短屏:功能区优先 v 压缩视觉区,loginY=max(0,dh-640)(2026-07-24 拍板上移 40:dh-600→dh-640,dh=1334 边界与 SHORT.loginY=694 连续)', () => {
+    // dh=1000:v=(1000-600)/734≈0.5449591;视觉区以 (375,0) 为锚缩放(v 公式不动)
     const layout = resolveLoginStage(750, 1000);
-    expect(layout.loginY).toBe(400);
+    expect(layout.loginY).toBe(360);
     expectBox(layout.cindy, {
       x: 211.51226158038146,
       y: 58.31062670299727,

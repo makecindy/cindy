@@ -47,25 +47,31 @@ export const LOGIN_STAGE_MIN_DESIGN_HEIGHT = 600;
 /** designHeight clamp 上限(demo stage 解析 1800)。 */
 export const LOGIN_STAGE_MAX_DESIGN_HEIGHT = 1800;
 
-/** 短屏档(designHeight=1334;inner 几何 347:2884 实测,wave3.5 旧表)。 */
+/**
+ * 短屏档(designHeight=1334;inner 几何 347:2884 实测,wave3.5 旧表)。
+ * 2026-07-24 用户拍板:协议行距屏幕底过近,视觉+功能区整体上移 40 设计px(hero 不动)——
+ * slogan.y 480.33→440.33、word.y 594.48→554.48、loginY 734→694。
+ */
 export const LOGIN_STAGE_SHORT = {
   designHeight: 1334,
   cindy: { x: 75, y: 107, w: 599, h: 720 },
-  slogan: { x: 462.55, y: 480.33, w: 254.01, h: 72.8 },
-  word: { x: 199, y: 594.48, w: 352.93, h: 120.54 },
-  loginY: 734,
+  slogan: { x: 462.55, y: 440.33, w: 254.01, h: 72.8 },
+  word: { x: 199, y: 554.48, w: 352.93, h: 120.54 },
+  loginY: 694,
 } as const;
 
 /**
  * 长屏档(designHeight=1624;358:434 实测)。立绘 y=116 双区统一
  * (〔已拍板 2026-07-19〕国区 116 vs 国际区旧帧 96 为设计稿内部不一致,取最新批次帧)。
+ * 2026-07-24 用户拍板:协议行距屏幕底过近,视觉+功能区整体上移 40 设计px(hero 不动)——
+ * slogan.y 686→646、word.y 814→774、loginY 973→933。
  */
 export const LOGIN_STAGE_LONG = {
   designHeight: 1624,
   cindy: { x: 0, y: 116, w: 750, h: 902 },
-  slogan: { x: 387, y: 686, w: 321, h: 92 },
-  word: { x: 175, y: 814, w: 401, h: 137 },
-  loginY: 973,
+  slogan: { x: 387, y: 646, w: 321, h: 92 },
+  word: { x: 175, y: 774, w: 401, h: 137 },
+  loginY: 933,
 } as const;
 
 function lerp(a: number, b: number, t: number): number {
@@ -79,7 +85,9 @@ function lerpBox(a: LoginStageBox, b: LoginStageBox, t: number): LoginStageBox {
  * 纯函数:物理 viewport → 750 stage 布局(U-8a「照 demo」逐式落码)。
  * - scale = viewportWidth / 750;designHeight = viewportHeight / scale,clamp [600,1800];
  * - dh < 1334:功能区优先——视觉区按 v=max(0.25,(dh-600)/734) 以 (375,0) 为锚连续压缩,
- *   loginY = max(0, dh-600)(功能区 680×560 + 底距不缩放、锚定底部);
+ *   loginY = max(0, dh-640)(功能区 680×560 + 底距不缩放、锚定底部;
+ *   2026-07-24 拍板整体上移 40 设计px 后由 dh-600 改 dh-640,与 SHORT.loginY=694
+ *   在 dh=1334 处保持连续:1334-640=694);
  * - 1334 ≤ dh ≤ 1624:t=(dh-1334)/290 全字段线性插值(含 loginY);
  * - dh > 1624:t clamp 1(长屏几何原样)。
  */
@@ -107,7 +115,8 @@ export function resolveLoginStage(
       cindy: cs(LOGIN_STAGE_SHORT.cindy),
       slogan: cs(LOGIN_STAGE_SHORT.slogan),
       word: cs(LOGIN_STAGE_SHORT.word),
-      loginY: Math.max(0, designHeight - 600),
+      // 2026-07-24 拍板:整体上移 40 设计px(dh-600 → dh-640),dh=1334 边界与 SHORT.loginY=694 连续
+      loginY: Math.max(0, designHeight - 640),
     };
   }
   const t = Math.max(
