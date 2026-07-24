@@ -126,6 +126,19 @@ describe('regionHint 归一化与 locale 排序', () => {
     expect(out[0]!.regionHint).toBeUndefined();
   });
 
+  it('非法 nameEn(非字符串/空白串)剥字段;与非法 regionHint 同现时两者都被清洗(Codex P2 回归)', () => {
+    const out = sanitizePresets([
+      { ...VALID_PRESET, id: 'a', nameEn: 42 } as never,
+      { ...VALID_PRESET, id: 'b', nameEn: '   ' } as never,
+      // 两字段同时非法:早退式清洗会漏掉 nameEn。
+      { ...VALID_PRESET, id: 'c', regionHint: 'mars', nameEn: 42 } as never,
+      { ...VALID_PRESET, id: 'd', nameEn: 'OpenRouter Intl' } as never,
+    ]);
+    expect(out).toHaveLength(4);
+    expect(out.map((p) => p.nameEn)).toEqual([undefined, undefined, undefined, 'OpenRouter Intl']);
+    expect(out[2]!.regionHint).toBeUndefined();
+  });
+
   it('厂商按首字母分组排序；同厂商 cn/global 相邻，组内按语言排先后', () => {
     const presets = sanitizePresets([
       mk('zhipu-glm-global', 'global'),
