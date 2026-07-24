@@ -294,7 +294,7 @@ export async function runLocalOwnerDataAdoption(
       try {
         await writeAdoptionMarker(deps, markerPath, {
           version: 1,
-          declinedOwnerKeys: [...(marker?.declinedOwnerKeys ?? []), ownerKey],
+          declinedOwnerKeys: [...new Set([...(marker?.declinedOwnerKeys ?? []), ownerKey])],
         });
       } catch (err) {
         // 拒绝记录写失败(磁盘满/权限)只影响「下次是否再问」,本次拒绝依然
@@ -498,12 +498,17 @@ const realFsDeps: LocalAdoptionFsDeps = {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EEXIST') throw err;
       // 文件系统不支持硬链接(FAT/exFAT 等):退化为「检查 + rename」,窗口
-      // 收窄到毫秒级(上层还有并发实例 gate 兜底)。
+      // 收窄到毫秒级(上层还有并发实例 gate 兜底)。fail-closed:只有确认
+      // 目标不存在(ENOENT)才 rename;EACCES 等「存在与否不可知」一律拒绝,
+      // 绝不冒覆盖风险。
       try {
         await fsp.access(target);
-      } catch {
-        await fsp.rename(source, target);
-        return;
+      } catch (accessErr) {
+        if ((accessErr as NodeJS.ErrnoException).code === 'ENOENT') {
+          await fsp.rename(source, target);
+          return;
+        }
+        throw accessErr;
       }
       const eexist = new Error(`EEXIST: file already exists, rename '${source}' -> '${target}'`);
       (eexist as NodeJS.ErrnoException).code = 'EEXIST';
