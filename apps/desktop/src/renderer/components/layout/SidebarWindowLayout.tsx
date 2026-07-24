@@ -40,6 +40,10 @@ import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { createLogger } from '@/lib/logger';
+import {
+  ensureGhostPanelsRegistered,
+  useGhostPanelsSync,
+} from '@/cindy-brain/ghostPanels';
 
 const log = createLogger('SidebarWindowLayout');
 
@@ -53,6 +57,10 @@ interface SidebarWindowContext {
 export function SidebarWindowLayout() {
   const { t } = useTranslation();
   useDeviceLinkRemoteProjects();
+  // 意识页签注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板/页签注册表
+  // 并订阅 ghosts:changed,否则 open-ghost-tab 命令路由到这里时 kind 未注册。
+  ensureGhostPanelsRegistered();
+  useGhostPanelsSync();
   const isMac = window.electronAPI?.platform === 'darwin';
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
 

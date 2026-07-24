@@ -227,4 +227,27 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
     expect(toast.success).toHaveBeenCalledTimes(1);
     expect(toast.error).not.toHaveBeenCalled();
   });
+
+  it('安装期间切换会话(getter 变 null)→ 不打开页签(避免写入旧会话)', async () => {
+    setupWindow(tabManifest);
+    const openGhostTab = vi.fn(async () => undefined);
+    let currentSession: string | null = 's1';
+    const confirmWithCheckbox = vi.fn(async () => {
+      // 模拟用户在确认弹窗期间切走会话
+      currentSession = null;
+      return { ok: true, checked: true };
+    });
+    const deps = {
+      t: ((key: string) => key) as never,
+      confirm: vi.fn(async () => true),
+      confirmWithCheckbox,
+      getSidebarSessionId: () => currentSession,
+      openGhostTab,
+    };
+
+    await confirmAndInstallGhost('/tmp/tab.cindy', deps);
+
+    expect(openGhostTab).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
 });

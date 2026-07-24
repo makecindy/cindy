@@ -209,20 +209,25 @@ export async function confirmAndInstallGhost(
         ? t('settings.ghosts.toast.installed', { name: ghost.manifest.name })
         : t('settings.ghosts.toast.installedAsleep', { name: ghost.manifest.name }),
     );
-    if (enable && willOpenTab && sidebarSessionId !== null) {
+    if (enable && willOpenTab) {
       // 兑现勾选文案:展开右侧栏并打开/聚焦页签(侧栏抽离时路由到子窗口)。
       // main 在 install() resolve 前已广播 ghosts:changed,Tab 注册表通常已就位;
       // 极端竞态下 Shell 的 PlaceholderBody 兜底,注册到位即自愈。
       // 打开失败不回滚安装,只记日志——装入本身已成功,toast 不改口。
-      const openGhostTab = deps.openGhostTab ?? openGhostTabInSidebar;
-      try {
-        await openGhostTab(sidebarSessionId, ghost.manifest.id);
-      } catch (err) {
-        installFlowLog.warn('open ghost tab after install failed', {
-          ghostId: ghost.manifest.id,
-          sessionId: sidebarSessionId,
-          err,
-        });
+      // 重新读取会话 ID——用户可能在确认弹窗/安装期间切换了会话,
+      // 用安装完成时的当前会话,而非弹窗出现时的快照。
+      const currentSessionId = deps.getSidebarSessionId?.() ?? null;
+      if (currentSessionId !== null) {
+        const openGhostTab = deps.openGhostTab ?? openGhostTabInSidebar;
+        try {
+          await openGhostTab(currentSessionId, ghost.manifest.id);
+        } catch (err) {
+          installFlowLog.warn('open ghost tab after install failed', {
+            ghostId: ghost.manifest.id,
+            sessionId: currentSessionId,
+            err,
+          });
+        }
       }
     }
   } catch (err) {
