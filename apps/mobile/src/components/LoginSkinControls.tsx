@@ -748,14 +748,24 @@ export function LoginTextLinkSlot({
   children,
   top,
   tone = 'placeholder',
+  align = 'center',
 }: {
   children: ReactNode;
   top?: number;
   tone?: 'placeholder' | 'secondary';
+  /** top:说明/提示类顶对齐 ≤2 行槽,槽高=行高×2(DESIGN.md §16.2,与桌面 SSO_ORG_HINT 同构)。 */
+  align?: 'center' | 'top';
 }) {
   const styles = useThemedStyles(makeStyles);
   return (
-    <View pointerEvents="none" style={[styles.textLinkSlotBox, top != null && { top }]}>
+    <View
+      pointerEvents="none"
+      style={[
+        styles.textLinkSlotBox,
+        top != null && { top },
+        align === 'top' && styles.textLinkSlotBoxTop,
+      ]}
+    >
       <Text
         numberOfLines={2}
         style={[
@@ -1174,6 +1184,11 @@ const makeStyles = (colors: ThemeColors) =>
     position: 'absolute',
     top: LOGIN_TEXT_LINK.y,
     width: LOGIN_TEXT_LINK.width,
+  },
+  // 顶对齐变体:说明/提示类 ≤2 行,槽高=行高×2,折行只向下伸展(DESIGN.md §16.2)
+  textLinkSlotBoxTop: {
+    height: LOGIN_SUBTITLE.height * 2,
+    justifyContent: 'flex-start',
   },
   resendLinkText: {
     color: colors.login.linkText,

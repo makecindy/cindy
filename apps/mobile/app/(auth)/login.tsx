@@ -299,7 +299,11 @@ export default function LoginScreen() {
             testID="login.ssoOrgInput"
             value={ssoOrg}
           />
-          <LoginTextLinkSlot tone="secondary" top={LOGIN_SSO_ORG_HINT_TOP}>
+          <LoginTextLinkSlot
+            align="top"
+            tone="secondary"
+            top={LOGIN_SSO_ORG_HINT_TOP}
+          >
             {loginText('ssoOrgHint')}
           </LoginTextLinkSlot>
           <LoginPrimaryButton
