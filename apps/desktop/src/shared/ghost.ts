@@ -964,7 +964,9 @@ export interface GhostTrustInfo {
 }
 
 /** 意识面板的 panelKind(布局树寻址用)。 */
-export function ghostPanelKind(id: string): string {
+// 返回类型收窄到模板字面量:右侧栏 TabKindId 含 `ghost:${string}` 分支,
+// 调用方无需再 as 断言;对既有 string 消费方完全兼容。
+export function ghostPanelKind(id: string): `ghost:${string}` {
   return `${GHOST_PANEL_KIND_PREFIX}${id}`;
 }
 

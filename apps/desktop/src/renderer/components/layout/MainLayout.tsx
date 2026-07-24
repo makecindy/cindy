@@ -244,6 +244,9 @@ export function MainLayout() {
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
+  // 给树内远端消费方(如 GlobalDropImportListener 的装入编排)的稳定 getter:
+  // 读 ref 拿最新值,prop 身份不随会话切换变化,不触发下游 effect 重挂。
+  const getRightSidebarSessionId = useCallback(() => rightSidebarSessionIdRef.current, []);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
@@ -1320,7 +1323,10 @@ export function MainLayout() {
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
-      <GlobalDropImportListener onOpenShareImport={openShareImport} />
+      <GlobalDropImportListener
+        onOpenShareImport={openShareImport}
+        getRightSidebarSessionId={getRightSidebarSessionId}
+      />
       {shareImportRequest && (
         <SessionShareImportWizard
           key={shareImportRequest.id}

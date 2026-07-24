@@ -72,9 +72,12 @@ describe('executeSidebarCommand', () => {
       focusTab: false,
     });
     await executeSidebarCommand({ type: 'close-orca-workers-tab', sessionId: 's1' });
+    await executeSidebarCommand({ type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' });
 
     expect(ensureHydrated).toHaveBeenCalledWith('s1');
     expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'terminal');
+    // 插件页签:与 terminal 同款单例语义,kind 为 ghost:<id>。
+    expect(addOrFocusSingletonTab).toHaveBeenCalledWith('s1', 'ghost:tab-demo-a');
     expect(openUrlInSidebarBrowser).toHaveBeenCalledWith('s1', 'https://example.com/');
     expect(openDirInSidebarFileBrowser).toHaveBeenCalledWith('s1', 'src');
     expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('s1', 'src/App.tsx');

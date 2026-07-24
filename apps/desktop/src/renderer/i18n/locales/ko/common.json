@@ -2254,6 +2254,7 @@
         "meta": "버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
+        "enableNowOpenTab": "설치 후 바로 활성화하고 탭 열기",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기",
         "nodeRiskTitle": "로컬 Node 프로그램 실행을 허용할까요?",

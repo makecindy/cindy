@@ -2254,6 +2254,7 @@
         "meta": "バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "metaWithAuthor": "作者 {{author}} · バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "enableNow": "インストール後すぐに有効化",
+        "enableNowOpenTab": "インストール後すぐに有効化してタブを開く",
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ",
         "nodeRiskTitle": "ローカル Node プログラムの実行を許可しますか？",
