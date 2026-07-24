@@ -1,64 +1,105 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+import { darkColors, lightColors } from "../theme/tokens";
 
 /**
  * 启动 splash 覆盖层契约:启动闸门链全程共用根部一个常驻 splash 实例。
  * 回归背景:此前每道闸门(端点清单/canary 渠道/OTA 门/auth 恢复)各自渲染独立的
  * splash,交接 remount 会露出 surface 底色,产生"红→白→红"闪帧(2026-07 用户实报)。
  */
-describe('startup splash overlay', () => {
+describe("startup splash overlay", () => {
   // Windows 检出(core.autocrlf)下源文件是 CRLF,归一化行尾让含 \n 的断言跨平台成立。
-  const read = (rel: string) => readFileSync(resolve(process.cwd(), rel), 'utf8').replace(/\r\n/g, '\n');
+  const read = (rel: string) =>
+    readFileSync(resolve(process.cwd(), rel), "utf8").replace(/\r\n/g, "\n");
 
-  it('root layout mounts a single persistent splash overlay above the gate chain', () => {
-    const layout = read('app/_layout.tsx');
+  it("root layout mounts a single persistent splash overlay above the gate chain", () => {
+    const layout = read("app/_layout.tsx");
 
     expect(layout).toContain("from '@/components/StartupSplashOverlay'");
-    expect(layout).toContain('<StartupSplashOverlay hidden={endpointGate.status === \'error\'}>');
+    expect(layout).toContain(
+      "<StartupSplashOverlay hidden={endpointGate.status === 'error'}>",
+    );
     // 闸门链各关不许再各自渲染 splash 实例(splash-preview 路由是唯一例外)。
     expect(layout).not.toContain('variant="splash"');
   });
 
-  it('gates render null while pending instead of their own splash instance', () => {
-    const layout = read('app/_layout.tsx');
-    const index = read('app/index.tsx');
+  it("gates render null while pending instead of their own splash instance", () => {
+    const layout = read("app/_layout.tsx");
+    const index = read("app/index.tsx");
 
-    expect(layout).toContain('if (!otaReady) {\n    return null;\n  }');
+    expect(layout).toContain("if (!otaReady) {\n    return null;\n  }");
     expect(layout).toContain("if (!channel.ready) return null;");
-    expect(index).toContain('if (!auth.initialized) return null;');
+    expect(index).toContain("if (!auth.initialized) return null;");
     expect(index).not.toContain('variant="splash"');
   });
 
-  it('releases the overlay on auth.initialized so deep-link cold starts also release', () => {
-    const layout = read('app/_layout.tsx');
+  it("releases the overlay on auth.initialized so deep-link cold starts also release", () => {
+    const layout = read("app/_layout.tsx");
 
-    expect(layout).toContain('if (auth.initialized) releaseSplash();');
+    expect(layout).toContain("if (auth.initialized) releaseSplash();");
   });
 
-  it('fades out with a one-shot compositor-only opacity animation', () => {
-    const overlay = read('src/components/StartupSplashOverlay.tsx');
+  it("fades out with a one-shot compositor-only opacity animation", () => {
+    const overlay = read("src/components/StartupSplashOverlay.tsx");
 
-    expect(overlay).toContain('useNativeDriver: true');
-    expect(overlay).toContain('StyleSheet.absoluteFill');
-    expect(overlay).toContain('<CenteredScreen title="Cindy" variant="splash" />');
+    expect(overlay).toContain("useNativeDriver: true");
+    expect(overlay).toContain("StyleSheet.absoluteFill");
+    expect(overlay).toContain(
+      '<CenteredScreen title="Cindy" variant="splash" />',
+    );
   });
 
-  it('keeps the native launch screen on the same brand red as the JS splash (both platforms)', () => {
-    // ios/android 目录是 prebuild 产物(gitignored),native 启动屏颜色的权威来源是
-    // app.json 的 expo-splash-screen 插件配置;#DF0C27 = brandSplashBackground
-    // (src/theme/tokens.ts),native→JS 交接不许有色差,深浅外观同色。
-    const appConfig = JSON.parse(read('app.json')) as {
+  it("keeps iOS unchanged while Android hands off to the themed JS splash", () => {
+    // ios/android 目录是 prebuild 产物(gitignored),app.json 是原生启动页的权威来源。
+    // iOS 保留旧的红底无图配置;Android 单独对齐 MobileLoginHandoffStage
+    // 的 login.bgBase,并用同源 hero 避免回退到 launcher adaptive icon。
+    const appConfig = JSON.parse(read("app.json")) as {
       expo: { plugins: (string | [string, Record<string, unknown>])[] };
     };
     const splashPlugin = appConfig.expo.plugins.find(
-      (p): p is [string, Record<string, unknown>] => Array.isArray(p) && p[0] === 'expo-splash-screen',
+      (p): p is [string, Record<string, unknown>] =>
+        Array.isArray(p) && p[0] === "expo-splash-screen",
     );
 
     expect(splashPlugin).toBeDefined();
-    expect(splashPlugin?.[1]).toEqual({
-      backgroundColor: '#DF0C27',
-      dark: { backgroundColor: '#DF0C27' },
+    const splashConfig = splashPlugin?.[1] as {
+      backgroundColor?: string;
+      image?: string;
+      dark?: { backgroundColor?: string; image?: string };
+      android?: {
+        backgroundColor?: string;
+        image?: string;
+        imageWidth?: number;
+        dark?: { backgroundColor?: string; image?: string };
+      };
+    };
+
+    expect(splashConfig).not.toHaveProperty("image");
+    expect(splashConfig.backgroundColor).toBe("#DF0C27");
+    expect(splashConfig.dark).toEqual({ backgroundColor: "#DF0C27" });
+    expect(splashConfig.android).toEqual({
+      backgroundColor: lightColors.login.bgBase,
+      image: "./assets/login/login-hero@2x.png",
+      imageWidth: 128,
+      dark: {
+        backgroundColor: darkColors.login.bgBase,
+        image: "./assets/login/login-hero@2x.png",
+      },
     });
+
+    // Android 12 无 icon background 的安全圆直径是 192dp。prebuild 后对 288dp
+    // splashscreen_logo 做 alpha 像素扫描,这份 hero 在 imageWidth=128 时的最远不透明
+    // 像素半径为 53.6dp(<96dp)。锁住资产字节,后续换图必须重新做安全圆验证并更新契约。
+    const heroSha256 = createHash("sha256")
+      .update(
+        readFileSync(resolve(process.cwd(), "assets/login/login-hero@2x.png")),
+      )
+      .digest("hex");
+    expect(heroSha256).toBe(
+      "4e0ce24b482ac28e1160ded2166a29a0054f497c5f63a21b7211805e9aa3ff01",
+    );
   });
 });
