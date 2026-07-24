@@ -3312,6 +3312,37 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('interrupts the running Full access turn when tightening to Auto', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-tighten-to-auto' } };
+      }
+      if (method === Method.TurnInterrupt) {
+        return {};
+      }
+      return undefined;
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-tighten-to-auto',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    await handle.send({ type: 'user', content: 'do work' });
+
+    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+    await handle.setPermissionMode('auto');
+
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-tighten-to-auto',
+    });
+
+    await handle.close();
+  });
+
   it('interrupts a pending turn/start once its id arrives when tightened mid-flight', async () => {
     // turn/start 已携带旧宽松策略发出、id 未回时收紧 —— 该 turn 不会再发审批请求,
     // 必须在拿到 id 的瞬间补中断 (review #969 第二轮 Greptile P1 / Codex P2)。

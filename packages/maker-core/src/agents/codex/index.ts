@@ -4179,9 +4179,13 @@ export class CodexAgent extends BaseAgent {
         // Full access 才能批量放行挂起的 ask。切到 Auto 时，已有请求不能绕过
         // app-server reviewer，先 fail-closed 关闭；后续重试会按 auto_review 路由。
         const allowPending = newMode === 'bypassPermissions';
-        const moreOpen = newMode === 'auto' || allowPending;
         dismissAllPending(`permission_mode_changed_to_${newMode}`, allowPending ? 'allow' : 'deny');
-        const wasOpen = mutablePermissionMode === 'auto' || mutablePermissionMode === 'bypassPermissions';
+        const wasAuto = mutablePermissionMode === 'auto';
+        const wasBypass = mutablePermissionMode === 'bypassPermissions';
+        const wasOpen = wasAuto || wasBypass;
+        const tightensCurrentTurn =
+          (newMode === 'ask' && wasOpen) ||
+          (newMode === 'auto' && wasBypass);
         mutablePermissionMode = newMode;
         // 下一 turn 通过 TurnStartParams.approvalPolicy + sandbox 透传。
         //
@@ -4189,9 +4193,9 @@ export class CodexAgent extends BaseAgent {
         // turn id 已知 → 立即中断; turn/start 在飞 (id 未回) → 置标记, 由
         // handleTurnStartResp / turnStarted 在拿到 id 的瞬间补中断。放宽则清标记
         // (收紧后又切回宽松档, 在飞的 turn 无需再中断)。
-        if (moreOpen) {
+        if (!tightensCurrentTurn) {
           pendingTightenInterrupt = false;
-        } else if (wasOpen && !closed && turnLaunchedUnattended) {
+        } else if (!closed && turnLaunchedUnattended) {
           // 只中断 auto_review / never 发射的 turn; user reviewer 发射的 turn 审批请求
           // 照常流经本地、收紧即时生效,期间 UI 短暂切过宽松档不构成中断理由。
           if (currentTurnId !== null) {
