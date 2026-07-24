@@ -77,16 +77,17 @@ const CARD_TITLE_META_SLOT_CLASS = 'ml-1 inline-flex h-[1em] w-3 items-center ju
 
 /**
  * 平台中立的“待用户交互”判定:直接读 maker session 状态(makerChatStore),不依赖
- * 只在 macOS Sonoma+ 可用的 Agent Island。返回精确三态('permission' / 'plan_review' /
- * 'ask_user'),非待交互态返回 ''(基本类型,适配 useSyncExternalStore 的稳定比较)。
+ * 只在 macOS Sonoma+ 可用的 Agent Island。返回精确待交互类型,非待交互态返回
+ * ''(基本类型,适配 useSyncExternalStore 的稳定比较)。
  */
 function getNeutralAwaitingKind(
   sessionId: string,
-): 'permission' | 'plan_review' | 'ask_user' | '' {
+): 'permission' | 'plan_review' | 'ask_user' | 'plugin_setup' | '' {
   const info = makerChatStore.getRunningSnapshot().get(sessionId);
   if (info?.hasPendingPermission) return 'permission';
   if (info?.hasPendingPlanReview) return 'plan_review';
   if (info?.hasPendingAskUser) return 'ask_user';
+  if (info?.hasPendingPluginSetup) return 'plugin_setup';
   return '';
 }
 
@@ -163,6 +164,8 @@ export function SessionCard({
         ? t('ccAgent.sidebar.card.awaitingPermission')
         : awaitingKind === 'plan_review'
           ? t('ccAgent.sidebar.card.awaitingPlan')
+          : awaitingKind === 'plugin_setup'
+            ? t('ccAgent.sidebar.card.awaitingPluginSetup')
           : t('ccAgent.sidebar.card.awaitingQuestion');
   const runningDetail =
     islandActivity?.phase === 'running' && islandActivity.compactDetail

@@ -56,6 +56,7 @@ const h = vi.hoisted(() => {
     eventCbs: new Map<string, (ev: { type: string; data: unknown }) => void>(),
     /** 每个 fake session 被装上的 interaction listener(交互测试驱动用)。 */
     interactionListeners: new Map<string, (req: unknown) => Promise<unknown>>(),
+    headlessDuringSend: [] as boolean[],
     installDesktopInteractionListener: vi.fn(),
     /** mocked resolveHookSessionConfig 的返回值(测试内可改写)。 */
     resolvedConfig: {
@@ -174,6 +175,7 @@ function makeFakeSession(id: string) {
     },
     send: vi.fn(
       async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }): Promise<unknown> => {
+        h.headlessDuringSend.push(isHeadlessGhostSetupTurn(id));
         await opts.onAccepted?.();
         // 收口: 模拟 agent 立刻完成本 turn
         queueMicrotask(() => h.eventCbs.get(id)?.({ type: 'done', data: null }));
@@ -202,6 +204,7 @@ vi.mock('../../maker-host/index.js', () => ({
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
+import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -261,6 +264,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.calls.length = 0;
   h.eventCbs.clear();
+  h.headlessDuringSend.length = 0;
   h.listProviders.mockReset();
   h.listProviders.mockResolvedValue([]);
   h.getModelVisibilityOverride.mockReset();
@@ -549,6 +553,8 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     // 渠道说明仍逐 turn 生效(不依赖 vendorOptions)
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({ content: HELLO_WITH_NOTE });
+    expect(h.headlessDuringSend).toEqual([true]);
+    expect(isHeadlessGhostSetupTurn('sess-old')).toBe(false);
   });
 
   it('isNew: touchUserSendInDb 失败不阻断建会话与广播(onAccepted 兜底)', async () => {

@@ -1620,7 +1620,7 @@ describe('ghost · settingsHtml 自绘设置区 + settingsHeight', () => {
   });
 });
 
-describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染退役)', () => {
+describe('ghost · user 凭证由 Host Setup 收单并保留 settingsHtml 管理入口', () => {
   function withSecret(secret: Record<string, unknown>, extra: Record<string, unknown> = {}) {
     return validateGhostManifest({
       ...goodManifest(),
@@ -1650,7 +1650,7 @@ describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染�
     expect(legacy.ok && 'input' in (legacy.manifest.network?.secrets?.[0] ?? {})).toBe(false);
   });
 
-  it('user 凭证没声明 settingsHtml → 拒(宿主渲染输入行已退役,没有界面就没人收单)', () => {
+  it('user 凭证没声明 settingsHtml → 拒(仍缺少长期管理/替换/清除入口)', () => {
     for (const secret of [{}, { input: 'ghost' }]) {
       const r = withSecret(secret);
       expect(r.ok, JSON.stringify(secret)).toBe(false);
@@ -1658,7 +1658,7 @@ describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染�
     }
   });
 
-  it("input:'host' → 拒(宿主收单已退役);其它非法值同拒", () => {
+  it("input:'host' → 拒(旧 input 字段已退役);其它非法值同拒", () => {
     const host = withSecret({ input: 'host' }, { settingsHtml: 'settings.html' });
     expect(host.ok).toBe(false);
     expect(!host.ok && host.reason).toContain('退役');

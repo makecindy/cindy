@@ -60,6 +60,7 @@ import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
+import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
@@ -428,6 +429,18 @@ export function CCAgentSessionView({
   const navigate = useNavigate();
   const ownsWindowRoute = navigationMode === 'route-owner';
   const location = useLocation();
+  useEffect(() => {
+    return window.electronAPI.ghosts.onSetupNavigate((payload) => {
+      // The session view owns the card even when it is embedded in a workdir
+      // rail or Orca worker pane. Route parsing cannot identify those surfaces.
+      if (!viewVisible || !sessionId || payload.sessionId !== sessionId) return;
+      if (payload.target === 'plugin_settings') {
+        navigate(`/plugins?ghost=${encodeURIComponent(payload.ghostId)}`);
+        return;
+      }
+      navigate('/settings?tab=providers');
+    });
+  }, [navigate, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;
@@ -1093,6 +1106,11 @@ export function CCAgentSessionView({
     respondToPermission,
     pendingAskUser,
     answerUserQuestion,
+    pendingPluginSetup,
+    pluginSetupViewerState,
+    pluginSetupCommandInFlight,
+    setPluginSetupViewerState,
+    respondToPluginSetup,
     askUserViewerState,
     setAskUserViewerState,
     askUserDraft,
@@ -1397,7 +1415,8 @@ export function CCAgentSessionView({
   useEffect(() => {
     if (!sessionId) return;
     setAskUserViewerState('expanded');
-  }, [sessionId, setAskUserViewerState]);
+    setPluginSetupViewerState('expanded');
+  }, [sessionId, setAskUserViewerState, setPluginSetupViewerState]);
 
   // ── F-DIFF-1: Session-wide change panel ──
   // Aggregate diffs once at this level and pass to both the toggle (for the
@@ -3010,6 +3029,7 @@ export function CCAgentSessionView({
                     pendingPlanReview ||
                     pendingPermission ||
                     pendingAskUser ||
+                    pendingPluginSetup ||
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
                     pendingGhostGrantConfirm
@@ -3052,6 +3072,15 @@ export function CCAgentSessionView({
                     draft={askUserDraft}
                     onDraftChange={setAskUserDraft}
                   />
+                ) : pendingPluginSetup ? (
+                  <PluginSetupPrompt
+                    pending={pendingPluginSetup}
+                    viewerState={pluginSetupViewerState}
+                    commandInFlight={pluginSetupCommandInFlight}
+                    remote={!!remoteDeviceId}
+                    onViewerStateChange={setPluginSetupViewerState}
+                    onCommand={respondToPluginSetup}
+                  />
                 ) : pendingIssueConfirm ? (
                   <IssueConfirmCard
                     pending={pendingIssueConfirm}
@@ -3085,6 +3114,7 @@ export function CCAgentSessionView({
               {pendingPlanReview ||
               pendingPermission ||
               pendingAskUser ||
+              pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||
               pendingGhostGrantConfirm ? null : sessionBinding.attached && sessionId ? (

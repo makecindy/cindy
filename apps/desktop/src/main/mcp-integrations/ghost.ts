@@ -55,8 +55,10 @@ import {
   getGhostCardService,
   getGhostManager,
   getGhostPipeDispatcher,
+  getGhostSetupAssessment,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
+import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
@@ -64,6 +66,7 @@ import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
+import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
@@ -555,6 +558,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           id: g.manifest.id,
           name: g.manifest.name,
           ...(g.manifest.command ? { command: g.manifest.command } : {}),
+          setup: getGhostSetupAssessment(g.manifest.id),
           tools: (g.manifest.tools ?? []).map((t) => ({
             name: t.name,
             description: t.description,
@@ -571,6 +575,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       saveDir,
       agentToolUseId,
       grantOnly,
+      setupPlan,
     }) {
       // Check the account/session capability before granting attachments or
       // directory tickets. A stale roster from a cloud session must not let a
@@ -587,8 +592,9 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
       // 不做半成品授权。全链路见 grantAttachmentUrls。
       let mergedArgs = args;
-      const sessionIdForConfirm = resolveSessionContext()?.sessionId ?? null;
-      const sessionWorkdir = resolveSessionContext()?.workingDir ?? null;
+      const sessionContext = resolveSessionContext();
+      const sessionIdForConfirm = sessionContext?.sessionId ?? null;
+      const sessionWorkdir = sessionContext?.workingDir ?? null;
       // 目录级禁用兜底(防御线):花名册/ghost_list 已过滤,正常路径走不到
       // 这里——只有"会话开着时中途被禁"(快照已含自述)或模型凭上文记忆
       // 硬调才会命中。message 是可直达模型的人话:停手改道,不要自纠重试。
@@ -646,6 +652,74 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             guidance:
               '整批文件已过户并获授权;继续逐次调用目标工具,引用原路径或这些指纹都不会再弹确认卡。不要向用户复述指纹列表。',
           },
+        };
+      }
+      // Runtime setup gate: resolve the target before creating any durable
+      // attachment grant, directory ticket, sandbox, card call, or dispatch.
+      const target = getGhostManager()
+        .list()
+        .find((g) => g.manifest.id === ghostId);
+      if (!target) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件不存在或已卸载' };
+      }
+      if (!target.enabled) {
+        return {
+          ok: false,
+          errorCode: 'GHOST_ASLEEP',
+          message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
+        };
+      }
+      if (!(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+        return {
+          ok: false,
+          errorCode: 'TOOL_NOT_FOUND',
+          message: `目标插件没有工具 ${tool}`,
+        };
+      }
+      const setupCoordinator = getGhostSetupCoordinator();
+      if (!setupCoordinator) {
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: '插件设置通道尚未就绪，本次调用未执行。',
+        };
+      }
+      const setup = await setupCoordinator.ensureReady({
+        sessionId: ghostSetupInteractionSessionId(sessionContext),
+        ghostId,
+        tool,
+        ...(setupPlan ? { plan: setupPlan } : {}),
+      });
+      if (!setup.ok) return setup;
+
+      // OAuth/settings may take minutes. Re-resolve mutable target facts after
+      // the waiter completes and before beginning the existing side effects.
+      const refreshed = getGhostManager()
+        .list()
+        .find((g) => g.manifest.id === ghostId);
+      if (!refreshed || !isGhostAvailableForActiveSession(ghostId)) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+      }
+      if (!refreshed.enabled) {
+        return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+      }
+      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+        return {
+          ok: false,
+          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+          message: '用户已在当前工作目录停用该插件;不要重试。',
+        };
+      }
+      if (!(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `目标插件不再提供工具 ${tool}` };
+      }
+      const finalAssessment = getGhostSetupAssessment(ghostId);
+      if (finalAssessment.state !== 'ready') {
+        return {
+          ok: false,
+          errorCode: 'SETUP_REQUIRED',
+          message: '插件配置在调用恢复前发生变化，请完成设置后重试。',
+          setup: finalAssessment,
         };
       }
       if (attachments && attachments.length > 0) {

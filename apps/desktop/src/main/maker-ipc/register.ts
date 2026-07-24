@@ -49,6 +49,21 @@ import { getDesktopCommandRegistry } from '../commands/index.js';
 import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index.js';
 import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import {
+  initGhostSetupInteractionBridge,
+  parseGhostSetupInlineSubmitRequest,
+  type GhostSetupInteractionSnapshot,
+} from '../cindy-brain/ghostSetupInteractionBridge.js';
+import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import {
+  executeGhostSetupAction,
+  executeGhostSetupInlineAction,
+  getGhostManager,
+  getGhostSetupAssessment,
+  isGhostAvailableForActiveSession,
+} from '../cindy-brain/index.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
   initRenameSessionsConfirm,
   RenameSessionsConfirmBridge,
 } from '../session-title-rename/index.js';
@@ -1099,6 +1114,87 @@ const ghostGrantConfirmBridge = initGhostGrantConfirmBridge({
   logger: log,
 });
 
+const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
+  broadcast: (channel, payload) => {
+    broadcastToAllWindows(channel, payload);
+    const value = payload as {
+      sessionId?: unknown;
+      requestId?: unknown;
+      request?: GhostSetupInteractionSnapshot;
+    };
+    if (typeof value.sessionId !== 'string') return;
+    if (channel === MAKER_PUSH.INTERACTION_REQUEST && value.request?.kind === 'plugin_setup') {
+      const activeStep = value.request.steps.find(
+        (step) => step.phase !== 'satisfied' && step.phase !== 'cancelled',
+      );
+      getAgentIslandService()?.handlePluginSetupInteraction(
+        value.sessionId,
+        value.request.requestId,
+        activeStep?.title ?? `${value.request.ghost.name} 设置`,
+      );
+      return;
+    }
+    if (
+      channel === MAKER_PUSH.INTERACTION_DISMISSED &&
+      typeof value.requestId === 'string'
+    ) {
+      getAgentIslandService()?.handleInteractionDismissed(
+        value.sessionId,
+        value.requestId,
+      );
+    }
+  },
+  logger: log,
+});
+
+initGhostSetupCoordinator({
+  changeBus: getGhostSetupChangeBus(),
+  bridge: ghostSetupInteractionBridge,
+  assess: (ghostId) => getGhostSetupAssessment(ghostId),
+  validateTarget: (ghostId, tool) => {
+    const ghost = getGhostManager()
+      .list()
+      .find((candidate) => candidate.manifest.id === ghostId);
+    if (!ghost || !isGhostAvailableForActiveSession(ghostId)) {
+      return {
+        ok: false,
+        errorCode: 'GHOST_NOT_FOUND',
+        message: '目标插件已卸载或当前不可用',
+      };
+    }
+    if (!ghost.enabled) {
+      return {
+        ok: false,
+        errorCode: 'GHOST_ASLEEP',
+        message: '目标插件已被停用',
+      };
+    }
+    if (!(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+      return {
+        ok: false,
+        errorCode: 'TOOL_NOT_FOUND',
+        message: `目标插件不再提供工具 ${tool}`,
+      };
+    }
+    return { ok: true };
+  },
+  getGhostIdentity: (ghostId) => {
+    const ghost = getGhostManager().list().find((candidate) => candidate.manifest.id === ghostId);
+    return ghost
+      ? {
+          id: ghostId,
+          name: ghost.manifest.name,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+        }
+      : null;
+  },
+  executeAction: ({ sessionId, ghostId, action }) =>
+    executeGhostSetupAction({ sessionId, ghostId, action }),
+  executeInlineAction: ({ sessionId, ghostId, action, value }) =>
+    executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
+  logger: log,
+});
+
 function clearPendingInteraction(requestId: string): PendingInteractionEntry | null {
   const entry = pendingInteractionResolvers.get(requestId);
   if (!entry) return null;
@@ -1115,12 +1211,27 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
  */
 function getPendingInteractionsForSession(
   sessionId: string,
-): Array<{ request: InteractionRequest; persistId?: string }> {
-  const out: Array<{ request: InteractionRequest; persistId?: string }> = [];
+): Array<{ request: InteractionRequest | GhostSetupInteractionSnapshot; persistId?: string }> {
+  const out: Array<{
+    request: InteractionRequest | GhostSetupInteractionSnapshot;
+    persistId?: string;
+  }> = [];
   for (const entry of pendingInteractionResolvers.values()) {
     if (entry.sessionId === sessionId) out.push({ request: entry.request, persistId: entry.persistId });
   }
+  out.push(
+    ...ghostSetupInteractionBridge
+      .pendingSnapshots(sessionId)
+      .map(({ request }) => ({ request })),
+  );
   return out;
+}
+
+function hasPendingInteractionForSession(sessionId: string): boolean {
+  return (
+    Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId) ||
+    ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
+  );
 }
 
 function dismissRendererInteraction(
@@ -1239,6 +1350,10 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
   ghostGrantConfirmBridge.cleanupForSession(
+    sessionId,
+    reason === 'session_closed' ? 'session_closed' : 'session_aborted',
+  );
+  ghostSetupInteractionBridge.cleanupForSession(
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
@@ -5847,8 +5962,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       if (sess?.isTurnRunning()) return;
       const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
         sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
-      const hadZombieInteraction = Array.from(pendingInteractionResolvers.values())
-        .some((entry) => entry.sessionId === sessionId);
+      const hadZombieInteraction = hasPendingInteractionForSession(sessionId);
       if (!trackerStale && !hadZombieInteraction) return;
       log.warn('reconcileTurnIdle: clearing stale busy state after authoritative NO_ACTIVE_TURN', {
         sessionId,
@@ -5862,8 +5976,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         cleanupPendingInteractionsForSession(sessionId, 'turn_idle_reconcile');
       }
     },
-    hasPendingInteraction: (sessionId) =>
-      Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId),
+    hasPendingInteraction: hasPendingInteractionForSession,
     getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
@@ -6585,7 +6698,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       if (issueConfirmBridge.resolve(requestId, decision)) return;
       if (renameSessionsConfirmBridge.resolve(requestId, decision)) return;
       if (ghostGrantConfirmBridge.resolve(requestId, decision)) return;
+      if (ghostSetupInteractionBridge.resolve(requestId, decision)) return;
       log.warn('resolve-interaction: no pending resolver (likely already dismissed/timed out)', { requestId });
+    }
+  });
+
+  ipcMain.handle(MAKER_INVOKE.PLUGIN_SETUP_SUBMIT_INLINE, (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const request = parseGhostSetupInlineSubmitRequest(raw);
+    if (!request) throwIpcError('INVALID_PARAMS', 'invalid plugin setup submission');
+    const { requestId, ...submit } = request;
+    if (!ghostSetupInteractionBridge.submitInline(requestId, submit)) {
+      throwIpcError('INVALID_PARAMS', 'plugin setup interaction is not pending');
     }
   });
 

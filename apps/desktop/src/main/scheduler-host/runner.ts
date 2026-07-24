@@ -77,6 +77,7 @@ import {
   cancelReleasedOutput,
   onReleasedAgentEvent,
 } from '../content-moderation/outputHub.js';
+import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const ALLOWED_EFFORT = new Set<string>([
   'minimal',
@@ -271,6 +272,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'runner entry');
       return await this.fireInner(schedule, ctx, holder);
     } finally {
+      holder.releaseHeadlessGhostSetupTurn?.();
       if (
         holder.sessionId &&
         !holder.keepAlive &&
@@ -654,6 +656,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
         resumeSessionId,
         providerId: createProviderId ?? undefined,
+        vendorOptions: { source: 'scheduler' },
       });
     } catch (err) {
       if (err instanceof CredentialModeSwitchBusyError) {
@@ -667,6 +670,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 登记,后续任何 throw 都能被收尾。
     holder.sessionId = session.id;
     holder.keepAlive = isHeartbeat || !!schedule.persistentSession;
+    holder.releaseHeadlessGhostSetupTurn = beginHeadlessGhostSetupTurn(session.id);
 
     // 4.4.1 heartbeat 模型 / effort 同步：schedule 上的选择与绑定 session 当前值
     // 不一致时，把改动推给 session 运行时。必须显式 setModel / setEffort ——
@@ -1087,6 +1091,25 @@ export class MakerScheduleRunner implements ScheduleRunner {
     ctx: FireContext,
     sessionId: string,
     /** 绑定会话的当前路由基线(meta.model / meta.effort / sessions.provider_id)。 */
+    routingBaseline: { model?: string; effort?: string; providerId: string | null },
+  ): Promise<FireResult> {
+    const releaseHeadlessGhostSetupTurn = beginHeadlessGhostSetupTurn(sessionId);
+    try {
+      return await this.fireTrackedHeartbeatViaQueue(
+        schedule,
+        ctx,
+        sessionId,
+        routingBaseline,
+      );
+    } finally {
+      releaseHeadlessGhostSetupTurn();
+    }
+  }
+
+  private async fireTrackedHeartbeatViaQueue(
+    schedule: Schedule,
+    ctx: FireContext,
+    sessionId: string,
     routingBaseline: { model?: string; effort?: string; providerId: string | null },
   ): Promise<FireResult> {
     const sq = this.deps.schedulerQueue;
@@ -1631,6 +1654,7 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   sessionId?: string;
+  releaseHeadlessGhostSetupTurn?: () => void;
   /** force cleanup when an accepted ephemeral turn is aborted mid-dispatch */
   closeOnAbort?: boolean;
   worktreeSessionId?: string;

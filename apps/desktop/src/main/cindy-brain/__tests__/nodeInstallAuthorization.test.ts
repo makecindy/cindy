@@ -42,12 +42,13 @@ beforeEach(() => {
 });
 
 describe('nodeInstallAuthorization', () => {
-  it('原生弹窗明确说明本机权限，并默认停在取消', () => {
+  it('原生弹窗用中性层级说明本机权限，并以 Continue 为主操作', () => {
     const options = buildNodeInstallDialogOptions(nodeManifest, 'install');
-    expect(options.type).toBe('warning');
+    expect(options.type).toBe('none');
     expect(options.detail).toContain('Node Ghost · v1.0.0');
-    expect(options.detail).toContain('same local permissions as your user account');
-    expect(options.defaultId).toBe(1);
+    expect(options.detail).toContain('access files and the network');
+    expect(options.buttons).toEqual(['Continue', 'Cancel']);
+    expect(options.defaultId).toBe(0);
     expect(options.cancelId).toBe(1);
     expect(options.noLink).toBe(true);
   });

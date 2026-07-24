@@ -1066,6 +1066,14 @@ interface ElectronAPI {
     onChanged: (
       callback: (payload: { ghosts: import('../shared/ghost').InstalledGhost[] }) => void,
     ) => () => void;
+    /** Host 校验 setup action 后请求打开固定的本地配置入口。 */
+    onSetupNavigate: (
+      callback: (
+        payload:
+          | { sessionId: string; target: 'plugin_settings'; ghostId: string }
+          | { sessionId: string; target: 'client_settings' },
+      ) => void,
+    ) => () => void;
     /** 双击 .cindy 转交信号:收到后调 takePendingInstall 取路径走确认装入流程。 */
     onInstallRequested: (callback: () => void) => () => void;
     /** 运行时状态广播:crashed / fused 时面板原地显示错误接管态。 */
@@ -3808,6 +3816,14 @@ interface ElectronAPI {
       requestId: string,
       decision: Record<string, unknown>,
     ) => Promise<void>;
+
+    /** Submit one inline plugin Secret through the local trusted-frame-only IPC. */
+    submitPluginSetupInline: (request: {
+      requestId: string;
+      actionId: string;
+      expectedRevision: number;
+      value: string;
+    }) => Promise<void>;
 
     /** 快照:某会话当前挂起交互(permission/ask/plan),打开/重连/刷新会话时拉一次重建面板。 */
     getPendingInteractions: (

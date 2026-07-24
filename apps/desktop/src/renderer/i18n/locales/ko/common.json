@@ -2260,10 +2260,10 @@
         "enableNow": "설치 후 바로 활성화",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기",
-        "nodeRiskTitle": "로컬 Node 프로그램 실행을 허용할까요?",
-        "nodeRiskDescription": "고위험 권한입니다. 플러그인의 Node 프로그램은 사용자 계정과 같은 로컬 권한으로 접근 가능한 파일을 읽거나 바꾸고, 네트워크를 사용하며, 다른 프로그램을 시작할 수 있습니다. 브라우저 샌드박스로 격리할 수 없습니다. 신뢰하는 출처의 플러그인만 설치하세요.",
-        "nodeRiskConfirm": "위험을 이해하고 계속",
-        "nodeRiskCancel": "설치 취소"
+        "nodeRiskTitle": "이 플러그인의 로컬 실행을 허용할까요?",
+        "nodeRiskDescription": "이 플러그인은 기능 제공을 위해 로컬 프로세스를 사용하며 사용자 권한 범위에서 파일과 네트워크에 접근할 수 있습니다. 신뢰하는 플러그인인 경우에만 계속하세요.",
+        "nodeRiskConfirm": "계속",
+        "nodeRiskCancel": "취소"
       },
       "trust": {
         "official": "Cindy 공식 플러그인",
@@ -3547,6 +3547,40 @@
       "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}} 를 누르면 작업을 중단하지 않고 끼어듭니다",
       "stop": "생성 중지"
     },
+    "pluginSetup": {
+      "title": "{{name}} 설정",
+      "chooseOne": "설정 방법을 하나 선택하세요",
+      "restoreAria": "{{name}} 설정 펼치기",
+      "minimizeAria": "{{name}} 설정 접기",
+      "completeOnDesktop": "제어 중인 데스크톱에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
+      "cancel": "취소",
+      "cancelling": "취소 중…",
+      "retry": "다시 시도",
+      "saveConfiguration": "설정 저장",
+      "saving": "저장 중…",
+      "form": {
+        "placeholder": "{{label}} 입력",
+        "required": "{{label}}을(를) 입력하세요",
+        "tooLong": "{{maxLength}}자 이하로 입력하세요",
+        "openLink": "{{label}} 받기",
+        "openLinkFailed": "페이지를 열 수 없습니다. 다시 시도하세요."
+      },
+      "action": {
+        "oauth_connect": "인증",
+        "open_plugin_settings": "설정 열기",
+        "manage_connection": "연결 관리",
+        "open_client_settings": "모델 설정 열기"
+      },
+      "phase": {
+        "pending": "설정 대기",
+        "action_running": "진행 중…",
+        "waiting_external": "인증 대기 중…",
+        "verifying": "검증 중…",
+        "satisfied": "완료",
+        "failed": "실패",
+        "cancelled": "취소됨"
+      }
+    },
     "createAgent": {
       "quickStart": "빠른 시작",
       "quickStarts": {
@@ -4720,7 +4754,8 @@
       "card": {
         "awaitingPermission": "승인 대기 중",
         "awaitingQuestion": "답장 대기 중",
-        "awaitingPlan": "계획 검토 대기 중"
+        "awaitingPlan": "계획 검토 대기 중",
+        "awaitingPluginSetup": "플러그인 설정 대기 중"
       },
       "showAllSessions": "모두 표시 {{count}}개",
       "dialogues": "대화",

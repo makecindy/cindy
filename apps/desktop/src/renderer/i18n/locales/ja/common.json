@@ -2260,10 +2260,10 @@
         "enableNow": "インストール後すぐに有効化",
         "expandDescription": "紹介全文を表示",
         "collapseDescription": "紹介を折りたたむ",
-        "nodeRiskTitle": "ローカル Node プログラムの実行を許可しますか？",
-        "nodeRiskDescription": "これは高リスクな権限です。プラグインの Node プログラムはあなたのユーザーアカウントと同じローカル権限を持ち、アクセス可能なファイルの読み書き、ネットワーク利用、他のプログラムの起動ができます。ブラウザーサンドボックスでは隔離できません。信頼できる配布元のプラグインだけをインストールしてください。",
-        "nodeRiskConfirm": "リスクを理解して続行",
-        "nodeRiskCancel": "インストールを中止"
+        "nodeRiskTitle": "このプラグインのローカル実行を許可しますか？",
+        "nodeRiskDescription": "このプラグインは機能を提供するためにローカルプロセスを使用し、ユーザー権限の範囲でファイルとネットワークにアクセスできます。信頼できる場合のみ続けてください。",
+        "nodeRiskConfirm": "続ける",
+        "nodeRiskCancel": "キャンセル"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",
@@ -3547,6 +3547,40 @@
       "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
       "stop": "生成を停止"
     },
+    "pluginSetup": {
+      "title": "{{name}} の設定",
+      "chooseOne": "設定方法を1つ選択してください",
+      "restoreAria": "{{name}} の設定を展開",
+      "minimizeAria": "{{name}} の設定を折りたたむ",
+      "completeOnDesktop": "操作対象のデスクトップで設定を完了してください。このカードは自動的に更新されます。",
+      "cancel": "キャンセル",
+      "cancelling": "キャンセル中…",
+      "retry": "再試行",
+      "saveConfiguration": "設定を保存",
+      "saving": "保存中…",
+      "form": {
+        "placeholder": "{{label}}を入力",
+        "required": "{{label}}を入力してください",
+        "tooLong": "{{maxLength}}文字以内で入力してください",
+        "openLink": "{{label}}を取得",
+        "openLinkFailed": "ページを開けませんでした。もう一度お試しください。"
+      },
+      "action": {
+        "oauth_connect": "認証",
+        "open_plugin_settings": "設定を開く",
+        "manage_connection": "接続を管理",
+        "open_client_settings": "モデル設定を開く"
+      },
+      "phase": {
+        "pending": "設定待ち",
+        "action_running": "処理中…",
+        "waiting_external": "認証待ち…",
+        "verifying": "検証中…",
+        "satisfied": "完了",
+        "failed": "失敗",
+        "cancelled": "キャンセル済み"
+      }
+    },
     "createAgent": {
       "quickStart": "クイックスタート",
       "quickStarts": {
@@ -4720,7 +4754,8 @@
       "card": {
         "awaitingPermission": "承認待ち",
         "awaitingQuestion": "返信待ち",
-        "awaitingPlan": "プランの確認待ち"
+        "awaitingPlan": "プランの確認待ち",
+        "awaitingPluginSetup": "プラグイン設定待ち"
       },
       "showAllSessions": "すべて表示 {{count}} 件",
       "dialogues": "会話",

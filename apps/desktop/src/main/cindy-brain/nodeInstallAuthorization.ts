@@ -19,7 +19,9 @@ export function buildNodeInstallDialogOptions(
   operation: NodeInstallOperation,
 ): MessageBoxOptions {
   return {
-    type: 'warning',
+    // 这是用户主动安装流程中的能力确认，不是错误或数据损坏告警。
+    // 保持 Main 原生授权边界，同时避免 warning 样式制造破坏性操作的压迫感。
+    type: 'none',
     title: t('settings.ghosts.installConfirm.nodeRiskTitle'),
     message: t('settings.ghosts.installConfirm.nodeRiskTitle'),
     detail: `${manifest.name} · v${manifest.version}\n\n${t(
@@ -31,7 +33,7 @@ export function buildNodeInstallDialogOptions(
         ? t('settings.ghosts.updateConfirm.cancel')
         : t('settings.ghosts.installConfirm.nodeRiskCancel'),
     ],
-    defaultId: 1,
+    defaultId: 0,
     cancelId: 1,
     noLink: true,
   };

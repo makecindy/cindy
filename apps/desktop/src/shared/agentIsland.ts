@@ -2,7 +2,11 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 export type AgentIslandSessionPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
-export type AgentIslandInteractionKind = 'permission' | 'ask_user_question' | 'plan_review';
+export type AgentIslandInteractionKind =
+  | 'permission'
+  | 'ask_user_question'
+  | 'plan_review'
+  | 'plugin_setup';
 export type AgentIslandActivityLineKind = 'user' | 'assistant' | 'status' | 'tool';
 
 /**

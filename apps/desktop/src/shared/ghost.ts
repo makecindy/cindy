@@ -591,16 +591,16 @@ export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth'] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
 /**
- * 凭证收单(2026-07-13 两次定案,当天收敛):user 凭证的收单**一律**由意识
- * settingsHtml 自绘——经协议 `/secrets` 只写通道一次性入库,存入后意识拿不回
- * 明文,保管(safeStorage)与注入(主机代发时)由主机独占。安全模型弱化点
- * 仅一处:录入瞬间明文经过意识页面(用户主动敲进它的输入框),装入确认框
- * 如实告知。**宿主渲染凭证输入行已整体退役**(基座不再为意识特设凭证 UI,
- * Lizi 定案):清单里遗留的 `input: "ghost"` 接受并忽略(与现状同义),
- * `input: "host"` 直接拒绝;声明 user 凭证必须同时声明 settingsHtml。
+ * user 凭证有两条 Host 受控收单路径:
+ * - 调用前缺失时，Setup Runtime 根据本声明生成统一 inline_form；
+ * - 详情页由 settingsHtml 经 `/secrets` 只写通道长期管理、替换和清除。
+ *
+ * 两条路径都只把明文一次性交给 Main 保险库，插件运行时只能获得 Host 注入后的
+ * 请求，读不回原值。历史 `input` 字段仍退役：`input: "ghost"` 仅兼容接受并忽略，
+ * `input: "host"` 拒绝；当前仍要求 user 凭证同时声明 settingsHtml 作为管理入口。
  */
 
-/** 凭证声明:只有名字与说明——值由用户在该意识设置区填入主机保险库。 */
+/** 凭证声明：Host 用名字与说明生成 Setup 字段，值只写入主机保险库。 */
 export interface GhostSecretDecl {
   /** 凭证键(意识内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
   key: string;
@@ -813,6 +813,110 @@ export interface GhostSetupStatus {
   reauth: GhostSetupStatusItem[];
 }
 
+/** Setup Runtime 暴露给 Agent / Renderer 的需求类型；不包含任何配置值。 */
+export type GhostSetupRequirementKind =
+  | 'oauth'
+  | 'secret'
+  | 'connection'
+  | 'plugin_config'
+  | 'client_config';
+
+/** Host 对单条 requirement 的权威判定。 */
+export type GhostSetupRequirementState = 'missing' | 'expired' | 'satisfied';
+
+/** Setup Runtime 允许 Agent 选择、但只能由 Host 执行的动作。 */
+export type GhostSetupActionKind =
+  | 'oauth_connect'
+  | 'open_plugin_settings'
+  | 'manage_connection'
+  | 'open_client_settings'
+  | 'inline_form';
+
+/** Secret 输入沿用 /secrets 的字符上限；值本身永远不进入 Shared DTO。 */
+export const GHOST_SECRET_VALUE_MAX_CHARS = 4096;
+
+export interface GhostSetupInlineSecretField {
+  /** v1 只支持单字段，固定 id 防止 Renderer/Agent 构造任意存储键。 */
+  id: 'value';
+  type: 'secret';
+  label: string;
+  description?: string;
+  placeholder?: string;
+  /**
+   * Host 从 manifest 的 network.secrets[].url 生成的辅助入口。
+   * 仅供可信 Desktop UI 展示；MCP 边界会剥离，Agent 不能提供或改写 URL。
+   */
+  externalLink?: {
+    url: string;
+  };
+  required: true;
+  maxLength: number;
+}
+
+export type GhostSetupAllowedAction =
+  | {
+      /** Host 生成的动作引用；执行时必须按最新 assessment 再校验，不能直接当执行参数。 */
+      id: string;
+      kind: Exclude<GhostSetupActionKind, 'inline_form'>;
+    }
+  | {
+      /** Host 生成的散列动作引用；不编码或暴露 Secret storage key。 */
+      id: string;
+      kind: 'inline_form';
+      form: {
+        /** v1 仅支持一个 Secret 字段。 */
+        fields: [GhostSetupInlineSecretField];
+      };
+    };
+
+export interface GhostSetupAssessmentItem {
+  /** requirement 的稳定关联引用；不携带配置值，也不是可执行能力。 */
+  ref: string;
+  kind: GhostSetupRequirementKind;
+  label: string;
+  description?: string;
+  state: GhostSetupRequirementState;
+  actions: GhostSetupAllowedAction[];
+}
+
+export interface GhostSetupAssessmentGroup {
+  id: string;
+  mode: 'any_of';
+  items: GhostSetupAssessmentItem[];
+}
+
+/**
+ * Setup Runtime 的完整判定结果。groups 之间 all-of，组内 any-of；
+ * revision 由 Host 变更总线维护，用于丢弃过期卡片更新。
+ */
+export interface GhostSetupAssessment {
+  state: 'ready' | 'required';
+  revision: number;
+  groups: GhostSetupAssessmentGroup[];
+}
+
+/** Agent 可选提供的展示编排；身份、Action 和完成状态仍由 Host 决定。 */
+export interface GhostSetupPlan {
+  assessmentRevision: number;
+  intro?: string;
+  steps: Array<{
+    id: string;
+    requirementRefs: string[];
+    title: string;
+    description: string;
+    actionId: string;
+  }>;
+}
+
+export type GhostSetupStepPhase =
+  | 'pending'
+  | 'action_running'
+  | 'waiting_external'
+  | 'verifying'
+  | 'satisfied'
+  | 'failed'
+  | 'cancelled';
+
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
   /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
@@ -860,8 +964,9 @@ export interface GhostManifest {
   /**
    * 设置页「自定义设置区」界面入口(可选;安装目录内相对路径,意识自绘)。
    * 与面板同款沙箱 webview 渲染(零桥、分区断网、CSP 'self'),主题 token
-   * 由主机灌入。凭证输入**不**走这里(必须 network.secrets 声明、主机渲染,
-   * 意识摸不到明文);自定义参数持久化走同源 `fetch('/kv')`。
+   * 由主机灌入。调用前缺失的 user Secret 可由 Host Setup 卡收单；详情页仍可
+   * 通过同源只写 `/secrets` 管理、替换和清除。自定义参数持久化走 `/kv`，
+   * Secret 不得写入 `/kv`。
    */
   settingsHtml?: string;
   /**
@@ -1982,13 +2087,13 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           if (s.source === 'login-email') source = 'login-email';
           if (s.source === 'oauth') source = 'oauth';
         }
-        // 输入面字段已退役(2026-07-13 宿主凭证渲染整体退役):user 凭证
-        // 一律意识 settingsHtml 收单。遗留 `input: "ghost"` 接受并忽略
-        // (与现状同义、不落清单);其余值(含 'host')一律拒。
+        // 旧 input 字段已退役：Setup Runtime 直接从 Secret 声明生成 Host 表单，
+        // settingsHtml 继续提供详情页管理。遗留 `input: "ghost"` 接受并忽略
+        // (不落清单)；其余值(含 'host')一律拒。
         if (s.input !== undefined && s.input !== 'ghost') {
           return {
             ok: false,
-            reason: 'network.secrets[].input 已退役:宿主收单不存在,用户填写的凭证一律由意识 settingsHtml 收单(删掉 input 字段即可;唯一可接受的遗留值是 "ghost")',
+            reason: 'network.secrets[].input 已退役:Setup 表单直接从 Secret 声明生成,详情页由 settingsHtml 管理(删掉 input 字段即可;唯一可接受的遗留值是 "ghost")',
           };
         }
         // login-email:值取自主机登录态派生,用户不填、没有输入面,
@@ -2003,7 +2108,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (!loginDerived && raw.settingsHtml === undefined) {
           return {
             ok: false,
-            reason: 'network.secrets 声明了用户填写的凭证时必须同时声明 settingsHtml(凭证由意识设置界面收单,没有界面就没人收单;宿主渲染输入行已退役)',
+            reason: 'network.secrets 声明了用户填写的凭证时必须同时声明 settingsHtml(调用前可由 Host Setup 卡收单,settingsHtml 仍是长期管理/替换/清除入口)',
           };
         }
         if (loginDerived && s.url !== undefined) {

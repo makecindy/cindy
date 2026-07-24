@@ -19,6 +19,8 @@ import {
   layoutWithGhostPanel,
   type GhostHostNoticeKey,
   type GhostManifest,
+  type GhostSetupAllowedAction,
+  type GhostSetupAssessment,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -55,8 +57,19 @@ import {
   setGhostWakeHandler,
 } from './runtime/electronSandboxAdapter.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import { createGhostKvStore, removeGhostKvBestEffort } from './ghostKvStore.js';
-import { handleGhostSetupStatusRequest } from './ghostSetupStatus.js';
+import {
+  createGhostKvStore,
+  removeGhostKvBestEffort,
+  type GhostKvStore,
+} from './ghostKvStore.js';
+import {
+  evaluateGhostSetupAssessment,
+  handleGhostSetupStatusRequest,
+} from './ghostSetupStatus.js';
+import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
+import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
+import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
+import { executeGhostSetupInlineSubmission } from './ghostSetupInlineExecutor.js';
 import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
@@ -68,6 +81,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { requestNodeInstallAuthorization } from './nodeInstallAuthorization.js';
 import {
   FILO_GOOGLE_GHOST_ID,
+  FILO_GOOGLE_SECRET_KEY,
   migrateFiloGoogleAccounts,
   type LegacyGoogleAccountRow,
 } from './googleAccountsMigration.js';
@@ -76,18 +90,21 @@ import {
   LEGACY_JIRA_CONNECTION_FILE,
   LEGACY_JIRA_RT_FILE,
   XD_ATLASSIAN_GHOST_ID,
+  XD_ATLASSIAN_SECRET_KEY,
   migrateAtlassianAccounts,
 } from './atlassianAccountsMigration.js';
 import {
   LEGACY_GITHUB_CONNECTION_FILE,
   LEGACY_GITHUB_TOKEN_FILE,
   CINDY_GITHUB_GHOST_ID,
+  CINDY_GITHUB_SECRET_KEY,
   migrateGithubAccounts,
 } from './githubAccountsMigration.js';
 import {
   LEGACY_GITLAB_CONNECTION_FILE,
   LEGACY_GITLAB_TOKEN_FILE,
   CINDY_GITLAB_GHOST_ID,
+  CINDY_GITLAB_CONNECTION_KEY,
   migrateGitlabAccounts,
 } from './gitlabAccountsMigration.js';
 import { GHOST_SCHEME, ghostExternalLinkUrls, parseGhostPartition } from '../../shared/ghost.js';
@@ -155,6 +172,10 @@ import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
+import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
+import { assessGhostHostSetupRequirements } from './ghostHostSetupRequirements.js';
+import { isModelAccessReady } from '../model-access/readiness.js';
 // ⚠️ 下面三个依赖必须保持模块顶层静态 import,禁止改回函数内 await import():
 // 运行时 import() 会被 Rollup 编译成跨 chunk 的 require(尤其 drizzle-orm 会拆独立
 // chunk),而 bootstrap chunk 因 conf(electron-store 依赖)的模块副作用
@@ -196,6 +217,17 @@ function currentGhostAppContext() {
 }
 
 let managerSingleton: GhostManager | null = null;
+let ghostSetupManifestTrackerSingleton: GhostSetupManifestTracker | null = null;
+
+function getGhostSetupManifestTracker(): GhostSetupManifestTracker {
+  if (!ghostSetupManifestTrackerSingleton) {
+    ghostSetupManifestTrackerSingleton = new GhostSetupManifestTracker(
+      getGhostSetupChangeBus(),
+      isGhostAvailableForActiveSession,
+    );
+  }
+  return ghostSetupManifestTrackerSingleton;
+}
 
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
@@ -466,6 +498,7 @@ export function getGhostManager(): GhostManager {
       trustRegistry: loadGhostTrustRegistry(),
       log,
     });
+    getGhostSetupManifestTracker().seed(managerSingleton.list());
   }
   return managerSingleton;
 }
@@ -1491,12 +1524,19 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 授权成功(新连/同身份重连)→ 主机代言 tips(带意识身份头;账号有
       // 展示标签时报"已连接 xxx",没有时报通用授权成功)。
       onAccountConnected: ({ ghostId, label }) => {
+        getGhostSetupChangeBus().emit(ghostId, { source: 'oauth' });
         broadcastGhostHostNotice(
           ghostId,
           label
             ? { textKey: 'oauthConnected', textArgs: { label } }
             : { textKey: 'oauthConnectedNoLabel' },
         );
+      },
+      onAccountStatusChanged: ({ ghostId, secretKey }) => {
+        getGhostSetupChangeBus().emit(ghostId, {
+          source: 'oauth',
+          ref: secretKey,
+        });
       },
     });
   }
@@ -1522,6 +1562,139 @@ function getGhostConnectionManager(): GhostConnectionManager {
     });
   }
   return ghostConnectionManagerSingleton;
+}
+
+let ghostSetupKvStore: GhostKvStore | null = null;
+
+/**
+ * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
+ * Unlike the legacy plugin-page projection this path is strict: storage or
+ * manifest drift errors propagate and therefore block dispatch.
+ */
+export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
+  const ghost = findAvailableGhost(ghostId);
+  if (!ghost || !ghostSetupKvStore) {
+    throw new Error(`ghost setup unavailable: ${ghostId}`);
+  }
+  const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+  const oauthManager = getGhostOauthAccountManager();
+  const connectionManager = getGhostConnectionManager();
+  let kvSnapshot: Record<string, unknown> | null = null;
+  return evaluateGhostSetupAssessment(
+    runtimeManifest,
+    {
+      secretSaved: (key) => ghostSecretSaved(ghostId, key),
+      oauthStatus: (key) => {
+        const decl = runtimeManifest.network?.secrets?.find((secret) => secret.key === key)?.oauth;
+        const accounts = oauthManager.listAccounts(ghostId, key);
+        return {
+          clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+          connected: accounts.filter((account) => account.status === 'connected').length,
+          expired: accounts.filter((account) => account.status === 'expired').length,
+        };
+      },
+      connectionCount: (key) => connectionManager.list(ghostId, key).length,
+      kvValue: (key) => {
+        if (kvSnapshot === null) kvSnapshot = ghostSetupKvStore?.readStrict(ghostId) ?? {};
+        return kvSnapshot[key];
+      },
+    },
+    {
+      revision: getGhostSetupChangeBus().currentRevision(ghostId),
+      strict: true,
+      additionalGroups: assessGhostHostSetupRequirements(runtimeManifest, {
+        clientConfigReady: (configId) =>
+          configId === 'model-provider' && isModelAccessReady(),
+      }),
+    },
+  );
+}
+
+/**
+ * Executes only Host-generated setup actions. The action id is revalidated by
+ * the coordinator against a fresh assessment before this entry is called.
+ */
+export async function executeGhostSetupAction(args: {
+  sessionId: string;
+  ghostId: string;
+  action: GhostSetupAllowedAction;
+}): Promise<GhostSetupActionResult> {
+  const ghost = findAvailableGhost(args.ghostId);
+  if (!ghost) return { ok: false, message: '目标插件已卸载或不可用' };
+  if (args.action.kind === 'oauth_connect') {
+    const prefix = 'oauth_connect:secret:';
+    if (!args.action.id.startsWith(prefix)) return { ok: false, message: '授权动作已失效' };
+    const secretKey = args.action.id.slice(prefix.length);
+    const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+    const decl = runtimeManifest.network?.secrets?.find(
+      (secret) => secret.key === secretKey && secret.source === 'oauth',
+    )?.oauth;
+    if (!decl) return { ok: false, message: '授权声明已变更，请重新尝试' };
+    const connected = await getGhostOauthAccountManager().connectAccount(
+      args.ghostId,
+      secretKey,
+      decl,
+    );
+    return connected.ok
+      ? { ok: true }
+      : {
+          ok: false,
+          message:
+            connected.error === 'CANCELLED'
+              ? '授权已取消'
+              : connected.detail ?? `授权失败：${connected.error}`,
+        };
+  }
+
+  const navigation = ghostSetupNavigationForAction(args.ghostId, args.action);
+  if (!navigation) return { ok: false, message: '不支持的插件设置动作' };
+  // Settings are rendered by the trusted Desktop Renderer. Main sends only a
+  // fixed local route target after validating the action against this ghost;
+  // no URL or route supplied by Agent/plugin is accepted.
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send(MAKER_PUSH.PLUGIN_SETUP_NAVIGATE, {
+      sessionId: args.sessionId,
+      ...navigation,
+    });
+  }
+  return { ok: true, waitingExternal: true };
+}
+
+/**
+ * 仅供 trusted Desktop inline-setup IPC 调用。Secret 值不经过通用
+ * InteractionDecision，也不进入 assessment、snapshot 或日志。
+ */
+export async function executeGhostSetupInlineAction(args: {
+  sessionId: string;
+  ghostId: string;
+  action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
+  value: string;
+}): Promise<GhostSetupActionResult> {
+  return executeGhostSetupInlineSubmission(
+    {
+      getAssessment: getGhostSetupAssessment,
+      getManifest: (ghostId) => {
+        const ghost = findAvailableGhost(ghostId);
+        return ghost ? withRuntimeFiloGoogleClient(ghost.manifest) : null;
+      },
+      storeSecret: storeGhostSecret,
+      emitChange: (ghostId, secretKey) => {
+        getGhostSetupChangeBus().emit(ghostId, {
+          source: 'secret',
+          ref: secretKey,
+        });
+      },
+      onSaved: (ghostId, label) => {
+        broadcastGhostHostNotice(ghostId, {
+          textKey: 'secretSaved',
+          textArgs: { name: label },
+        });
+      },
+      logger: log,
+    },
+    args,
+  );
 }
 
 /**
@@ -1818,6 +1991,7 @@ export function registerGhostIpc(): void {
     getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
     log,
   });
+  ghostSetupKvStore = ghostKv;
   const ghostInstalled = (ghostId: string): boolean =>
     findAvailableGhost(ghostId) !== null;
   setGhostKvStore({
@@ -1825,6 +1999,7 @@ export function registerGhostIpc(): void {
     write: (ghostId, value) => {
       if (!ghostInstalled(ghostId)) return; // 幽灵写静默丢弃,不留文件
       ghostKv.write(ghostId, value);
+      getGhostSetupChangeBus().emit(ghostId, { source: 'kv' });
     },
   });
   // /secrets 只写通道(user 凭证一律由意识 settingsHtml 收单入库——宿主
@@ -1858,8 +2033,15 @@ export function registerGhostIpc(): void {
       vault: {
         saved: (id, key) => readGhostSecret(id, key) !== null,
         tail: (id, key) => readGhostSecretTail(id, key),
-        store: (id, key, value) => storeGhostSecret(id, key, value),
-        remove: (id, key) => removeGhostSecret(id, key),
+        store: (id, key, value) => {
+          const stored = storeGhostSecret(id, key, value);
+          if (stored) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: key });
+          return stored;
+        },
+        remove: (id, key) => {
+          removeGhostSecret(id, key);
+          getGhostSetupChangeBus().emit(id, { source: 'secret', ref: key });
+        },
       },
       // 入库成功 → 主机代言 tips("凭证「xxx」已保存",带意识身份头);
       // 文案里的名字用清单声明的 label(给用户看的名称),兜底裸 key。
@@ -1888,6 +2070,9 @@ export function registerGhostIpc(): void {
       oauthSecrets,
       manager: getGhostOauthAccountManager(),
       ghostId,
+      onChanged: (secretKey) => {
+        getGhostSetupChangeBus().emit(ghostId, { source: 'oauth', ref: secretKey });
+      },
       log,
     });
   });
@@ -1938,8 +2123,11 @@ export function registerGhostIpc(): void {
         });
         return response === 0;
       },
-      // 新连接添加成功 → 主机代言 tips(带意识身份头;与 secretSaved 同接法)。
       onChanged: (declKey) => {
+        getGhostSetupChangeBus().emit(ghostId, { source: 'connection', ref: declKey });
+      },
+      // 新连接添加成功 → 主机代言 tips(带意识身份头;与 secretSaved 同接法)。
+      onAdded: (declKey) => {
         const label = connectionDecls.find((c) => c.key === declKey)?.label ?? declKey;
         broadcastGhostHostNotice(ghostId, { textKey: 'connectionAdded', textArgs: { label } });
       },
@@ -1979,7 +2167,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateFiloGoogleAccounts({
+          const migrated = migrateFiloGoogleAccounts({
             readLegacyManifest: () => {
               try {
                 const raw = JSON.parse(
@@ -2008,6 +2196,12 @@ export function registerGhostIpc(): void {
             },
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(FILO_GOOGLE_GHOST_ID, {
+              source: 'oauth',
+              ref: FILO_GOOGLE_SECRET_KEY,
+            });
+          }
         } catch (err) {
           log.warn('filo-google 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2021,7 +2215,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateAtlassianAccounts({
+          const migrated = migrateAtlassianAccounts({
             readLegacyRefreshToken: () => {
               try {
                 if (!safeStorage.isEncryptionAvailable()) return null;
@@ -2049,6 +2243,12 @@ export function registerGhostIpc(): void {
             },
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(XD_ATLASSIAN_GHOST_ID, {
+              source: 'oauth',
+              ref: XD_ATLASSIAN_SECRET_KEY,
+            });
+          }
         } catch (err) {
           log.warn('xd-atlassian 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2065,7 +2265,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateGithubAccounts({
+          const migrated = migrateGithubAccounts({
             readLegacyToken: () => {
               try {
                 if (!safeStorage.isEncryptionAvailable()) return null;
@@ -2092,6 +2292,12 @@ export function registerGhostIpc(): void {
             },
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(CINDY_GITHUB_GHOST_ID, {
+              source: 'secret',
+              ref: CINDY_GITHUB_SECRET_KEY,
+            });
+          }
         } catch (err) {
           log.warn('cindy-github 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2106,7 +2312,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateGitlabAccounts({
+          const migrated = migrateGitlabAccounts({
             readLegacyToken: () => {
               try {
                 if (!safeStorage.isEncryptionAvailable()) return null;
@@ -2140,6 +2346,12 @@ export function registerGhostIpc(): void {
             manager: getGhostConnectionManager(),
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(CINDY_GITLAB_GHOST_ID, {
+              source: 'connection',
+              ref: CINDY_GITLAB_CONNECTION_KEY,
+            });
+          }
         } catch (err) {
           log.warn('cindy-gitlab 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2488,6 +2700,10 @@ export function registerGhostIpc(): void {
       capability as CindyCapabilityKey,
       model as string | null,
     );
+    getGhostSetupChangeBus().emit(ghostId, {
+      source: 'host_config',
+      ref: `cindy-pref:${String(capability)}`,
+    });
     return { overrides };
   });
 
@@ -2910,6 +3126,7 @@ function broadcastGhostProvisioning(active: boolean): void {
 }
 
 function broadcastGhostsChanged(ghosts: InstalledGhost[]): void {
+  getGhostSetupManifestTracker().note(ghosts);
   const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;

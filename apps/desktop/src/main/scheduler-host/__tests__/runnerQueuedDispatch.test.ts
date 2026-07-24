@@ -69,6 +69,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner, type SchedulerQueueDeps } from '../runner';
+import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -313,10 +314,12 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     // 不直发、不自行落库(coordinator drain 负责)。
     expect(harness.send).not.toHaveBeenCalled();
     expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
 
     // drain 派发 → runner 挂 turn 监听 → done 收尾。
     await queue.accept();
     await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
     harness.emit({ type: 'text', data: { text: 'heartbeat summary', isFinal: true }, source: 'claude-code' });
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
 
@@ -325,6 +328,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(result.resultText).toBe('heartbeat summary');
     // listener 已摘干净,不泄漏。
     expect(harness.listenerCount()).toBe(0);
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
     // 收尾通知照常(未静默场景)。
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
   });

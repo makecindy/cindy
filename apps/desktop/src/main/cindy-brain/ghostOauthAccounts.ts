@@ -118,8 +118,18 @@ export interface GhostOauthAccountManagerDeps {
    * 授权成功钩子(2026-07-14):新连与同身份重连两个成功出口都触发,调用方
    * 拿它广播"授权成功"的主机代言 tips(label = 账号展示标签,声明 identity
    * 且拉取成功才有)。抛错不许影响连接结果,实现侧自兜。
-   */
+  */
   onAccountConnected?: (info: { ghostId: string; secretKey: string; label: string | null }) => void;
+  /**
+   * Refresh-path status transition hook. It deliberately carries no token,
+   * label, account id, or provider response and fires only after a real
+   * connected/expired manifest change commits.
+   */
+  onAccountStatusChanged?: (info: {
+    ghostId: string;
+    secretKey: string;
+    status: GhostOauthAccountStatus;
+  }) => void;
   /** 延时器(仅 invalid_grant 轮换探测用;测试注入即时假体,生产缺省 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -824,28 +834,53 @@ export class GhostOauthAccountManager {
     secretKey: string,
     accountId: string,
     mutator: (row: AccountRow) => boolean | undefined,
-  ): void {
+  ): boolean {
     const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
     const row = manifest.accounts.find((a) => a.id === accountId);
-    if (!row) return;
-    if (mutator(row)) {
-      this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest));
-    }
+    if (!row || !mutator(row)) return false;
+    return this.deps.vault.store(
+      ghostId,
+      accountsKey(secretKey),
+      JSON.stringify(manifest),
+    );
   }
 
   private markExpired(ghostId: string, secretKey: string, accountId: string): void {
-    this.patchAccount(ghostId, secretKey, accountId, (row) => {
+    const changed = this.patchAccount(ghostId, secretKey, accountId, (row) => {
       if (row.status === 'expired') return false;
       row.status = 'expired';
       return true;
     });
+    if (changed) this.notifyStatusChanged(ghostId, secretKey, 'expired');
   }
+
   private markConnected(ghostId: string, secretKey: string, accountId: string): void {
-    this.patchAccount(ghostId, secretKey, accountId, (row) => {
+    const changed = this.patchAccount(ghostId, secretKey, accountId, (row) => {
       if (row.status === 'connected') return false;
       row.status = 'connected';
       return true;
     });
+    if (changed) this.notifyStatusChanged(ghostId, secretKey, 'connected');
+  }
+
+  private notifyStatusChanged(
+    ghostId: string,
+    secretKey: string,
+    status: GhostOauthAccountStatus,
+  ): void {
+    try {
+      this.deps.onAccountStatusChanged?.({ ghostId, secretKey, status });
+    } catch (err) {
+      this.deps.logger?.warn?.(
+        'ghost oauth onAccountStatusChanged 通知失败(不影响状态写入)',
+        {
+          ghostId,
+          secretKey,
+          status,
+          err: String(err),
+        },
+      );
+    }
   }
 
   private cacheKey(ghostId: string, secretKey: string, accountId: string): string {

@@ -678,7 +678,7 @@ my-ghost/
   "panel": { "title": "面板标题", "html": "panel.html", "position": "right",
              "minWidth": 240, "defaultFraction": 0.24 },
   // panel.position:相对主聊天窗的停靠位,right(缺省)/ left;top/bottom 暂未支持(排期中)
-  "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时必填——凭证收单界面,见 §4.7)
+  "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 \`\`\`
@@ -741,9 +741,9 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32
     "label": "Example API Token",                   // 给用户看的名称(设置页/确认框)
-    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户在你的 settingsHtml 里填(声明 user 凭证必须同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段)
-    "hint": "在控制台生成后粘贴",                     // 可选提示(建议写进你的 settingsHtml 提示文案)
-    "url": "https://example.com/settings/keys",     // 可选:控制台地址(仅 https)。settingsHtml 里可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」);也供确认框等宿主 UI 引用
+    "source": "user",                               // 可选:凭证值来源。"user"(缺省)=用户可在调用前的主机 Setup 卡内填写,也可在你的 settingsHtml 里长期管理/替换/清除(当前仍要求同时声明 settingsHtml,见 §4.7);"login-email"=主机登录邮箱自动派生(用户不填;声明它时不允许再写 url,见 §4.7);"oauth"=主机托管 OAuth 授权,值 = 授权换来的 access token(必须同时声明 oauth 详单,见 §4.7 与下方 oauth 字段)
+    "hint": "在控制台生成后粘贴",                     // 可选提示(主机 Setup 卡与 settingsHtml 都会用到)
+    "url": "https://example.com/settings/keys",     // 可选:控制台/申请地址(仅 https)。调用前缺凭证时,主机 Setup 卡会在输入框旁展示本地化的「获取凭证」入口；settingsHtml 也可用 <a href> 逐字引用它,点击经主机转系统浏览器打开(见 §4.8「外链」)
     "inject": {                                     // 必填:这条凭证怎么进请求
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
@@ -783,8 +783,10 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 \`\`\`
 
 **setup 就绪声明**(可选,顶层字段):回答"这段意识**用之前必须配好什么**"。用户在
-插件页点「使用」时,主机按它做前置检查,没配齐就弹窗引导去你的设置页——检查全在
-主机代码里执行,你只声明需求,不用写任何检查逻辑,也不要在电子脑里自己重复检查。
+插件页点「使用」或 Agent 调用你的工具时,主机按它做前置检查；没配齐就用统一设置卡
+引导用户完成配置：普通 user Secret 直接在卡内填写，OAuth 在卡内发起授权，KV 与连接等
+复杂配置再进入插件详情页。配齐后继续原调用。检查、字段绑定、保存状态和恢复都在主机
+代码里执行,你只声明需求,不用写卡片回调或检查逻辑,也不要在电子脑里自己重复检查。
 
 \`\`\`json
 "setup": {
@@ -1327,8 +1329,14 @@ const r = await cindy.fetch({
 值由主机加密保管、只在代发请求时注入。**保险库里的明文你的代码永远读不回**——
 不要试图让用户把 key 发进聊天,更不要把 key 硬编码在源码里。
 
-**收单一律由你的 settingsHtml 负责**(宿主不渲染凭证输入框,声明 user 凭证必须
-同时声明 settingsHtml,校验强制):你在 settingsHtml 里画输入框收单,值经
+**调用前缺失的普通 user Secret 由主机统一 Setup 卡收单**：主机只根据你声明的
+\`label\` / \`hint\` 生成密码输入，不把值交给 Agent 或你的代码；提交后直接写保险库并
+重新检查 setup，全部满足才继续原工具调用。你不要声明表单字段 id、Action id 或聊天卡
+回调，也不要让用户把 key 发进聊天。同一 \`anyOf\` 组声明了多种合法配置方式时，
+主机会完整展示所有选项供用户选择，不会只取第一项；选项较多时统一卡片正文内部滚动。
+
+**settingsHtml 仍负责详情页里的长期管理**(当前声明 user 凭证仍必须同时声明
+settingsHtml,校验强制):你在 settingsHtml 里画输入框供用户主动添加、替换或清除，值经
 \`fetch('/secrets/<key>', { method:'PUT', body: JSON.stringify({ value }) })\`
 **一次性交给主机保险库**(204 即入库),\`fetch('/secrets')\` 只能查回
 \`[{key, saved, tail?}]\` 状态、**永远拿不回值**(tail 是主机截存的**尾 4 位
@@ -1337,7 +1345,7 @@ tail 也能画来写),DELETE 清除。红线:收单即交,不许把 key 落进 /
 BroadcastChannel、日志或任何自存路径(review 必查)。凭证只会注入到它
 \`inject.hosts\` 声明的域名请求,重定向出域也不会跟着走。用户没填时 cindy.fetch
 返回结构化错误,把 message 原样告诉用户即可(里面带了去哪填的指引)。
-入库成功(204)时主机会自动弹一条「凭证已保存」的系统提示(带你的身份头,
+无论走 Setup 卡还是 settingsHtml，入库成功时主机会自动弹一条「凭证已保存」的系统提示(带你的身份头,
 文案跟随用户语言;无需声明 notify 槽)——设置页里画个就地的轻反馈即可,
 不用自己想办法做全局提示。
 (历史字段 \`input\` 已退役:遗留 \`"input":"ghost"\` 可被接受并忽略,
@@ -1612,8 +1620,9 @@ await fetch('/kv', { method: 'PUT', body: JSON.stringify({ style: 'anime', autoR
 - **卸下意识时清除,沉睡保留**;更新版本保留;
 - 设置页与电子脑/面板同源,改完参数可用 \`BroadcastChannel\` 通知对方热生效
   (同一意识的面板/设置页/电子脑共用频道名,消息自带 type 字段区分来源);
-- **不要在 /kv 里存任何密钥/token 明文**——凭证一律走 network.secrets 声明 +
-  settingsHtml 收单 + /secrets 只写通道入库(§4.7),这是 review 红线;
+- **不要在 /kv 里存任何密钥/token 明文**——凭证一律走 network.secrets 声明，
+  调用前可由主机 Setup 卡内联入库，详情页管理走 settingsHtml + /secrets 只写通道
+  (§4.7)，这是 review 红线;
 - \`/kv\` 与 \`/secrets\`、\`/oauth\`、\`/wake\`、\`/gallery\`、\`/media/\`、\`/preview/\`、\`/__boot__\`
   一样是主机保留路径,安装目录里的同名文件会被遮蔽,起名避开。
 
@@ -1640,6 +1649,10 @@ $('#save').onclick = async () => {
   new BroadcastChannel('my-ghost').postMessage({ type: 'settings-changed' });
 };
 \`\`\`
+
+\`BroadcastChannel\` 只用于让你自己的 panel / 电子脑热更新。聊天里的统一设置卡不监听
+这个事件,也不需要你写任何完成回调；\`/oauth\`、\`/kv\`、\`/secrets\`、
+\`/connections\` 保存成功后,主机会重新读取真实状态并自动更新卡片、继续原工具调用。
 
 ## 4.9 系统提示(notify 槽)
 
@@ -2074,8 +2087,9 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
   WebSocket)与直接读写磁盘永远不存在,声明了槽也一样——槽给的是"请主机
   代办"的资格,不是能力本身;
 - 保险库里的凭证明文永不进沙箱:network 槽的 key 由主机保管注入,你的代码
-  读不回(settingsHtml 收单时明文只在录入瞬间路过你的页面,经 /secrets 交给
-  主机即焚,之后同样拿不到;状态回查最多附尾 4 位指纹,重建不出值);
+  读不回(主机 Setup 卡直接交保险库；settingsHtml 收单时明文只在录入瞬间路过
+  你的页面,经 /secrets 交给主机即焚,之后同样拿不到;状态回查最多附尾 4 位
+  指纹,重建不出值);
 - 只经手字符串(指纹/地址),拿不到任何磁盘路径;
 - 改图只能改本意识自己生成的媒体(主机查账,越权统一 404/拒绝);
 - 崩溃只影响自己的面板(错误接管态),反复崩会被熔断。

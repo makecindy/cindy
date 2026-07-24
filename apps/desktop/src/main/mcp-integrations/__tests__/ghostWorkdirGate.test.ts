@@ -37,7 +37,16 @@ vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: listMock }),
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
+  getGhostSetupAssessment: () => ({ state: 'ready', revision: 0, groups: [] }),
   isGhostAvailableForActiveSession: () => true,
+}));
+vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
+  getGhostSetupCoordinator: () => ({
+    ensureReady: vi.fn(async () => ({
+      ok: true,
+      assessment: { state: 'ready', revision: 0, groups: [] },
+    })),
+  }),
 }));
 // 以下依赖在本测试路径上不会被触达,但 import 副作用重,一律断开。
 vi.mock('../../cindy-brain/attachmentGrant.js', () => ({

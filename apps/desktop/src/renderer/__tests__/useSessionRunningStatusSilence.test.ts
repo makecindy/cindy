@@ -49,6 +49,7 @@ function status(isRunning: boolean, hasError = false, sideTask?: boolean): Sessi
     hasPendingAskUser: false,
     hasPendingPermission: false,
     hasPendingPlanReview: false,
+    hasPendingPluginSetup: false,
   };
 }
 
@@ -327,6 +328,18 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(vi.mocked(addSessionAttention)).not.toHaveBeenCalledWith('s-ask', 'done');
     expect(onSessionDone).toHaveBeenCalledWith('s-ask');
     vi.useRealTimers();
+  });
+
+  it('treats plugin setup as a needs-reply interaction', async () => {
+    const onSessionNeedsReply = vi.fn();
+    renderHook(() => useSessionRunningStatus('another-session', { onSessionNeedsReply }));
+
+    await emitSnapshot(
+      new Map([['s-setup', { ...status(false), hasPendingPluginSetup: true }]]),
+    );
+
+    expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('s-setup', 'awaiting');
+    expect(onSessionNeedsReply).toHaveBeenCalledWith('s-setup');
   });
 
   it('clears an orphaned error badge when a new turn starts and the terminal error is gone', async () => {

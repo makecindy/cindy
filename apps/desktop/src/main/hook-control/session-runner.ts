@@ -87,6 +87,7 @@ import {
   pushToolStep,
   renderActivity,
 } from '../im/shared/turnActivity.js';
+import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import type { HookRunOutcome, HookSessionRunner } from './dispatcher.js';
 import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defaults.js';
@@ -466,6 +467,7 @@ export function createMakerHookSessionRunner(deps: {
       // (用户在桌面端继续用该会话时交互仍走桌面弹窗)。
       const ownInteractionIds = new Set<string>();
       const hookInteractionsInstalled = req.onInteraction !== undefined;
+      let releaseHeadlessGhostSetupTurn = () => {};
       if (req.onInteraction) {
         const sendCard = req.onInteraction;
         const sendCancel = req.onInteractionCancel;
@@ -504,6 +506,7 @@ export function createMakerHookSessionRunner(deps: {
       }
       /** turn 收口清扫: 未决交互按默认自决 + 归还桌面版 listener。幂等。 */
       const finalizeInteractions = (): void => {
+        releaseHeadlessGhostSetupTurn();
         if (!hookInteractionsInstalled) return;
         for (const iid of [...ownInteractionIds]) {
           cancelHookInteraction(iid, '任务已结束, 此交互已失效');
@@ -850,6 +853,7 @@ export function createMakerHookSessionRunner(deps: {
           : req.prompt;
 
       try {
+        releaseHeadlessGhostSetupTurn = beginHeadlessGhostSetupTurn(session.id);
         const pendingHandoff = await agentHandoffPending.peek(session.id);
         const outgoingMessage: UserMessage = pendingHandoff
           ? (prependHandoffToUserMessage(

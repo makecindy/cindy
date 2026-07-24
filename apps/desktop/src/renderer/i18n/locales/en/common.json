@@ -2261,10 +2261,10 @@
         "enableNow": "Enable right after install",
         "expandDescription": "Show Full Description",
         "collapseDescription": "Hide Full Description",
-        "nodeRiskTitle": "Allow a local Node program to run?",
-        "nodeRiskDescription": "This is high risk. The plugin's Node program has the same local permissions as your user account: it can read or change accessible files, use the network, and start other programs. The browser sandbox cannot contain it. Install only plugins from sources you trust.",
-        "nodeRiskConfirm": "I understand, continue",
-        "nodeRiskCancel": "Cancel installation"
+        "nodeRiskTitle": "Allow this plugin to run locally?",
+        "nodeRiskDescription": "This plugin uses a local process to provide its features. It can access files and the network with your user permissions. Continue only if you trust this plugin.",
+        "nodeRiskConfirm": "Continue",
+        "nodeRiskCancel": "Cancel"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -3548,6 +3548,40 @@
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
       "stop": "Stop generating"
     },
+    "pluginSetup": {
+      "title": "{{name}} Settings",
+      "chooseOne": "Choose one setup method",
+      "restoreAria": "Restore {{name}} settings",
+      "minimizeAria": "Minimize {{name}} settings",
+      "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling…",
+      "retry": "Retry",
+      "saveConfiguration": "Save Configuration",
+      "saving": "Saving…",
+      "form": {
+        "placeholder": "Enter {{label}}",
+        "required": "Enter {{label}}",
+        "tooLong": "Must be {{maxLength}} characters or fewer",
+        "openLink": "Get {{label}}",
+        "openLinkFailed": "Couldn't open this page. Please try again."
+      },
+      "action": {
+        "oauth_connect": "Authorize",
+        "open_plugin_settings": "Open settings",
+        "manage_connection": "Manage connections",
+        "open_client_settings": "Open model settings"
+      },
+      "phase": {
+        "pending": "Pending",
+        "action_running": "In progress…",
+        "waiting_external": "Waiting for authorization…",
+        "verifying": "Verifying…",
+        "satisfied": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      }
+    },
     "createAgent": {
       "quickStart": "Quick start",
       "quickStarts": {
@@ -4730,7 +4764,8 @@
       "card": {
         "awaitingPermission": "Awaiting permission",
         "awaitingQuestion": "Awaiting your reply",
-        "awaitingPlan": "Awaiting plan review"
+        "awaitingPlan": "Awaiting plan review",
+        "awaitingPluginSetup": "Awaiting plugin setup"
       },
       "showAllSessions": "Show all {{count}}",
       "dialogues": "Dialogues",

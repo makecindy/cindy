@@ -32,12 +32,14 @@ import type {
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
-import {
-  getAgentFacingText,
-  reconcileSessionRefsForText,
-} from '../../shared/agentInputQueue';
+import { getAgentFacingText, reconcileSessionRefsForText } from '../../shared/agentInputQueue';
 import { providerSecretStorageKey } from '../../shared/providerSecrets';
-import { GHOST_HOST_NOTICE_KEYS } from '../../shared/ghost';
+import { GHOST_HOST_NOTICE_KEYS, GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost';
+import type {
+  GhostSetupActionKind,
+  GhostSetupAllowedAction,
+  GhostSetupStepPhase,
+} from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
@@ -460,6 +462,42 @@ export interface PendingAskUser {
   questions: AskUserQuestionItem[];
 }
 
+export type PluginSetupAction = GhostSetupAllowedAction;
+type PluginSetupInlineFormAction = Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
+
+export interface PendingPluginSetup {
+  requestId: string;
+  revision: number;
+  ghost: {
+    id: string;
+    name: string;
+    iconDataUrl?: string;
+  };
+  intro?: string;
+  steps: Array<{
+    id: string;
+    groupId: string;
+    groupMode: 'any_of';
+    title: string;
+    description: string;
+    phase: GhostSetupStepPhase;
+    action?: PluginSetupAction;
+    errorMessage?: string;
+  }>;
+}
+
+export type PluginSetupViewerState = 'expanded' | 'minimized';
+
+export interface PluginSetupCommandInFlight {
+  requestId: string;
+  action: 'run_action' | 'submit_form' | 'cancel';
+  actionId?: string;
+}
+
+export interface PluginSetupInlineFormValues {
+  value: string;
+}
+
 /**
  * F-AUQ-DRAFT: Per-session draft of in-progress AskUserQuestion answers.
  *
@@ -699,6 +737,12 @@ export interface SessionChatState {
   pendingPermission: PendingPermission | null;
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
+  /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
+  pendingPluginSetup: PendingPluginSetup | null;
+  /** UI-only fold state for the current plugin setup prompt. */
+  pluginSetupViewerState: PluginSetupViewerState;
+  /** Prevents duplicate commands until Main publishes a newer snapshot/dismissal. */
+  pluginSetupCommandInFlight: PluginSetupCommandInFlight | null;
   /**
    * F-AUQ-MIN-1: AskUserQuestion viewer display state. Only meaningful while
    * pendingAskUser != null. Reset to 'expanded' every time a new
@@ -852,6 +896,9 @@ export type SessionChatLightState = Pick<
   | 'historyLoaded'
   | 'pendingPermission'
   | 'pendingAskUser'
+  | 'pendingPluginSetup'
+  | 'pluginSetupViewerState'
+  | 'pluginSetupCommandInFlight'
   | 'askUserViewerState'
   | 'askUserDraft'
   | 'pendingPlanReview'
@@ -900,6 +947,9 @@ function createInitialState(): SessionChatState {
     streamingText: '',
     pendingPermission: null,
     pendingAskUser: null,
+    pendingPluginSetup: null,
+    pluginSetupViewerState: 'expanded',
+    pluginSetupCommandInFlight: null,
     askUserViewerState: 'expanded',
     askUserDraft: null,
     pendingPlanReview: null,
@@ -961,6 +1011,9 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   sdkSessionId: null,
   pendingPermission: null,
   pendingAskUser: null,
+  pendingPluginSetup: null,
+  pluginSetupViewerState: 'expanded',
+  pluginSetupCommandInFlight: null,
   askUserViewerState: 'expanded',
   askUserDraft: null,
   pendingPlanReview: null,
@@ -1148,6 +1201,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     hasBackgroundAgentWork(sessionId, s) ||
     s.pendingPermission ||
     s.pendingAskUser ||
+    s.pendingPluginSetup ||
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
     s.pendingRenameSessionsConfirm ||
@@ -1430,8 +1484,10 @@ function hydratePersistedMessage(
     existing.toolName === 'update_plan' &&
     persisted.toolName === 'update_plan' &&
     existing.toolUseId === persisted.toolUseId &&
-    typeof existing.toolInput === 'object' && existing.toolInput !== null &&
-    typeof persisted.toolInput === 'object' && persisted.toolInput !== null &&
+    typeof existing.toolInput === 'object' &&
+    existing.toolInput !== null &&
+    typeof persisted.toolInput === 'object' &&
+    persisted.toolInput !== null &&
     Array.isArray((existing.toolInput as { plan?: unknown }).plan) &&
     Array.isArray((persisted.toolInput as { plan?: unknown }).plan)
   ) {
@@ -2259,11 +2315,14 @@ export function handleStreamEvent(
         return next;
       });
 
-      const terminalData = event.data as { plan?: unknown; raw?: { id?: unknown } } | null | undefined;
+      const terminalData = event.data as
+        { plan?: unknown; raw?: { id?: unknown } } | null | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
-      const doneMessages = event.source === 'codex'
-        ? applyCodexPlanSnapshotOnDone(cleanedMessages, terminalData?.plan, terminalTurnId).messages
-        : cleanedMessages;
+      const doneMessages =
+        event.source === 'codex'
+          ? applyCodexPlanSnapshotOnDone(cleanedMessages, terminalData?.plan, terminalTurnId)
+              .messages
+          : cleanedMessages;
 
       // F1-a Option C: tool-result-image 孤儿 flush(turn 末残留 pendingFullText)已收口
       // main(messagePersistBroadcaster.flushOrphanToolResults),落库后经 onCreated append
@@ -2302,7 +2361,11 @@ export function handleStreamEvent(
     }
 
     case 'error': {
-      const { message: errMsgRaw, reason, errorStatus } = event.data as {
+      const {
+        message: errMsgRaw,
+        reason,
+        errorStatus,
+      } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
@@ -2434,6 +2497,14 @@ export function handleStreamEvent(
           : null;
       if (state.pendingPermission?.requestId === data.requestId) {
         return { ...state, pendingPermission: null };
+      }
+      if (state.pendingPluginSetup?.requestId === data.requestId) {
+        return {
+          ...state,
+          pendingPluginSetup: null,
+          pluginSetupViewerState: 'expanded',
+          pluginSetupCommandInFlight: null,
+        };
       }
       if (state.pendingIssueConfirm?.requestId === data.requestId) {
         // issue 确认卡被 main 兜底关闭(超时/会话清理),ephemeral 无落库,直接清。
@@ -2728,6 +2799,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.isStreaming &&
     !state.pendingPermission &&
     !state.pendingAskUser &&
+    !state.pendingPluginSetup &&
     !state.pendingPlanReview &&
     !state.pendingIssueConfirm &&
     !state.pendingRenameSessionsConfirm &&
@@ -2769,6 +2841,9 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     errorRetryText: null,
     pendingPermission: null,
     pendingAskUser: null,
+    pendingPluginSetup: null,
+    pluginSetupViewerState: 'expanded',
+    pluginSetupCommandInFlight: null,
     askUserViewerState: 'expanded',
     askUserDraft: null,
     pendingPlanReview: null,
@@ -3046,6 +3121,222 @@ function enqueueTextDeltaPayload(
   scheduleTextDeltaFlush();
 }
 
+const PLUGIN_SETUP_STEP_PHASES = new Set<GhostSetupStepPhase>([
+  'pending',
+  'action_running',
+  'waiting_external',
+  'verifying',
+  'satisfied',
+  'failed',
+  'cancelled',
+]);
+
+const PLUGIN_SETUP_ACTION_KINDS = new Set<GhostSetupActionKind>([
+  'oauth_connect',
+  'open_plugin_settings',
+  'manage_connection',
+  'open_client_settings',
+]);
+
+function parsePluginSetupInlineFormAction(
+  rawAction: Record<string, unknown>,
+): PluginSetupInlineFormAction | null {
+  const rawForm = rawAction.form;
+  if (!rawForm || typeof rawForm !== 'object' || Array.isArray(rawForm)) return null;
+  const rawFields = (rawForm as Record<string, unknown>).fields;
+  if (!Array.isArray(rawFields) || rawFields.length !== 1) return null;
+
+  const rawField = rawFields[0];
+  if (!rawField || typeof rawField !== 'object' || Array.isArray(rawField)) return null;
+  const field = rawField as Record<string, unknown>;
+  let externalLink: { url: string } | undefined;
+  if (field.externalLink !== undefined) {
+    if (
+      !field.externalLink ||
+      typeof field.externalLink !== 'object' ||
+      Array.isArray(field.externalLink)
+    ) {
+      return null;
+    }
+    const rawLink = field.externalLink as Record<string, unknown>;
+    if (
+      Object.keys(rawLink).length !== 1 ||
+      typeof rawLink.url !== 'string' ||
+      rawLink.url.length === 0 ||
+      rawLink.url.length > 200
+    ) {
+      return null;
+    }
+    try {
+      const parsed = new URL(rawLink.url);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+    } catch {
+      return null;
+    }
+    externalLink = { url: rawLink.url };
+  }
+  if (
+    field.id !== 'value' ||
+    field.type !== 'secret' ||
+    typeof field.label !== 'string' ||
+    field.label.length === 0 ||
+    field.label.length > 120 ||
+    (field.description !== undefined &&
+      (typeof field.description !== 'string' || field.description.length > 500)) ||
+    (field.placeholder !== undefined &&
+      (typeof field.placeholder !== 'string' || field.placeholder.length > 120)) ||
+    field.required !== true ||
+    typeof field.maxLength !== 'number' ||
+    !Number.isSafeInteger(field.maxLength) ||
+    field.maxLength < 1 ||
+    field.maxLength > GHOST_SECRET_VALUE_MAX_CHARS
+  ) {
+    return null;
+  }
+
+  return {
+    id: rawAction.id as string,
+    kind: 'inline_form',
+    form: {
+      fields: [
+        {
+          id: field.id,
+          type: 'secret',
+          label: field.label,
+          ...(typeof field.description === 'string' ? { description: field.description } : {}),
+          ...(typeof field.placeholder === 'string' ? { placeholder: field.placeholder } : {}),
+          ...(externalLink ? { externalLink } : {}),
+          required: true,
+          maxLength: field.maxLength,
+        },
+      ],
+    },
+  };
+}
+
+/** Strict renderer boundary parser: unknown push data never reaches the card. */
+export function parsePendingPluginSetup(request: {
+  requestId?: unknown;
+  revision?: unknown;
+  ghost?: unknown;
+  intro?: unknown;
+  steps?: unknown;
+}): PendingPluginSetup | null {
+  if (
+    typeof request.requestId !== 'string' ||
+    request.requestId.length === 0 ||
+    request.requestId.length > 256 ||
+    typeof request.revision !== 'number' ||
+    !Number.isSafeInteger(request.revision) ||
+    request.revision < 0 ||
+    !request.ghost ||
+    typeof request.ghost !== 'object' ||
+    !Array.isArray(request.steps) ||
+    request.steps.length === 0 ||
+    request.steps.length > 16 ||
+    (request.intro !== undefined &&
+      (typeof request.intro !== 'string' || request.intro.length > 500))
+  ) {
+    return null;
+  }
+
+  const ghost = request.ghost as Record<string, unknown>;
+  if (
+    typeof ghost.id !== 'string' ||
+    ghost.id.length === 0 ||
+    ghost.id.length > 256 ||
+    typeof ghost.name !== 'string' ||
+    ghost.name.length === 0 ||
+    ghost.name.length > 256
+  ) {
+    return null;
+  }
+
+  const steps: PendingPluginSetup['steps'] = [];
+  for (const rawStep of request.steps) {
+    if (!rawStep || typeof rawStep !== 'object') return null;
+    const step = rawStep as Record<string, unknown>;
+    if (
+      typeof step.id !== 'string' ||
+      step.id.length === 0 ||
+      step.id.length > 256 ||
+      (step.groupId !== undefined &&
+        (typeof step.groupId !== 'string' ||
+          step.groupId.length === 0 ||
+          step.groupId.length > 256)) ||
+      (step.groupMode !== undefined && step.groupMode !== 'any_of') ||
+      typeof step.title !== 'string' ||
+      step.title.length === 0 ||
+      step.title.length > 120 ||
+      typeof step.description !== 'string' ||
+      step.description.length > 500 ||
+      typeof step.phase !== 'string' ||
+      !PLUGIN_SETUP_STEP_PHASES.has(step.phase as GhostSetupStepPhase) ||
+      (step.errorMessage !== undefined &&
+        (typeof step.errorMessage !== 'string' || step.errorMessage.length > 500))
+    ) {
+      return null;
+    }
+
+    let action: PluginSetupAction | undefined;
+    if (step.action !== undefined) {
+      if (!step.action || typeof step.action !== 'object') return null;
+      const rawAction = step.action as Record<string, unknown>;
+      if (
+        typeof rawAction.id !== 'string' ||
+        rawAction.id.length === 0 ||
+        rawAction.id.length > 256 ||
+        typeof rawAction.kind !== 'string'
+      ) {
+        return null;
+      }
+      if (rawAction.kind === 'inline_form') {
+        const parsedInline = parsePluginSetupInlineFormAction(rawAction);
+        if (!parsedInline) return null;
+        action = parsedInline;
+      } else {
+        if (!PLUGIN_SETUP_ACTION_KINDS.has(rawAction.kind as GhostSetupActionKind)) return null;
+        action = {
+          id: rawAction.id,
+          kind: rawAction.kind as Exclude<GhostSetupActionKind, 'inline_form'>,
+        };
+      }
+    }
+
+    steps.push({
+      id: step.id,
+      // Older controlled Desktops did not project group identity. Treat each
+      // legacy step as its own group while preserving strict validation when
+      // the new fields are present.
+      groupId: typeof step.groupId === 'string' ? step.groupId : step.id,
+      groupMode: 'any_of',
+      title: step.title,
+      description: step.description,
+      phase: step.phase as GhostSetupStepPhase,
+      ...(action ? { action } : {}),
+      ...(typeof step.errorMessage === 'string' ? { errorMessage: step.errorMessage } : {}),
+    });
+  }
+
+  const iconDataUrl =
+    typeof ghost.iconDataUrl === 'string' &&
+    ghost.iconDataUrl.length <= 512_000 &&
+    ghost.iconDataUrl.startsWith('data:image/')
+      ? ghost.iconDataUrl
+      : undefined;
+  return {
+    requestId: request.requestId,
+    revision: request.revision,
+    ghost: {
+      id: ghost.id,
+      name: ghost.name,
+      ...(iconDataUrl ? { iconDataUrl } : {}),
+    },
+    ...(typeof request.intro === 'string' ? { intro: request.intro } : {}),
+    steps,
+  };
+}
+
 function initGlobalListeners(): void {
   if (globalListenersInitialized) return; // idempotent for StrictMode / HMR
   globalListenersInitialized = true;
@@ -3103,7 +3394,8 @@ function initGlobalListeners(): void {
     // fork / rewind 反向找 prior assistant 锚点要靠这个字段。
     // Remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
-      const errData = (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
+      const errData =
+        (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
       const isAuthError =
         errData.sdkError === 'authentication_failed' ||
         errData.errorStatus === 401 ||
@@ -3321,6 +3613,7 @@ function initGlobalListeners(): void {
     if (
       (kind !== 'permission' &&
         kind !== 'ask_user_question' &&
+        kind !== 'plugin_setup' &&
         kind !== 'plan_review' &&
         kind !== 'issue_confirm' &&
         kind !== 'rename_sessions_confirm' &&
@@ -3362,6 +3655,27 @@ function initGlobalListeners(): void {
       setState(sessionId, (s) =>
         handleStreamEvent(s, { sessionId, type: 'ask_user_question', data, persistId }),
       );
+      return;
+    }
+
+    if (request.kind === 'plugin_setup') {
+      const parsed = parsePendingPluginSetup(request);
+      if (!parsed) return;
+      setState(sessionId, (s) => {
+        const current = s.pendingPluginSetup;
+        if (current?.requestId === parsed.requestId && parsed.revision < current.revision) {
+          return s;
+        }
+        const sameRequest = current?.requestId === parsed.requestId;
+        const advanced = sameRequest && parsed.revision > current.revision;
+        return {
+          ...s,
+          pendingPluginSetup: parsed,
+          pluginSetupViewerState: sameRequest ? s.pluginSetupViewerState : 'expanded',
+          pluginSetupCommandInFlight:
+            advanced || !sameRequest ? null : s.pluginSetupCommandInFlight,
+        };
+      });
       return;
     }
 
@@ -3508,8 +3822,8 @@ function initGlobalListeners(): void {
     } | null;
     if (!payload?.sessionId) return;
     const clientIds = Array.isArray(payload.clientIds)
-      ? payload.clientIds.filter((value): value is string =>
-          typeof value === 'string' && value.length > 0,
+      ? payload.clientIds.filter(
+          (value): value is string => typeof value === 'string' && value.length > 0,
         )
       : typeof payload.clientId === 'string' && payload.clientId.length > 0
         ? [payload.clientId]
@@ -3896,10 +4210,10 @@ function initGlobalListeners(): void {
       i18nKey?: string;
     } | null;
     if (
-      !payload?.sessionId
-      || payload.kind !== 'blocked'
-      || payload.i18nKey !== 'contentModeration.blocked'
-      || !_activeViewSessions.has(payload.sessionId)
+      !payload?.sessionId ||
+      payload.kind !== 'blocked' ||
+      payload.i18nKey !== 'contentModeration.blocked' ||
+      !_activeViewSessions.has(payload.sessionId)
     ) {
       return;
     }
@@ -4101,6 +4415,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     historyLoaded: state.historyLoaded,
     pendingPermission: state.pendingPermission,
     pendingAskUser: state.pendingAskUser,
+    pendingPluginSetup: state.pendingPluginSetup,
+    pluginSetupViewerState: state.pluginSetupViewerState,
+    pluginSetupCommandInFlight: state.pluginSetupCommandInFlight,
     askUserViewerState: state.askUserViewerState,
     askUserDraft: state.askUserDraft,
     pendingPlanReview: state.pendingPlanReview,
@@ -4135,6 +4452,9 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.historyLoaded === b.historyLoaded &&
     a.pendingPermission === b.pendingPermission &&
     a.pendingAskUser === b.pendingAskUser &&
+    a.pendingPluginSetup === b.pendingPluginSetup &&
+    a.pluginSetupViewerState === b.pluginSetupViewerState &&
+    a.pluginSetupCommandInFlight === b.pluginSetupCommandInFlight &&
     a.askUserViewerState === b.askUserViewerState &&
     a.askUserDraft === b.askUserDraft &&
     a.pendingPlanReview === b.pendingPlanReview &&
@@ -4204,6 +4524,7 @@ function subscribeAll(cb: () => void): () => void {
  * `hasPendingAskUser`    — session is waiting for user to answer a question.
  * `hasPendingPermission` — session is waiting for user to grant permission.
  * `hasPendingPlanReview` — session is waiting for user to review a plan (FP-3).
+ * `hasPendingPluginSetup` — session is waiting for local plugin setup.
  */
 export interface SessionStatusInfo {
   isRunning: boolean;
@@ -4213,6 +4534,7 @@ export interface SessionStatusInfo {
   hasPendingAskUser: boolean;
   hasPendingPermission: boolean;
   hasPendingPlanReview: boolean;
+  hasPendingPluginSetup: boolean;
 }
 
 /**
@@ -4271,6 +4593,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasPendingAskUser = state.pendingAskUser !== null;
     const hasPendingPermission = state.pendingPermission !== null;
     const hasPendingPlanReview = state.pendingPlanReview !== null;
+    const hasPendingPluginSetup = state.pendingPluginSetup !== null;
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -4288,8 +4611,14 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingAskUser,
         hasPendingPermission,
         hasPendingPlanReview,
+        hasPendingPluginSetup,
       });
-    } else if (hasPendingAskUser || hasPendingPermission || hasPendingPlanReview) {
+    } else if (
+      hasPendingAskUser ||
+      hasPendingPermission ||
+      hasPendingPlanReview ||
+      hasPendingPluginSetup
+    ) {
       // Session has a pending prompt for the user — include so the Sidebar
       // can show the "needs attention" notification dot.
       next.set(id, {
@@ -4298,6 +4627,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingAskUser,
         hasPendingPermission,
         hasPendingPlanReview,
+        hasPendingPluginSetup,
       });
     }
   }
@@ -4317,6 +4647,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasPendingAskUser: state.pendingAskUser !== null,
       hasPendingPermission: state.pendingPermission !== null,
       hasPendingPlanReview: state.pendingPlanReview !== null,
+      hasPendingPluginSetup: state.pendingPluginSetup !== null,
     });
   }
 
@@ -4353,7 +4684,8 @@ function getRunningSnapshot(): ReadonlyMap<string, SessionStatusInfo> {
         prev.sideTask !== info.sideTask ||
         prev.hasPendingAskUser !== info.hasPendingAskUser ||
         prev.hasPendingPermission !== info.hasPendingPermission ||
-        prev.hasPendingPlanReview !== info.hasPendingPlanReview
+        prev.hasPendingPlanReview !== info.hasPendingPlanReview ||
+        prev.hasPendingPluginSetup !== info.hasPendingPluginSetup
       ) {
         same = false;
         break;
@@ -4758,12 +5090,8 @@ function removeMessagesByClientIds(
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
   setState(sessionId, (s) => {
-    const removedMessages = s.messages.filter((message) =>
-      deletedClientIds.has(message.clientId),
-    );
-    const messages = s.messages.filter((message) =>
-      !deletedClientIds.has(message.clientId),
-    );
+    const removedMessages = s.messages.filter((message) => deletedClientIds.has(message.clientId));
+    const messages = s.messages.filter((message) => !deletedClientIds.has(message.clientId));
     const deletedTaskAliases = new Set<string>(deletedClientIds);
     for (const message of removedMessages) {
       if (message.toolUseId) deletedTaskAliases.add(message.toolUseId);
@@ -4777,8 +5105,7 @@ function removeMessagesByClientIds(
         if (
           deletedTaskAliases.has(key) ||
           deletedTaskAliases.has(task.taskId) ||
-          (task.parentToolUseId !== undefined &&
-            deletedTaskAliases.has(task.parentToolUseId))
+          (task.parentToolUseId !== undefined && deletedTaskAliases.has(task.parentToolUseId))
         ) {
           changed = true;
           continue;
@@ -4787,10 +5114,7 @@ function removeMessagesByClientIds(
       }
       if (changed) taskUpdates = nextTaskUpdates;
     }
-    if (
-      messages.length === s.messages.length &&
-      taskUpdates === s.taskUpdates
-    ) {
+    if (messages.length === s.messages.length && taskUpdates === s.taskUpdates) {
       return s;
     }
     return {
@@ -5285,10 +5609,8 @@ function extractSessionRefs(
   text: string,
   previous?: readonly AgentInputSessionRef[],
 ): NonNullable<AgentInputQueuedMessage['sessionRefs']> {
-  return reconcileSessionRefsForText(
-    text,
-    previous,
-    (sessionId) => remoteProjectsStore.getSessionDeviceId(sessionId),
+  return reconcileSessionRefsForText(text, previous, (sessionId) =>
+    remoteProjectsStore.getSessionDeviceId(sessionId),
   );
 }
 
@@ -5918,16 +6240,18 @@ async function resendBlockedMessage(
         msg.retryFiles,
         msg.retryMentions,
         opts?.quotesEncoded ||
-        opts?.agentReferences?.length ||
-        opts?.pastedTextRanges?.length ||
-        opts?.slashCommandRanges !== undefined
+          opts?.agentReferences?.length ||
+          opts?.pastedTextRanges?.length ||
+          opts?.slashCommandRanges !== undefined
           ? {
               ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
-              ...(opts?.agentReferences?.length
-                ? { agentReferences: opts.agentReferences }
+              ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
+              ...(opts?.pastedTextRanges?.length
+                ? { pastedTextRanges: opts.pastedTextRanges }
                 : {}),
-              ...(opts?.pastedTextRanges?.length ? { pastedTextRanges: opts.pastedTextRanges } : {}),
-              ...(opts?.slashCommandRanges !== undefined ? { slashCommandRanges: opts.slashCommandRanges } : {}),
+              ...(opts?.slashCommandRanges !== undefined
+                ? { slashCommandRanges: opts.slashCommandRanges }
+                : {}),
             }
           : undefined,
       );
@@ -6258,6 +6582,9 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       errorRetryText: null,
       pendingPermission: null,
       pendingAskUser: null,
+      pendingPluginSetup: null,
+      pluginSetupViewerState: 'expanded',
+      pluginSetupCommandInFlight: null,
       // F-AUQ-MIN-5: Clear session — wipe viewer state too.
       askUserViewerState: 'expanded',
       // F-AUQ-DRAFT: Clear session also wipes any in-progress draft.
@@ -6465,6 +6792,81 @@ function answerUserQuestion(
   makerApiFor(sessionId)
     .resolveInteraction(requestId, { kind: 'ask_user_question', answers })
     .catch((err) => log.error('Failed to answer user question:', err));
+}
+
+function respondToPluginSetup(
+  sessionId: string,
+  requestId: string,
+  action: 'run_action' | 'submit_form' | 'cancel',
+  actionId?: string,
+  values?: PluginSetupInlineFormValues,
+): void {
+  if (!sessionId) return;
+  const state = getOrCreateState(sessionId);
+  const pending = state.pendingPluginSetup;
+  if (!pending || pending.requestId !== requestId || state.pluginSetupCommandInFlight) return;
+
+  const selectedAction = actionId
+    ? pending.steps.find((step) => step.action?.id === actionId)?.action
+    : undefined;
+  if (action === 'run_action') {
+    if (!selectedAction || selectedAction.kind === 'inline_form') return;
+  } else if (action === 'submit_form') {
+    if (
+      isRemoteSession(sessionId) ||
+      !selectedAction ||
+      selectedAction.kind !== 'inline_form' ||
+      typeof values?.value !== 'string'
+    ) {
+      return;
+    }
+    const value = values.value.trim();
+    const field = selectedAction.form.fields[0];
+    if (value.length === 0 || value.length > field.maxLength) return;
+
+    const command: PluginSetupCommandInFlight = {
+      requestId,
+      action,
+      actionId: selectedAction.id,
+    };
+    setState(sessionId, (s) => ({ ...s, pluginSetupCommandInFlight: command }));
+    window.electronAPI.maker
+      .submitPluginSetupInline({
+        requestId,
+        actionId: selectedAction.id,
+        expectedRevision: pending.revision,
+        value,
+      })
+      .catch(() => {
+        // Do not attach IPC error details here: this path carries a secret.
+        log.error('Failed to submit plugin setup form');
+        setState(sessionId, (s) =>
+          s.pluginSetupCommandInFlight === command ? { ...s, pluginSetupCommandInFlight: null } : s,
+        );
+      });
+    return;
+  }
+
+  const command: PluginSetupCommandInFlight = {
+    requestId,
+    action,
+    ...(actionId ? { actionId } : {}),
+  };
+  setState(sessionId, (s) => ({ ...s, pluginSetupCommandInFlight: command }));
+
+  makerApiFor(sessionId)
+    .resolveInteraction(requestId, {
+      kind: 'plugin_setup',
+      action,
+      ...(actionId ? { actionId } : {}),
+      expectedRevision: pending.revision,
+    })
+    .catch((err) => {
+      log.error('Failed to respond to plugin setup:', err);
+      setState(sessionId, (s) =>
+        s.pluginSetupCommandInFlight === command ? { ...s, pluginSetupCommandInFlight: null } : s,
+      );
+    });
 }
 
 /**
@@ -6964,6 +7366,14 @@ function setAskUserViewerState(sessionId: string, next: AskUserViewerState): voi
   });
 }
 
+function setPluginSetupViewerState(sessionId: string, next: PluginSetupViewerState): void {
+  if (!sessionId) return;
+  setState(sessionId, (s) => {
+    if (s.pluginSetupViewerState === next) return s;
+    return { ...s, pluginSetupViewerState: next };
+  });
+}
+
 /**
  * F-AUQ-DRAFT: Persist the in-progress AskUserQuestion wizard state
  * (currentIndex + answers) per session so it survives the session-switch
@@ -7097,12 +7507,11 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         // 执行端 maker:send 在进入 vendor 前冻结自己的时钟，并仅在 accepted 后
         // durable ack；device-link 控制端不再跨设备传时间戳。老执行端忽略该选项
         // 时安全降级为“不确认旧中断”，不会因时钟偏差抹掉新的中断。
-        return sendDirect(true)
-          .then(() => {
-            if (continuedErrorTailClientId) {
-              dismissErrorTailMessage(sessionId, continuedErrorTailClientId);
-            }
-          });
+        return sendDirect(true).then(() => {
+          if (continuedErrorTailClientId) {
+            dismissErrorTailMessage(sessionId, continuedErrorTailClientId);
+          }
+        });
       }
       const queued = buildQueuedMessage(
         sessionId,
@@ -7391,6 +7800,7 @@ export const makerChatStore = {
   respondToRenameSessionsConfirm,
   respondToGhostGrantConfirm,
   answerUserQuestion,
+  respondToPluginSetup,
   respondToPlanReview,
   cancelPlanReview,
   updatePendingPlanReviewContent,
@@ -7400,6 +7810,8 @@ export const makerChatStore = {
   setPlanViewerState,
   /** F-AUQ-MIN-2/4: minimize/restore the AskUserQuestion prompt UI. */
   setAskUserViewerState,
+  /** Minimize/restore the Host-owned plugin setup prompt UI. */
+  setPluginSetupViewerState,
   /** F-AUQ-DRAFT: persist in-progress wizard state across session switch. */
   setAskUserDraft,
   setTitleUpdateCallback,
@@ -8017,10 +8429,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         : {}),
       // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
-      ...(m.role === 'assistant' && (
-        m.agentMeta?.turnCompleted === true ||
-        (typeof m.agentMeta?.turnCostUsd === 'number' && m.agentMeta.turnCostUsd > 0)
-      )
+      ...(m.role === 'assistant' &&
+      (m.agentMeta?.turnCompleted === true ||
+        (typeof m.agentMeta?.turnCostUsd === 'number' && m.agentMeta.turnCostUsd > 0))
         ? { turnCompleted: true }
         : {}),
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)

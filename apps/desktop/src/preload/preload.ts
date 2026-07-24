@@ -340,6 +340,7 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 意识仓库变化广播 (install/uninstall 后 main 推全量已装清单,多窗口热更新;
 // 见 main/cindy-brain/index.ts)。
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
+const fanOutGhostSetupNavigate = createIpcFanOut('maker:plugin-setup:navigate');
 // Plugin 顶部已安装快捷行的最近使用顺序，多窗口同步。
 const fanOutGhostRecentUsageChanged = createIpcFanOut('ghosts:recent-usage-changed');
 // 双击 .cindy 转交信号(main 缓存路径,renderer 收信号后来取,统一走应用内确认流程)。
@@ -811,6 +812,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
     takePendingInstall: (): Promise<{ filePath: string | null }> =>
       ipcRenderer.invoke('ghosts:take-pending-install'),
     onChanged: fanOutGhostsChanged,
+    onSetupNavigate: (
+      callback: (
+        payload:
+          | { sessionId: string; target: 'plugin_settings'; ghostId: string }
+          | { sessionId: string; target: 'client_settings' },
+      ) => void,
+    ): (() => void) =>
+      fanOutGhostSetupNavigate((raw: unknown) => {
+        if (!raw || typeof raw !== 'object') return;
+        const value = raw as Record<string, unknown>;
+        if (typeof value.sessionId !== 'string' || value.sessionId.length === 0) return;
+        if (
+          value.target === 'plugin_settings' &&
+          typeof value.ghostId === 'string' &&
+          value.ghostId.length > 0
+        ) {
+          callback({
+            sessionId: value.sessionId,
+            target: 'plugin_settings',
+            ghostId: value.ghostId,
+          });
+          return;
+        }
+        if (value.target === 'client_settings') {
+          callback({ sessionId: value.sessionId, target: 'client_settings' });
+        }
+      }),
     onRecentUsageChanged: fanOutGhostRecentUsageChanged,
     onInstallRequested: fanOutGhostInstallRequested,
     onRuntimeChanged: fanOutGhostRuntimeChanged,
@@ -3822,6 +3850,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // InteractionDecision union (permission/ask_user_question/plan_review,按 kind 分支)
       decision: Record<string, unknown>,
     ): Promise<void> => ipcRenderer.invoke('maker:resolve-interaction', requestId, decision),
+
+    /** Local-only Secret handoff; Main verifies this is Cindy's trusted top-level frame. */
+    submitPluginSetupInline: (request: {
+      requestId: string;
+      actionId: string;
+      expectedRevision: number;
+      value: string;
+    }): Promise<void> => ipcRenderer.invoke('maker:plugin-setup:submit-inline', request),
 
     // 快照:某会话当前挂起的交互(permission/ask/plan)。打开/重连/刷新会话时拉一次重建面板
     // —— pending 状态原本只由实时 INTERACTION_REQUEST push 设置,后加入的窗口靠它补回。

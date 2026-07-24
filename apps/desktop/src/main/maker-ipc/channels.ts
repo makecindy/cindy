@@ -149,6 +149,11 @@ export const MAKER_INVOKE = {
   LIST_CUSTOMIZATIONS: 'maker:list-customizations',
   /** Resolve a pending interaction (permission / ask_user_question / plan_review) */
   RESOLVE_INTERACTION: 'maker:resolve-interaction',
+  /**
+   * Cindy 自有顶层 Renderer 专用的插件 Secret 提交窄桥。
+   * 不进入通用 interaction/device-link transport。
+   */
+  PLUGIN_SETUP_SUBMIT_INLINE: 'maker:plugin-setup:submit-inline',
   /** Snapshot the session's currently-pending interactions (rebuild panel on open/reconnect/refresh) */
   GET_PENDING_INTERACTIONS: 'maker:get-pending-interactions',
   // 运行时切换 (Phase B)
@@ -599,6 +604,8 @@ export const MAKER_PUSH = {
   INTERACTION_REQUEST: 'maker:interaction-request',
   /** Pending interaction was auto-resolved (e.g. permission mode changed mid-session) */
   INTERACTION_DISMISSED: 'maker:interaction-dismissed',
+  /** Host-validated plugin setup action requests a trusted local settings route. */
+  PLUGIN_SETUP_NAVIGATE: 'maker:plugin-setup:navigate',
   /** Agent 鉴权状态变化 (login/logout 完成时, 替代老 codex:auth:state-changed) */
   AUTH_STATE_CHANGED: 'maker:auth:state-changed',
   /**
