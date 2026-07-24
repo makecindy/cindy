@@ -33,7 +33,7 @@ const messages = {
     ssoEntry: '使用企业 SSO 登录',
     ssoOrgTitle: '企业 SSO 登录',
     ssoOrgSubtitle: '输入企业 ID、组织 slug 或已验证域名，跳转到企业单点登录。',
-    ssoOrgPlaceholder: '企业 ID、组织 slug 或已验证域名',
+    ssoOrgPlaceholder: '企业 ID、slug 或域名',
     ssoOrgHint: '不知道企业登录标识？请联系企业管理员。',
     ssoOrgDetected: '选择企业「{org}」的单点登录方式',
     ssoVerificationTitle: '验证企业联系方式',
@@ -130,7 +130,7 @@ const messages = {
     ssoOrgTitle: 'Enterprise SSO',
     ssoOrgSubtitle:
       'Enter a company ID, organization slug, or verified domain to continue with single sign-on.',
-    ssoOrgPlaceholder: 'Company ID, organization slug, or verified domain',
+    ssoOrgPlaceholder: 'Company ID, slug, or domain',
     ssoOrgHint:
       "Don't know your enterprise sign-in identifier? Ask your admin.",
     ssoOrgDetected: 'Choose a single sign-on connection for "{org}"',

@@ -66,10 +66,13 @@ export function LoginTitleBlock({
   title,
   subtitle,
   globalPill,
+  subtitleMaxLines = SUBTITLE.maxLines,
 }: {
   title: string;
   subtitle?: ReactNode;
   globalPill?: string;
+  /** 副标题行数上限(登录屏默认 2;Splash 故障指引等长文案宿主可放宽)。 */
+  subtitleMaxLines?: number;
 }) {
   return (
     <>
@@ -121,16 +124,19 @@ export function LoginTitleBlock({
       </div>
       {subtitle != null && (
         <div
-          className="absolute line-clamp-2 text-center"
+          // break-words:codeSentTo 邮箱、org slug 等无空格长 token 需要词内断行
+          // 才能用上第二行,否则单行横向溢出被裁。
+          className="absolute overflow-hidden break-words text-center [display:-webkit-box] [-webkit-box-orient:vertical]"
           style={{
             left: SUBTITLE.x,
             top: SUBTITLE.y,
             width: SUBTITLE.width,
-            height: SUBTITLE.lineHeight * SUBTITLE.maxLines,
+            height: SUBTITLE.lineHeight * subtitleMaxLines,
             // 显式行高:继承行高(body 1.5)大于槽高会被 clamp 裁字形(MT-7)。
             lineHeight: `${SUBTITLE.lineHeight}px`,
             fontSize: SUBTITLE.fontSize,
             color: LOGIN_COLORS.secondaryText,
+            WebkitLineClamp: subtitleMaxLines,
           }}
         >
           {subtitle}

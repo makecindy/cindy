@@ -98,7 +98,8 @@ export function LoginPanel({
   );
 }
 
-/** 标题块(figma §5.1:标题 y=31 h=38 32 Bold 居中;副标题 x=41 y=75 w=599 20 Regular 居中)。 */
+/** 标题块(figma §5.1:标题 y=31 h=38 32 Bold 居中;副标题 @(70,75) 540 宽 ≤2 行
+ *  顶对齐 20 Regular——2026-07-24 拍板,原单行 599@41 作废,见 DESIGN.md §16.2)。 */
 export function LoginTitleBlock({
   title,
   subtitle,
@@ -115,7 +116,7 @@ export function LoginTitleBlock({
         {title}
       </Text>
       {subtitle != null ? (
-        <Text numberOfLines={1} style={styles.subtitle}>
+        <Text numberOfLines={LOGIN_SUBTITLE.maxLines} style={styles.subtitle}>
           {subtitle}
         </Text>
       ) : null}
@@ -967,6 +968,8 @@ const makeStyles = (colors: ThemeColors) =>
     fontSize: LOGIN_SUBTITLE.font,
     fontWeight: fontWeight.regular,
     left: LOGIN_SUBTITLE.x,
+    // 显式行高:两行槽高 = 行高 × maxLines,折行只向下伸展(§16.2 折行分级 2)
+    lineHeight: LOGIN_SUBTITLE.height,
     // 同查:不设固定 height(设计 h=23 仅几何参考),盒随字形,descender 不受裁切
     position: 'absolute',
     textAlign: 'center',
@@ -1181,6 +1184,8 @@ const makeStyles = (colors: ThemeColors) =>
   textLinkSlotText: {
     fontSize: LOGIN_TEXT_LINK.font,
     fontWeight: fontWeight.regular,
+    // 显式行高:两行(numberOfLines=2)共 46 ≤ 槽高 50,不再依赖平台默认行高
+    lineHeight: LOGIN_SUBTITLE.height,
     textAlign: 'center',
     width: LOGIN_TEXT_LINK.width,
   },

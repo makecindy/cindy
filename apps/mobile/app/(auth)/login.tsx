@@ -33,6 +33,7 @@ import {
   LOGIN_GROUP,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
+  LOGIN_SSO_ORG_HINT_TOP,
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
   type LoginSurfaceMode,
@@ -298,7 +299,7 @@ export default function LoginScreen() {
             testID="login.ssoOrgInput"
             value={ssoOrg}
           />
-          <LoginTextLinkSlot tone="secondary">
+          <LoginTextLinkSlot tone="secondary" top={LOGIN_SSO_ORG_HINT_TOP}>
             {loginText('ssoOrgHint')}
           </LoginTextLinkSlot>
           <LoginPrimaryButton

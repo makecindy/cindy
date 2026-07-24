@@ -338,8 +338,8 @@ export function resolveLoginSurface(
 export const LOGIN_GROUP = { x: 35, width: 680, height: 560 } as const;
 /** 标题(figma §5.1:y=31 h=38 32 Bold 居中)。 */
 export const LOGIN_TITLE = { y: 31, height: 38, font: 32 } as const;
-/** 副标题(figma §5.1:x=41 y=75 w=599 20 Regular 居中)。 */
-export const LOGIN_SUBTITLE = { x: 41, y: 75, width: 599, height: 23, font: 20 } as const;
+/** 副标题:540@70 ≤2 行顶对齐,height=行高(DESIGN.md §16.2,2026-07-24 拍板;原单行 599@41 作废)。 */
+export const LOGIN_SUBTITLE = { x: 70, y: 75, width: 540, height: 23, font: 20, maxLines: 2 } as const;
 /** 输入/主按钮(figma §4.1/§4.3:540×80 r40;文本 x=31 §4.1)。 */
 export const LOGIN_CONTROL = {
   x: 70,
@@ -384,6 +384,8 @@ export const LOGIN_METHOD_ROW = {
 export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size: 64 } as const;
 /** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20)。 */
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20 } as const;
+/** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
+export const LOGIN_SSO_ORG_HINT_TOP = 244;
 
 // 态叠层 / 浅底钮白描边 / loading 环底圈色:原 LOGIN_PRESSED_OVERLAY /
 // LOGIN_INVERTED_BORDER / LOGIN_RING_TRACK 字面常量已随暗色实现 PR 并入
