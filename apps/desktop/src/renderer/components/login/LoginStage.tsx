@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { panelPlacement } from './loginScale';
-import { LOGIN_GROUP } from './loginDesignTokens';
+import { LOGIN_GROUP, LOGIN_LOCAL_MODE } from './loginDesignTokens';
 
 /**
  * LoginStage — 桌面登录 1819×2098 设计画布的「面板宿主」层(demo v3.1 缩放)。
@@ -34,16 +34,24 @@ export function LoginStage({
   children,
   ssoOrgGroupY = false,
   groupStyle,
+  footer,
 }: {
   children: ReactNode;
   /** sso-org 族状态登录组 y=1227,其余 1229(figma §5.1 / demo loginY)。 */
   ssoOrgGroupY?: boolean;
   /** handoff 面板入场样式(opacity/transform/transition,LoginPage 消费 context 注入)。 */
   groupStyle?: CSSProperties;
+  /** 登录组下方的辅助操作区；相对于 stage 定位并参与视口底部避让计算。 */
+  footer?: ReactNode;
 }) {
   const { width, height } = useViewportSize();
   const groupY = ssoOrgGroupY ? LOGIN_GROUP.ySsoOrg : LOGIN_GROUP.yDefault;
-  const placement = panelPlacement(width, height, groupY);
+  const placement = panelPlacement(
+    width,
+    height,
+    groupY,
+    footer ? LOGIN_LOCAL_MODE.reservedHeight : 0,
+  );
 
   return (
     <div
@@ -73,6 +81,30 @@ export function LoginStage({
           {children}
         </div>
       </div>
+      {footer && (
+        <div
+          data-testid="login-stage-footer"
+          className="absolute z-30 flex flex-col items-center text-center"
+          style={{
+            left: '50%',
+            top:
+              placement.topY +
+              LOGIN_GROUP.height * placement.scale +
+              LOGIN_LOCAL_MODE.gap,
+            width: `min(${LOGIN_GROUP.width}px, calc(100vw - 32px))`,
+            // footer 与登录面板共享 handoff 入场态，避免品牌 splash 期间先露出
+            // “跳过登录”而面板仍不可点击。
+            opacity: groupStyle?.opacity,
+            transform: groupStyle?.transform
+              ? `translateX(-50%) ${groupStyle.transform}`
+              : 'translateX(-50%)',
+            pointerEvents: groupStyle?.pointerEvents,
+            transition: groupStyle?.transition,
+          }}
+        >
+          {footer}
+        </div>
+      )}
     </div>
   );
 }
