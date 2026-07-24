@@ -126,7 +126,7 @@ import { createLogger } from '../logger.js';
 import { desktopClaudeAuthAdapter, desktopCodexAuthAdapter, readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
 import { syncExternalCodexSessionFromDesktop } from '../maker-host/codex-local-sessions.js';
-import { getCodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
+import { getCodexProxyAuthInjection, getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
 import {
   readCollaborationSettings,
   readCollaborationSettingsState,
@@ -6568,6 +6568,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
           clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
           wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
           getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+          // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
+          // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
+          codexAuthInjection: getCodexProxyAuthInjectionState(),
           logger: log,
         }),
         (id) => broadcastSessionPatched(id, {

@@ -213,6 +213,11 @@ export interface AppServerHostOptions {
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
    */
   codexProxyActive?: boolean;
+  /**
+   * Host 创建时冻结的事实:spawn args 里定义的 OpenAI 身份 provider id(仅
+   * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
+   */
+  remoteCompactionProviderId?: string;
 }
 
 interface BufferedNotification {
@@ -252,6 +257,11 @@ export class AppServerHost {
 
   isCodexProxyActive(): boolean {
     return this.opts.codexProxyActive === true;
+  }
+
+  /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
+  getRemoteCompactionProviderId(): string | null {
+    return this.opts.remoteCompactionProviderId ?? null;
   }
 
   getConnectionId(): string {

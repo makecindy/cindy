@@ -123,6 +123,34 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_gateway.supports_websockets=false');
   });
 
+  it('oauth-bearer 模式: 追加 OpenAI 身份 provider(远端压缩)并关掉请求 zstd 压缩', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
+
+    // 默认 model_provider 仍是 cindy_gateway(本地压缩安全缺省);OpenAI 身份靠
+    // thread/start|resume 的 modelProvider 显式选入。
+    expect(args).toContain('model_provider="cindy_gateway"');
+    // name 必须逐字 "OpenAI" —— codex supports_remote_compaction() 按 name 判定。
+    expect(args).toContain('model_providers.cindy_openai.name="OpenAI"');
+    expect(args).toContain('model_providers.cindy_openai.base_url="http://127.0.0.1:12345"');
+    expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
+    expect(args).toContain('model_providers.cindy_openai.requires_openai_auth=true');
+    expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
+    // is_openai + OAuth 命中时 codex 默认 zstd 压缩请求体,loopback proxy 无法解析,必须关。
+    expect(args).toContain('features.enable_request_compression=false');
+  });
+
+  it('env-key / provider-oauth 模式: 不定义 OpenAI 身份 provider', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    for (const mode of ['env-key', 'provider-oauth'] as const) {
+      const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
+      expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
+      expect(args).not.toContain('features.enable_request_compression=false');
+    }
+  });
+
   it('env-key 模式: env_key=XDT_CODEX_API_KEY, 不带 requires_openai_auth', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 

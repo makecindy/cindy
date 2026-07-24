@@ -198,6 +198,12 @@ export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex';
 export interface ThreadStartParams {
   /** 缺省走 server 端 config 的默认 model。 */
   model?: string;
+  /**
+   * 覆盖本 thread 的 model provider(config `model_providers` 里的 key)。
+   * 缺省走 config 顶层 model_provider。用于订阅直连 thread 选 OpenAI 身份
+   * provider(开远端压缩);provider 身份是 thread 级冻结,settings/update 改不了。
+   */
+  modelProvider?: string;
   cwd?: string;
   approvalPolicy?: AskForApproval;
   sandbox?: SandboxMode;
@@ -350,6 +356,8 @@ export interface ThreadResumeParams {
   threadId: string;
   /** 可选覆盖, 缺省继承 thread 原有配置。 */
   model?: string;
+  /** 同 ThreadStartParams.modelProvider —— resume 也接受 provider 覆盖(v2.rs ThreadResumeParams)。 */
+  modelProvider?: string;
   cwd?: string;
   approvalPolicy?: AskForApproval;
   sandbox?: SandboxMode;

@@ -71,6 +71,12 @@ export interface ApplyRuntimeSetModelChangeInput {
   getPendingCredentialSwitch?: (
     sessionId: string,
   ) => { model: string; providerId: string | null } | undefined;
+  /**
+   * 当前本地 Codex spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
+   * shouldCloseSessionForCredentialSwitch 用它解析隐式来源的凭证家族,精确判定
+   * 是否跨「远端压缩身份」边界;不传时该判定按未知保守处理(倾向关会话重建)。
+   */
+  codexAuthInjection?: 'oauth-bearer' | 'env-key' | 'provider-oauth' | null;
   logger?: RuntimeSetModelLogger;
 }
 
@@ -122,6 +128,7 @@ export async function applyRuntimeSetModelChange(
         currentModel: sess.model,
         nextModel: model,
         currentCodexProxyActive: sess.codexProxyActive,
+        codexAuthInjection: input.codexAuthInjection,
       })
     : false;
   let selfBusyMemo: boolean | undefined;

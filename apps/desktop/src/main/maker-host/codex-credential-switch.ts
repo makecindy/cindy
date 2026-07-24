@@ -2,10 +2,12 @@ import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
   resolveAgentCredentialMode,
+  type AgentCredentialMode,
   type AgentKind,
 } from '@cindy/maker-core';
 
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
+import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
   agentKind: AgentKind;
@@ -19,6 +21,23 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * provider-oauth 依赖 proxy 做供应商 OAuth 注入和 model rewrite；未知状态按 false 处理。
    */
   currentCodexProxyActive?: boolean | null;
+  /**
+   * 当前本地 Codex app-server spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
+   * 用于把隐式来源(resolveAgentCredentialMode 解析出 undefined)落到实际凭证家族,
+   * 让「远端压缩身份边界」判定更精确。不传 / null 时按未知处理:隐式一侧无法证明
+   * 不跨边界,凡与另一侧家族不同即保守关会话重建(正确性优先于热切)。
+   */
+  codexAuthInjection?: CodexProxyAuthInjection | null;
+}
+
+/** spawn 鉴权注入形态 → 会话凭证家族(与 resolveAgentCredentialMode 值域同构)。 */
+function credentialFamilyFromAuthInjection(
+  injection: CodexProxyAuthInjection | null | undefined,
+): AgentCredentialMode | undefined {
+  if (injection === 'oauth-bearer') return 'oauth-bearer';
+  if (injection === 'env-key') return 'gateway-key';
+  if (injection === 'provider-oauth') return 'provider-oauth';
+  return undefined;
 }
 
 interface LocalAgentSession {
@@ -158,6 +177,25 @@ export function shouldCloseSessionForCredentialSwitch(
     providerId: nextProviderId,
     model: input.nextModel,
   });
+
+  // ── 远端压缩身份边界(codex, proxy-active)────────────────────────────────
+  // oauth spawn 的订阅直连 thread 以 OpenAI 身份 provider 创建(codex 据此走
+  // OpenAI 远端压缩),而 provider 身份是 thread 级冻结、settings/update 改不了;
+  // 网关 / xAI 等上游不支持远端压缩且失败无本地回退。因此凡切换跨过
+  // oauth-bearer(订阅直连)家族边界,必须关会话、由下一次发送按新路由 resume
+  // 重建 thread(resume 会按新家族重新决定 provider 身份)。这有意收窄了
+  // 方案 A 的「oauth 超集 host 热切 gateway-key / provider-oauth 会话」范围:
+  // host 仍复用不重建,只是该会话自身要走关闭重建。隐式来源解析不出家族且
+  // 未提供 codexAuthInjection 时按未知处理 → 与另一侧不同即保守关闭。
+  if (input.agentKind === 'codex' && input.currentCodexProxyActive === true) {
+    const fallbackFamily = credentialFamilyFromAuthInjection(input.codexAuthInjection);
+    const effCurrent = currentMode ?? fallbackFamily;
+    const effNext = nextMode ?? fallbackFamily;
+    const mayTouchRemoteCompaction =
+      effCurrent === 'oauth-bearer' || effNext === 'oauth-bearer' ||
+      effCurrent === undefined || effNext === undefined;
+    if (effCurrent !== effNext && mayTouchRemoteCompaction) return true;
+  }
 
   if (
     input.agentKind === 'codex' &&

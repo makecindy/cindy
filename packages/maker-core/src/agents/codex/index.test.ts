@@ -301,7 +301,7 @@ async function waitForExpectation(assertion: () => void | Promise<void>, timeout
 function installFakeHost(
   agent: CodexAgent,
   requestImpl?: (method: string, params: unknown) => Promise<unknown> | unknown,
-  opts: { codexProxyActive?: boolean } = {},
+  opts: { codexProxyActive?: boolean; remoteCompactionProviderId?: string } = {},
 ) {
   const ensureStarted = vi.fn(async () => ({}));
   let threadHandlers: ThreadEventHandlers | null = null;
@@ -343,11 +343,13 @@ function installFakeHost(
     return { release: vi.fn() };
   });
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
+  const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const host = {
     ensureStarted,
     request,
     subscribeThread,
     isCodexProxyActive,
+    getRemoteCompactionProviderId,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
   };
@@ -564,6 +566,93 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     threadStartGate.resolve();
     const handle = await startPromise;
+    await handle.close();
+  });
+
+  it('passes the OpenAI compaction provider to thread/start only for oauth-family sessions', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    // 显式 openai 来源(ChatGPT 订阅直连)→ thread 选 OpenAI 身份 provider(远端压缩)。
+    const oauthHandle = await agent.startSession({
+      sessionId: 'session-oauth',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+    });
+    const oauthParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(oauthParams.modelProvider).toBe('cindy_openai');
+    await oauthHandle.close();
+
+    // 骨折 codex/(gateway-key 家族)→ 保持默认 provider(本地压缩)。
+    host.request.mock.calls.length = 0;
+    const gatewayHandle = await agent.startSession({
+      sessionId: 'session-gateway',
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+    });
+    const gatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(gatewayParams.modelProvider).toBeUndefined();
+    await gatewayHandle.close();
+
+    // xAI(provider-oauth 家族)→ 保持默认 provider。
+    host.request.mock.calls.length = 0;
+    const xaiHandle = await agent.startSession({
+      sessionId: 'session-xai',
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      workingDir: '/repo',
+    });
+    const xaiParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(xaiParams.modelProvider).toBeUndefined();
+    await xaiHandle.close();
+  });
+
+  it('omits the OpenAI compaction provider when the host did not advertise one', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { codexProxyActive: true });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-no-compact-provider',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(params.modelProvider).toBeUndefined();
+    await handle.close();
+  });
+
+  it('passes the OpenAI compaction provider to thread/resume for oauth-family sessions', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-oauth-resume',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(params.modelProvider).toBe('cindy_openai');
     await handle.close();
   });
 

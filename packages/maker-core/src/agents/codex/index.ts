@@ -1577,6 +1577,7 @@ export class CodexAgent extends BaseAgent {
     let env: Record<string, string> = {};
     let extraArgs: string[] = [];
     let codexProxyActive = false;
+    let remoteCompactionProviderId: string | undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -1596,6 +1597,7 @@ export class CodexAgent extends BaseAgent {
 
       extraArgs = [];
       codexProxyActive = false;
+      remoteCompactionProviderId = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -1606,6 +1608,11 @@ export class CodexAgent extends BaseAgent {
           Object.assign(env, cfg.extraEnv);
           extraArgs = cfg.extraArgs;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
+          // OpenAI 身份 provider 依赖 loopback proxy 路由订阅直连;proxy 不可用
+          // (退化直连网关)时不得下发,否则远端压缩请求会打到不支持它的上游。
+          if (codexProxyActive && cfg.codexRemoteCompactionProviderId) {
+            remoteCompactionProviderId = cfg.codexRemoteCompactionProviderId;
+          }
           this.deps.logger.info('codex MCP bridge ready', {
             providers: this.deps.mcpProviders?.length ?? 0,
             extraArgsCount: extraArgs.length,
@@ -1672,6 +1679,7 @@ export class CodexAgent extends BaseAgent {
       // (2026-07-17 随品牌翻转改 cindy;上游 gating 走 originator,与此无关)。
       clientInfo: { name: 'cindy', version: '0.0.0' },
       codexProxyActive,
+      remoteCompactionProviderId,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -2169,6 +2177,22 @@ export class CodexAgent extends BaseAgent {
     const isCodexProxyChannelReady = (): boolean =>
       hostUsesCodexProxy && typeof this.deps.registerCodexSystemPromptForThread === 'function';
 
+    // ── OpenAI 远端压缩身份(thread 级,start/resume 冻结)────────────────────
+    // 仅当 ① host 是 oauth spawn 且下发了 OpenAI 身份 provider(见
+    // CodexExtraSpawnConfig.codexRemoteCompactionProviderId),② 本会话的凭证家族
+    // 解析为 oauth-bearer(显式 openai 来源,或隐式来源 + host 归一化形态为订阅)
+    // 时,才让 thread 选 OpenAI 身份 provider → codex 走 OpenAI 远端压缩。
+    // codex/ 骨折(gateway-key)、xai//chatgpt/ 与显式第三方来源(provider-oauth)
+    // 都被 resolveAgentCredentialMode 排除 —— 它们的上游不支持远端压缩,且 codex
+    // 远端压缩失败无本地回退,错配会打断长会话。
+    const threadModelProvider = (() => {
+      if (opts.remoteHostId) return undefined;
+      const providerIdFromHost = host.getRemoteCompactionProviderId?.();
+      if (!providerIdFromHost) return undefined;
+      const family = credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
+      return family === 'oauth-bearer' ? providerIdFromHost : undefined;
+    })();
+
     let registeredDeveloperInstructions = '';
     const registerCodexDeveloperInstructions = (threadId: string, text: string): void => {
       if (!text) return;
@@ -2295,6 +2319,7 @@ export class CodexAgent extends BaseAgent {
         cwd: opts.workingDir,
         approvalPolicy,
         sandbox,
+        ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
         ...(developerInstructions && !useProxyChannel && opts.codexHistoryHasProductPrompt !== true
@@ -2360,6 +2385,7 @@ export class CodexAgent extends BaseAgent {
         approvalPolicy,
         sandbox,
         ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
+        ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
         ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
