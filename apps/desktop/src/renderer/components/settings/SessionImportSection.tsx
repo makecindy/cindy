@@ -127,6 +127,25 @@ export function SessionImportSection() {
     });
   }, []);
 
+  const visibleSelectedCount = useMemo(
+    () => visibleCandidates.filter((item) => selected.has(item.key)).length,
+    [selected, visibleCandidates],
+  );
+  const hiddenSelectedCount = selectedItems.length - visibleSelectedCount;
+
+  const toggleAllVisible = useCallback(() => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected =
+        visibleCandidates.length > 0 && visibleCandidates.every((item) => next.has(item.key));
+      for (const item of visibleCandidates) {
+        if (allSelected) next.delete(item.key);
+        else next.add(item.key);
+      }
+      return next;
+    });
+  }, [visibleCandidates]);
+
   const importSelected = useCallback(async () => {
     if (selectedItems.length === 0) return;
     setImporting(true);
@@ -221,99 +240,126 @@ export function SessionImportSection() {
               onPlacementChange={setPlacementFilter}
             />
 
-            <div className="flex max-h-[560px] flex-col overflow-y-auto rounded-lg border border-[var(--settings-input-border)]">
-              {listItems.length === 0 ? (
-                <div className="px-4 py-10 text-center text-12 text-[var(--settings-section-desc)]">
-                  {t('settings.sessionImport.noCandidates')}
-                </div>
-              ) : (
-                listItems.map((listItem) => {
-                  if (listItem.type === 'dialogue') {
-                    const item = listItem.item;
+            <div className="flex flex-col rounded-lg border border-[var(--settings-input-border)]">
+              {listItems.length > 0 && (
+                <label className="flex cursor-pointer items-center gap-2 border-b border-[var(--settings-input-border)] px-4 py-2.5 hover:bg-[var(--settings-menu-bg-hover)]">
+                  <input
+                    type="checkbox"
+                    checked={visibleCandidates.length > 0 && visibleSelectedCount === visibleCandidates.length}
+                    ref={(node) => {
+                      if (node) {
+                        node.indeterminate =
+                          visibleSelectedCount > 0 && visibleSelectedCount < visibleCandidates.length;
+                      }
+                    }}
+                    onChange={toggleAllVisible}
+                    className="h-4 w-4 accent-[var(--settings-menu-text-selected)]"
+                  />
+                  <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                    {t('settings.sessionImport.selectAll', { count: visibleCandidates.length })}
+                  </span>
+                </label>
+              )}
+              <div className="flex max-h-[520px] flex-col overflow-y-auto">
+                {listItems.length === 0 ? (
+                  <div className="px-4 py-10 text-center text-12 text-[var(--settings-section-desc)]">
+                    {t('settings.sessionImport.noCandidates')}
+                  </div>
+                ) : (
+                  listItems.map((listItem) => {
+                    if (listItem.type === 'dialogue') {
+                      const item = listItem.item;
+                      return (
+                        <div
+                          key={listItem.key}
+                          className="border-b border-[var(--settings-input-border)] last:border-b-0"
+                        >
+                          <SessionImportRow
+                            item={item}
+                            checked={selected.has(item.key)}
+                            onToggle={() => toggleItem(item.key)}
+                          />
+                        </div>
+                      );
+                    }
+
+                    const group = listItem;
+                    const isOpen = expanded.has(group.key);
+                    const selectedCount = group.items.filter((item) => selected.has(item.key)).length;
+                    const latestUpdatedAt = group.items[0]?.updatedAt;
                     return (
-                      <div
-                        key={listItem.key}
-                        className="border-b border-[var(--settings-input-border)] last:border-b-0"
-                      >
-                        <SessionImportRow
-                          item={item}
-                          checked={selected.has(item.key)}
-                          onToggle={() => toggleItem(item.key)}
-                        />
+                      <div key={group.key} className="border-b border-[var(--settings-input-border)] last:border-b-0">
+                        <div className="grid min-h-14 grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedCount === group.items.length}
+                            ref={(node) => {
+                              if (node) node.indeterminate = selectedCount > 0 && selectedCount < group.items.length;
+                            }}
+                            onChange={() => toggleGroupSelection(group.items)}
+                            className="h-4 w-4 accent-[var(--settings-menu-text-selected)]"
+                            aria-label={t('settings.sessionImport.selectGroup')}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleGroup(group.key)}
+                            className="flex h-6 w-5 items-center justify-center rounded-md text-[var(--settings-section-sublabel)] hover:bg-[var(--settings-menu-bg-hover)]"
+                            aria-label={isOpen ? t('settings.sessionImport.collapse') : t('settings.sessionImport.expand')}
+                          >
+                            {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
+                              {groupProjectName(group.items[0], t)}
+                            </p>
+                            <p
+                              title={groupProjectPath(group.items[0], t)}
+                              className="truncate text-11 text-[var(--settings-section-desc)]"
+                            >
+                              {group.items.length} {t('settings.sessionImport.sessions')} · {groupProjectPath(group.items[0], t)}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {selectedCount > 0 && (
+                              <span className="text-11 text-[var(--settings-section-desc)]">
+                                {selectedCount}/{group.items.length}
+                              </span>
+                            )}
+                            <time
+                              dateTime={latestUpdatedAt}
+                              title={formatSidebarTimeAbsolute(latestUpdatedAt)}
+                              className="w-14 truncate text-right text-xs font-medium tabular-nums text-[var(--settings-section-desc)]"
+                            >
+                              {formatSidebarTime(latestUpdatedAt, t)}
+                            </time>
+                          </div>
+                        </div>
+                        {isOpen && (
+                          <div className="flex flex-col border-t border-[var(--settings-input-border)]">
+                            {group.items.map((item) => (
+                              <SessionImportRow
+                                key={item.key}
+                                item={item}
+                                checked={selected.has(item.key)}
+                                onToggle={() => toggleItem(item.key)}
+                                isProjectChild
+                              />
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
-                  }
-
-                  const group = listItem;
-                  const isOpen = expanded.has(group.key);
-                  const selectedCount = group.items.filter((item) => selected.has(item.key)).length;
-                  const latestUpdatedAt = group.items[0]?.updatedAt;
-                  return (
-                    <div key={group.key} className="border-b border-[var(--settings-input-border)] last:border-b-0">
-                      <div className="grid min-h-14 grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2">
-                        <input
-                          type="checkbox"
-                          checked={selectedCount === group.items.length}
-                          ref={(node) => {
-                            if (node) node.indeterminate = selectedCount > 0 && selectedCount < group.items.length;
-                          }}
-                          onChange={() => toggleGroupSelection(group.items)}
-                          className="h-4 w-4 accent-[var(--settings-menu-text-selected)]"
-                          aria-label={t('settings.sessionImport.selectGroup')}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => toggleGroup(group.key)}
-                          className="flex h-6 w-5 items-center justify-center rounded-md text-[var(--settings-section-sublabel)] hover:bg-[var(--settings-menu-bg-hover)]"
-                          aria-label={isOpen ? t('settings.sessionImport.collapse') : t('settings.sessionImport.expand')}
-                        >
-                          {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                        </button>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
-                            {groupProjectName(group.items[0], t)}
-                          </p>
-                          <p className="truncate text-11 text-[var(--settings-section-desc)]">
-                            {group.items.length} {t('settings.sessionImport.sessions')} · {groupProjectPath(group.items[0], t)}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {selectedCount > 0 && (
-                            <span className="text-11 text-[var(--settings-section-desc)]">
-                              {selectedCount}/{group.items.length}
-                            </span>
-                          )}
-                          <time
-                            dateTime={latestUpdatedAt}
-                            title={formatSidebarTimeAbsolute(latestUpdatedAt)}
-                            className="w-14 truncate text-right text-xs font-medium tabular-nums text-[var(--settings-section-desc)]"
-                          >
-                            {formatSidebarTime(latestUpdatedAt, t)}
-                          </time>
-                        </div>
-                      </div>
-                      {isOpen && (
-                        <div className="flex flex-col border-t border-[var(--settings-input-border)]">
-                          {group.items.map((item) => (
-                            <SessionImportRow
-                              key={item.key}
-                              item={item}
-                              checked={selected.has(item.key)}
-                              onToggle={() => toggleItem(item.key)}
-                              isProjectChild
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
+                  })
+                )}
+              </div>
             </div>
 
             <div className="flex items-center justify-between gap-3">
               <p className="text-12 text-[var(--settings-section-desc)]">
                 {t('settings.sessionImport.selected', { count: selectedItems.length })}
+                {hiddenSelectedCount > 0 && (
+                  <span> {t('settings.sessionImport.selectedOutsideFilter', { count: hiddenSelectedCount })}</span>
+                )}
               </p>
               <button
                 type="button"
@@ -524,11 +570,16 @@ function SessionImportRow({
               {t('settings.sessionImport.filters.dialogue')}
             </span>
           )}
-          <p className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]">
+          <p
+            title={item.title || undefined}
+            className="truncate text-13 font-medium text-[var(--settings-section-sublabel)]"
+          >
             {item.title || t('settings.sessionImport.untitled')}
           </p>
         </div>
-        <p className="mt-1 truncate text-11 text-[var(--settings-section-desc)]">{item.cwd}</p>
+        <p title={item.cwd || undefined} className="mt-1 truncate text-11 text-[var(--settings-section-desc)]">
+          {item.cwd}
+        </p>
       </div>
       <time
         dateTime={item.updatedAt}

@@ -927,10 +927,6 @@
       }
     },
     "sessionImport": {
-      "linkedTitle": "로컬 세션 링크",
-      "linkedDescription": "로컬 Claude Code / Codex 기록을 읽기 전용으로 스캔합니다. Codex 세션은 원본 thread에 링크되어 기록 재생 없이 이어서 대화하며, Claude 세션은 로컬 기록으로 가져옵니다.",
-      "linkSelected": "선택 항목 링크",
-      "linked": "링크됨",
       "title": "로컬 세션 가져오기",
       "description": "로컬 Claude Code / Codex 기록을 읽기 전용으로 스캔합니다. 목록에서 선택한 세션만 가져오며, 건너뛴 내부 세션은 표시되지 않고 가져올 수 없습니다.",
       "scan": "스캔",
@@ -971,7 +967,9 @@
         "scanFailed": "스캔 실패",
         "importFailed": "가져오기 실패",
         "imported": "가져오기 완료: 신규 {{inserted}}개, 업데이트 {{updated}}개"
-      }
+      },
+      "selectAll": "현재 필터 결과 모두 선택({{count}}개)",
+      "selectedOutsideFilter": "(그중 {{count}}개는 현재 필터 밖)"
     },
     "connections": {
       "codex": {

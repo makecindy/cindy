@@ -927,10 +927,6 @@
       }
     },
     "sessionImport": {
-      "linkedTitle": "ローカルセッションのリンク",
-      "linkedDescription": "ローカルの Claude Code / Codex 履歴を読み取り専用でスキャンします。Codex セッションは元の thread にリンクされ、履歴を再生せずにそのまま再開できます。Claude セッションはローカル履歴としてインポートされます。",
-      "linkSelected": "選択をリンク",
-      "linked": "リンク済み",
       "title": "ローカルセッションのインポート",
       "description": "ローカルの Claude Code / Codex 履歴を読み取り専用でスキャンします。リストでチェックしたセッションのみインポートされ、スキップされた内部セッションは表示されず、インポートもされません。",
       "scan": "スキャン",
@@ -971,7 +967,9 @@
         "scanFailed": "スキャンに失敗しました",
         "importFailed": "インポートに失敗しました",
         "imported": "インポート完了:新規 {{inserted}} 件、更新 {{updated}} 件"
-      }
+      },
+      "selectAll": "現在の絞り込み結果をすべて選択（{{count}}件）",
+      "selectedOutsideFilter": "（うち{{count}}件は現在の絞り込み対象外）"
     },
     "connections": {
       "codex": {

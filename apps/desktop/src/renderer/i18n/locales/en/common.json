@@ -929,8 +929,6 @@
     "sessionImport": {
       "title": "Local Session Import",
       "description": "Read-only scan of local Claude Code and Codex history. Only checked sessions in the list will be imported; skipped internal sessions are hidden and cannot be imported.",
-      "linkedTitle": "Local Session Links",
-      "linkedDescription": "Read-only scan of local Claude Code and Codex history. Codex sessions are linked to the original thread and resumed without replaying history; Claude sessions are imported as local history.",
       "scan": "Scan",
       "scanning": "Scanning",
       "emptyTitle": "Scan local history first",
@@ -942,9 +940,7 @@
       "sessions": "sessions",
       "selected": "{{count}} selected",
       "importSelected": "Import selected",
-      "linkSelected": "Link selected",
       "importing": "Importing",
-      "linked": "Linked",
       "archived": "Archived",
       "untitled": "Untitled Session",
       "noWorkingDir": "No working directory",
@@ -971,7 +967,9 @@
         "scanFailed": "Scan failed",
         "importFailed": "Import failed",
         "imported": "Import complete: {{inserted}} inserted, {{updated}} updated"
-      }
+      },
+      "selectAll": "Select all in current filter ({{count}})",
+      "selectedOutsideFilter": "({{count}} of them outside the current filter)"
     },
     "connections": {
       "codex": {

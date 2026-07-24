@@ -345,14 +345,16 @@ export function SessionShareImportWizard({
 
               {needWorkdir && (
                 <div className="flex flex-col gap-1.5">
-                  <p className="text-sm text-[var(--confirm-desc)]">
+                  {/* originalDir 是他机路径,可能是无空格长串:break-words 防止顶破弹窗宽度 */}
+                  <p className="break-words text-sm text-[var(--confirm-desc)]">
                     {t('sessionShare.import.workdirHint', {
                       originalDir: preview.originalWorkingDir ?? '-',
                     })}
                   </p>
                   <div className="flex items-center gap-2">
                     <div
-                      className="h-8 flex-1 truncate rounded-md border px-2 text-sm leading-8"
+                      title={workingDir || undefined}
+                      className="h-8 min-w-0 flex-1 truncate rounded-md border px-2 text-sm leading-8"
                       style={{
                         borderColor: 'var(--border-default)',
                         color: workingDir ? 'var(--confirm-title)' : 'var(--text-tertiary)',

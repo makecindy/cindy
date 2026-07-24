@@ -927,10 +927,6 @@
       }
     },
     "sessionImport": {
-      "linkedTitle": "本地会话链接",
-      "linkedDescription": "只读扫描本机 Claude Code 与 Codex 历史。Codex 会话会链接到原 thread 并直接续聊，不会重放历史；Claude 会话仍作为本地历史导入。",
-      "linkSelected": "链接选中",
-      "linked": "已链接",
       "title": "本地会话导入",
       "description": "只读扫描本机 Claude Code 与 Codex 历史。只有列表里勾选的会话会被导入；已跳过的内部会话不会展示，也不会导入。",
       "scan": "扫描",
@@ -971,7 +967,9 @@
         "scanFailed": "扫描失败",
         "importFailed": "导入失败",
         "imported": "导入完成：新增 {{inserted}} 条，更新 {{updated}} 条"
-      }
+      },
+      "selectAll": "全选当前筛选结果（{{count}} 条）",
+      "selectedOutsideFilter": "（其中 {{count}} 条在当前筛选之外）"
     },
     "connections": {
       "codex": {
