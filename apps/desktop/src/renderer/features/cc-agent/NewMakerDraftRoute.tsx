@@ -2089,26 +2089,6 @@ export function NewMakerDraftRoute() {
               />
 
               <div className={cn('flex w-full flex-col items-start gap-0', isDraftNarrow && 'order-3')}>
-                {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
-                    被控设备上、属于那台机器的项目,而不是本机。 */}
-                {isDeviceLinkDraft && (
-                  <div className="mb-3 flex max-w-full items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
-                    <MonitorSmartphone
-                      size={14}
-                      strokeWidth={2}
-                      className="shrink-0 text-[var(--folder-item-icon)]"
-                    />
-                    <span className="min-w-0 truncate">
-                      {t('ccAgent.draft.remoteProjectBanner', {
-                        device: effectiveDeviceLinkDeviceName ?? effectiveDeviceLinkDeviceId ?? '',
-                        project:
-                          effectiveWorkingDir?.split(/[\\/]/).filter(Boolean).pop() ??
-                          effectiveWorkingDir ??
-                          '',
-                      })}
-                    </span>
-                  </div>
-                )}
                 <div className="w-full">
                   <ChatInput
                     onSend={handleSend}
@@ -2204,6 +2184,27 @@ export function NewMakerDraftRoute() {
                     }
                   />
                 </div>
+                {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
+                    被控设备上、属于那台机器的项目,而不是本机。放输入框正下方并与其水平居中
+                    (父列 items-start,靠 self-center 相对 w-full 的输入框居中)。 */}
+                {isDeviceLinkDraft && (
+                  <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+                    <MonitorSmartphone
+                      size={14}
+                      strokeWidth={2}
+                      className="shrink-0 text-[var(--folder-item-icon)]"
+                    />
+                    <span className="min-w-0 truncate">
+                      {t('ccAgent.draft.remoteProjectBanner', {
+                        device: effectiveDeviceLinkDeviceName ?? effectiveDeviceLinkDeviceId ?? '',
+                        project:
+                          effectiveWorkingDir?.split(/[\\/]/).filter(Boolean).pop() ??
+                          effectiveWorkingDir ??
+                          '',
+                      })}
+                    </span>
+                  </div>
+                )}
                 {/* 输入框跟随 inputWidth 变宽后,快捷入口只有 4 项,若也铺满全宽
                     会被撑成又宽又空的短卡。这里把卡片区封顶在 800px、左对齐(与输入框
                     左缘齐),保持每张卡当前的紧凑比例;输入框仍独立用满可用宽度。 */}
