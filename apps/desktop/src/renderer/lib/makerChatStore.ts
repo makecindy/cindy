@@ -3643,7 +3643,12 @@ function initGlobalListeners(): void {
           // 不发 sessions:patched)→ 镜像进远程项目分片;打开中的远程会话底部 $ chip 经
           // session.totalCostUsd → useSessionSpend 初值重置显示最新值。
           const p = push.payload as { sessionId?: string; totalCostUsd?: number } | null;
-          if (push.deviceId && p?.sessionId && typeof p.totalCostUsd === 'number') {
+          // 跨设备 payload 防御:NaN / 负数不入镜像(否则 chip 显示 $NaN / 污染后续计算)。
+          if (
+            push.deviceId && p?.sessionId
+            && typeof p.totalCostUsd === 'number'
+            && Number.isFinite(p.totalCostUsd) && p.totalCostUsd >= 0
+          ) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalCostUsd: p.totalCostUsd,
             });
@@ -3653,7 +3658,11 @@ function initGlobalListeners(): void {
         case 'usage:session-tokens-changed': {
           // 同上:session 终身累计 token 镜像(chip tooltip 的 token 累计行)。
           const p = push.payload as { sessionId?: string; totalTokens?: number } | null;
-          if (push.deviceId && p?.sessionId && typeof p.totalTokens === 'number') {
+          if (
+            push.deviceId && p?.sessionId
+            && typeof p.totalTokens === 'number'
+            && Number.isFinite(p.totalTokens) && p.totalTokens >= 0
+          ) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalTokenUsage: p.totalTokens,
             });
