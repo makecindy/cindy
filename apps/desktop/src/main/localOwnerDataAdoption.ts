@@ -8,9 +8,13 @@
  *
  * 本模块在「登录成功、账号 db 尚未打开」时(registerLocalDbIpc 的
  * beforeEnsureReady 钩子,排在 mToc 首登迁移之后)做一次性的整体认领:
- *  - 触发前提(全部满足才弹窗):local 库存在**且含至少一条未删除会话**;账号库
- *    `<prefix>-<userId>.db` 不存在(本机全新账号);独占 userData(非 passive、
- *    无并发活实例);local 库已干净关闭(无 wal/shm 残留)。
+ *  - 触发前提(全部满足才弹窗):local 库存在**且含至少一条未删除会话**;账号
+ *    命名空间未被实际使用——账号库 `<prefix>-<userId>.db` 不存在,或存在但
+ *    **0 条未删除会话**(认领失败/推迟后登录会照常创建空账号库,若只认「库不
+ *    存在」,一次挫折就会永久堵死承诺的下次登录重试;空库在认领时先改名备份
+ *    让位,绝不覆盖);独占 userData(非 passive、无并发活实例);local 库已
+ *    干净关闭(无 wal/shm 残留)。账号库已有会话(真实使用过)则跳过,不做
+ *    行级合并。
  *  - 弹确认窗让用户二选一:「并入当前账号」或「保留在本机模式」。共用机器上
  *    A 的本机会话绝不能被 B 的账号静默吸收,确认窗是归属裁决,不可省略。
  *  - 并入 = 搬移而非复制:先合并搬 `owners/<localKey>` → `owners/<accountKey>`
@@ -58,6 +62,9 @@ const OWNERS_DIR_NAME = 'owners';
 /** SQLite sidecar 后缀;残留 = 库仍被别的进程持有,认领必须推迟。 */
 const DB_SIDECAR_SUFFIXES = ['-wal', '-shm'] as const;
 
+/** 空账号库让位时的备份名后缀(带时间戳防多次重试撞名;文件保留不删)。 */
+const ACCOUNT_DB_BACKUP_SUFFIX = '.pre-adoption-';
+
 /** 推送给 renderer 的弹窗阶段(语义同 mToc:done/failed 后可解除)。 */
 export type LocalAdoptionPhase = 'confirm' | 'running' | 'done' | 'failed';
 
@@ -93,16 +100,22 @@ export interface LocalOwnerAdoptionDeps {
   dbFilePrefix: string;
   fs: LocalAdoptionFsDeps;
   /**
-   * 统计 local 库里未删除会话数;打开失败/表缺失时 throw(调用方按不可读跳过)。
-   * 默认实现顺带完成 wal checkpoint(open+close),让 sidecar 检查有意义。
+   * 统计某个已关闭库文件里未删除会话数;打开失败/表缺失时 throw(调用方按
+   * 不可读跳过)。默认实现顺带完成 wal checkpoint(open+close),让 sidecar
+   * 检查有意义。local 库与「疑似空置的账号库」共用本探针。
    */
-  countLocalSessions(dbPath: string): Promise<number>;
+  countDbSessions(dbPath: string): Promise<number>;
   /** 共享 userData 的 passive dev 实例必须保持只读。 */
   passiveSharedUserData(): boolean;
   /** 是否有其它活实例共享本 userData(rename 前的独占确认)。 */
   hasConcurrentLiveInstances(): boolean;
   /** 若 main 进程仍以 local-v1 打开着库(inproc fallback),先关闭再动文件。 */
   closeLocalDbIfOpen(): void;
+  /**
+   * 账号库当前正被本进程打开(同账号 ensure-ready 重入,如 LocalDbGate 重试)。
+   * 此时绝不能动账号库文件;worker 持有的场景由 sidecar 检查兜底。
+   */
+  accountDbCurrentlyOpen(userId: string): boolean;
   now(): Date;
   log: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void };
   ui: LocalAdoptionUiDeps;
@@ -115,10 +128,16 @@ export type LocalOwnerAdoptionResult =
   | { status: 'no-local-db' }
   | { status: 'no-local-sessions' }
   | { status: 'account-db-exists' }
+  | { status: 'account-db-in-use' }
+  | { status: 'account-db-unreadable'; error: string }
   | { status: 'local-db-unreadable'; error: string }
   | {
       status: 'deferred';
-      reason: 'passive-shared-user-data' | 'concurrent-live-instances' | 'local-db-busy';
+      reason:
+        | 'passive-shared-user-data'
+        | 'concurrent-live-instances'
+        | 'local-db-busy'
+        | 'account-db-busy';
     }
   | { status: 'declined' }
   | { status: 'adopted'; ownersMoved: number; ownersConflicts: number }
@@ -152,13 +171,13 @@ async function writeAdoptionMarker(
   await deps.fs.writeFile(markerPath, JSON.stringify(marker, null, 2));
 }
 
-/** local 库的 sidecar(-wal/-shm)任一存在 = 仍被持有,不能 rename。 */
-async function localDbSidecarsPresent(
+/** 库文件的 sidecar(-wal/-shm)任一存在 = 仍被持有,不能 rename。 */
+async function dbSidecarsPresent(
   deps: LocalOwnerAdoptionDeps,
-  localDbPath: string,
+  dbPath: string,
 ): Promise<boolean> {
   for (const suffix of DB_SIDECAR_SUFFIXES) {
-    if (await deps.fs.pathExists(`${localDbPath}${suffix}`)) return true;
+    if (await deps.fs.pathExists(`${dbPath}${suffix}`)) return true;
   }
   return false;
 }
@@ -188,7 +207,6 @@ export async function runLocalOwnerDataAdoption(
     );
     if (!(await deps.fs.pathExists(localDbPath))) return { status: 'no-local-db' };
     const accountDbPath = path.join(deps.userDataDir, `${deps.dbFilePrefix}-${userId}.db`);
-    if (await deps.fs.pathExists(accountDbPath)) return { status: 'account-db-exists' };
 
     // 2. 独占确认:passive 只读实例与并发活实例都只推迟,不取消(下次登录重来)。
     if (deps.passiveSharedUserData()) {
@@ -200,20 +218,46 @@ export async function runLocalOwnerDataAdoption(
       return { status: 'deferred', reason: 'concurrent-live-instances' };
     }
 
+    // 2.5 账号命名空间必须「未被实际使用」:库不存在,或存在但 0 条未删除会话。
+    //     只认「库不存在」会让一次认领失败/推迟永久堵死重试——失败后登录照常
+    //     创建空账号库,下次登录就再也进不来了(Greptile review)。空库在提交
+    //     阶段改名备份让位,绝不覆盖;有会话 = 真实使用过,跳过(不做行级合并)。
+    let accountDbToDisplace = false;
+    if (await deps.fs.pathExists(accountDbPath)) {
+      if (deps.accountDbCurrentlyOpen(userId)) {
+        // 同账号 ensure-ready 重入(LocalDbGate 重试等):账号库正开着,不动。
+        return { status: 'account-db-in-use' };
+      }
+      let accountSessionCount: number;
+      try {
+        accountSessionCount = await deps.countDbSessions(accountDbPath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.log.warn('local owner adoption: account db unreadable, skipped: %s', message);
+        return { status: 'account-db-unreadable', error: message };
+      }
+      if (accountSessionCount > 0) return { status: 'account-db-exists' };
+      if (await dbSidecarsPresent(deps, accountDbPath)) {
+        deps.log.info('local owner adoption deferred: account db sidecars still present');
+        return { status: 'deferred', reason: 'account-db-busy' };
+      }
+      accountDbToDisplace = true;
+    }
+
     // 3. 本进程若仍持有 local 库(inproc fallback 路径)先关闭;随后 open+close
     //    统计会话数,顺带完成 wal checkpoint。0 条会话 = 无可认领,静默跳过
     //    (不写 marker:之后 local 模式产生了会话,再次登录仍可认领)。
     deps.closeLocalDbIfOpen();
     let sessionCount: number;
     try {
-      sessionCount = await deps.countLocalSessions(localDbPath);
+      sessionCount = await deps.countDbSessions(localDbPath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       deps.log.warn('local owner adoption: local db unreadable, skipped: %s', message);
       return { status: 'local-db-unreadable', error: message };
     }
     if (sessionCount <= 0) return { status: 'no-local-sessions' };
-    if (await localDbSidecarsPresent(deps, localDbPath)) {
+    if (await dbSidecarsPresent(deps, localDbPath)) {
       deps.log.info('local owner adoption deferred: local db sidecars still present');
       return { status: 'deferred', reason: 'local-db-busy' };
     }
@@ -242,8 +286,9 @@ export async function runLocalOwnerDataAdoption(
         return { status: 'deferred', reason: 'concurrent-live-instances' };
       }
       if (
-        (await deps.fs.pathExists(accountDbPath)) ||
-        (await localDbSidecarsPresent(deps, localDbPath))
+        (!accountDbToDisplace && (await deps.fs.pathExists(accountDbPath))) ||
+        (await dbSidecarsPresent(deps, localDbPath)) ||
+        (accountDbToDisplace && (await dbSidecarsPresent(deps, accountDbPath)))
       ) {
         deps.log.warn('local owner adoption aborted: target db or sidecars appeared mid-flow');
         deps.ui.publish('failed');
@@ -265,6 +310,21 @@ export async function runLocalOwnerDataAdoption(
         const moveResult = await moveWithoutOverwrite(deps.fs, localOwnerDir, accountOwnerDir);
         ownersMoved = moveResult.moved;
         ownersConflicts = moveResult.conflicts;
+      }
+      if (accountDbToDisplace) {
+        // 空账号库(0 会话,前置已验证)改名备份让位:文件保留不删,时间戳后缀
+        // 防多次重试撞名。窗口期内该库可能残留的少量配置随备份保留,可人工找回。
+        const stamp = deps
+          .now()
+          .toISOString()
+          .replace(/[-:.TZ]/g, '')
+          .slice(0, 14);
+        const backupPath = `${accountDbPath}${ACCOUNT_DB_BACKUP_SUFFIX}${stamp}`;
+        await deps.fs.rename(accountDbPath, backupPath);
+        deps.log.info(
+          'local owner adoption: empty account db displaced to %s',
+          path.basename(backupPath),
+        );
       }
       await deps.fs.rename(localDbPath, accountDbPath);
       await writeAdoptionMarker(deps, markerPath, {
@@ -341,12 +401,12 @@ const realFsDeps: LocalAdoptionFsDeps = {
 };
 
 /**
- * 统计 local 库未删除会话数。这里直连 better-sqlite3 而非 DbClient:此时账号库
- * 尚未 ensureReady,DbClient 也只面向「当前 owner 的库」,而 local 库是另一个
- * owner 的已关闭文件——这是迁移工具语境(与 mToc/ownerNamespaceMigration 同层),
+ * 统计已关闭库文件的未删除会话数。这里直连 better-sqlite3 而非 DbClient:此时
+ * 账号库尚未 ensureReady,DbClient 也只面向「当前 owner 的库」,而探测对象是
+ * 已关闭的库文件——这是迁移工具语境(与 mToc/ownerNamespaceMigration 同层),
  * 不是运行期业务查询。open+close 顺带完成 wal checkpoint,使 sidecar 检查成立。
  */
-async function countSessionsInLocalDb(dbPath: string): Promise<number> {
+async function countSessionsInClosedDb(dbPath: string): Promise<number> {
   const db = new Database(dbPath, { fileMustExist: true });
   try {
     const row = db
@@ -410,12 +470,13 @@ export async function runLocalOwnerDataAdoptionForUser(userId: string): Promise<
     userDataDir: app.getPath('userData'),
     dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     fs: realFsDeps,
-    countLocalSessions: countSessionsInLocalDb,
+    countDbSessions: countSessionsInClosedDb,
     passiveSharedUserData: () => process.env.XDT_PASSIVE_SHARED_USER_DATA === '1',
     hasConcurrentLiveInstances: () => hasConcurrentLiveInstancesSharingUserData(),
     closeLocalDbIfOpen: () => {
       if (getCurrentUserId() === LOCAL_DATA_OWNER_ID) closeDb();
     },
+    accountDbCurrentlyOpen: (uid) => getCurrentUserId() === uid,
     now: () => new Date(),
     log,
     ui: electronUiDeps,

@@ -126,10 +126,15 @@ function createMemFs() {
 
 interface HarnessOverrides {
   decision?: LocalAdoptionDecision | (() => Promise<LocalAdoptionDecision>);
+  /** local 库未删除会话数(默认 3)。 */
   sessionCount?: number | (() => number);
+  /** 账号库未删除会话数(默认 0 = 空置)。 */
+  accountSessionCount?: number;
+  accountDbOpen?: boolean;
   passive?: boolean;
   concurrent?: () => boolean;
   countThrows?: boolean;
+  accountCountThrows?: boolean;
   fsOverrides?: Partial<LocalAdoptionFsDeps>;
 }
 
@@ -143,7 +148,11 @@ function createHarness(overrides: HarnessOverrides = {}) {
     userDataDir: USER_DATA,
     dbFilePrefix: PREFIX,
     fs: { ...mem.fsDeps, ...overrides.fsOverrides },
-    countLocalSessions: vi.fn(async () => {
+    countDbSessions: vi.fn(async (dbPath: string) => {
+      if (path.normalize(dbPath) === path.normalize(ACCOUNT_DB)) {
+        if (overrides.accountCountThrows) throw new Error('SQLITE_CORRUPT: malformed');
+        return overrides.accountSessionCount ?? 0;
+      }
       if (overrides.countThrows) throw new Error('SQLITE_CORRUPT: malformed');
       const count = overrides.sessionCount;
       return typeof count === 'function' ? count() : (count ?? 3);
@@ -151,6 +160,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     passiveSharedUserData: () => overrides.passive ?? false,
     hasConcurrentLiveInstances: overrides.concurrent ?? (() => false),
     closeLocalDbIfOpen: vi.fn(),
+    accountDbCurrentlyOpen: () => overrides.accountDbOpen ?? false,
     now: () => new Date('2026-07-24T00:00:00.000Z'),
     log: { info: vi.fn(), warn: vi.fn() },
     ui: {
@@ -188,14 +198,43 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
     expect(mem.files.has(path.normalize(MARKER))).toBe(false);
   });
 
-  it('账号库已存在时返回 account-db-exists(不做行级合并,local 数据原地保留)', async () => {
-    const { mem, deps, phases } = createHarness();
+  it('账号库已有会话(真实使用过)时返回 account-db-exists(不做行级合并,local 数据原地保留)', async () => {
+    const { mem, deps, phases } = createHarness({ accountSessionCount: 2 });
     mem.addFile(LOCAL_DB);
     mem.addFile(ACCOUNT_DB);
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result).toEqual({ status: 'account-db-exists' });
     expect(phases).toEqual([]);
     expect(mem.files.has(path.normalize(LOCAL_DB))).toBe(true);
+  });
+
+  it('账号库正被本进程打开(同账号 ensure-ready 重入)时跳过,不动文件', async () => {
+    const { mem, deps, phases } = createHarness({ accountDbOpen: true });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(ACCOUNT_DB);
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result).toEqual({ status: 'account-db-in-use' });
+    expect(phases).toEqual([]);
+  });
+
+  it('账号库不可读时返回 account-db-unreadable,不弹窗、不动文件', async () => {
+    const { mem, deps, phases } = createHarness({ accountCountThrows: true });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(ACCOUNT_DB, 'corrupt');
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result.status).toBe('account-db-unreadable');
+    expect(phases).toEqual([]);
+    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('corrupt');
+  });
+
+  it('账号库 wal 残留(被 worker/其它进程持有)时推迟', async () => {
+    const { mem, deps, phases } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(ACCOUNT_DB);
+    mem.addFile(`${ACCOUNT_DB}-wal`);
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result).toEqual({ status: 'deferred', reason: 'account-db-busy' });
+    expect(phases).toEqual([]);
   });
 
   it('local 库不可读(count 抛错)时返回 local-db-unreadable,不弹窗', async () => {
@@ -367,6 +406,20 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
     expect(result.status).toBe('adopted');
     expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
   });
+
+  it('空账号库(0 会话)不堵死认领:改名备份让位后并入(Greptile 场景)', async () => {
+    const { mem, deps, phases } = createHarness({ decision: 'adopt', accountSessionCount: 0 });
+    mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(ACCOUNT_DB, 'empty-account-db');
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result.status).toBe('adopted');
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
+    // 空库不删,时间戳备份保留(now = 2026-07-24T00:00:00Z → 20260724000000)。
+    expect(mem.files.get(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`))).toBe(
+      'empty-account-db',
+    );
+  });
 });
 
 describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
@@ -389,11 +442,16 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     expect(first.status).toBe('failed');
     expect(phases).toEqual(['confirm', 'running', 'failed']);
     expect(mem.files.has(path.normalize(MARKER))).toBe(false);
-    // owners 已搬走但库还在 local 名下 → 前置条件仍成立,重试幂等续跑。
+    // 失败后登录照常继续,ensureReady 会创建空账号库(Greptile 指出的堵死场景)
+    // ——重试必须仍能进来:空库让位,认领续跑完成。
+    mem.addFile(ACCOUNT_DB, 'auto-created-empty-db');
     failNext = false;
     const second = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(second.status).toBe('adopted');
     expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
+    expect(mem.files.get(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`))).toBe(
+      'auto-created-empty-db',
+    );
     expect(mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'maker-memory', 'MEMORY.md')))).toBe(
       'mem',
     );
@@ -406,7 +464,7 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     expect(deps.closeLocalDbIfOpen).toHaveBeenCalledTimes(1);
     const closeOrder = (deps.closeLocalDbIfOpen as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
-    const countOrder = (deps.countLocalSessions as ReturnType<typeof vi.fn>).mock
+    const countOrder = (deps.countDbSessions as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
     expect(closeOrder).toBeLessThan(countOrder);
   });
