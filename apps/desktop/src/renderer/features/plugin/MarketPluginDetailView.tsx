@@ -13,6 +13,7 @@ interface MarketPluginDetailViewProps {
   busy: boolean;
   onBack: () => void;
   onInstall: () => void;
+  onIconLoadError: () => void;
 }
 /** 尚未安装的市场 Plugin 详情；只展示协议事实，不创建 renderer 侧安装逻辑。 */
 export function MarketPluginDetailView({
@@ -20,6 +21,7 @@ export function MarketPluginDetailView({
   busy,
   onBack,
   onInstall,
+  onIconLoadError,
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const permissions = ghostPermissionItems(detail.manifest);
@@ -54,6 +56,7 @@ export function MarketPluginDetailView({
               iconDataUrl={detail.icon?.url}
               iconId={detail.ghostId}
               iconName={detail.name}
+              onIconLoadError={onIconLoadError}
               size="detail"
             />
             <div className="min-w-0">
