@@ -278,6 +278,10 @@ export function GhostPluginPage() {
   const selectedMarketInstall = selectedDetail
     ? (marketByGhostId.get(selectedDetail.id) ?? null)
     : null;
+  const selectedMarketUpdate =
+    selectedMarketInstall?.installState === 'update-available'
+      ? selectedMarketInstall
+      : null;
 
   const panelStatus = useMemo(() => {
     if (!selectedDetail || selectedDetail.panelMinWidth === null) return null;
@@ -324,11 +328,11 @@ export function GhostPluginPage() {
 
   const handleUpdate = useCallback(async () => {
     if (!selectedDetail) return;
-    if (selectedMarketInstall) {
-      setMarketBusyId(selectedMarketInstall.pluginId);
+    if (selectedMarketUpdate) {
+      setMarketBusyId(selectedMarketUpdate.pluginId);
       try {
         const next = await window.electronAPI.pluginMarket.detail(
-          selectedMarketInstall.pluginId,
+          selectedMarketUpdate.pluginId,
         );
         const diff = diffGhostPermissionItems(
           selectedGhost?.manifest ?? next.manifest,
@@ -347,7 +351,7 @@ export function GhostPluginPage() {
         });
         if (!approved) return;
         const result = await window.electronAPI.pluginMarket.install(
-          selectedMarketInstall.pluginId,
+          selectedMarketUpdate.pluginId,
           { allowPermissionExpansion: diff.added.length > 0 },
         );
         toast.success(
@@ -371,7 +375,7 @@ export function GhostPluginPage() {
     refreshMarket,
     selectedDetail,
     selectedGhost,
-    selectedMarketInstall,
+    selectedMarketUpdate,
     t,
   ]);
 
@@ -551,7 +555,7 @@ export function GhostPluginPage() {
         onUse={handleUse}
         onUpdate={() => void handleUpdate()}
         updateLabel={
-          selectedMarketInstall
+          selectedMarketUpdate
             ? t('settings.ghosts.market.update')
             : undefined
         }

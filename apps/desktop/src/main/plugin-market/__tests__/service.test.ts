@@ -306,6 +306,31 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
   });
 
+  it('records an opt-out only after a tracked local uninstall succeeds', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+
+    const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
+
+    expect(complete).not.toBeNull();
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(true);
+    await complete?.();
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
+  });
+
+  it('does not attach local uninstall tracking outside a cloud session', () => {
+    runtime.session = {
+      mode: 'local',
+      dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const h = harness([summary()]);
+
+    expect(h.service.prepareLocalUninstallTracking('cindy-test')).toBeNull();
+  });
+
   it('does not restore a bundled default after the user removed it', async () => {
     const item = summary({ defaultInstall: true });
     runtime.builtinRemoved.add(item.ghostId);

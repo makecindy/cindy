@@ -252,13 +252,36 @@ export class PluginMarketService {
       );
       if (!record) throw new Error('该市场 Plugin 未安装');
       requireSameCloudOwner(owner);
-      await uninstallGhostAndCleanup(record.ghostId);
+      await uninstallGhostAndCleanup(record.ghostId, { skipMarketLedger: true });
       requireSameCloudOwner(owner);
       await this.withLedgerMutation(owner, () => {
         ledger.markRemoved(record.ghostId, getCurrentUserId());
       });
       return { ok: true };
     });
+  }
+
+  /**
+   * Captures the cloud owner and ledger before a local-page uninstall starts.
+   * The returned completion records opt-out only after the package was removed.
+   */
+  prepareLocalUninstallTracking(ghostId: string): (() => Promise<void>) | null {
+    let owner: ActiveAppSession;
+    try {
+      owner = captureCloudOwner();
+    } catch {
+      return null;
+    }
+    const ledger = this.ledgerForOwner(owner);
+    const record = ledger.installationForGhost(ghostId);
+    if (!record?.installed) return null;
+    const userId = getCurrentUserId();
+    return async () => {
+      requireSameCloudOwner(owner);
+      await this.withLedgerMutation(owner, () => {
+        ledger.markRemoved(ghostId, userId);
+      });
+    };
   }
 
   private async installDetail(

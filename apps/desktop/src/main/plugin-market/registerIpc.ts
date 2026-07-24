@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron';
 
+import { setGhostUninstallLedgerPreparer } from '../cindy-brain/index.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireString } from '../utils/ipcValidate.js';
 import { PluginMarketService } from './service.js';
@@ -16,6 +17,9 @@ function service(): PluginMarketService {
 export function registerPluginMarketIpc(): void {
   if (registered) return;
   registered = true;
+  setGhostUninstallLedgerPreparer((ghostId) =>
+    service().prepareLocalUninstallTracking(ghostId),
+  );
   ipcMain.handle('plugin-market:snapshot', (event) => {
     assertTrustedAppRendererEvent(event);
     return service().snapshot();

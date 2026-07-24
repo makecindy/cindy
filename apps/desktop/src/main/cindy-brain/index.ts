@@ -1820,12 +1820,36 @@ export async function installOrUpdateMarketGhostPackage(
   return result.ghost;
 }
 
+type GhostUninstallLedgerCompletion = () => Promise<void>;
+type GhostUninstallLedgerPreparer = (
+  ghostId: string,
+) => GhostUninstallLedgerCompletion | null;
+
+let prepareGhostUninstallLedgerCompletion: GhostUninstallLedgerPreparer | null = null;
+
+/**
+ * 由 Plugin Market 在 IPC 注册期注入账本桥接，保持 cindy-brain 不反向依赖
+ * 市场服务。preparer 在卸载开始前捕获 owner，返回的 completion 只在卸载成功后执行。
+ */
+export function setGhostUninstallLedgerPreparer(
+  preparer: GhostUninstallLedgerPreparer,
+): void {
+  prepareGhostUninstallLedgerCompletion = preparer;
+}
+
 /**
  * 卸载一张意识并清理其宿主侧凭证、KV、私有文件与最近使用记录。
- * Plugin 市场和本地插件页共用，避免市场账本更新后只删了包目录。
+ * Plugin 市场和本地插件页共用；本地入口还会在成功后同步市场账本。
  */
-export async function uninstallGhostAndCleanup(id: string): Promise<void> {
+export async function uninstallGhostAndCleanup(
+  id: string,
+  options?: { skipMarketLedger?: boolean },
+): Promise<void> {
   requireGhostAvailableForActiveSession(id);
+  const completeLedger =
+    options?.skipMarketLedger === true
+      ? null
+      : (prepareGhostUninstallLedgerCompletion?.(id) ?? null);
   const manager = getGhostManager();
   const runtime = getGhostRuntime();
   runtime.stop(id);
@@ -1870,6 +1894,7 @@ export async function uninstallGhostAndCleanup(id: string): Promise<void> {
   }
   broadcastGhostsChanged(manager.list());
   if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
+  await completeLedger?.();
 }
 
 /** 市场默认安装必须尊重用户对内置插件的显式卸载选择。 */
