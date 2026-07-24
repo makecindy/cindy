@@ -634,8 +634,11 @@ export function notarizeMacApp(appPath, identity) {
   console.log('    Submitting to Apple notarization service (this may take a few minutes)...');
   // 密码作为 --password 值直接传给 notarytool——不再用 --password @env:VAR 间接:
   // 旧版 notarytool 不认 @env: 前缀,会把字面量 "@env:..." 当密码本身发出去而 401。
-  // 走 spawnSync 参数数组(不经 shell,密码不落进被回显/被 ps 看到的命令字符串);
-  // 日志里对密码打码(credentials 规则:输出不得含凭证明文)。
+  // 走 spawnSync 参数数组:避免 shell 参与(无插值/无注入面),且日志回显时对密码
+  // 打码(credentials 规则:输出不得含凭证明文)。
+  // 注意暴露面:密码仍作为 xcrun 的明文 argv 传入,--wait 期间(最长 30min)同机同
+  // 用户进程经 ps/proc 仍可读到——构建机为受控单租户环境,取此权衡;若需彻底消除
+  // argv 暴露,后续可改用 notarytool 的 --keychain-profile(@keychain: 凭据)。
   const submitArgs = [
     'notarytool',
     'submit',
@@ -658,6 +661,11 @@ export function notarizeMacApp(appPath, identity) {
   });
   if (submitResult.error) {
     throw new Error(`notarytool submit 无法执行:${submitResult.error.message}`);
+  }
+  if (submitResult.signal) {
+    // 被信号终止(如 30min 超时 kill → SIGTERM):status 为 null,单看 exit 会显示
+    // "exit null",这里显式报出 signal 便于定位。
+    throw new Error(`notarytool submit 被信号 ${submitResult.signal} 终止(可能公证超时);公证未通过。`);
   }
   if (submitResult.status !== 0) {
     throw new Error(`notarytool submit 失败(exit ${submitResult.status});公证未通过。`);
