@@ -49,8 +49,10 @@ import {
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { prewarmVoiceInputAudio } from './audioContextPool';
+import { readVoicePrivacyConsent } from './voicePrivacyConsent';
 import { createVoiceInputAudioProfile } from './audioProfile';
 import { startVoiceInputCaptureSession } from './captureSession';
+import { runVoiceInputStartPreflight } from './startPreflight';
 import {
   buildBaseVoiceInputRefinementContext,
   resolveBrowserVoiceInputLanguage,
@@ -148,6 +150,7 @@ type StopCompletionWaiter = {
 };
 
 export type UseVoiceInputOptions = {
+  onBeforeVoiceInputStart?: () => boolean | Promise<boolean>;
   onMicrophonePermissionRequired?: (error: string) => void | Promise<void>;
 };
 
@@ -185,6 +188,7 @@ export function useVoiceInput(
   const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);
   const sentAudioMsRef = useRef(0);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
+  const startPreflightInFlightRef = useRef(false);
   const startAttemptIdRef = useRef(0);
   const startReadyRef = useRef<StartReadyState | null>(null);
   const ownedRunIdRef = useRef<string | null>(null);
@@ -1065,6 +1069,7 @@ export function useVoiceInput(
   // is cheap. Errors are swallowed; prewarm must never disrupt the UI.
   useEffect(() => {
     if (disabledRef.current) return;
+    if (!readVoicePrivacyConsent()) return;
     void window.electronAPI.voiceInput.prewarm({
       sourceLanguage: voiceInputSettings.language,
       refinementEnabled: voiceInputSettings.refinementEnabled,
@@ -1113,6 +1118,10 @@ export function useVoiceInput(
     ) {
       return;
     }
+    if (!(await runVoiceInputStartPreflight(
+      startPreflightInFlightRef,
+      options?.onBeforeVoiceInputStart,
+    ))) return;
     dismissInlineError();
     shouldRestoreEditorFocusRef.current = true;
     insertionRangeRef.current = readEditorSelectionRange();

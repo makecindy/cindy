@@ -193,6 +193,8 @@ import {
 } from '@/voice-input/shortcut';
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { readVoicePrivacyConsent, saveVoicePrivacyConsent } from '@/voice-input/voicePrivacyConsent';
+import { runVoiceInputStartPreflight } from '@/voice-input/startPreflight';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
@@ -1080,6 +1082,7 @@ export function ChatInput({
   // 被 dead-code 消除(hooks 本身按 rules-of-hooks 保持无条件调用,残留可忽略)。
   const perfCommitKeyRef = useRef<string | null>(null);
   const perfCommitStartRef = useRef(0);
+  const voiceStartPreflightLockRef = useRef(false);
   const perfCommitKey = storageKey ?? 'null';
   if (import.meta.env.DEV && perfCommitKeyRef.current !== perfCommitKey) {
     perfCommitKeyRef.current = perfCommitKey;
@@ -2226,7 +2229,9 @@ export function ChatInput({
   }, [confirmDialog, t]);
 
   const voiceInputOptions = useMemo(
-    () => ({ onMicrophonePermissionRequired: handleVoiceInputPermissionRequired }),
+    () => ({
+      onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
+    }),
     [handleVoiceInputPermissionRequired],
   );
 
@@ -2242,13 +2247,31 @@ export function ChatInput({
     }
   }, [voiceInputSettings.playInteractionSound]);
   const handleVoiceInputStart = useCallback(async () => {
-    const proceed = await onBeforeVoiceInputStart?.();
-    if (proceed === false) return;
+    const canStart = await runVoiceInputStartPreflight(voiceStartPreflightLockRef, async () => {
+      const proceed = await onBeforeVoiceInputStart?.();
+      if (proceed === false) return false;
+      if (!readVoicePrivacyConsent()) {
+        const confirmed = await confirmDialog({
+          title: t('voicePrivacyConsent.title'),
+          description: t('voicePrivacyConsent.description'),
+          confirmText: t('voicePrivacyConsent.confirm'),
+          cancelText: t('voicePrivacyConsent.cancel'),
+          autoFocusConfirm: true,
+        });
+        if (!confirmed) return false;
+        if (!saveVoicePrivacyConsent()) {
+          toast.error(t('voicePrivacyConsent.saveFailed'));
+          return false;
+        }
+      }
+      return true;
+    });
+    if (!canStart) return;
     if (voiceInputSettings.playInteractionSound) {
       playVoiceInputStartCue();
     }
     await voiceInput.start();
-  }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
+  }, [confirmDialog, onBeforeVoiceInputStart, t, voiceInput.start, voiceInputSettings.playInteractionSound]);
 
   const playVoiceInputEndCueNow = useCallback(() => {
     if (!voiceInputSettings.playInteractionSound) return;

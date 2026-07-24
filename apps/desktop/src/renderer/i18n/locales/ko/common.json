@@ -3889,6 +3889,13 @@
       "saveEdit": "텍스트 저장"
     }
   },
+  "voicePrivacyConsent": {
+    "title": "음성 입력 개인정보 안내",
+    "description": "음성 입력은 마이크를 사용하며, 텍스트 변환을 위해 설정된 음성 인식 서비스로 오디오를 전송합니다. 취소해도 텍스트 입력에는 영향을 주지 않습니다.",
+    "confirm": "동의하고 계속",
+    "cancel": "취소",
+    "saveFailed": "개인정보 선택을 저장하지 못해 음성 입력을 시작하지 않았습니다. 다시 시도해 주세요."
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "음성 입력 중",

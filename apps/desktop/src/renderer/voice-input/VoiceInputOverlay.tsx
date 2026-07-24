@@ -19,6 +19,7 @@ import type {
 
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -57,8 +58,10 @@ import {
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { prewarmVoiceInputAudio } from './audioContextPool';
+import { readVoicePrivacyConsent, saveVoicePrivacyConsent } from './voicePrivacyConsent';
 import { createVoiceInputAudioProfile } from './audioProfile';
 import { startVoiceInputCaptureSession } from './captureSession';
+import { runVoiceInputStartPreflight } from './startPreflight';
 import {
   buildBaseVoiceInputRefinementContext,
   resolveBrowserVoiceInputLanguage,
@@ -150,6 +153,7 @@ function getPasteErrorHintKey(errorCode: PasteErrorCode | null): string {
 
 export function VoiceInputOverlay() {
   const { t, i18n } = useTranslation();
+  const { confirm: confirmDialog } = useConfirmDialog();
   const codexSessionPromptActiveRef = useRef(false);
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
     onPromptClosed: () => {
@@ -185,6 +189,7 @@ export function VoiceInputOverlay() {
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
+  const startPreflightInFlightRef = useRef(false);
   const systemAudioMutedRef = useRef(false);
   const pendingSystemAudioMutePromiseRef = useRef<Promise<void> | null>(null);
   const systemAudioMuteGateOpenRef = useRef(true);
@@ -677,6 +682,25 @@ export function VoiceInputOverlay() {
     if (stateRef.current === 'listening' || stateRef.current === 'submitting' || stateRef.current === 'refining') {
       return;
     }
+    const canStart = await runVoiceInputStartPreflight(startPreflightInFlightRef, async () => {
+      if (!readVoicePrivacyConsent()) {
+        const confirmed = await confirmDialog({
+          title: t('voicePrivacyConsent.title'),
+          description: t('voicePrivacyConsent.description'),
+          confirmText: t('voicePrivacyConsent.confirm'),
+          cancelText: t('voicePrivacyConsent.cancel'),
+          autoFocusConfirm: true,
+        });
+        if (!confirmed) return false;
+        if (!saveVoicePrivacyConsent()) {
+          setError(t('voicePrivacyConsent.saveFailed'));
+          setVoiceState('error');
+          return false;
+        }
+      }
+      return true;
+    });
+    if (!canStart) return;
     clearErrorCloseTimer();
     resetOverlayInteraction();
     const attemptId = startAttemptIdRef.current + 1;
@@ -863,6 +887,7 @@ export function VoiceInputOverlay() {
     cancelStartedRun,
     clearErrorCloseTimer,
     closeOverlay,
+    confirmDialog,
     createStartReadyState,
     failRecording,
     formatMicrophoneFallbackMessage,
@@ -1301,6 +1326,7 @@ export function VoiceInputOverlay() {
   // effect runs well before the user's first shortcut press, populating the
   // shared AudioContext + worklet module and warming provider auth.
   useEffect(() => {
+    if (!readVoicePrivacyConsent()) return;
     void window.electronAPI.voiceInput.prewarm({
       sourceLanguage: settingsRef.current.language,
       refinementEnabled: settingsRef.current.refinementEnabled,

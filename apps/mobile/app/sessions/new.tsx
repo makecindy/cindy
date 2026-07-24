@@ -199,6 +199,7 @@ import {
   prewarmMobileRealtimeAudio,
   shouldShowMobileVoiceUi,
 } from '@/session/mobileRealtimeAudio';
+import { ensureMobileVoicePrivacyConsent } from '@/session/mobileVoicePrivacyConsent';
 import {
   discardPendingPrewarm,
   prewarmMobileVoiceStart,
@@ -1380,6 +1381,7 @@ export default function NewRemoteSessionScreen() {
         setVoiceError(mobileVoiceRealtimeAudioUnavailableError());
         return;
       }
+      if (!await ensureMobileVoicePrivacyConsent()) return;
       startupSeq = voiceStartupSeqRef.current + 1;
       voiceStartupSeqRef.current = startupSeq;
       voiceStartupInFlightRef.current = true;
@@ -1558,12 +1560,13 @@ export default function NewRemoteSessionScreen() {
   // connect, see mobileVoicePrewarm): both cold-start costs overlap the press
   // gesture instead of following the tap. Skipped when the tap will stop the
   // current recording rather than start a new one.
-  const handleVoiceButtonPressIn = useCallback(() => {
+  const handleVoiceButtonPressIn = useCallback(async () => {
     if (creating || voiceIsProcessing) return;
     if (voiceRecordingActiveRef.current || voiceState === 'listening') return;
     if (!selectedDeviceId || !isMobileRealtimeAudioAvailable()) return;
-    // Keep the native audio-session warmup on the synchronous press-down path
-    // (prewarmMobileVoiceStart re-runs it idempotently below).
+    if (!await ensureMobileVoicePrivacyConsent()) return;
+    // After consent is confirmed, warm the native audio session before starting
+    // the speculative ASR connection (the full prewarm repeats this idempotently).
     prewarmMobileRealtimeAudio();
     // 托管预热:凭登录态提前拿 voice-server 票据并开 ASR WebSocket。
     prewarmMobileVoiceStart(selectedDeviceId, {

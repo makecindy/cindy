@@ -22,7 +22,14 @@
     "openMicPermission": "マイクの権限設定を開く",
     "maxAttachments": "添付は最大 {{max}} 件までです。",
     "voiceStopRecording": "録音を停止",
-    "capabilitiesUnsupported": "リモート機能の形式に対応していません"
+    "capabilitiesUnsupported": "リモート機能の形式に対応していません",
+    "voicePrivacyConsent": {
+      "title": "音声入力のプライバシーについて",
+      "description": "音声入力ではマイクを使用し、文字起こしのために設定済みの音声認識サービスへ音声を送信します。キャンセルしてもテキスト入力には影響しません。",
+      "confirm": "同意して続ける",
+      "cancel": "キャンセル",
+      "saveFailed": "プライバシー設定を保存できなかったため、音声入力を開始しませんでした。もう一度お試しください。"
+    }
   },
   "screen": {
     "composerSyncing": "セッションデータを同期中です。完了すると送信できます。",
