@@ -37,15 +37,18 @@ function stubElectron() {
     endTeam: vi.fn(),
     getCollaborationSettings: vi.fn(),
   };
+  const localMessages = {
+    estimatedSessionValue: vi.fn().mockResolvedValue({ totalValueUsd: 0, entries: [] }),
+  };
   const invoke = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal('window', {
     electronAPI: {
       maker: makerSpies,
-      localDb: { orcaWorkflows },
+      localDb: { orcaWorkflows, messages: localMessages },
       deviceLink: { invoke },
     },
   });
-  return { makerSpies, orcaWorkflows, invoke };
+  return { makerSpies, orcaWorkflows, localMessages, invoke };
 }
 
 const sess = (id: string): Session => ({ id }) as unknown as Session;
@@ -175,6 +178,27 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockClear();
     // 未注册 → 本机会话:直接 false,不经隧道(看门狗对本机会话整体不生效)
     await expect(isSessionTurnRunningFor('local-sess')).resolves.toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('estimatedSessionValueFor:远程经隧道查被控端汇总;本机查本地库(不经隧道)', async () => {
+    const { localMessages, invoke } = stubElectron();
+    invoke.mockResolvedValue({ totalValueUsd: 1.5, entries: [{ clientId: 'a', costUsd: 1.5 }] });
+    const { estimatedSessionValueFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+
+    // 远程会话:查本机是空库恒 0,必须隧道到被控端
+    await expect(estimatedSessionValueFor('rs')).resolves.toEqual({
+      totalValueUsd: 1.5,
+      entries: [{ clientId: 'a', costUsd: 1.5 }],
+    });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', ['rs']);
+    expect(localMessages.estimatedSessionValue).not.toHaveBeenCalled();
+
+    invoke.mockClear();
+    await estimatedSessionValueFor('local-sess');
+    expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith('local-sess');
     expect(invoke).not.toHaveBeenCalled();
   });
 });

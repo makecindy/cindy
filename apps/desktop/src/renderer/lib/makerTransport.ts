@@ -192,6 +192,23 @@ export function listMessagesFor(
   return invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<Message[]>;
 }
 
+/**
+ * 订阅形态会话「本会话价值」历史汇总:远程走隧道(否则查控制端空库恒为 0,底部 $ chip
+ * 的历史初值永远缺失)。归属用粘滞解析(relay 瞬时重连清空注册表的窗口内不误判为本机,
+ * 与 goal/learn 链路同款);老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方 catch
+ * 后退化为只显示已加载消息 + 实时推送的部分值。
+ */
+export function estimatedSessionValueFor(sessionId: string): Promise<{
+  totalValueUsd: number;
+  entries: Array<{ clientId: string; costUsd: number }>;
+}> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return messageService.estimatedSessionValue(sessionId);
+  return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
+    sessionId,
+  ]) as Promise<{ totalValueUsd: number; entries: Array<{ clientId: string; costUsd: number }> }>;
+}
+
 /** 会话内搜索跳转定位:远程走隧道 local-db:messages:around(否则查控制端空库,跳转必失败)。 */
 export function aroundMessagesFor(
   sessionId: string,

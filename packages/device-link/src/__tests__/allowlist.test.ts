@@ -41,6 +41,10 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
+  it('放行订阅价值历史汇总只读聚合(远程会话底部 $ chip 的历史初值查被控端)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:messages:estimatedSessionValue')).toBe(true);
+  });
+
   it('放行 per-session turn 态只读查询(控制端 stall 看门狗核实被控端用)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-in-turn')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:any-session-in-turn')).toBe(true);
@@ -268,6 +272,8 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:schedule:event',
       'maker:orca:worker-changed',
       'usage:message-turn-cost',
+      'usage:session-spend-changed',
+      'usage:session-tokens-changed',
       'local-db:messages:created',
       'local-db:messages:deleted',
       'local-db:session:error-persisted',

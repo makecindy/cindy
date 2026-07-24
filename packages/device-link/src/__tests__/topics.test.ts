@@ -81,6 +81,13 @@ describe('topicForPush', () => {
     expect(topicForPush('usage:message-turn-cost', { sessionId: 's7', clientId: 'm1' })).toBe(
       'session:s7',
     );
+    // session 终身累计 cost / token 镜像:payload 顶层 sessionId → 默认路由到 session:<id>。
+    expect(topicForPush('usage:session-spend-changed', { sessionId: 's8', totalCostUsd: 1.23 })).toBe(
+      'session:s8',
+    );
+    expect(topicForPush('usage:session-tokens-changed', { sessionId: 's8', totalTokens: 42 })).toBe(
+      'session:s8',
+    );
   });
 
   it('orca:worker-changed 用 leadSessionId(不同 key)', () => {

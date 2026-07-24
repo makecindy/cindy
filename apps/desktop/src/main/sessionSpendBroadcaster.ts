@@ -24,6 +24,7 @@ import { sql } from 'drizzle-orm';
 import { sessions } from './localDb/schema';
 import { getDbClient } from './localDb/client/current';
 import { createLogger } from './logger';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 
 const log = createLogger('sessionSpendBroadcaster');
 
@@ -90,6 +91,9 @@ export async function recordSessionTurnSpend(sessionId: string, costUsdDelta: nu
 }
 
 function broadcast(payload: SessionSpendPayload): void {
+  // device-link 旁路:控制端打开的远程会话按 session:<id> topic 收到累计 cost 镜像
+  // (本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的 $ 永远不更新)。
+  tapWindowBroadcast(USAGE_SESSION_SPEND_CHANGED, payload);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_SESSION_SPEND_CHANGED, payload);
@@ -122,6 +126,7 @@ export async function recordSessionTurnTokens(sessionId: string, tokenDelta: num
 }
 
 function broadcastTokens(payload: SessionTokensPayload): void {
+  tapWindowBroadcast(USAGE_SESSION_TOKENS_CHANGED, payload);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_SESSION_TOKENS_CHANGED, payload);

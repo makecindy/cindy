@@ -73,6 +73,25 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain("codexAuthState.authSource === 'oauth'");
   });
 
+  it('renders device-link remote sessions data-driven without local-account classification', () => {
+    // device-link 远程会话:计费形态事实在被控端,本机 route 观察 / 账号状态一律不用。
+    expect(source).toContain('const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);');
+    // 本机 Codex runtime route 观察对 device-link 关闭(否则按控制端账号形态张冠李戴)
+    expect(source).toContain("enabled: vendorKey === 'codex' && !isDeviceLinkRemote,");
+    // Claude 默认路由观察(proxy 观察值 / OAuth / 网关 key 启发式)对 device-link 关闭
+    expect(source).toContain(
+      "vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null",
+    );
+    // 订阅形态分类整体排除 device-link(专属分支接管渲染)
+    expect(source).toContain(
+      "const isClaudeSubscription = vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && (",
+    );
+    // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
+    expect(source).toContain('if (isDeviceLinkRemote) {');
+    // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)
+    expect(source).toMatch(/usageDashboardUrl: string \| null = isDeviceLinkRemote\s*\?\s*null/);
+  });
+
   it('does not classify remote Codex sessions from the local runtime route', () => {
     expect(source).toContain('remoteHostId?: string | null');
     expect(source).toContain("const isRemoteCodexSession = vendorKey === 'codex' && Boolean(remoteHostId);");
@@ -97,9 +116,10 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("session: { label: t('todaySpend.sessionCostLabel', { cost: '$—' })");
     expect(source).toContain("(vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionId : undefined");
     expect(source).toContain("(vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionInitialCostUsd : null");
-    // 订阅"本会话价值"估算: Codex OAuth / Claude 订阅 / bridge 订阅共用同一管道
+    // 订阅"本会话价值"估算: Codex OAuth / Claude 订阅 / bridge 订阅共用同一管道;
+    // device-link 远程会话形态未知(被控端账号事实拿不到)→ 无条件启用
     expect(source).toMatch(
-      /useSessionEstimatedValue\(\s*sessionId,\s*isCodexSubscription \|\| isClaudeSubscription \|\| isSubscriptionBridge,?\s*\)/,
+      /useSessionEstimatedValue\(\s*sessionId,\s*isCodexSubscription \|\| isClaudeSubscription \|\| isSubscriptionBridge \|\| isDeviceLinkRemote,?\s*\)/,
     );
     expect(source).toContain('function getCodexChipWindows(');
     expect(source).toContain("'todaySpend.codex.windowSegment'");
@@ -125,7 +145,7 @@ describe('TodaySpendChip dashboard routing', () => {
 
   it('uses token and explicit empty-state fallbacks for Codex API sessions', () => {
     expect(source).toContain(
-      'isCodexApi || isCodexSubscription || isSubscriptionBridge ? sessionId : undefined',
+      'isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote',
     );
     expect(source).toContain('function hasPositiveSessionTokens(sessionTokens: number | null)');
     expect(source).toContain('const codexApiHasTokenFallback = isCodexApi');

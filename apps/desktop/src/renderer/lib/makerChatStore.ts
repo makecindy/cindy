@@ -3638,6 +3638,28 @@ function initGlobalListeners(): void {
         case 'usage:message-model-mismatch':
           handleUsageMessageModelMismatchRaw(push.payload);
           break;
+        case 'usage:session-spend-changed': {
+          // 被控端 session 终身累计 cost 落库推送(sessionSpendBroadcaster 走裸 UPDATE、
+          // 不发 sessions:patched)→ 镜像进远程项目分片;打开中的远程会话底部 $ chip 经
+          // session.totalCostUsd → useSessionSpend 初值重置显示最新值。
+          const p = push.payload as { sessionId?: string; totalCostUsd?: number } | null;
+          if (push.deviceId && p?.sessionId && typeof p.totalCostUsd === 'number') {
+            remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
+              totalCostUsd: p.totalCostUsd,
+            });
+          }
+          break;
+        }
+        case 'usage:session-tokens-changed': {
+          // 同上:session 终身累计 token 镜像(chip tooltip 的 token 累计行)。
+          const p = push.payload as { sessionId?: string; totalTokens?: number } | null;
+          if (push.deviceId && p?.sessionId && typeof p.totalTokens === 'number') {
+            remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
+              totalTokenUsage: p.totalTokens,
+            });
+          }
+          break;
+        }
         case 'local-db:sessions:patched': {
           // 被控端会话元数据 / 设置变更 → 就地镜像到远程项目分片(取代乐观覆盖)。
           const p = push.payload as { sessionId?: string; patch?: Record<string, unknown> } | null;
