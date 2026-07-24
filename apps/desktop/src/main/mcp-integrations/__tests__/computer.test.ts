@@ -2386,6 +2386,26 @@ describe('computer mcp integration', () => {
     );
   });
 
+  it('prepares the runtime only once for subsequent tool calls', async () => {
+    const prepareRuntimeBeforeUse = vi.fn(async () => undefined);
+    mcpCallToolMock
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+      });
+    const deps = getComputerMcpDeps({
+      isComputerUseEnabled: () => true,
+      prepareRuntimeBeforeUse,
+    });
+
+    await deps.callTool('list_windows', {}, { sessionId: 'session-runtime-gate-once' });
+    await deps.callTool('list_windows', {}, { sessionId: 'session-runtime-gate-once' });
+
+    expect(prepareRuntimeBeforeUse).toHaveBeenCalledTimes(1);
+  });
+
   it('runs the official installer and returns refreshed status', async () => {
     mockDriverSpawn({ stdout: 'installed\n' });
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });

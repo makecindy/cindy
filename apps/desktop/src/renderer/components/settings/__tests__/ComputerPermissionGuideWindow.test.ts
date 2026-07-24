@@ -106,6 +106,15 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
 
     expect(screen.queryByText('Dragging Computer Use')).toBeNull();
     expect(screen.getByText('Turn on Computer Use in Accessibility')).toBeTruthy();
+
+    const retryButton = screen.getByRole('button', { name: /Computer Use/ });
+    expect(retryButton).toHaveProperty('draggable', true);
+    fireEvent.dragStart(retryButton, {
+      dataTransfer: { effectAllowed: 'none' },
+    });
+
+    expect(startPermissionAppDrag).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Dragging Computer Use')).toBeTruthy();
   });
 });
 

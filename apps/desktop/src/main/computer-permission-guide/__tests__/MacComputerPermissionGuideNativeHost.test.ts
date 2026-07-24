@@ -96,6 +96,9 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('didEstablishFallbackWindowBaseline');
     expect(source).toContain('presentation == .switchGuide');
     expect(source).toContain('intersectionArea >= area * 0.9');
+    expect(source).toContain('didEncounterUnavailableAttribute = true');
+    expect(source).toContain('return didEncounterUnavailableAttribute ? nil : false');
+    expect(source).not.toContain('attribute: kAXChildrenAttribute as CFString\n        ) ?? []');
     expect(source).not.toContain('layerZeroCount');
   });
 

@@ -568,9 +568,9 @@ export function isComputerDriverPermissionProbePaused(): boolean {
 }
 
 /**
- * Stop the branded daemon while the app is absent from the current macOS
- * permission pane. Merely probing AX/TCC re-registers a deleted app row, so
- * the first-time drag step must be genuinely passive until System Settings
+ * Pause permission probes while the app is absent from the current macOS
+ * permission pane. This does not stop the branded daemon; it only prevents
+ * AX/TCC probes from re-registering a deleted app row until System Settings
  * exposes the row again.
  */
 export async function pauseComputerDriverPermissionProbe(): Promise<void> {
@@ -3334,8 +3334,11 @@ export async function cleanupAllComputerDriverSessions(): Promise<void> {
 }
 
 export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDeps {
+  let runtimePreparation: Promise<void> | null = null;
   const ensureRuntime = async (): Promise<void> => {
-    await options.prepareRuntimeBeforeUse?.();
+    if (!options.prepareRuntimeBeforeUse) return;
+    runtimePreparation ??= Promise.resolve().then(options.prepareRuntimeBeforeUse);
+    await runtimePreparation;
   };
   return {
     getStatus: async () => {

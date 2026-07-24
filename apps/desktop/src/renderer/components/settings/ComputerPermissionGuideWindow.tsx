@@ -192,10 +192,6 @@ export function ComputerPermissionGuideWindow() {
     : t('settings.computerUse.directControl.permissions.screenRecordingLabel');
 
   const handleDragStart = (event: React.DragEvent<HTMLButtonElement>) => {
-    if (awaitingUser) {
-      event.preventDefault();
-      return;
-    }
     const iconDataUrl = dragIconDataUrl(iconRef.current);
     if (!iconDataUrl) {
       event.preventDefault();
@@ -281,12 +277,10 @@ export function ComputerPermissionGuideWindow() {
               </h1>
               <button
                 type="button"
-                draggable={!awaitingUser}
+                draggable
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
-                className={awaitingUser
-                  ? 'mt-3 flex min-h-[64px] w-full cursor-default items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 text-left'
-                  : 'mt-3 flex min-h-[64px] w-full cursor-grab items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 text-left transition-[transform,background-color] duration-200 ease-out hover:-translate-y-0.5 hover:bg-[var(--surface-hover)] active:cursor-grabbing active:scale-[0.99]'}
+                className="mt-3 flex min-h-[64px] w-full cursor-grab items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 text-left transition-[transform,background-color] duration-200 ease-out hover:-translate-y-0.5 hover:bg-[var(--surface-hover)] active:cursor-grabbing active:scale-[0.99]"
               >
                 <span className="inline-flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--surface-elevated)]">
                   <img

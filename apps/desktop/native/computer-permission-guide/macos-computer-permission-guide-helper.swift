@@ -1096,27 +1096,46 @@ private func systemSettingsHasModalPresentation(pid: pid_t) -> Bool? {
         of: application,
         attribute: kAXWindowsAttribute as CFString
     ) else { return nil }
+    var didEncounterUnavailableAttribute = false
     for window in windows {
-        if accessibilityRole(of: window) == kAXSheetRole as String {
-            return true
+        if let role = accessibilityRole(of: window) {
+            if role == kAXSheetRole as String {
+                return true
+            }
+        } else {
+            didEncounterUnavailableAttribute = true
         }
-        let hasSheetChild = (accessibilityElements(
+        if let children = accessibilityElements(
             of: window,
             attribute: kAXChildrenAttribute as CFString
-        ) ?? []).contains { accessibilityRole(of: $0) == kAXSheetRole as String }
-        if hasSheetChild { return true }
+        ) {
+            for child in children {
+                guard let role = accessibilityRole(of: child) else {
+                    didEncounterUnavailableAttribute = true
+                    continue
+                }
+                if role == kAXSheetRole as String {
+                    return true
+                }
+            }
+        } else {
+            didEncounterUnavailableAttribute = true
+        }
         var modalValue: CFTypeRef?
         if AXUIElementCopyAttributeValue(
             window,
             kAXModalAttribute as CFString,
             &modalValue
         ) == .success,
-           let isModal = modalValue as? Bool,
-           isModal {
-            return true
+           let isModal = modalValue as? Bool {
+            if isModal {
+                return true
+            }
+        } else {
+            didEncounterUnavailableAttribute = true
         }
     }
-    return false
+    return didEncounterUnavailableAttribute ? nil : false
 }
 
 /**
