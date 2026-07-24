@@ -60,6 +60,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 }));
 
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { resetProviderOnboardingDismissal } from '@/state/providerOnboardingDismissal';
 
 function makeProvider(id: string, over?: Partial<ProviderView>): ProviderView {
   return {
@@ -148,7 +149,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  localStorage.clear();
+  // 同时清 localStorage 与内存兜底态,防 dismiss 跨用例残留。
+  resetProviderOnboardingDismissal();
   vi.clearAllMocks();
 });
 
@@ -215,7 +217,7 @@ describe('ConnectProviderCard', () => {
     );
 
     cleanup();
-    localStorage.clear();
+    resetProviderOnboardingDismissal();
     await renderCardSettled();
     // 展开折叠区:OAuth 三家 + 非 cn 预设都在。
     fireEvent.click(screen.getByText('onboarding.connectProvider.othersToggle').closest('button')!);

@@ -33,7 +33,10 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
-import { dismissProviderOnboarding } from '@/state/providerOnboardingDismissal';
+import {
+  dismissProviderOnboarding,
+  resetProviderOnboardingDismissal,
+} from '@/state/providerOnboardingDismissal';
 
 const disconnectedXd = {
   id: 'xd',
@@ -77,7 +80,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  localStorage.clear();
+  // 走 store 的 reset:同时清 localStorage 与内存兜底态(只清 storage 会让
+  // memoryDismissed 跨用例残留)。
+  resetProviderOnboardingDismissal();
   vi.clearAllMocks();
 });
 
@@ -114,7 +119,7 @@ describe('ConnectProviderBanner', () => {
     expect(localStorage.getItem('providerOnboarding.dismissedAt')).not.toBeNull();
 
     cleanup();
-    localStorage.clear();
+    act(() => resetProviderOnboardingDismissal());
     renderBanner();
     expect(screen.getByTestId('connect-provider-banner')).not.toBeNull();
     // 模拟另一处(首屏卡片)dismiss:同一 store 通知,banner 立即消失。

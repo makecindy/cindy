@@ -329,8 +329,8 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
       out.push(normalizePresetModelsUrls(rest as ProviderPreset));
       continue;
     }
-    // nameEn 非法值(非非空字符串)同 regionHint 容错语义:剥字段不淘汰整条。
-    if (v.nameEn !== undefined && (typeof v.nameEn !== 'string' || v.nameEn.length === 0)) {
+    // nameEn 非法值(非字符串/空白串)同 regionHint 容错语义:剥字段不淘汰整条。
+    if (v.nameEn !== undefined && (typeof v.nameEn !== 'string' || v.nameEn.trim().length === 0)) {
       const { nameEn: _drop, ...rest } = v as ProviderPreset & { nameEn: unknown };
       out.push(normalizePresetModelsUrls(rest as ProviderPreset));
       continue;

@@ -16,35 +16,48 @@ const STORAGE_KEY = 'providerOnboarding.dismissedAt';
 type Subscriber = () => void;
 const subscribers = new Set<Subscriber>();
 
+/**
+ * localStorage 不可用(隐私模式/配额)时的进程内兜底:dismiss 至少在本次会话内
+ * 生效,否则订阅方收到通知后 snapshot 仍是 false,UI 永远关不掉(review 反馈)。
+ */
+let memoryDismissed = false;
+
 function notify(): void {
   subscribers.forEach((cb) => cb());
 }
 
 export function isProviderOnboardingDismissed(): boolean {
+  if (memoryDismissed) return true;
   try {
     return localStorage.getItem(STORAGE_KEY) != null;
   } catch {
-    // localStorage 不可用 — 视为未 dismiss(宁可多引导,不可失联)
+    // localStorage 不可用 — 只剩内存兜底(上面已判)
     return false;
   }
 }
 
 export function dismissProviderOnboarding(): void {
+  memoryDismissed = true;
   try {
     localStorage.setItem(STORAGE_KEY, new Date().toISOString());
   } catch {
-    // localStorage 不可用 — 忽略,本次会话内订阅方仍会收到通知
+    // localStorage 不可用 — 内存兜底已生效,本次会话内仍视为 dismissed
   }
   notify();
 }
 
 export function resetProviderOnboardingDismissal(): void {
+  let had = memoryDismissed;
+  memoryDismissed = false;
   try {
-    if (localStorage.getItem(STORAGE_KEY) == null) return;
-    localStorage.removeItem(STORAGE_KEY);
+    if (localStorage.getItem(STORAGE_KEY) != null) {
+      localStorage.removeItem(STORAGE_KEY);
+      had = true;
+    }
   } catch {
-    return;
+    // localStorage 不可用 — 只清内存态
   }
+  if (!had) return;
   notify();
 }
 

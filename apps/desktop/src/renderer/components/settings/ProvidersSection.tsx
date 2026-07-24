@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
@@ -1097,7 +1097,6 @@ function SuggestionRow({
 
 export function ProvidersSection() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const signInToCindy = useSignInToCindy();
   const { confirm } = useConfirmDialog();
   const { providers, loading, refetch } = useProviders();
