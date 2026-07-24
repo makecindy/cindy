@@ -30,6 +30,7 @@ type ServerFetch = <T>(path: string, options: ApiFetchOptions) => Promise<T>;
 
 export type BillingIpcDependencies = {
   getMainWindow: () => BrowserWindow | null;
+  requirePersonalAccount: () => void;
   getBaseUrl?: () => string;
   fetch?: ServerFetch;
   openExternal?: (url: string) => Promise<void>;
@@ -193,6 +194,7 @@ export function createBillingHandlers(
     (handler: (payload?: unknown) => Promise<unknown>): BillingHandler =>
     async (event, payload) => {
       assertMainWindowSender(event, deps.getMainWindow);
+      deps.requirePersonalAccount();
       return handler(payload);
     };
 

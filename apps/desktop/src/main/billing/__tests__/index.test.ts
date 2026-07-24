@@ -82,8 +82,10 @@ function harness() {
   }) as unknown as NonNullable<Parameters<typeof createBillingHandlers>[0]['fetch']> &
     ReturnType<typeof vi.fn>;
   const openExternal = vi.fn(async () => undefined);
+  const requirePersonalAccount = vi.fn();
   const handlers = createBillingHandlers({
     getMainWindow: () => mainWindow,
+    requirePersonalAccount,
     getBaseUrl: () => 'https://model-access.example',
     fetch,
     openExternal,
@@ -94,7 +96,14 @@ function harness() {
     sender: unknown = mainWebContents,
     senderFrame: unknown = mainFrame,
   ) => handlers[channel]!({ sender, senderFrame } as never, payload);
-  return { call, fetch, mainFrame, mainWebContents, openExternal };
+  return {
+    call,
+    fetch,
+    mainFrame,
+    mainWebContents,
+    openExternal,
+    requirePersonalAccount,
+  };
 }
 
 describe('billing IPC', () => {
@@ -236,6 +245,24 @@ describe('billing IPC', () => {
     });
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each(Object.values(BILLING_INVOKE))(
+    'rejects account-ineligible access on %s before payload parsing or network access',
+    async (channel) => {
+      const { call, fetch, openExternal, requirePersonalAccount } = harness();
+      requirePersonalAccount.mockImplementation(() => {
+        throw Object.assign(new Error('[PERMISSION_DENIED] Billing requires a personal account.'), {
+          code: 'PERMISSION_DENIED',
+        });
+      });
+
+      await expect(call(channel, { invalid: true })).rejects.toMatchObject({
+        code: 'PERMISSION_DENIED',
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects unknown fields and invalid idempotency keys', async () => {
     const { call, fetch } = harness();

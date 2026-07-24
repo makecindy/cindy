@@ -323,6 +323,54 @@ describe('billing response projection', () => {
     });
   });
 
+  it('enforces the server contract that offer codes are globally unique', () => {
+    const purchaseOption = {
+      id: 'listing_stripe',
+      provider: 'stripe',
+      capability: 'PROVIDER_MANAGED_SUBSCRIPTION',
+      paymentAction: 'REDIRECT',
+    };
+    const offer = (code: string) => ({
+      code,
+      interval: 'MONTH',
+      currency: 'usd',
+      amount: '10',
+      minAmount: null,
+      maxAmount: null,
+      creditAmount: '100',
+      rolloverCap: '0',
+      purchaseOptions: [purchaseOption],
+    });
+
+    expect(
+      projectBillingCatalog({
+        products: [
+          {
+            code: 'plus',
+            name: 'Plus',
+            kind: 'SUBSCRIPTION',
+            level: 1,
+            sortOrder: 1,
+            offers: [offer('shared_month')],
+          },
+          {
+            code: 'max',
+            name: 'Max',
+            kind: 'SUBSCRIPTION',
+            level: 2,
+            sortOrder: 2,
+            offers: [offer('shared_month'), offer('max_month')],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      products: [
+        { code: 'plus', offers: [{ code: 'shared_month' }] },
+        { code: 'max', offers: [{ code: 'max_month' }] },
+      ],
+    });
+  });
+
   it('drops malformed list rows and strips unknown payment actions without leaking extra fields', () => {
     const projected = projectBillingOrderList({
       orders: [

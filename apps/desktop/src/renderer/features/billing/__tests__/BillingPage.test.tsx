@@ -734,7 +734,10 @@ describe('BillingPage plan change', () => {
     ],
   };
 
-  const activeSubscription = (pendingPlanChange: unknown = null) => ({
+  const activeSubscription = (
+    pendingPlanChange: unknown = null,
+    interval: 'MONTH' | 'YEAR' = 'MONTH',
+  ) => ({
     subscriptionId: 'subscription_active',
     status: 'ACTIVE' as const,
     provider: 'stripe',
@@ -745,7 +748,7 @@ describe('BillingPage plan change', () => {
     effectivePlan: {
       version: 1 as const,
       product: { code: 'plus', kind: 'SUBSCRIPTION' as const, level: 1 },
-      offer: { code: 'plus_month', interval: 'MONTH' as const },
+      offer: { code: 'plus_month', interval },
       terms: { amount: '9', currency: 'usd', creditAmount: '100', rolloverCap: '0' },
       capturedAt: '2026-07-01T00:00:00.000Z',
     },
@@ -843,6 +846,21 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not expose plan change for yearly subscriptions while server v1 is monthly-only', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: activeSubscription(null, 'YEAR'),
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    await screen.findByText('Plus plan');
+    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+    expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+    expect(billing.quotePlanChange).not.toHaveBeenCalled();
   });
 
   it('shows a scheduled downgrade banner and undoes it through DELETE', async () => {

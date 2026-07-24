@@ -392,7 +392,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const planChangeable =
     currentSubscription?.status === 'ACTIVE' &&
     !currentSubscription.cancelAtPeriodEnd &&
-    currentPlan !== null;
+    currentPlan?.offer.interval === 'MONTH';
 
   // UI candidates only. The quote is the authority on whether a target is
   // actually reachable; this filter just avoids offering obviously invalid
@@ -403,7 +403,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     return subscriptionOffers
       .filter(
         ({ product, offer }) =>
-          offer.interval === 'MONTH' &&
+          offer.interval === currentPlan.offer.interval &&
           offer.code !== currentPlan.offer.code &&
           product.level !== null &&
           product.level !== currentPlan.product.level &&
@@ -473,10 +473,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   };
 
   const selectPlanChangeTarget = (candidate: PlanChangeCandidate) => {
+    if (candidate.offer.interval === null) return;
     setPlanChangeTargetOpen(false);
     void planChange.startQuote(candidate.offer.code, {
       product: { code: candidate.product.code, level: candidate.product.level ?? 0 },
-      offer: { code: candidate.offer.code, interval: 'MONTH' },
+      offer: { code: candidate.offer.code, interval: candidate.offer.interval },
       terms: {
         amount: candidate.offer.amount ?? '0',
         currency: candidate.offer.currency,
@@ -1197,9 +1198,7 @@ function BillingOfferDialog({
                     const active = selected?.offer.code === offer.code;
                     return (
                       <button
-                        // Offer codes are only unique within a product, so the key
-                        // must include the product to stay collision-free.
-                        key={`${product.code}:${offer.code}`}
+                        key={offer.code}
                         type="button"
                         onClick={() => onSelectOffer(offer.code)}
                         aria-pressed={active}

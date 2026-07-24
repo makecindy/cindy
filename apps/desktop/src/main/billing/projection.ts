@@ -504,13 +504,17 @@ function projectProduct(value: unknown): BillingCatalogProduct | null {
 export function projectBillingCatalog(value: unknown): BillingCatalog {
   if (!isRecord(value) || !Array.isArray(value.products)) invalidResponse();
   const productCodes = new Set<string>();
-  const products = value.products
-    .map(projectProduct)
-    .filter((product): product is BillingCatalogProduct => {
-      if (!product || productCodes.has(product.code)) return false;
-      productCodes.add(product.code);
-      return true;
-    });
+  const offerCodes = new Set<string>();
+  const products: BillingCatalogProduct[] = [];
+  for (const valueProduct of value.products) {
+    const product = projectProduct(valueProduct);
+    if (!product || productCodes.has(product.code)) continue;
+    const offers = product.offers.filter((offer) => !offerCodes.has(offer.code));
+    if (offers.length === 0) continue;
+    productCodes.add(product.code);
+    for (const offer of offers) offerCodes.add(offer.code);
+    products.push({ ...product, offers });
+  }
   return { products };
 }
 

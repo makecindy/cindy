@@ -2311,7 +2311,18 @@ const registerIpcHandlers = () => {
     return windows.find((w) => !w.isDestroyed() && w.isMinimizable()) ?? windows[0];
   };
 
-  registerBillingIpc({ getMainWindow: () => mainWindowRef });
+  registerBillingIpc({
+    getMainWindow: () => mainWindowRef,
+    requirePersonalAccount: () => {
+      requireAppCapability(
+        'canUseCindyAccountServices',
+        'Billing requires a personal Cindy account.',
+      );
+      if (authManager.getAuthState().user?.membershipKind !== 'personal') {
+        throwIpcError('PERMISSION_DENIED', 'Billing is only available to personal accounts.');
+      }
+    },
+  });
 
   initAppBadgeService({
     getWindow: () => getWindow() ?? null,
