@@ -48,6 +48,21 @@ describe('computer permission flow', () => {
     )).toBe(true);
   });
 
+  it('does not start onboarding when passive preflight is inconclusive', () => {
+    const missing = status('missing', 'missing');
+    const unknown: ComputerDriverStatus = {
+      ...missing,
+      permissionState: {
+        ...missing.permissionState!,
+        status: 'unknown',
+      },
+    };
+
+    expect(isComputerPermissionReady(unknown)).toBe(false);
+    expect(shouldStartComputerPermissionGuide(true, unknown)).toBe(false);
+    expect(shouldStartComputerPermissionGuide(true, null)).toBe(false);
+  });
+
   it('never starts onboarding while disabling the feature', () => {
     expect(shouldStartComputerPermissionGuide(
       false,

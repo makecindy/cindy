@@ -9,5 +9,5 @@ export function shouldStartComputerPermissionGuide(
   enabling: boolean,
   status: ComputerDriverStatus | null,
 ): boolean {
-  return enabling && !isComputerPermissionReady(status);
+  return enabling && status?.permissionState?.status === 'missing';
 }
