@@ -78,4 +78,23 @@ describe('downloadVerifiedPlugin', () => {
       ),
     ).rejects.toThrow('超过');
   });
+
+  it('cancels the response body when Content-Length mismatches the release', async () => {
+    const bytes = Buffer.from('mismatched length');
+    const response = new Response(bytes, {
+      status: 200,
+      headers: { 'content-length': String(bytes.byteLength + 1) },
+    });
+    const cancel = vi.spyOn(response.body!, 'cancel');
+    fetchMock.mockResolvedValue(response);
+
+    await expect(
+      downloadVerifiedPlugin(
+        'https://downloads.example.test/a',
+        expected(bytes),
+        target(),
+      ),
+    ).rejects.toThrow('Content-Length');
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });

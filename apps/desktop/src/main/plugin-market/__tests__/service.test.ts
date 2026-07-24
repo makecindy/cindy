@@ -480,6 +480,24 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.isDefaultInstallSuppressed('local-v1', item.id)).toBe(true);
   });
 
+  it('records a local uninstall opt-out for the captured owner after an account switch', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+    const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
+
+    runtime.session = {
+      mode: 'cloud',
+      dataOwnerId: 'user-2',
+      generation: 2,
+    };
+
+    await expect(complete?.()).resolves.toBeUndefined();
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-2', item.id)).toBe(false);
+  });
+
   it('does not attach local uninstall tracking without a stable owner', () => {
     runtime.session = {
       mode: 'signed-out',
@@ -591,6 +609,34 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.install(item.id)).rejects.toThrow('账号已切换');
     expect(runtime.install).not.toHaveBeenCalled();
     expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
+  });
+
+  it('records provenance for the captured owner when the owner changes after install', async () => {
+    const item = summary();
+    const installedGhost = {
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: false,
+    };
+    const h = harness([item]);
+    runtime.install.mockImplementationOnce(async () => {
+      runtime.session = {
+        mode: 'cloud',
+        dataOwnerId: 'user-2',
+        generation: 2,
+      };
+      runtime.ghosts = [installedGhost];
+      return installedGhost;
+    });
+
+    await expect(h.service.install(item.id)).resolves.toEqual({
+      ghost: installedGhost,
+    });
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      pluginId: item.id,
+      releaseId: item.currentRelease.id,
+      installed: true,
+    });
   });
 
   it('reports a successful market uninstall when the owner changes during cleanup', async () => {

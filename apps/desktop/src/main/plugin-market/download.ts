@@ -20,11 +20,12 @@ export async function downloadVerifiedPlugin(
     redirect: 'error',
   });
   if (!response.ok) throw new Error(`Plugin 下载失败 (${response.status})`);
+  if (!response.body) throw new Error('Plugin 下载响应体为空');
   const contentLength = response.headers.get('content-length');
   if (contentLength !== null && Number(contentLength) !== expected.sizeBytes) {
+    await response.body.cancel().catch(() => undefined);
     throw new Error('Plugin 下载 Content-Length 与 Release 不一致');
   }
-  if (!response.body) throw new Error('Plugin 下载响应体为空');
 
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];

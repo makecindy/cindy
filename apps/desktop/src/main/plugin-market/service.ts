@@ -310,8 +310,7 @@ export class PluginMarketService {
     if (!record?.installed) return null;
     const installSubject = defaultInstallSubject(owner);
     return async () => {
-      requireSameMarketOwner(owner);
-      await this.withLedgerMutation(owner, () => {
+      await this.withCapturedLedgerMutation(ledger, () => {
         ledger.markRemoved(ghostId, installSubject);
       });
     };
@@ -377,8 +376,10 @@ export class PluginMarketService {
         version: plugin.currentRelease.version,
         initiallyEnabled: options.initiallyEnabled === true,
       });
-      requireSameMarketOwner(owner);
-      await this.withLedgerMutation(owner, () => {
+      // Once the package directory is committed, finish provenance against the
+      // owner captured at operation start even if the active session changes.
+      // The bound ledger prevents this write from leaking into the new owner.
+      await this.withCapturedLedgerMutation(ledger, () => {
         ledger.upsertInstallation(recordFrom(plugin, 'market'));
       });
       return ghost;
