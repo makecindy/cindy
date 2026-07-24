@@ -208,6 +208,24 @@ export interface LoginSkinColors {
   appleCircleBg: string;
   /** Apple logo 标色(亮 #FFFFFF / 暗 #000000;与圆钮底反相,ADR 官方 Logo-only) */
   appleLogoInk: string;
+  /** 协议 radio 未选中圈底(亮 #F1F0F1 / 暗 #2A2828;figma 600:626/602:1091) */
+  consentRadioBg: string;
+  /** 协议 radio 未选中 2px 描边(亮 #434343 / 暗 #F1F0F1,双模式反色) */
+  consentRadioBorder: string;
+  /** 协议 radio 选中圈底(亮 #2A2828 / 暗 #F1F0F1;选中态为对勾非圆点) */
+  consentRadioCheckedBg: string;
+  /** 协议 radio 选中对勾(亮白 / 暗墨;figma 600:628/602:1093) */
+  consentRadioCheck: string;
+  /** 协议弹窗全屏遮罩(两模式同值黑 85%;figma 602:820/602:1248) */
+  consentOverlay: string;
+  /** 弹窗次级钮底(亮 #EEEEEE / 暗 #434141;figma wave5 双色小按钮 602:863/602:1311) */
+  secondaryButtonBg: string;
+  /** 弹窗次级钮 1px 描边(亮白 / 暗 #565454) */
+  secondaryButtonBorder: string;
+  /** 弹窗次级钮文字(亮墨 / 暗浅,双模式反色) */
+  secondaryButtonText: string;
+  /** 弹窗次级钮 pressed 叠层(亮浅底黑10% / 暗 Dark_button_Normal 黑20%;wave5 §11.1) */
+  overlaySecondaryPressed: string;
 }
 
 /** 登录皮肤双态色板(与桌面 --login-* dark 值同源,DESIGN.md §16.1) */
@@ -245,6 +263,15 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
     loadingRingTrack: 'rgba(42, 40, 40, 0.18)',
     appleCircleBg: '#000000',
     appleLogoInk: '#FFFFFF',
+    consentRadioBg: '#F1F0F1',
+    consentRadioBorder: '#434343',
+    consentRadioCheckedBg: '#2A2828',
+    consentRadioCheck: '#FFFFFF',
+    consentOverlay: 'rgba(0, 0, 0, 0.85)',
+    secondaryButtonBg: '#EEEEEE',
+    secondaryButtonBorder: '#FFFFFF',
+    secondaryButtonText: '#2A2828',
+    overlaySecondaryPressed: 'rgba(0, 0, 0, 0.1)',
   },
   dark: {
     bgBase: '#1F1F1E',
@@ -279,6 +306,15 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
     loadingRingTrack: 'rgba(212, 212, 212, 0.18)',
     appleCircleBg: '#FFFFFF',
     appleLogoInk: '#000000',
+    consentRadioBg: '#2A2828',
+    consentRadioBorder: '#F1F0F1',
+    consentRadioCheckedBg: '#F1F0F1',
+    consentRadioCheck: '#2A2828',
+    consentOverlay: 'rgba(0, 0, 0, 0.85)',
+    secondaryButtonBg: '#434141',
+    secondaryButtonBorder: '#565454',
+    secondaryButtonText: '#EEEEEE',
+    overlaySecondaryPressed: 'rgba(0, 0, 0, 0.2)',
   },
 };
 

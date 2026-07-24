@@ -2758,6 +2758,13 @@
     "localModeOpening": "ローカルモードを開いています...",
     "returnToLocalMode": "ローカルモードに戻る",
     "localModeDescription": "Cindy アカウントは不要です。データはこのデバイスに保存され、クラウドモデル、デバイス間アクセス、マーケットサービスは利用できません。",
+    "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
+    "consentDialog": {
+      "title": "利用規約とプライバシーポリシー",
+      "body": "Cindy の<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、これに同意します。",
+      "agree": "同意する",
+      "disagree": "同意しない"
+    },
     "ssoOrgTitle": "企業 SSO サインイン",
     "ssoOrgSubtitle": "企業 ID、組織 slug、または確認済みドメインを入力してシングルサインオンに進みます",
     "ssoOrgPlaceholder": "企業 ID、組織 slug、または確認済みドメイン",

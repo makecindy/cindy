@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 
+import { PANEL_FIXED_SCALE } from './loginScale';
 import {
   BACK,
+  CONSENT_DIALOG,
+  CONSENT_ROW,
   CONTROL,
   ERROR_TEXT,
   GLOBAL_PILL,
@@ -579,6 +582,318 @@ export function LoginTextLink({
     >
       {children}
     </button>
+  );
+}
+
+/* ── 协议同意族(consent PR;figma wave5 radiobutton 600:627 + 弹窗 602:822) ── */
+
+export type LegalSegment = { kind: 'text' | 'terms' | 'privacy'; text: string };
+
+/**
+ * 解析协议文案里的内联链接标记(`<terms>…</terms>` / `<privacy>…</privacy>`)。
+ * i18n 单 key 保住各语言词序(ja 链接前置、zh/en 链接居中),链接段由代码确定性
+ * 拆分渲染(规则 9),不依赖 react-i18next Trans(仓内无此先例)。
+ */
+export function parseLegalSegments(input: string): LegalSegment[] {
+  const out: LegalSegment[] = [];
+  const re = /<(terms|privacy)>(.*?)<\/\1>/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(input))) {
+    if (match.index > last) out.push({ kind: 'text', text: input.slice(last, match.index) });
+    out.push({ kind: match[1] as 'terms' | 'privacy', text: match[2] });
+    last = match.index + match[0].length;
+  }
+  if (last < input.length) out.push({ kind: 'text', text: input.slice(last) });
+  return out;
+}
+
+/**
+ * 协议声明内联渲染:文本段原样、链接段 = Bold + underline 可点(600:661 span 样式;
+ * 颜色继承所在容器,hover/pressed 走 Text_link 同源 token)。链接点击只开外部
+ * 浏览器,不冒泡到 radio 切换。
+ */
+function LegalStatementText({
+  statement,
+  onOpenTerms,
+  onOpenPrivacy,
+  testIdPrefix,
+}: {
+  statement: string;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
+  testIdPrefix: string;
+}) {
+  return (
+    <>
+      {parseLegalSegments(statement).map((segment, index) => {
+        if (segment.kind === 'text') {
+          // eslint-disable-next-line react/no-array-index-key
+          return <span key={index}>{segment.text}</span>;
+        }
+        const isTerms = segment.kind === 'terms';
+        return (
+          <button
+            // eslint-disable-next-line react/no-array-index-key
+            key={index}
+            type="button"
+            data-testid={`${testIdPrefix}-${segment.kind}-link`}
+            onClick={(event) => {
+              event.stopPropagation();
+              (isTerms ? onOpenTerms : onOpenPrivacy)();
+            }}
+            className={cn(
+              'inline border-0 bg-transparent p-0 font-bold underline',
+              'transition-colors duration-150',
+              'hover:[color:var(--login-link-hover)] active:[color:var(--login-link-pressed)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+            style={{ font: 'inherit', fontWeight: 700, color: 'inherit', cursor: 'pointer' }}
+          >
+            {segment.text}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/** radio 选中对勾(figma 600:632 Group:8.65×5.13 @(8.35,10) stroke 3 round;静态矢量)。 */
+function ConsentCheckGlyph() {
+  const s = CONSENT_ROW.radio.ringSize;
+  return (
+    <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} fill="none" aria-hidden>
+      {/* 圈体坐标系 20×20(命中区 24 内缩 2):勾形按 24 系 (8.35,10)-(17,15.13) 平移 -2 */}
+      <path
+        d="M6.6 10.4 L9.3 12.9 L15 8.2"
+        stroke={LOGIN_COLORS.consentRadioCheck}
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * 协议同意行(figma 600:660:登录组下方 22 设计px,680×40,内容水平居中):
+ * radio(24 命中区,圈 20 r9 + 2px 描边,选中态对勾)+ 声明文字 20 Regular
+ * (login-control-text 双态),「服务条款」「隐私协议」为 Bold underline 内联链接。
+ * radio 态切换只变圈色(transition-colors ≤150ms,规则 7:无布局跳变)。
+ */
+export function LoginConsentRow({
+  checked,
+  onToggle,
+  statement,
+  onOpenTerms,
+  onOpenPrivacy,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  statement: string;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
+}) {
+  const { hitSize, ringSize, ringRadius, ringStroke } = CONSENT_ROW.radio;
+  return (
+    <div
+      data-testid="login-consent-row"
+      className="absolute left-0 flex items-center justify-center"
+      style={{
+        top: CONSENT_ROW.y,
+        width: CONSENT_ROW.width,
+        height: CONSENT_ROW.height,
+        gap: CONSENT_ROW.gap,
+      }}
+    >
+      <button
+        data-testid="login-consent-radio"
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        aria-labelledby="login-consent-statement"
+        onClick={onToggle}
+        className="grid shrink-0 place-items-center border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+        style={{ width: hitSize, height: hitSize, cursor: 'pointer' }}
+      >
+        <span
+          className="grid place-items-center transition-colors duration-150"
+          style={{
+            width: ringSize,
+            height: ringSize,
+            borderRadius: ringRadius,
+            background: checked ? LOGIN_COLORS.consentRadioCheckedBg : LOGIN_COLORS.consentRadioBg,
+            boxShadow: `inset 0 0 0 ${ringStroke}px ${
+              checked ? LOGIN_COLORS.consentRadioCheckedBg : LOGIN_COLORS.consentRadioBorder
+            }`,
+          }}
+        >
+          {checked && <ConsentCheckGlyph />}
+        </span>
+      </button>
+      <span
+        id="login-consent-statement"
+        className="whitespace-nowrap"
+        style={{
+          fontSize: CONSENT_ROW.fontSize,
+          lineHeight: '23px',
+          color: LOGIN_COLORS.controlText,
+        }}
+      >
+        <LegalStatementText
+          statement={statement}
+          onOpenTerms={onOpenTerms}
+          onOpenPrivacy={onOpenPrivacy}
+          testIdPrefix="login-consent"
+        />
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 服务条款弹窗(figma 602:822/602:1249):全屏遮罩黑 85% + 680×380 r36 面板
+ * (login-panel-bg/border 双态复用),标题 Bold 32、正文 26/40(secondary-text,
+ * 内联链接可点),两钮 260×80 r40——不同意 = 次级钮(wave5 双色小按钮),
+ * 同意 = 强调钮(login-primary-button-* 复用)。
+ * 交互:打开即焦点落「同意」(DESIGN.md §14.2);Esc = 不同意;遮罩不可点穿
+ * (协议确认必须显式选择)。面板按恒定 0.5 缩放渲染(与登录面板同口径)。
+ */
+export function LoginConsentDialog({
+  title,
+  body,
+  agreeLabel,
+  disagreeLabel,
+  onAgree,
+  onDisagree,
+  onOpenTerms,
+  onOpenPrivacy,
+}: {
+  title: string;
+  body: string;
+  agreeLabel: string;
+  disagreeLabel: string;
+  onAgree: () => void;
+  onDisagree: () => void;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
+}) {
+  const agreeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    agreeRef.current?.focus();
+  }, []);
+  const { button } = CONSENT_DIALOG;
+  const smallButtonBase = cn(
+    'absolute box-border flex items-center justify-center overflow-hidden font-bold',
+    'after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit]',
+    'after:opacity-0 after:transition-opacity after:content-[""]',
+  );
+  return (
+    <div
+      data-testid="login-consent-dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="login-consent-dialog-title"
+      aria-describedby="login-consent-dialog-body"
+      className="fixed inset-0 z-50 grid place-items-center"
+      style={{ background: LOGIN_COLORS.consentOverlay }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onDisagree();
+      }}
+    >
+      <div
+        className="relative"
+        style={{
+          width: CONSENT_DIALOG.width,
+          height: CONSENT_DIALOG.height,
+          borderRadius: CONSENT_DIALOG.radius,
+          background: LOGIN_COLORS.panelBg,
+          boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}`,
+          transform: `scale(${PANEL_FIXED_SCALE})`,
+        }}
+      >
+        <div
+          id="login-consent-dialog-title"
+          className="absolute left-0 whitespace-nowrap text-center font-bold"
+          style={{
+            top: CONSENT_DIALOG.title.y,
+            width: CONSENT_DIALOG.width,
+            height: CONSENT_DIALOG.title.height,
+            lineHeight: `${CONSENT_DIALOG.title.height}px`,
+            fontSize: CONSENT_DIALOG.title.fontSize,
+            color: LOGIN_COLORS.titleText,
+          }}
+        >
+          {title}
+        </div>
+        <div
+          id="login-consent-dialog-body"
+          className="absolute text-center"
+          style={{
+            left: CONSENT_DIALOG.body.x,
+            top: CONSENT_DIALOG.body.y,
+            width: CONSENT_DIALOG.body.width,
+            fontSize: CONSENT_DIALOG.body.fontSize,
+            lineHeight: `${CONSENT_DIALOG.body.lineHeight}px`,
+            color: LOGIN_COLORS.secondaryText,
+          }}
+        >
+          <LegalStatementText
+            statement={body}
+            onOpenTerms={onOpenTerms}
+            onOpenPrivacy={onOpenPrivacy}
+            testIdPrefix="login-consent-dialog"
+          />
+        </div>
+        <button
+          data-testid="login-consent-disagree"
+          type="button"
+          onClick={onDisagree}
+          className={cn(
+            smallButtonBase,
+            'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-secondary-hover)]',
+            'active:after:opacity-100 active:after:bg-[var(--login-overlay-secondary-pressed)]',
+          )}
+          style={{
+            left: button.disagreeX,
+            top: button.y,
+            width: button.width,
+            height: button.height,
+            borderRadius: button.radius,
+            fontSize: button.fontSize,
+            background: LOGIN_COLORS.secondaryButtonBg,
+            border: `1px solid ${LOGIN_COLORS.secondaryButtonBorder}`,
+            color: LOGIN_COLORS.secondaryButtonText,
+          }}
+        >
+          <span className="relative z-[1]">{disagreeLabel}</span>
+        </button>
+        <button
+          ref={agreeRef}
+          data-testid="login-consent-agree"
+          type="button"
+          onClick={onAgree}
+          className={cn(
+            smallButtonBase,
+            'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-button-hover)]',
+            'active:after:opacity-100 active:after:bg-[var(--login-overlay-button-pressed)]',
+          )}
+          style={{
+            left: button.agreeX,
+            top: button.y,
+            width: button.width,
+            height: button.height,
+            borderRadius: button.radius,
+            fontSize: button.fontSize,
+            background: LOGIN_COLORS.primaryButtonBg,
+            border: `1px solid ${LOGIN_COLORS.primaryButtonBorder}`,
+            color: LOGIN_COLORS.primaryButtonText,
+          }}
+        >
+          <span className="relative z-[1]">{agreeLabel}</span>
+        </button>
+      </div>
+    </div>
   );
 }
 

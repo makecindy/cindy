@@ -385,6 +385,41 @@ export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size
 /** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20)。 */
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20 } as const;
 
+/**
+ * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):
+ * 行 680×40 @登录组下方 22 设计px(组高 560 → 行顶 y=582);radio 命中区 24、
+ * 圈体 20 r9 + 2px 描边(选中态为对勾);文字 20 Regular,radio-文字间距 6.5。
+ * 行内容水平居中(文字宽随语言变化,flex 居中,几何语义与稿等价)。
+ */
+export const LOGIN_CONSENT_ROW = {
+  y: 582,
+  width: 680,
+  height: 40,
+  gap: 6.5,
+  font: 20,
+  /** 声明文字行高(figma 600:661 文本框 23 高,与桌面协议行同值) */
+  textLineHeight: 23,
+  /** 行底(622)超出登录组(560)的设计 px,安全区抬升按此追加预留 */
+  bottomOverflow: 62,
+  /** 对勾线宽 3(figma 600:632 stroke-width 3 round,设计 px) */
+  radio: { hitSize: 24, ringSize: 20, ringRadius: 9, ringStroke: 2, checkStroke: 3 },
+} as const;
+
+/**
+ * 服务条款弹窗(consent PR;figma 602:822/602:1249,与桌面 CONSENT_DIALOG 同参数源):
+ * 面板 680×380 r36(panelBg/panelBorder 双态);标题 Bold 32 @y31;正文 26/40
+ * @(41,122) w599 居中;两钮 260×80 r40 @y260——不同意 x70(次级钮)/ 同意 x350
+ * (强调钮 = primaryButton 族)。遮罩 = consentOverlay 黑 85% 全屏。
+ */
+export const LOGIN_CONSENT_DIALOG = {
+  width: 680,
+  height: 380,
+  radius: 36,
+  title: { y: 31, height: 38, font: 32 },
+  body: { x: 41, y: 122, width: 599, font: 26, textLineHeight: 40 },
+  button: { y: 260, width: 260, height: 80, radius: 40, font: 24, disagreeX: 70, agreeX: 350 },
+} as const;
+
 // 态叠层 / 浅底钮白描边 / loading 环底圈色:原 LOGIN_PRESSED_OVERLAY /
 // LOGIN_INVERTED_BORDER / LOGIN_RING_TRACK 字面常量已随暗色实现 PR 并入
 // `LoginSkinColors` 双态色板(overlayButtonPressed / overlayControlPressed /

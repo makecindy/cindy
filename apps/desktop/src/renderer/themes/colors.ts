@@ -661,6 +661,60 @@ registerColor('login-loading-ring-track', {
   dark: 'rgba(212, 212, 212, 0.18)',
 }, 'Login — loading 环轨(亮色深半透 / 暗色浅半透 推导,待 Figma)');
 
+// ── Login 协议同意族(consent PR;figma wave5 radiobutton 600:627 四态 +
+// 服务条款弹窗 602:822/602:1249 + 双色小按钮四母版 602:846/863/1297/1311)──
+// 与 login-* 族同口径:随基础 light/dark 二态切换,扩展主题不 override。
+// radio 选中态为对勾(非圆点),四态双模式反色,色值经 figma SVG 源码直读核对。
+registerColor('login-consent-radio-bg', {
+  light: '#F1F0F1',
+  dark: '#2A2828',
+}, 'Login — 协议 radio 未选中圈底(figma white_normal 600:626 / Dark_normal 602:1091)');
+registerColor('login-consent-radio-border', {
+  light: '#434343',
+  dark: '#F1F0F1',
+}, 'Login — 协议 radio 未选中 2px 描边(双模式反色)');
+registerColor('login-consent-radio-checked-bg', {
+  light: '#2A2828',
+  dark: '#F1F0F1',
+}, 'Login — 协议 radio 选中圈底(figma white_highlight 600:628 / Dark_highlight 602:1093)');
+registerColor('login-consent-radio-check', {
+  light: '#FFFFFF',
+  dark: '#2A2828',
+}, 'Login — 协议 radio 选中对勾(亮色白勾 / 暗色墨勾)');
+registerColor('login-consent-overlay', {
+  light: 'rgba(0, 0, 0, 0.85)',
+  dark: 'rgba(0, 0, 0, 0.85)',
+}, 'Login — 协议弹窗全屏遮罩(两模式同值黑 85%;figma 602:820/602:1248 实测)');
+// 弹窗次级钮(「不同意」):亮模式浅底 light_button_Normal(602:863),暗模式
+// Dark_button_Normal(602:1311,#434141 与面板 #312F2F/描边 #434343 均不同值)。
+// 「同意」钮 = 强调钮,双模式恰与 login-primary-button-* 同值,直接复用不新增。
+registerColor('login-secondary-button-bg', {
+  light: '#EEEEEE',
+  dark: '#434141',
+}, 'Login — 弹窗次级钮底(亮 #EEEEEE / 暗 #434141;figma 双色小按钮 wave5)');
+registerColor('login-secondary-button-border', {
+  light: '#FFFFFF',
+  dark: '#565454',
+}, 'Login — 弹窗次级钮 1px 描边(亮白 / 暗 #565454)');
+registerColor('login-secondary-button-text', {
+  light: '#2A2828',
+  dark: '#EEEEEE',
+}, 'Login — 弹窗次级钮文字(亮墨 / 暗浅,双模式反色)');
+// wave5 hover/pressed 统一口径:hover = 底叠白(深底 8% / 浅底 10%);
+// pressed = 叠黑(浅底钮 10% / Dark_button_Normal 20%)。次级钮亮浅暗深,
+// 两模式叠层参数不同故二态注册(与 login-overlay-* 族同理)。
+registerColor('login-overlay-secondary-hover', {
+  light: 'rgba(255, 255, 255, 0.1)',
+  dark: 'rgba(255, 255, 255, 0.08)',
+}, 'Login — 弹窗次级钮 hover 叠层(亮浅底白10% / 暗深底白8%;wave5 §11.1)');
+registerColor('login-overlay-secondary-pressed', {
+  light: 'rgba(0, 0, 0, 0.1)',
+  dark: 'rgba(0, 0, 0, 0.2)',
+}, 'Login — 弹窗次级钮 pressed 叠层(亮浅底黑10% / 暗 Dark_button_Normal 黑20%;wave5 §11.1)');
+
+// Apple 登录圆钮(App Store Guideline 4 对齐,用户标准图 2026-07-24):亮色模式 =
+// ADR Black button 配色(纯黑圆 + 白标),暗色模式 = ADR White button 配色
+// (纯白圆 + 黑标),无描边。语义豁免:官方按钮配色,扩展主题不 override。
 registerColor('login-apple-circle-bg', {
   light: '#000000',
   dark: '#FFFFFF',

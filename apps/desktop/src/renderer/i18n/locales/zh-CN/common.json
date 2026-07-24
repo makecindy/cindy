@@ -2758,6 +2758,13 @@
     "localModeOpening": "正在打开本地模式...",
     "returnToLocalMode": "返回本地模式",
     "localModeDescription": "无需 Cindy 账号，数据保存在本机。云模型、跨设备与市场服务不可用。",
+    "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
+    "consentDialog": {
+      "title": "服务条款和隐私协议",
+      "body": "已阅读并同意 Cindy 的以下协议：<terms>服务条款</terms>、<privacy>隐私协议</privacy>",
+      "agree": "同意",
+      "disagree": "不同意"
+    },
     "ssoOrgTitle": "企业 SSO 登录",
     "ssoOrgSubtitle": "输入企业 ID、组织 slug 或已验证域名，跳转到企业单点登录",
     "ssoOrgPlaceholder": "请输入企业 ID、组织 slug 或已验证域名",

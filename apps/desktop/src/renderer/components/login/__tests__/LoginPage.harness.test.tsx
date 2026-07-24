@@ -167,13 +167,18 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.getByTestId('login-social-row')).toBeTruthy();
   });
 
-  it('本地模式入口挂在登录 stage footer，不再脱离内容固定到底部', async () => {
+  it('identifier 视图:协议行挂在登录组内(y=582),游客圆钮取代 footer 入口', async () => {
     mount(await identifierState('providers:both'));
-    const footer = screen.getByTestId('login-stage-footer');
-    expect(footer.contains(screen.getByTestId('login-local-mode'))).toBe(true);
-    const description = screen.getByText('login.localModeDescription');
-    expect(footer.contains(description)).toBe(true);
-    expect(description.className).toContain('line-clamp-2');
+    // 协议同意行(consent PR):登录组坐标 y=582(圆钮行下方 22 设计px),radio 初始未勾选
+    const row = screen.getByTestId('login-consent-row');
+    expect(screen.getByTestId('login-group').contains(row)).toBe(true);
+    expect(row.style.top).toBe('582px');
+    expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
+    // 游客入口 = 社交行最后一颗人形圆钮;identifier 步不再渲染 footer(仅 error 步保留逃生入口)
+    const socialRow = screen.getByTestId('login-social-row');
+    expect(socialRow.lastElementChild).toBe(screen.getByTestId('login-social-guest'));
+    expect(screen.queryByTestId('login-stage-footer')).toBeNull();
+    expect(screen.queryByTestId('login-local-mode')).toBeNull();
   });
 
   it('providers:phone-only → 无 tabs,placeholder 为手机号', async () => {
@@ -192,12 +197,14 @@ describe('identifier 态(附录 A providers 场景)', () => {
     );
   });
 
-  it('providers:cn-social → 圆钮行 = Apple + SSO(SSO 恒为行内最后一颗)', async () => {
+  it('providers:cn-social → 圆钮行 = Apple + SSO + 游客(游客恒为行内最后一颗,SSO 次末)', async () => {
     mount(await identifierState('providers:cn-social'));
     const row = screen.getByTestId('login-social-row');
     expect(screen.getByTestId('login-social-apple')).toBeTruthy();
     expect(screen.queryByTestId('login-social-google')).toBeNull();
-    expect(row.lastElementChild).toBe(screen.getByTestId('login-social-sso'));
+    // consent PR:游客人形圆钮追加为行内最后一颗(figma 600:655 顺序 Apple→SSO→游客)
+    expect(row.lastElementChild).toBe(screen.getByTestId('login-social-guest'));
+    expect(row.children[row.children.length - 2]).toBe(screen.getByTestId('login-social-sso'));
   });
 
   it('providers:global-social → 圆钮行 = Apple + Google + SSO,region=global(不冒充构建区域)', async () => {
@@ -320,8 +327,10 @@ describe('SC-SOC-7 圆钮 in-flight guard', () => {
     expect(loginHook.value.dispatch).not.toHaveBeenCalled();
   });
 
-  it('isLoading=false 时点 Apple 圆钮 → 正常派发 start-browser(social, apple)', async () => {
+  it('isLoading=false 且已勾选协议时点 Apple 圆钮 → 正常派发 start-browser(social, apple)', async () => {
     mount(await identifierState('providers:cn-social'), { isLoading: false });
+    // consent PR:个人链路先过协议门,勾选 radio 后点击直接派发(未勾选路径见 consent 专测)
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
     fireEvent.click(screen.getByTestId('login-social-apple'));
     expect(loginHook.value.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({

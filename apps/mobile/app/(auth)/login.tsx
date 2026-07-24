@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Linking, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
@@ -28,6 +28,7 @@ import { computeLoginKeyboardShift } from '@/auth/loginKeyboardAvoidance';
 import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
 import {
   createResendDeadline,
+  LOGIN_CONSENT_ROW,
   LOGIN_CONTROL,
   LOGIN_ERROR_TEXT,
   LOGIN_GROUP,
@@ -37,9 +38,12 @@ import {
   LOGIN_TITLE,
   type LoginSurfaceMode,
 } from '@/auth/loginSkinLayout';
+import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useLoginKeyboardRect } from '@/session/useMobileKeyboardState';
 import {
   LoginBackButton,
+  LoginConsentDialog,
+  LoginConsentRow,
   LoginErrorText,
   LoginLoadingRing,
   LoginMethodRow,
@@ -107,6 +111,41 @@ export default function LoginScreen() {
   // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态)
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
+  /* ── 协议同意链路(consent PR,与桌面 LoginPage 同源语义):radio 状态 +
+     未勾选拦截弹窗 + 同意后续接。所有个人登录入口(国内手机号/国际邮箱/
+     Apple/Google/微信)统一过 requireConsent;企业 SSO 全豁免(产品拍板);
+     手机端无游客登录(远程连接客户端必须有账号,产品拍板 2026-07-24)。
+     pending 动作只存本组件(不进 AuthContext 状态机;仓规 9 代码状态机化)。 ── */
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
+  const pendingConsentAction = useRef<(() => void) | null>(null);
+  const requireConsent = (action: () => void) => {
+    if (consentAccepted) {
+      action();
+      return;
+    }
+    pendingConsentAction.current = action;
+    setConsentDialogOpen(true);
+  };
+  const agreeConsent = () => {
+    // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
+    setConsentAccepted(true);
+    setConsentDialogOpen(false);
+    const run = pendingConsentAction.current;
+    pendingConsentAction.current = null;
+    run?.();
+  };
+  const dismissConsent = () => {
+    // 不同意 = 退回登录页,radio 保持未勾选
+    pendingConsentAction.current = null;
+    setConsentDialogOpen(false);
+  };
+  const openLegalLink = (kind: 'terms' | 'privacy') => {
+    // 系统默认浏览器打开(settings.tsx 同款 Linking 模式);URL 按构建区域分流
+    void Linking.openURL(
+      kind === 'terms' ? LEGAL_LINKS.termsOfService : LEGAL_LINKS.privacyPolicy,
+    ).catch(() => undefined);
+  };
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
@@ -324,7 +363,10 @@ export default function LoginScreen() {
           return;
         }
         setIdentifierFormatError(null);
-        void auth.dispatchLoginAction({ type: 'discover', email: value });
+        // 个人登录链路过协议门:未勾选先弹同意弹窗,同意后续接本次 discover
+        requireConsent(() =>
+          void auth.dispatchLoginAction({ type: 'discover', email: value }),
+        );
       } else {
         // 手机号登录只支持中国大陆号码:UI 固定 +86,输入框只存本地号,提交时拼回完整号码。
         // 号段不合法本地拦截并提示「请输入正确手机号」(设计稿同款红边+红字)。
@@ -334,11 +376,13 @@ export default function LoginScreen() {
           return;
         }
         setIdentifierFormatError(null);
-        void auth.dispatchLoginAction({
-          type: 'request-code',
-          kind: 'phone',
-          identifier: toCnE164(identifier),
-        });
+        requireConsent(() =>
+          void auth.dispatchLoginAction({
+            type: 'request-code',
+            kind: 'phone',
+            identifier: toCnE164(identifier),
+          }),
+        );
       }
     };
     // 本地格式错误优先展示(设计稿「请输入正确邮箱/手机号」),否则回退 server 错误文案。
@@ -429,10 +473,13 @@ export default function LoginScreen() {
               onPress={() => {
                 // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
                 if (disabled) return;
-                void auth.dispatchLoginAction({
-                  type: 'native-social',
-                  provider: 'apple',
-                });
+                // Apple 属个人登录链路,过协议门(未勾选先弹协议弹窗,同意后续接原路径)
+                requireConsent(() =>
+                  void auth.dispatchLoginAction({
+                    type: 'native-social',
+                    provider: 'apple',
+                  }),
+                );
               }}
               testID="login.appleButton"
             >
@@ -448,10 +495,13 @@ export default function LoginScreen() {
                 // SC-SOC-7: in-flight(disabled)期间 no-op 防重复发起;行为层 guard,
                 // 零视觉变化(圆钮已无 disabled 态 per §10 拍板,不回填 disabled 视觉)。
                 if (disabled) return;
-                void auth.dispatchLoginAction({
-                  type: 'native-social',
-                  provider,
-                });
+                // Google/微信属个人登录链路,过协议门;同意后续接本次 native-social
+                requireConsent(() =>
+                  void auth.dispatchLoginAction({
+                    type: 'native-social',
+                    provider,
+                  }),
+                );
               }}
               // 对象展开保持 testID: 键形态(mobileAuthServerLogin 守护测试锚定该字面)
               {...{ testID: `login.${provider}Button` }}
@@ -459,7 +509,8 @@ export default function LoginScreen() {
               <LoginSocialGlyph provider={provider} />
             </LoginSocialButton>
           ))}
-          {/* 企业 SSO 入口:输入组织标识 发起单点登录(国内版隐藏邮箱后企业用户的登录路径) */}
+          {/* 企业 SSO 入口:输入组织标识 发起单点登录(国内版隐藏邮箱后企业用户的登录路径)。
+              企业 SSO 豁免协议门(产品拍板),不过 requireConsent。 */}
           <LoginSocialButton
             label={loginText('ssoEntry')}
             busy={auth.isBusy}
@@ -474,6 +525,15 @@ export default function LoginScreen() {
             <LoginSocialGlyph provider="sso" />
           </LoginSocialButton>
         </LoginSocialRow>
+        {/* 协议同意行(figma 600:660:圆钮行下方 22 设计px,组坐标 y=582;
+            仅 identifier 主视图渲染,与安全区抬升的 consent 追加量同条件) */}
+        <LoginConsentRow
+          checked={consentAccepted}
+          onToggle={() => setConsentAccepted((prev) => !prev)}
+          statement={loginText('consentStatement')}
+          onOpenTerms={() => openLegalLink('terms')}
+          onOpenPrivacy={() => openLegalLink('privacy')}
+        />
       </>
     );
   };
@@ -935,9 +995,15 @@ export default function LoginScreen() {
   const groupLeftPx = stage.offsetX + stage.loginX * stage.scale;
   const groupTopPxRaw = stage.offsetY + stage.loginY * stage.scale;
   const bottomLimitPx = stage.viewportHeight - insets.bottom;
+  // consent PR:identifier 主视图下方多出协议行(行底 622 超出组高 560 共 62 设计px),
+  // 安全区抬升按实际最低内容计算,保证协议行不被 bottom inset 裁切。
+  const showConsentRow =
+    auth.loginState?.step === 'identifier' && !ssoOrgMode && configIssues.length === 0;
+  const flowBottomDesignPx =
+    loginSizes.flowHeight + (showConsentRow ? LOGIN_CONSENT_ROW.bottomOverflow : 0);
   const liftPx = Math.max(
     0,
-    groupTopPxRaw + loginSizes.flowHeight * groupScale - bottomLimitPx,
+    groupTopPxRaw + flowBottomDesignPx * groupScale - bottomLimitPx,
   );
   const groupTopPx = Math.max(0, groupTopPxRaw - liftPx);
 
@@ -1073,6 +1139,22 @@ export default function LoginScreen() {
           </Animated.View>
         </View>
       </View>
+      {/* 服务条款和隐私协议确认弹窗(figma 602:822/602:1249):个人登录链路在
+          radio 未勾选时统一拦截;同意=勾选并续接,不同意=留在登录页。stage 内
+          全屏遮罩(继承首启亮色门主题上下文),zIndex 盖过登录组。 */}
+      {consentDialogOpen ? (
+        <LoginConsentDialog
+          scale={groupScale}
+          title={loginText('consentDialogTitle')}
+          body={loginText('consentDialogBody')}
+          agreeLabel={loginText('consentAgree')}
+          disagreeLabel={loginText('consentDisagree')}
+          onAgree={agreeConsent}
+          onDisagree={dismissConsent}
+          onOpenTerms={() => openLegalLink('terms')}
+          onOpenPrivacy={() => openLegalLink('privacy')}
+        />
+      ) : null}
     </MobileLoginHandoffStage>
   );
 }
