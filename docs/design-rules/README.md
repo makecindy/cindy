@@ -12,5 +12,9 @@
 
 ## 当前规范
 
-- [`DESIGN.md`](../../DESIGN.md)：Cindy 的视觉语言、颜色与主题 Token、排版、组件、
-  布局、动效、交互和内容规范。`cindy-design-system.md` 仅保留为历史引用兼容入口。
+- 设计文档一律放本目录，索引与版本台账见
+  [`cindy-design-system.md`](./cindy-design-system.md)。
+- 权威视觉规范正本为 [`DESIGN.md`](./DESIGN.md)（视觉语言、颜色与主题 Token、排版、
+  组件、布局、动效、交互、内容规范、登录链路）；仓库根 `DESIGN.md` 仅为跳转入口。
+- 登录域逐参数与 token 决策见 [`figma-component-spec.md`](./figma-component-spec.md)
+  与 [`token-decision-table.md`](./token-decision-table.md)。
