@@ -14,10 +14,7 @@ import { isValidEmail } from '@cindy/auth-client';
 import { cn } from '@/lib/utils';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useLogin } from '@/hooks/useLogin';
-import {
-  endLoginFirstLaunchLightGate,
-  loginFirstLaunchLightActive,
-} from '@/hooks/useTheme';
+import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
 
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
@@ -801,29 +798,28 @@ export function LoginPage() {
       ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}, transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
       : undefined,
   };
-  const localModeFooter =
-    showLocalModeFooter ? (
-      <>
-        <button
-          data-testid="login-local-mode"
-          type="button"
-          disabled={localModePending || isLoading}
-          onClick={() => void openLocalMode()}
-          aria-describedby="login-local-mode-description"
-          className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-          style={{ minHeight: 40 }}
-        >
-          {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
-        </button>
-        <span
-          id="login-local-mode-description"
-          className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
-          style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
-        >
-          {t('login.localModeDescription')}
-        </span>
-      </>
-    ) : null;
+  const localModeFooter = showLocalModeFooter ? (
+    <>
+      <button
+        data-testid="login-local-mode"
+        type="button"
+        disabled={localModePending || isLoading}
+        onClick={() => void openLocalMode()}
+        aria-describedby="login-local-mode-description"
+        className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+        style={{ minHeight: 40 }}
+      >
+        {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+      </button>
+      <span
+        id="login-local-mode-description"
+        className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
+        style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
+      >
+        {t('login.localModeDescription')}
+      </span>
+    </>
+  ) : null;
 
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
