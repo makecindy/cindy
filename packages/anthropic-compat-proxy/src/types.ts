@@ -23,6 +23,14 @@ export interface RequestTransformCtx {
   readonly method: string;
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * 本请求**最终**发往的上游 baseURL(routingTransform 的 per-request override 已生效,
+   * 与 ResponseObserverCtx.upstreamBase 同构)。仅在请求 transform 链的 ctx 里出现;
+   * routingTransform / localHandler 的 ctx 中为 undefined(路由尚未/无需解析)。
+   * 供「按目标上游做兼容改写」的 transform 使用(如跨供应商时转换上游读不懂的历史项),
+   * 避免 host 侧为判断路由去向而复刻整套路由逻辑。
+   */
+  readonly upstreamBase?: string;
 }
 
 /**

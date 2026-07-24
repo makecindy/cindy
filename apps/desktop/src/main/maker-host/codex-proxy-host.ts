@@ -602,6 +602,62 @@ function createXaiResponsesCompatTransform(): RequestTransform {
   };
 }
 
+/**
+ * 跨来源恢复的加密压缩历史兼容(Greptile P1, PR #265):
+ *
+ * OpenAI 远端压缩会把早期历史替换成加密 compaction 块(只有 ChatGPT 后端能解)。
+ * 该会话切到 XD / xAI / 自定义供应商后按原 thread id resume,持久化历史里的加密块
+ * 会被逐请求重放给读不懂它的上游 → 请求被拒、会话卡死。客户端无法解密转换,
+ * 唯一可行的降级是:发往**非 ChatGPT 上游**时把加密块替换成明文占位 user message,
+ * 明确告知模型「压缩点之前的上下文不可用」,保留压缩点之后仍在历史里的对话继续跑。
+ * 判断去向用 ctx.upstreamBase(引擎按最终路由注入),不复刻路由逻辑。
+ * ChatGPT 路由(chatgpt.com)原样透传,远端压缩语义不受影响。
+ */
+const COMPACTION_UNAVAILABLE_NOTE =
+  '[context note] Earlier conversation history was compacted into an encrypted snapshot by the ' +
+  'OpenAI subscription backend and is not readable on the current model provider. Treat the ' +
+  'conversation from this point on as the available context; ask the user if earlier details are needed.';
+
+function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
+  if (!upstreamBase) return false;
+  try {
+    return new URL(upstreamBase).hostname === new URL(CODEX_OAUTH_UPSTREAM).hostname;
+  } catch {
+    return false;
+  }
+}
+
+export function createCrossProviderCompactionCompatTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+    // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
+    // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
+    if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
+    let changed = false;
+    const input = body.input.map((item) => {
+      if (
+        isPlainObject(item) &&
+        (item.type === 'compaction' || item.type === 'context_compaction')
+      ) {
+        changed = true;
+        return {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: COMPACTION_UNAVAILABLE_NOTE }],
+        };
+      }
+      return item;
+    });
+    if (!changed) return null;
+    log.info('replaced encrypted compaction history for non-ChatGPT upstream', {
+      reqId: ctx.reqId,
+      upstreamBase: ctx.upstreamBase,
+      threadId: selectedThreadIdFromHeaders(ctx.headers),
+    });
+    return { ...body, input };
+  };
+}
+
 const MINIMAX_RESPONSES_UPSTREAMS: ReadonlySet<string> = new Set([
   'https://api.minimaxi.com/v1',
   'https://api.minimax.io/v1',
@@ -952,6 +1008,9 @@ function createTransformRequestChain(): RequestTransform[] {
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
+    // 针对具体供应商的 input 归一化才能按标准 message 处理它。
+    createCrossProviderCompactionCompatTransform(),
     createXaiResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),

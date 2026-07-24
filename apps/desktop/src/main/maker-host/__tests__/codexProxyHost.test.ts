@@ -172,6 +172,59 @@ describe('codex gateway config', () => {
   });
 });
 
+describe('createCrossProviderCompactionCompatTransform', () => {
+  const CTX_BASE = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 't-1' } };
+  const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
+  const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
+  const userMessage = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+
+  it('把加密压缩块替换为明文占位 message(非 ChatGPT 上游)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      { model: 'gpt-5.5', input: [compactionItem, contextCompactionItem, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out).not.toBeNull();
+    expect(out.input).toHaveLength(3);
+    expect(out.input[0].type).toBe('message');
+    expect(out.input[1].type).toBe('message');
+    expect(JSON.stringify(out.input)).not.toContain('ENC');
+    expect(JSON.stringify(out.input[0])).toContain('compacted into an encrypted snapshot');
+    // 压缩点之后的原有消息原样保留
+    expect(out.input[2]).toEqual(userMessage);
+  });
+
+  it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'gpt-5.5', input: [compactionItem, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
+    )).toBeNull();
+  });
+
+  it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform({ model: 'gpt-5.5', input: [compactionItem] }, CTX_BASE)).toBeNull();
+  });
+
+  it('无压缩块时零改写', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'codex/gpt-5.5', input: [userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
+  });
+});
+
 describe('decideCodexRoute', () => {
   const CHATGPT = 'https://chatgpt.com/backend-api/codex';
 
@@ -389,8 +442,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -945,7 +998,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(8); // encrypted activeStrip, image generation activeStrip, instructions 注入, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(9); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

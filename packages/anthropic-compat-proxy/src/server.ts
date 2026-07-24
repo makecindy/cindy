@@ -1125,7 +1125,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       });
     }
 
-    const transformed = runTransforms(rawBody, contentType, transforms, requestCtx, logger);
+    // transform 链的 ctx 附带最终上游(override 已生效):按目标上游做兼容改写的
+    // transform 据此判断去向,不必在 host 侧复刻路由逻辑。
+    const transformCtx: RequestTransformCtx = {
+      ...requestCtx,
+      upstreamBase: formatUpstreamBase(route.target),
+    };
+    const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
     if (transformed) {
