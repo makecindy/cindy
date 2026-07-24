@@ -97,6 +97,18 @@ describe('parseOutboundProxyUrl', () => {
     expect(parseOutboundProxyUrl(undefined)).toBeNull();
   });
 
+  it('unbrackets IPv6 proxy hostnames for TCP connect while keeping the bracketed url form', () => {
+    // WHATWG URL.hostname 对 IPv6 带方括号;connect host 必须是裸地址(回归:
+    // 带括号的 hostname 直接交给 net.connect 会解析失败)。
+    const parsed = parseOutboundProxyUrl('http://[::1]:7890');
+    expect(parsed).toEqual({
+      url: 'http://[::1]:7890',
+      hostname: '::1',
+      port: 7890,
+      authHeader: undefined,
+    });
+  });
+
   it('never throws on malformed percent-encoding in userinfo (regression: URIError escaped fail-open)', () => {
     const parsed = parseOutboundProxyUrl('http://user%GG:pa%ZZss@127.0.0.1:8080');
     expect(parsed?.hostname).toBe('127.0.0.1');

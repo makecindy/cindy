@@ -118,7 +118,9 @@ export function parseOutboundProxyUrl(raw: string | null | undefined): OutboundP
     const pass = u.password ? safeDecodeUserinfo(u.password) : '';
     authHeader = `Basic ${Buffer.from(`${user}:${pass}`, 'utf8').toString('base64')}`;
   }
-  return { url: `http://${u.host}`, hostname: u.hostname, port, authHeader };
+  // hostname 去掉 IPv6 方括号:它会被直接用作 TCP connect host(net/tls 只认裸地址);
+  // url 保留带括号的 u.host 形态(仅用于日志与 pool key)。
+  return { url: `http://${u.host}`, hostname: stripIpv6Brackets(u.hostname), port, authHeader };
 }
 
 /** 把可能带凭证的代理地址脱敏成可进日志的形式(只留 scheme://host:port)。 */
