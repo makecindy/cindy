@@ -19,6 +19,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import type {
   BillingCatalog,
   BillingCatalogOffer,
+  BillingCatalogOfferUnavailableReason,
   BillingCatalogProduct,
   BillingPendingPlanChange,
   BillingPurchaseOption,
@@ -42,7 +43,7 @@ import {
 import { useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 
-type PurchasableOffer = {
+type CatalogOfferEntry = {
   product: BillingCatalogProduct;
   offer: BillingCatalogOffer;
   purchaseOptions: SupportedPurchaseOption[];
@@ -128,6 +129,30 @@ function formatLedgerTimestamp(value: string): string {
 
 function isCustomTopup(offer: BillingCatalogOffer): boolean {
   return offer.amount === null && offer.minAmount !== null && offer.maxAmount !== null;
+}
+
+function hasServerAvailabilityProjection(offer: BillingCatalogOffer): boolean {
+  return (
+    offer.salesState !== undefined &&
+    offer.purchasable !== undefined &&
+    offer.unavailableReason !== undefined
+  );
+}
+
+function isCatalogOfferVisible(entry: CatalogOfferEntry): boolean {
+  return hasServerAvailabilityProjection(entry.offer) || entry.purchaseOptions.length > 0;
+}
+
+function isCatalogOfferPurchasable(entry: CatalogOfferEntry): boolean {
+  if (!hasServerAvailabilityProjection(entry.offer)) return entry.purchaseOptions.length > 0;
+  return entry.offer.purchasable === true && entry.purchaseOptions.length > 0;
+}
+
+function catalogOfferUnavailableReason(
+  entry: CatalogOfferEntry,
+): BillingCatalogOfferUnavailableReason | null {
+  if (isCatalogOfferPurchasable(entry)) return null;
+  return entry.offer.unavailableReason ?? 'NO_AVAILABLE_PAYMENT_CHANNEL';
 }
 
 function isSupportedPurchaseOption(
@@ -281,7 +306,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   );
   const planChange = usePlanChange(accountId, handlePlanChangeSettled);
 
-  const offers = useMemo<PurchasableOffer[]>(() => {
+  const offers = useMemo<CatalogOfferEntry[]>(() => {
     if (!catalog) return [];
     return catalog.products
       .flatMap((product) =>
@@ -295,7 +320,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             : [],
         })),
       )
-      .filter(({ purchaseOptions }) => purchaseOptions.length > 0)
+      .filter(isCatalogOfferVisible)
       .sort((left, right) => {
         const productOrder = left.product.sortOrder - right.product.sortOrder;
         if (productOrder !== 0) return productOrder;
@@ -313,7 +338,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   );
 
   const selected = useMemo(
-    () => offers.find(({ offer }) => offer.code === selectedOfferCode) ?? null,
+    () =>
+      offers.find(
+        (entry) => entry.offer.code === selectedOfferCode && isCatalogOfferPurchasable(entry),
+      ) ?? null,
     [offers, selectedOfferCode],
   );
   const selectedOption = useMemo(
@@ -324,7 +352,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   useEffect(() => {
     if (!selectedOfferCode) return;
-    if (!offers.some(({ offer }) => offer.code === selectedOfferCode)) {
+    const selectedEntry = offers.find(({ offer }) => offer.code === selectedOfferCode);
+    if (!selectedEntry || !isCatalogOfferPurchasable(selectedEntry)) {
       resetSelection();
     }
   }, [offers, resetSelection, selectedOfferCode]);
@@ -403,13 +432,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const currentProvider = currentSubscription?.provider ?? null;
     return subscriptionOffers
       .filter(
-        ({ product, offer }) =>
-          offer.interval === currentPlan.offer.interval &&
-          offer.code !== currentPlan.offer.code &&
-          product.level !== null &&
-          product.level !== currentPlan.product.level &&
+        (entry) =>
+          isCatalogOfferPurchasable(entry) &&
+          entry.offer.interval === currentPlan.offer.interval &&
+          entry.offer.code !== currentPlan.offer.code &&
+          entry.product.level !== null &&
+          entry.product.level !== currentPlan.product.level &&
           (currentProvider === null ||
-            offer.purchaseOptions.some((option) => option.provider === currentProvider)),
+            entry.purchaseOptions.some((option) => option.provider === currentProvider)),
       )
       .map(({ product, offer }) => ({
         product,
@@ -432,6 +462,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const selectOffer = (offerCode: string) => {
     if (selectedOfferCode === offerCode) return;
+    const entry = offers.find(({ offer }) => offer.code === offerCode);
+    if (!entry || !isCatalogOfferPurchasable(entry)) return;
     setSelectedOfferCode(offerCode);
     setSelectedPurchaseOptionId(null);
     setCustomAmount('');
@@ -1111,10 +1143,10 @@ function BillingOfferDialog({
 }: {
   open: boolean;
   kind: PurchaseKind;
-  offers: PurchasableOffer[];
+  offers: CatalogOfferEntry[];
   loading: boolean;
   catalogError: boolean;
-  selected: PurchasableOffer | null;
+  selected: CatalogOfferEntry | null;
   selectedPurchaseOptionId: string | null;
   customAmount: string;
   amountError: string | null;
@@ -1196,19 +1228,23 @@ function BillingOfferDialog({
             ) : (
               <>
                 <div className="space-y-2.5">
-                  {offers.map(({ product, offer }) => {
+                  {offers.map((entry) => {
+                    const { product, offer } = entry;
                     const active = selected?.offer.code === offer.code;
+                    const unavailableReason = catalogOfferUnavailableReason(entry);
                     return (
                       <button
                         key={offer.code}
                         type="button"
                         onClick={() => onSelectOffer(offer.code)}
+                        disabled={unavailableReason !== null}
                         aria-pressed={active}
                         className={cn(
                           'group relative flex min-h-[88px] w-full items-center gap-5 rounded-xl border px-4 py-3.5 text-left',
                           'transition-[background-color,border-color,box-shadow] focus-visible:outline-none',
                           'focus-visible:ring-2 focus-visible:ring-[var(--text-primary)] focus-visible:ring-offset-2',
                           'focus-visible:ring-offset-[var(--surface-elevated)]',
+                          'disabled:cursor-not-allowed disabled:bg-[var(--surface)] disabled:hover:bg-[var(--surface)]',
                           active
                             ? 'border-[var(--text-primary)] bg-[var(--surface)] shadow-[inset_3px_0_0_var(--text-primary)]'
                             : 'border-[var(--border-default)] hover:bg-[var(--surface-hover-soft)]',
@@ -1218,11 +1254,18 @@ function BillingOfferDialog({
                           <p className="truncate text-sm font-medium text-[var(--text-primary)]">
                             {product.name}
                           </p>
-                          <p className="mt-1 text-11 text-[var(--text-tertiary)]">
-                            {kind === 'SUBSCRIPTION'
-                              ? t('billing.offerKinds.subscription')
-                              : t('billing.offerKinds.topup')}
-                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span className="text-11 text-[var(--text-tertiary)]">
+                              {kind === 'SUBSCRIPTION'
+                                ? t('billing.offerKinds.subscription')
+                                : t('billing.offerKinds.topup')}
+                            </span>
+                            {unavailableReason && (
+                              <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-4">
                           <div className="text-right">
@@ -1242,7 +1285,7 @@ function BillingOfferDialog({
                               </p>
                             )}
                           </div>
-                          <SelectionMark active={active} />
+                          {unavailableReason === null && <SelectionMark active={active} />}
                         </div>
                       </button>
                     );

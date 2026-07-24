@@ -7034,11 +7034,11 @@
     "dialogs": {
       "subscription": {
         "title": "Choose a subscription plan",
-        "description": "Only currently configured server plans are shown. Choose a plan before selecting its payment method."
+        "description": "Server-published subscription plans are shown. Plans that cannot be purchased yet include a status."
       },
       "topup": {
         "title": "Buy credits",
-        "description": "Only currently configured server credit products are shown. Choose a product before selecting its payment method."
+        "description": "Server-published credit products are shown. Products that cannot be purchased yet include a status."
       }
     },
     "eyebrow": "Account & usage",
@@ -7047,7 +7047,7 @@
     "steps": {
       "offer": {
         "title": "Choose a plan",
-        "description": "Only currently purchasable credit and subscription offers are shown."
+        "description": "Server-published credit and subscription offers are shown."
       },
       "channel": {
         "title": "Choose a payment method",
@@ -7071,8 +7071,12 @@
     "catalog": {
       "errorTitle": "Plans are temporarily unavailable",
       "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
-      "emptyTitle": "No plans are available",
-      "emptyDescription": "The server has not configured a purchasable plan and payment method yet."
+      "emptyTitle": "No Plans Available",
+      "emptyDescription": "The server has not published any plans yet.",
+      "unavailableReasons": {
+        "OFFER_COMING_SOON": "Coming Soon",
+        "NO_AVAILABLE_PAYMENT_CHANNEL": "No Payment Method Available"
+      }
     },
     "offerKinds": {
       "topup": "Credit top-up",

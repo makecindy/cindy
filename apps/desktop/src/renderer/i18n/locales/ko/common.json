@@ -7023,11 +7023,11 @@
     "dialogs": {
       "subscription": {
         "title": "구독 요금제 선택",
-        "description": "서버에 현재 설정된 구독 요금제만 표시합니다. 요금제를 선택하면 결제 수단이 표시됩니다."
+        "description": "서버에서 공개한 구독 요금제를 표시합니다. 아직 구매할 수 없는 요금제에는 상태가 표시됩니다."
       },
       "topup": {
         "title": "크레딧 구매",
-        "description": "서버에 현재 설정된 크레딧 상품만 표시합니다. 상품을 선택하면 결제 수단이 표시됩니다."
+        "description": "서버에서 공개한 크레딧 상품을 표시합니다. 아직 구매할 수 없는 상품에는 상태가 표시됩니다."
       }
     },
     "eyebrow": "계정 및 사용량",
@@ -7036,7 +7036,7 @@
     "steps": {
       "offer": {
         "title": "요금제 선택",
-        "description": "현재 구매 가능한 충전 및 구독만 표시합니다."
+        "description": "서버에서 공개한 충전 및 구독 상품을 표시합니다."
       },
       "channel": {
         "title": "결제 수단 선택",
@@ -7060,8 +7060,12 @@
     "catalog": {
       "errorTitle": "요금제를 불러올 수 없습니다",
       "errorDescription": "네트워크를 확인하고 다시 시도하세요. 로컬 대체 요금제는 표시하지 않습니다.",
-      "emptyTitle": "사용 가능한 요금제가 없습니다",
-      "emptyDescription": "서버에 구매 가능한 요금제와 결제 수단이 아직 설정되지 않았습니다."
+      "emptyTitle": "요금제가 없습니다",
+      "emptyDescription": "서버에서 공개한 요금제가 아직 없습니다.",
+      "unavailableReasons": {
+        "OFFER_COMING_SOON": "출시 예정",
+        "NO_AVAILABLE_PAYMENT_CHANNEL": "사용 가능한 결제 수단 없음"
+      }
     },
     "offerKinds": {
       "topup": "크레딧 충전",

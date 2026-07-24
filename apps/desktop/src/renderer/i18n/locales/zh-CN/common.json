@@ -7023,11 +7023,11 @@
     "dialogs": {
       "subscription": {
         "title": "选择订阅套餐",
-        "description": "仅展示服务端当前配置且可用的订阅套餐。选择套餐后再选择支付方式。"
+        "description": "展示服务端当前公开的订阅套餐；暂不可购买的套餐会标注状态。"
       },
       "topup": {
         "title": "购买点数",
-        "description": "仅展示服务端当前配置且可用的点数商品。选择商品后再选择支付方式。"
+        "description": "展示服务端当前公开的点数商品；暂不可购买的商品会标注状态。"
       }
     },
     "eyebrow": "账户与用量",
@@ -7036,7 +7036,7 @@
     "steps": {
       "offer": {
         "title": "选择套餐",
-        "description": "仅展示当前可购买的充值和订阅方案。"
+        "description": "展示服务端当前公开的充值和订阅方案。"
       },
       "channel": {
         "title": "选择支付方式",
@@ -7060,8 +7060,12 @@
     "catalog": {
       "errorTitle": "暂时无法获取套餐",
       "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
-      "emptyTitle": "当前暂无可用套餐",
-      "emptyDescription": "服务端尚未配置可购买的套餐和支付方式。"
+      "emptyTitle": "当前暂无套餐",
+      "emptyDescription": "服务端尚未配置公开的套餐。",
+      "unavailableReasons": {
+        "OFFER_COMING_SOON": "敬请期待",
+        "NO_AVAILABLE_PAYMENT_CHANNEL": "暂无可用支付方式"
+      }
     },
     "offerKinds": {
       "topup": "点数充值",

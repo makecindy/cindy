@@ -323,6 +323,114 @@ describe('billing response projection', () => {
     });
   });
 
+  it('keeps server-visible unavailable offers and rejects inconsistent availability fields', () => {
+    const projected = projectBillingCatalog({
+      products: [
+        {
+          code: 'subscription',
+          name: 'Subscription',
+          kind: 'SUBSCRIPTION',
+          level: 1,
+          sortOrder: 1,
+          offers: [
+            {
+              code: 'coming_soon',
+              salesState: 'COMING_SOON',
+              purchasable: false,
+              unavailableReason: 'OFFER_COMING_SOON',
+              interval: 'MONTH',
+              currency: 'usd',
+              amount: '9',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '100',
+              rolloverCap: '0',
+              purchaseOptions: [],
+            },
+            {
+              code: 'no_available_channel',
+              salesState: 'AVAILABLE',
+              purchasable: false,
+              unavailableReason: 'NO_AVAILABLE_PAYMENT_CHANNEL',
+              interval: 'MONTH',
+              currency: 'usd',
+              amount: '19',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '250',
+              rolloverCap: '0',
+              purchaseOptions: [],
+            },
+            {
+              code: 'available',
+              salesState: 'AVAILABLE',
+              purchasable: true,
+              unavailableReason: null,
+              interval: 'MONTH',
+              currency: 'usd',
+              amount: '25',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '350',
+              rolloverCap: '0',
+              purchaseOptions: [
+                {
+                  id: 'listing_stripe',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION',
+                  paymentAction: 'REDIRECT',
+                },
+              ],
+            },
+            {
+              code: 'inconsistent',
+              salesState: 'COMING_SOON',
+              purchasable: true,
+              unavailableReason: null,
+              interval: 'MONTH',
+              currency: 'usd',
+              amount: '29',
+              minAmount: null,
+              maxAmount: null,
+              creditAmount: '500',
+              rolloverCap: '0',
+              purchaseOptions: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(projected.products[0]?.offers).toEqual([
+      expect.objectContaining({
+        code: 'coming_soon',
+        salesState: 'COMING_SOON',
+        purchasable: false,
+        unavailableReason: 'OFFER_COMING_SOON',
+        purchaseOptions: [],
+      }),
+      expect.objectContaining({
+        code: 'no_available_channel',
+        salesState: 'AVAILABLE',
+        purchasable: false,
+        unavailableReason: 'NO_AVAILABLE_PAYMENT_CHANNEL',
+        purchaseOptions: [],
+      }),
+      expect.objectContaining({
+        code: 'available',
+        salesState: 'AVAILABLE',
+        purchasable: true,
+        unavailableReason: null,
+        purchaseOptions: [
+          expect.objectContaining({
+            id: 'listing_stripe',
+            provider: 'stripe',
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it('enforces the server contract that offer codes are globally unique', () => {
     const purchaseOption = {
       id: 'listing_stripe',

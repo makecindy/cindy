@@ -40,8 +40,19 @@ export type BillingPurchaseOption = {
   paymentAction: BillingPaymentAction['type'];
 };
 
+export type BillingCatalogOfferSalesState = 'COMING_SOON' | 'AVAILABLE';
+export type BillingCatalogOfferUnavailableReason =
+  'OFFER_COMING_SOON' | 'NO_AVAILABLE_PAYMENT_CHANNEL';
+
 export type BillingCatalogOffer = {
   code: string;
+  /**
+   * Optional only while Desktop remains compatible with older Model Access
+   * servers. New servers always send the three availability fields together.
+   */
+  salesState?: BillingCatalogOfferSalesState;
+  purchasable?: boolean;
+  unavailableReason?: BillingCatalogOfferUnavailableReason | null;
   interval: 'MONTH' | 'YEAR' | null;
   currency: string;
   amount: string | null;

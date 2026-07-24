@@ -7023,11 +7023,11 @@
     "dialogs": {
       "subscription": {
         "title": "サブスクリプションプランを選択",
-        "description": "サーバーで現在設定されているプランのみ表示します。プランを選択すると支払い方法が表示されます。"
+        "description": "サーバーで公開中のサブスクリプションプランを表示します。購入できないプランには状態を表示します。"
       },
       "topup": {
         "title": "クレジットを購入",
-        "description": "サーバーで現在設定されているクレジット商品のみ表示します。商品を選択すると支払い方法が表示されます。"
+        "description": "サーバーで公開中のクレジット商品を表示します。購入できない商品には状態を表示します。"
       }
     },
     "eyebrow": "アカウントと使用量",
@@ -7036,7 +7036,7 @@
     "steps": {
       "offer": {
         "title": "プランを選択",
-        "description": "現在購入できるチャージとサブスクリプションのみ表示します。"
+        "description": "サーバーで公開中のチャージとサブスクリプションを表示します。"
       },
       "channel": {
         "title": "支払い方法を選択",
@@ -7060,8 +7060,12 @@
     "catalog": {
       "errorTitle": "プランを取得できません",
       "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
-      "emptyTitle": "利用可能なプランはありません",
-      "emptyDescription": "購入可能なプランと支払い方法がまだ設定されていません。"
+      "emptyTitle": "プランはまだありません",
+      "emptyDescription": "サーバーで公開中のプランはまだありません。",
+      "unavailableReasons": {
+        "OFFER_COMING_SOON": "近日提供",
+        "NO_AVAILABLE_PAYMENT_CHANNEL": "利用可能な支払い方法なし"
+      }
     },
     "offerKinds": {
       "topup": "クレジットチャージ",

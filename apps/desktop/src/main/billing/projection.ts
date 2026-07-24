@@ -439,9 +439,63 @@ function projectOffer(
       optionIds.add(option.id);
       return true;
     });
-  if (purchaseOptions.length === 0) return null;
+  const hasAvailabilityProjection =
+    value.salesState !== undefined ||
+    value.purchasable !== undefined ||
+    value.unavailableReason !== undefined;
+  let availability: Pick<BillingCatalogOffer, 'salesState' | 'purchasable' | 'unavailableReason'> =
+    {};
+  if (hasAvailabilityProjection) {
+    const salesState =
+      value.salesState === 'COMING_SOON' || value.salesState === 'AVAILABLE'
+        ? value.salesState
+        : null;
+    const purchasable = typeof value.purchasable === 'boolean' ? value.purchasable : null;
+    const unavailableReason =
+      value.unavailableReason === null ||
+      value.unavailableReason === 'OFFER_COMING_SOON' ||
+      value.unavailableReason === 'NO_AVAILABLE_PAYMENT_CHANNEL'
+        ? value.unavailableReason
+        : undefined;
+    if (salesState === 'COMING_SOON') {
+      if (
+        purchasable !== false ||
+        unavailableReason !== 'OFFER_COMING_SOON' ||
+        value.purchaseOptions.length !== 0
+      ) {
+        return null;
+      }
+      availability = {
+        salesState,
+        purchasable: false,
+        unavailableReason: 'OFFER_COMING_SOON',
+      };
+    } else if (salesState === 'AVAILABLE') {
+      if (purchasable === true && unavailableReason === null && value.purchaseOptions.length > 0) {
+        availability = { salesState, purchasable: true, unavailableReason: null };
+      } else if (
+        purchasable === false &&
+        unavailableReason === 'NO_AVAILABLE_PAYMENT_CHANNEL' &&
+        value.purchaseOptions.length === 0
+      ) {
+        availability = {
+          salesState,
+          purchasable: false,
+          unavailableReason: 'NO_AVAILABLE_PAYMENT_CHANNEL',
+        };
+      } else {
+        return null;
+      }
+    } else {
+      return null;
+    }
+  } else if (purchaseOptions.length === 0) {
+    // Older servers only returned purchasable offers and had no availability projection.
+    return null;
+  }
   return {
     code: offerCode,
+    ...availability,
     interval: isSubscription ? interval : null,
     currency: offerCurrency,
     amount,
