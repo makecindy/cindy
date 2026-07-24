@@ -6,18 +6,91 @@
 > 本文件是只增不改的台账,不承载任何现行规范——**与 `DESIGN.md` 冲突时以
 > `DESIGN.md` 为准**。
 >
-> 范围现状(2026-07-24 建档):首批归档为原 `DESIGN.md §13` 的 G1–G4 勘误全文与
-> 旁注 backlog。`§15` CINDY 皮肤族的决策史(红色体系重构、caret 改稿、vibrancy
-> 定稿等)仍留存于 `DESIGN.md §15` 各小节内,待 §15 重构(梳理 C5)时迁入本文件。
+> 范围现状:2026-07-24 建档,首批归档原 `DESIGN.md §13` 的 G1–G4 勘误全文;
+> 2026-07-25 起 `§15` CINDY 皮肤族的决策史(红色体系重构、caret 改稿、vibrancy
+> 定稿等)已随 §15 保号重构迁入本文件,`DESIGN.md §15` 只保留现行规范。
 
 ## 2026-07
 
-- **07-24** 设计文档整体梳理启动:DESIGN.md 去除 Ollama 官网叙事(标题改
+- **07-25(梳理批次 2)** `DESIGN.md §15` 保号重构:小节编号冻结为稳定标识
+  (15.9 从未分配;15.13 物理位置移回 15.12 与 15.14 之间),各小节只留现行规范,
+  决策史迁入本文件;§10/§11/§14/§15 及 §2/§4/§5 残留中文段英文化(§16 冻结暂缓,
+  外部引用的关键标题保留中文括注);§16 两处「§2 双模式交付门槛」误指修正为 §10
+  (门槛正文在 §10,冻结例外,一行级)。
+- **07-24(梳理批次 1)** 设计文档整体梳理启动:DESIGN.md 去除 Ollama 官网叙事(标题改
   `Cindy Design System`,§4/§5/§8/§9 官网内容删除或重写为 Cindy 自述);
   §12 结构化组件规格试点采纳并入 §4(§12 编号保留占位);§13 G1–G4 归档至本文件;
   focus ring 文档追平代码(`#3b82f6` → `#417CDD`,代码 2026-07-17 已定稿,文档滞后);
   §2/§9 二级三级文字与 chip 双 slot 表述修正(以 `colors.ts` 为准);
-  §10 写死 token 计数移除(以 `colors.ts` 为准)。
+  §10 写死 token 计数移除(以 `colors.ts` 为准);§10 Tier-1 表删除幽灵行
+  `--accent-fg-on-pure`(colors.ts 无注册,值与 `--surface-on-card` 重复)。
+- **07-22** splash 字标资产统一:白字(DARK 用)/深字(LIGHT 用)两版统一为
+  459×156(@2x),渲染框 229.5×78 恰为 2x 满框——此前白字版 486×184 塞同框被
+  object-contain 缩小 ~10%,DARK 字标偏小(用户实机发现,换图修复);同日拍板
+  splash 字标双模式**均不带投影**(原 drop-shadow 移除),`SplashScreen.test.tsx`
+  反向断言。(→ §15.7)
+- **07-20** U2 二级信息色 light 两轮调参定稿:`#9A9DA3`(Figma 原值)→ `#919399`
+  → `#8C8E94`,桌面 cindy-light 与移动 tokens.ts 同步;dark `#6F6F6F` 不变;
+  `text-secondary-cross` light 未随调仍 `#9A9DA3`。`cindyThemes.test.ts` ⑦ 锁值。(→ §15.5)
+- **07-20** `sidebar-item-active` 撤红改反相胶囊(light 深底 `#3C3F43`+浅字
+  `#FCFCFC` / dark 浅底 `#EEEEEE`+深字 `#252222`,描边 transparent;用户三轮改稿
+  定稿,PR #174/#190 落地),同时退出红例外 map。(→ §15.10)
+- **07-19** `drop-overlay-bg` 红 10% 撤红回中性灰遮罩(用户实机否决:整窗红罩语义
+  似警报);`migration-bar-fill` 随主干迁移条退役(token 已删,非撤红);splash 根
+  容器由半透改**不透明 `--surface`**(加载完成前必须完全遮盖已挂载主界面);vibrancy
+  材质缺省定稿 `hud`(sidebar 实测回写)。(→ §15.10/§15.12)
+- **07-18** caret 光标:日间定品牌红 `#DF0C27`、当晚被用户覆盖定稿为蓝 `#417CDD`
+  (与 focus ring 同值,双端一致);历史文档中「caret 品牌红」表述一律作废。(→ §15.11)
+- **07-18** vibrancy 体系定稿:透壁纸三重管线经实机 A/B 实证(窗口创建期设透明底
+  + 根容器让路 + 禁 CSS backdrop-filter);唯一半透面 token
+  `surface-translucent-sidebar`;浅色红渐变层经用户确认设计稿无此元素整层砍除,
+  splash 渐变辉光层未实现入 backlog。同日发布双端换肤定稿规则(§15.13)。(→ §15.12/§15.13)
+- **07-17** E1D 红色体系重构(用户批准):常规主操作弃品牌红改反相中性四态
+  (light `#3C3F43`/`#FCFCFC`,hover `#2E3237`,pressed `#25282C`;dark `#EEEEEE`/
+  `#252222`,hover `#E2E2E2`,pressed `#D4D4D4`)。B 类改中性 11 项:
+  `accent-cta-bg`/`-pure`/`-emphasis`/`-soft`/`-hover`、`update-btn-border`/`-text`、
+  `confirm-btn-primary`、`perm-allow-btn`、`primary`、`settings-btn-primary`(alias)、
+  `accent-pure-cta-fg`/`settings-btn-primary-text`(中性字)。C 类逐项裁决:confirm
+  普通中性(danger 另设)/ perm-allow 中性+警示橙 chip / primary 中性 /
+  sidebar-item-active 当时 light 红胶囊、dark 深红(07-20 撤红,见上)/
+  migration-bar-fill 保留红(07-19 退役)/ drop-overlay 保留红 10%(07-19 撤红)/
+  brand-login-cta 不动。send-btn 族六 token 纳入 CINDY override 值表 + disabled 灰
+  `#444242`/`#585555`;侧栏颜色层级整改(正文/二级暗灰/选中胶囊/running 橙,
+  详见 §15.10 现行文)。三份新 map(`NEUTRAL_PRIMARY_EXPECTED_BY_ID`/
+  `NEUTRAL_PRIMARY_FOREGROUND_BY_ID` + `RED_EXCEPTION_ALLOWED_IDS`)取代旧
+  `BRAND_RED_*`;D2T ⑤/⑦/⑧ 迁移。(→ §15.2/§15.10)
+- **07-17** 〔归档〕E1D 前的旧 `BRAND_RED_*` 三份名单原文(cindyDecisionData.ts 中
+  保留供 D2T 迁移、迁完删):
+  - `BRAND_RED_EXPECTED_BY_ID`(必须等于品牌红/深红):`accent-cta-bg`/
+    `accent-cta-bg-pure`/`accent-emphasis`/`confirm-btn-primary-bg`/
+    `perm-allow-btn-bg`/`update-btn-border`/`update-btn-text`(均 `#DF0C27`);
+    `primary`(HSL,RGB 归一等价品牌红)。
+  - `BRAND_RED_ALLOWED_IDS`(允许含红全集 = EXPECTED ∪ 派生):上述 +
+    `accent-soft`/`accent-hover`/`confirm-btn-primary-hover`/
+    `settings-btn-primary-bg`/`-border`/`-hover-bg`。
+  - `CTA_FOREGROUND_WHITE_IDS`(红底白前景):`accent-pure-cta-fg`/
+    `confirm-btn-primary-text`/`perm-allow-btn-text`/`primary-foreground`/
+    `settings-btn-primary-text`。
+- **07-17** `status-badge-fg` 拆分推导:橙徽章此前借用 `accent-pure-cta-fg` 白字,
+  `#FFFFFF`×旧橙 `#FF6600`=2.94:1 不达标 → 拆独立 token,default 镜像
+  `accent-pure-cta-fg`(9 主题零变化),CINDY 两模式 override `#1F1F1F`
+  (×新橙 `#EA6B17`=5.19:1 ≥4.5,用户亲批;不达 4.5 则加深 `#000000`);覆盖数组
+  115→116;消费点迁移见 §15.8 现行文。(→ §15.8)
+- **07-17** hljs 语法高亮双门槛 D 裁决全推导:hljs 属辅助性视觉编码,对齐
+  selection/边界 3:1 口径(语法色 ≥3:1、正文 ≥4.5:1)。light 三项 <4.5 但 ≥3
+  (keyword 4.31 / built_in 3.29 / name 4.36)判 default 同源折损不整改,逐项落
+  豁免档;dark `.hljs-section` `#1f6feb`×`#312F2F`=2.87 <3 补
+  `[data-theme="cindy-dark"]` 提亮 `#2573ec`(H212 S84% L52→53.5%,=3.00);
+  `.hljs-punctuation`/`.hljs-tag` github-dark 无显式色,继承 text `#c9d1d9`
+  (8.62 达标),防御性补显式覆盖。落档 `cindyCodeBlockContrast.test.ts`。(→ §15.4)
+- **07-16** U2 裁决:二级信息色 (b) 忠于 Figma 原值,接受可读性折损(实测
+  × surface 2.32/2.92:1 等,均低于 AA 4.5:1),作为记录在案的显式偏离;
+  `#686B72` 加深方案证伪仅存档。(→ §15.5)
+- **〔勘误注记〕`brand-login-*` 已退役**:`brand-login-bg`/`brand-login-error-border`/
+  `brand-login-error-text`(E1D A 类「保留红」)已随 wave4 登录白底改版退役——
+  `colors.ts` 无注册,仅存于 `cindyDecisionData.ts` 红例外白名单字符串(白名单语义
+  是"允许存在",token 不存在时无害);现行品牌红唯一出口为 `--login-brand-accent`
+  (§16.1)。
 
 ## 2026-06 · Spec / Token Gaps 勘误(原 DESIGN.md §13 全文归档)
 
@@ -43,4 +116,5 @@
 ## Backlog(已知、刻意搁置)
 
 - `MakerExperimentalView.tsx` 通篇裸 hardcode hex(#404040 / #d4d4d4 / #262626 / #333),违反 DESIGN.md 第 10 节 token 规则。因是 experimental 视图,暂不清理,仅备忘(原 §13 旁注,2026-06)。
-- R2 §4.3 Project_List 五点差异(2026-07-17 lead 裁决本轮不做):Project_List 三态拆分、项目 header/list card 选中中性底、去选中组 focus-ring 蓝 ring、小箭头 #A61629 强调等。详见 DESIGN.md §15.10 backlog 段(§15 重构时迁入本文件)。
+- R2 §4.3 Project_List 五点差异(2026-07-17 lead 裁决本轮不做,出处为设计阶段工作文件 `2026-07-17-r2-ui-specs.md` §4.3,不入仓库):① Project_List 三态拆分(active-task-pill / project-card / flat-list-row 不共用 `sidebar-item-active`);② 项目 header / list card 选中应中性底(`#312F2F`/`#F6F6F6`,非 `#DF0C27` 大红);③ 去 Project_List 选中组 `focus-ring-soft` 蓝 ring,改 card stroke `#DCDFE3`/`#434343`;④ 小箭头 `#A61629` 强调(非整行红底);⑤ 本轮收敛不扩战线,后续另开。
+- splash 渐变辉光层未实现(2026-07-18 backlog,待用户表态)。
