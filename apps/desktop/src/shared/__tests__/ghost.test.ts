@@ -407,6 +407,35 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         }),
       ]),
     );
+
+    const reordered = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: '邮箱授权码',
+            methods: ['mail/action', 'account/connect'],
+            url: 'https://mail.example.com/settings',
+          },
+        ],
+      },
+    });
+    expect(reordered.ok).toBe(true);
+    if (!reordered.ok) return;
+    const permission = ghostPermissionItems(result.manifest).find((item) =>
+      item.key.startsWith('node:secret:mail_code:'),
+    );
+    const reorderedPermission = ghostPermissionItems(reordered.manifest).find((item) =>
+      item.key.startsWith('node:secret:mail_code:'),
+    );
+    expect(reorderedPermission?.key).toBe(permission?.key);
+    expect(reorderedPermission?.detail).toBe('mail/action\naccount/connect');
+
     expect(ghostExternalLinkUrls(result.manifest)).toContain('https://mail.example.com/settings');
   });
 
@@ -435,6 +464,28 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         node: { ...base.node, secretBindings: [{ ...binding, methods: ['bad method'] }] },
       }).ok,
     ).toBe(false);
+    for (const method of ['initialize', 'notifications/initialized']) {
+      expect(
+        validateGhostManifest({
+          ...base,
+          node: {
+            ...base.node,
+            protocol: 'mcp-stdio',
+            secretBindings: [{ ...binding, methods: [method] }],
+          },
+        }).ok,
+      ).toBe(false);
+    }
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          protocol: 'json-rpc-stdio',
+          secretBindings: [{ ...binding, methods: ['initialize'] }],
+        },
+      }).ok,
+    ).toBe(true);
     expect(
       validateGhostManifest({
         ...base,

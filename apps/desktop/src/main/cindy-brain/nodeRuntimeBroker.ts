@@ -34,6 +34,7 @@ import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
   GHOST_NODE_REQUEST_MAX_TOTAL_MS,
+  isGhostNodeMcpReservedMethod,
   parseGhostNodeChildToHostMessage,
 } from '../../shared/ghost.js';
 
@@ -312,6 +313,11 @@ function errorResult(
   return { ok: false, errorCode, message, ...(data !== undefined ? { data } : {}) };
 }
 
+function clearHostSecrets(secrets: Record<string, string> | undefined): void {
+  if (!secrets) return;
+  for (const key of Object.keys(secrets)) secrets[key] = '';
+}
+
 /**
  * 每意识的本地 Node 工作进程生命周期与 JSON-RPC stdio 中继。
  * 多进程窄版(2026-07-23):主入口之外,manifest.node.entries 申报的每个额外
@@ -418,18 +424,13 @@ export class GhostNodeRuntimeBroker {
         (binding.entry ?? ghost.manifest.node!.entry) === entryRel,
     );
 
-    let entry: WorkerEntry;
-    try {
-      entry = await this.ensureWorker(ghost, entryRel);
-    } catch (error) {
-      return errorResult(
-        'PROCESS_START_FAILED',
-        error instanceof Error ? error.message : 'Node 工作进程启动失败',
-      );
+    if (
+      ghost.manifest.node.protocol === 'mcp-stdio' &&
+      isGhostNodeMcpReservedMethod(request.method as string)
+    ) {
+      return errorResult('INVALID_REQUEST', 'MCP 初始化由 Cindy 主机统一管理');
     }
-    if (entry.pending.size >= MAX_PENDING_REQUESTS) {
-      return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
-    }
+
     let hostSecrets: Record<string, string> | undefined;
     if (secretBindings.length > 0) {
       hostSecrets = Object.create(null) as Record<string, string>;
@@ -437,7 +438,7 @@ export class GhostNodeRuntimeBroker {
         for (const binding of secretBindings) {
           const value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
           if (value === null) {
-            for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+            clearHostSecrets(hostSecrets);
             return errorResult(
               'PERMISSION_DENIED',
               `Node 请求需要先配置凭证「${binding.label}」`,
@@ -446,16 +447,28 @@ export class GhostNodeRuntimeBroker {
           hostSecrets[binding.key] = value;
         }
       } catch {
-        for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+        clearHostSecrets(hostSecrets);
         return errorResult('INTERNAL', '读取 Node 请求所需凭证失败');
       }
     }
 
+    let entry: WorkerEntry;
+    try {
+      entry = await this.ensureWorker(ghost, entryRel);
+    } catch (error) {
+      clearHostSecrets(hostSecrets);
+      return errorResult(
+        'PROCESS_START_FAILED',
+        error instanceof Error ? error.message : 'Node 工作进程启动失败',
+      );
+    }
+    if (entry.pending.size >= MAX_PENDING_REQUESTS) {
+      clearHostSecrets(hostSecrets);
+      return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
+    }
+
     try {
       if (ghost.manifest.node.protocol === 'mcp-stdio') {
-        if (request.method === 'initialize' || request.method === 'notifications/initialized') {
-          return errorResult('INVALID_REQUEST', 'MCP 初始化由 Cindy 主机统一管理');
-        }
         await this.ensureMcpInitialized(entry);
         if (entry.pending.size >= MAX_PENDING_REQUESTS) {
           return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
@@ -472,7 +485,7 @@ export class GhostNodeRuntimeBroker {
       // writeLine/JSON.stringify 在 sendRpc 内同步完成；随即抹掉本次临时对象，
       // 不让凭证明文跟随 Promise 生命周期常驻在 broker 闭包里。
       if (hostSecrets) {
-        for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+        clearHostSecrets(hostSecrets);
         hostSecrets = undefined;
       }
       const result = await pendingResult;
@@ -485,9 +498,7 @@ export class GhostNodeRuntimeBroker {
       }
       return errorResult('INTERNAL', error instanceof Error ? error.message : String(error));
     } finally {
-      if (hostSecrets) {
-        for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
-      }
+      clearHostSecrets(hostSecrets);
       this.scheduleIdleStop(entry);
     }
   }

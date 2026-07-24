@@ -2291,7 +2291,7 @@
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险:它和你本人一样,可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
         "nodeSecret": "可将已保存凭证「{{name}}」提供给本机 Node 程序",
-        "nodeSecretDetail": "Cindy 加密保管,仅在下列已声明 Worker 方法执行时临时注入;浏览器侧插件代码和 Agent 参数无法读取,但 Node 程序在该次请求中可以使用明文。",
+        "nodeSecretDetail": "Cindy 加密保管,仅在下列已声明 Worker 方法执行时临时注入。Node 程序会收到明文,也可以将其回传、记录、保存或暴露给浏览器侧插件代码及 Agent 参数;请只安装可信插件。",
         "nodeResident": "Node 程序可常驻后台",
         "nodeResidentDetail": "插件启用期间会一直运行;停用、更新、卸载或退出 Cindy 时关闭。",
         "tool": "工具「{{name}}」",

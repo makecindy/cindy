@@ -806,10 +806,11 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
-- 条目三种引用:\`secret:<key>\`(network.secrets 声明的凭证:user 源查已保存、oauth 源
-  查已连接账号;账号全过期时主机弹「重新连接」话术)、\`connection:<key>\`(该连接声明
-  下至少添加一条)、\`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;
-  键名主机无先验,label 必填)。
+- 条目三种引用:\`secret:<key>\`(\`network.secrets\` 或 \`node.secretBindings\` 声明的
+  凭证:Node 绑定与 user 源查已保存、oauth 源查已连接账号;账号全过期时主机弹「重新连接」
+  话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
+  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;键名主机无先验,
+  label 必填)。Node 凭证同样可参与 setup.requires。
 - 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
   引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
 - **绝大多数意识不需要写本字段**:不声明时主机走启发式——声明过凭证/连接的意识,
@@ -1899,8 +1900,9 @@ const authorizationCode = request.cindy.secrets.mail_code;
   只绑定主入口，不能借同名方法把凭证送去其它入口；
 - 未保存凭证时宿主在请求进入 Worker 前返回 \`PERMISSION_DENIED\`，设置页可用
   \`GET /secrets\` 的 saved 状态引导用户；
-- 明文不会经过 \`main.js\`、Agent 参数或宿主日志，但 Worker 在该次请求中
-  确实能使用它；安装/更新权限清单会逐条告诉用户；
+- 宿主不会直接把明文交给 \`main.js\`、Agent 参数或写入宿主日志；但 Worker
+  收到明文后可以主动回传、落盘或写日志，浏览器侧代码和 Agent 也可能因此间接
+  获得它。安装/更新权限清单会逐条披露此风险，只安装可信来源插件；
 - Worker 用完不要缓存、落盘、回传或写日志；每次请求都以
   \`request.cindy.secrets\` 的当次值为准；
 - \`node.secretBindings\` 与 \`network.secrets\` / \`network.connections\`

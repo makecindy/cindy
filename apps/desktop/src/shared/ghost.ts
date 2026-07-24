@@ -131,14 +131,20 @@ export type GhostNodeLifecycle = (typeof GHOST_NODE_LIFECYCLES)[number];
 export const GHOST_NODE_MAX_SECRET_BINDINGS = 4;
 /** 单条 Node 凭证最多可绑定的 JSON-RPC 方法数。 */
 export const GHOST_NODE_MAX_SECRET_METHODS = 16;
+const GHOST_NODE_MCP_RESERVED_METHODS = new Set(['initialize', 'notifications/initialized']);
+
+/** MCP 握手由宿主发起，插件业务请求与凭证绑定均不得占用这些方法。 */
+export function isGhostNodeMcpReservedMethod(method: string): boolean {
+  return GHOST_NODE_MCP_RESERVED_METHODS.has(method);
+}
 
 /**
  * 主机保险库 → 随包 Node Worker 的按请求凭证绑定。
  *
  * 值由 settingsHtml 经 `/secrets` 一次性写入 safeStorage；浏览器沙箱
- * main.js 只能发普通 node-request，无法读取或携带明文。宿主仅在 method
- * 与 entry 同时命中本声明时，把值放进发往 Worker 的保留字段
- * `cindy.secrets[key]`。未声明 entry 时只允许主入口。
+ * main.js 不能直接从保险库读取明文。宿主仅在 method 与 entry 同时命中
+ * 本声明时，把值放进发往 Worker 的保留字段 `cindy.secrets[key]`；
+ * Worker 获得明文后仍可能主动回传或泄露。未声明 entry 时只允许主入口。
  */
 export interface GhostNodeSecretBinding {
   /** 凭证键(插件内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
@@ -1158,8 +1164,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     });
     for (const binding of manifest.node.secretBindings ?? []) {
       const targetEntry = binding.entry ?? manifest.node.entry;
+      const stableMethods = [...binding.methods].sort();
       items.unshift({
-        key: `node:secret:${binding.key}:${targetEntry}:${binding.methods.join(',')}`,
+        key: `node:secret:${binding.key}:${targetEntry}:${stableMethods.join(',')}`,
         kind: 'node',
         labelKey: 'nodeSecret',
         labelArgs: { name: binding.label },
@@ -1937,6 +1944,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
             return {
               ok: false,
               reason: 'node.secretBindings[].methods 每项必须是 1–128 位安全方法名',
+            };
+          }
+          if (nodeRaw.protocol === 'mcp-stdio' && isGhostNodeMcpReservedMethod(method)) {
+            return {
+              ok: false,
+              reason: `node.secretBindings[].methods 不能绑定宿主保留的 MCP 方法 ${JSON.stringify(method)}`,
             };
           }
           if (methods.includes(method)) {

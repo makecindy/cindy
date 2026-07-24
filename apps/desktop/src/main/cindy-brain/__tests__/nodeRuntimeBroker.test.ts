@@ -326,10 +326,11 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
     ];
     const child = makeAutoReplyProcess();
     const log = { info: vi.fn(), warn: vi.fn() };
+    const spawnProcess = vi.fn(() => child as unknown as NodeWorkerProcess);
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       readSecret: () => null,
-      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      spawnProcess,
       log,
     });
 
@@ -338,6 +339,7 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       errorCode: 'PERMISSION_DENIED',
       message: expect.stringContaining('邮箱授权码'),
     });
+    expect(spawnProcess).not.toHaveBeenCalled();
     expect(child.received).toHaveLength(0);
     expect(JSON.stringify(log)).not.toContain('fake-secret-value');
     broker.destroyAll();
@@ -353,12 +355,13 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       },
     ];
     const child = makeAutoReplyProcess();
+    const spawnProcess = vi.fn(() => child as unknown as NodeWorkerProcess);
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       readSecret: () => {
         throw new Error('vault failed with sensitive context');
       },
-      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      spawnProcess,
     });
 
     const result = await broker.handleRequest('node-ghost', rpcRequest('mail/action', {}));
@@ -368,8 +371,24 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       message: '读取 Node 请求所需凭证失败',
     });
     expect(JSON.stringify(result)).not.toContain('sensitive context');
+    expect(spawnProcess).not.toHaveBeenCalled();
     expect(child.received).toHaveLength(0);
     broker.destroyAll();
+  });
+
+  it('mcp-stdio 保留初始化方法在启动 Worker 前拒绝', async () => {
+    const ghost = fakeGhost({ protocol: 'mcp-stdio' });
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess });
+
+    for (const method of ['initialize', 'notifications/initialized']) {
+      expect(await broker.handleRequest('node-ghost', rpcRequest(method, {}))).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        message: expect.stringContaining('MCP 初始化'),
+      });
+    }
+    expect(spawnProcess).not.toHaveBeenCalled();
   });
 
   it('mcp-stdio 由主机先 initialize，再发送 initialized 通知和业务方法', async () => {
