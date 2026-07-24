@@ -8,13 +8,13 @@
  *
  * 本模块在「登录成功、账号 db 尚未打开」时(registerLocalDbIpc 的
  * beforeEnsureReady 钩子,排在 mToc 首登迁移之后)做一次性的整体认领:
- *  - 触发前提(全部满足才弹窗):local 库存在**且含至少一条未删除会话**;账号
- *    命名空间未被实际使用——账号库 `<prefix>-<userId>.db` 不存在,或存在但
- *    **0 条未删除会话**(认领失败/推迟后登录会照常创建空账号库,若只认「库不
- *    存在」,一次挫折就会永久堵死承诺的下次登录重试;空库在认领时先改名备份
- *    让位,绝不覆盖);独占 userData(非 passive、无并发活实例);local 库已
- *    干净关闭(无 wal/shm 残留)。账号库已有会话(真实使用过)则跳过,不做
- *    行级合并。
+ *  - 触发前提(全部满足才弹窗):local 库存在**且含至少一条未删除会话**;账号库
+ *    `<prefix>-<userId>.db` 不存在——唯一例外是本流程此前对该账号推迟/失败过
+ *    (marker pendingOwnerKeys):那次退出后登录自动创建的空占位库不能堵死承诺
+ *    的重试,pending + 使用面探测全空 + 未被持有时,占位库在提交阶段改名备份
+ *    让位(保留不删),绝不覆盖;普通已存在账号库(无论多空)一律跳过,不做
+ *    行级合并。另需独占 userData(非 passive、无并发活实例)、local 库已干净
+ *    关闭(无 wal/shm 残留)。
  *  - 弹确认窗让用户二选一:「并入当前账号」或「保留在本机模式」。共用机器上
  *    A 的本机会话绝不能被 B 的账号静默吸收,确认窗是归属裁决,不可省略。
  *  - 并入 = 搬移而非复制:先合并搬 `owners/<localKey>` → `owners/<accountKey>`
@@ -24,8 +24,9 @@
  *    (bootstrap 已把 local dialogues 根加入 additionalLegacyDialogueRoots)。
  *  - marker `<userData>/.local-owner-adoption-v1.json`:认领成功记
  *    claimedOwnerKey(一次性,永久终结);用户拒绝记 declinedOwnerKeys(该账号
- *    不再询问,数据保持可被其它全新账号认领)。key 存 dataOwnerStorageKey 哈希,
- *    与 owners/ 目录同口径,不落明文 userId。
+ *    不再询问,数据保持可被其它全新账号认领);推迟/失败记 pendingOwnerKeys
+ *    (空占位库让位的唯一凭据,成功/拒绝时清除)。key 存 dataOwnerStorageKey
+ *    哈希,与 owners/ 目录同口径,不落明文 userId。
  *  - 任一步失败:不写 marker(下次登录重试)、warn 日志、failed 弹窗,不阻塞
  *    登录(ensureReady 照常建新账号库)。
  *
@@ -82,6 +83,13 @@ interface AdoptionMarker {
   adoptedAt?: string;
   /** 拒绝过认领的账号 ownerKey 列表;这些账号不再询问,数据保持可认领。 */
   declinedOwnerKeys?: string[];
+  /**
+   * 认领被推迟/失败过的账号 ownerKey 列表:随后的登录会照常创建空账号库,
+   * 「账号库存在即跳过」会把重试永久堵死——pending 是唯一放行「空库改名
+   * 备份让位」的凭据,把让位严格限定在本流程自己造成的占位库上;普通
+   * 已存在账号库(无论多空)一律不动。成功或拒绝后清除。
+   */
+  pendingOwnerKeys?: string[];
 }
 
 /** 内存可替身的最小 fs 面;默认实现见 realFsDeps。全部异步。 */
@@ -189,6 +197,33 @@ async function writeAdoptionMarker(
   await deps.fs.writeFile(markerPath, JSON.stringify(marker, null, 2));
 }
 
+/**
+ * 推迟/失败退出前登记 pending(best-effort,失败只 warn):没有它,本次退出后
+ * 登录自动创建的空账号库会把下次重试挡在「账号库已存在」外面。passive 实例
+ * 保持只读,不写(dev 场景,推迟由下次独占启动自然解除)。
+ */
+async function recordPendingAdoption(
+  deps: LocalOwnerAdoptionDeps,
+  markerPath: string,
+  marker: AdoptionMarker | null,
+  ownerKey: string,
+): Promise<void> {
+  try {
+    await writeAdoptionMarker(deps, markerPath, {
+      version: 1,
+      ...(marker?.declinedOwnerKeys?.length
+        ? { declinedOwnerKeys: marker.declinedOwnerKeys }
+        : {}),
+      pendingOwnerKeys: [...new Set([...(marker?.pendingOwnerKeys ?? []), ownerKey])],
+    });
+  } catch (err) {
+    deps.log.warn(
+      'local owner adoption: pending marker write failed: %s',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
 /** owners 递归合并期间发现并发实例时的中断信号(转成 deferred,不算失败)。 */
 class AdoptionInterruptedError extends Error {
   constructor() {
@@ -240,18 +275,22 @@ export async function runLocalOwnerDataAdoption(
     }
     if (deps.hasConcurrentLiveInstances()) {
       deps.log.info('local owner adoption deferred: other live instances share this userData');
+      await recordPendingAdoption(deps, markerPath, marker, ownerKey);
       return { status: 'deferred', reason: 'concurrent-live-instances' };
     }
 
-    // 2.5 账号命名空间必须「未被实际使用」:库不存在,或存在但 0 条未删除会话。
-    //     只认「库不存在」会让一次认领失败/推迟永久堵死重试——失败后登录照常
-    //     创建空账号库,下次登录就再也进不来了(Greptile review)。空库在提交
-    //     阶段改名备份让位,绝不覆盖;有会话 = 真实使用过,跳过(不做行级合并)。
+    // 2.5 账号库已存在时默认跳过(v1 契约:不做行级合并)。唯一例外:本流程
+    //     此前对该账号推迟/失败过(marker pending)——那次退出后登录自动创建的
+    //     空占位库不能堵死承诺的重试。只有 pending + 使用面探测全空 + 未被持有
+    //     三者同时成立,才在提交阶段把占位库改名备份让位,绝不覆盖。
     let accountDbToDisplace = false;
     if (await deps.fs.pathExists(accountDbPath)) {
       if (deps.accountDbCurrentlyOpen(userId)) {
         // 同账号 ensure-ready 重入(LocalDbGate 重试等):账号库正开着,不动。
         return { status: 'account-db-in-use' };
+      }
+      if (!marker?.pendingOwnerKeys?.includes(ownerKey)) {
+        return { status: 'account-db-exists' };
       }
       let accountUsed: boolean;
       try {
@@ -264,6 +303,7 @@ export async function runLocalOwnerDataAdoption(
       if (accountUsed) return { status: 'account-db-exists' };
       if (await dbSidecarsPresent(deps, accountDbPath)) {
         deps.log.info('local owner adoption deferred: account db sidecars still present');
+        await recordPendingAdoption(deps, markerPath, marker, ownerKey);
         return { status: 'deferred', reason: 'account-db-busy' };
       }
       accountDbToDisplace = true;
@@ -284,6 +324,7 @@ export async function runLocalOwnerDataAdoption(
     if (sessionCount <= 0) return { status: 'no-local-sessions' };
     if (await dbSidecarsPresent(deps, localDbPath)) {
       deps.log.info('local owner adoption deferred: local db sidecars still present');
+      await recordPendingAdoption(deps, markerPath, marker, ownerKey);
       return { status: 'deferred', reason: 'local-db-busy' };
     }
 
@@ -292,9 +333,12 @@ export async function runLocalOwnerDataAdoption(
     const decision = await deps.ui.waitForDecision();
     if (decision === 'keep') {
       try {
+        // 拒绝同时清掉本账号的 pending:占位库让位凭据只服务「还想认领」的重试。
+        const pendingRest = (marker?.pendingOwnerKeys ?? []).filter((k) => k !== ownerKey);
         await writeAdoptionMarker(deps, markerPath, {
           version: 1,
           declinedOwnerKeys: [...new Set([...(marker?.declinedOwnerKeys ?? []), ownerKey])],
+          ...(pendingRest.length ? { pendingOwnerKeys: pendingRest } : {}),
         });
       } catch (err) {
         // 拒绝记录写失败(磁盘满/权限)只影响「下次是否再问」,本次拒绝依然
@@ -318,6 +362,7 @@ export async function runLocalOwnerDataAdoption(
       if (deps.hasConcurrentLiveInstances()) {
         deps.log.info('local owner adoption interrupted: instance appeared while confirming');
         deps.ui.publish('failed');
+        await recordPendingAdoption(deps, markerPath, marker, ownerKey);
         return { status: 'deferred', reason: 'concurrent-live-instances' };
       }
       if (
@@ -327,6 +372,7 @@ export async function runLocalOwnerDataAdoption(
       ) {
         deps.log.warn('local owner adoption aborted: target db or sidecars appeared mid-flow');
         deps.ui.publish('failed');
+        await recordPendingAdoption(deps, markerPath, marker, ownerKey);
         return { status: 'failed', error: 'target db or sidecars appeared mid-flow' };
       }
 
@@ -404,6 +450,7 @@ export async function runLocalOwnerDataAdoption(
       // 提交点:目标已存在(窗口期另一实例创建/打开了账号库)必须失败而非覆盖。
       await deps.fs.renameNoReplace(localDbPath, accountDbPath);
       try {
+        // claimed 即全局终态,pending 一并清空(不再有任何可让位场景)。
         await writeAdoptionMarker(deps, markerPath, {
           version: 1,
           claimedOwnerKey: ownerKey,
@@ -435,12 +482,15 @@ export async function runLocalOwnerDataAdoption(
       if (err instanceof AdoptionInterruptedError) {
         deps.log.info('local owner adoption interrupted: instance appeared mid-move');
         deps.ui.publish('failed');
+        await recordPendingAdoption(deps, markerPath, marker, ownerKey);
         return { status: 'deferred', reason: 'concurrent-live-instances' };
       }
-      // 搬移阶段失败:不写 marker(下次登录重试)、failed 弹窗、不阻塞登录。
+      // 搬移阶段失败:不写终态 marker、只登记 pending(下次登录凭它重试),
+      // failed 弹窗,不阻塞登录。
       const message = err instanceof Error ? err.message : String(err);
       deps.log.warn('local owner adoption failed (will retry next login): %s', message);
       deps.ui.publish('failed');
+      await recordPendingAdoption(deps, markerPath, marker, ownerKey);
       return { status: 'failed', error: message };
     }
   } catch (err) {

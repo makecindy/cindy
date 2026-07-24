@@ -233,6 +233,7 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
     const { mem, deps, phases } = createHarness({ accountProbeThrows: true });
     mem.addFile(LOCAL_DB);
     mem.addFile(ACCOUNT_DB, 'corrupt');
+    mem.addFile(MARKER, JSON.stringify({ version: 1, pendingOwnerKeys: [USER_KEY] }));
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result.status).toBe('account-db-unreadable');
     expect(phases).toEqual([]);
@@ -244,6 +245,7 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
     mem.addFile(LOCAL_DB);
     mem.addFile(ACCOUNT_DB);
     mem.addFile(`${ACCOUNT_DB}-wal`);
+    mem.addFile(MARKER, JSON.stringify({ version: 1, pendingOwnerKeys: [USER_KEY] }));
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result).toEqual({ status: 'deferred', reason: 'account-db-busy' });
     expect(phases).toEqual([]);
@@ -341,7 +343,10 @@ describe('runLocalOwnerDataAdoption 独占推迟(不取消,下次登录重来)',
     expect(result).toEqual({ status: 'deferred', reason: 'concurrent-live-instances' });
     expect(phases).toEqual(['confirm', 'running', 'failed']);
     expect(mem.files.has(path.normalize(LOCAL_DB))).toBe(true);
-    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
+      pendingOwnerKeys?: string[];
+    };
+    expect(marker.pendingOwnerKeys).toEqual([USER_KEY]);
   });
 
   it('确认窗停留期间账号库出现:中断,绝不覆盖', async () => {
@@ -448,10 +453,22 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
     expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
   });
 
-  it('空账号库(0 会话)不堵死认领:改名备份让位后并入(Greptile 场景)', async () => {
+  it('账号库存在但无 pending:无论多空一律跳过,不做任何探测让位(v1 契约)', async () => {
+    const { mem, deps, phases } = createHarness({ accountUsed: false });
+    mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(ACCOUNT_DB, 'existing-account-db');
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result).toEqual({ status: 'account-db-exists' });
+    expect(phases).toEqual([]);
+    expect(deps.accountDbLooksUsed).not.toHaveBeenCalled();
+    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('existing-account-db');
+  });
+
+  it('pending 重试场景:空占位账号库改名备份让位后并入(Greptile 场景)', async () => {
     const { mem, deps, phases } = createHarness({ decision: 'adopt', accountUsed: false });
     mem.addFile(LOCAL_DB, 'local-data');
     mem.addFile(ACCOUNT_DB, 'empty-account-db');
+    mem.addFile(MARKER, JSON.stringify({ version: 1, pendingOwnerKeys: [USER_KEY] }));
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result.status).toBe('adopted');
     expect(phases).toEqual(['confirm', 'running', 'done']);
@@ -482,9 +499,15 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     const first = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(first.status).toBe('failed');
     expect(phases).toEqual(['confirm', 'running', 'failed']);
-    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+    // 失败只登记 pending(重试凭据),不写终态。
+    const firstMarker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
+      pendingOwnerKeys?: string[];
+      claimedOwnerKey?: string;
+    };
+    expect(firstMarker.pendingOwnerKeys).toEqual([USER_KEY]);
+    expect(firstMarker.claimedOwnerKey).toBeUndefined();
     // 失败后登录照常继续,ensureReady 会创建空账号库(Greptile 指出的堵死场景)
-    // ——重试必须仍能进来:空库让位,认领续跑完成。
+    // ——重试凭 pending 仍能进来:占位库让位,认领续跑完成。
     mem.addFile(ACCOUNT_DB, 'auto-created-empty-db');
     failNext = false;
     const second = await runLocalOwnerDataAdoption(USER_ID, deps);
@@ -518,7 +541,13 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     expect(phases).toEqual(['confirm', 'running', 'failed']);
     // 库改名(提交点)未发生,local 模式数据完好;已搬部分下次续跑。
     expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
-    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+    // 推迟登记 pending(重试凭据),不写终态。
+    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
+      pendingOwnerKeys?: string[];
+      claimedOwnerKey?: string;
+    };
+    expect(marker.pendingOwnerKeys).toEqual([USER_KEY]);
+    expect(marker.claimedOwnerKey).toBeUndefined();
   });
 
   it('拒绝记录写失败:本次拒绝仍生效,弹窗按 done 解除不卡 confirm', async () => {
