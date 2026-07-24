@@ -156,6 +156,16 @@ function observedAt(value: unknown): string | null {
   return value;
 }
 
+function compareObservedAt(left: string, right: string): number {
+  const [leftWhole, leftFraction = ''] = left.slice(0, -1).split('.');
+  const [rightWhole, rightFraction = ''] = right.slice(0, -1).split('.');
+  if (leftWhole !== rightWhole) return leftWhole < rightWhole ? -1 : 1;
+  const normalizedLeft = leftFraction.padEnd(9, '0');
+  const normalizedRight = rightFraction.padEnd(9, '0');
+  if (normalizedLeft === normalizedRight) return 0;
+  return normalizedLeft < normalizedRight ? -1 : 1;
+}
+
 export function projectModelAccessBalance(value: unknown): ModelAccessBalance {
   if (!isRecord(value) || value.scale !== 9) invalidResponse();
   const planCredits = ledgerDecimal(value.planCredits);
@@ -300,14 +310,13 @@ export function projectModelAccessCreditUsage(value: unknown): ModelAccessCredit
   let currentOriginalTotal = 0n;
   let currentUsedTotal = 0n;
   let currentRemainingTotal = 0n;
-  const observedAtMs = Date.parse(snapshotTime);
   const promotionalGrants = value.promotionalGrants.map((grant) => {
     const projected = projectPromotionalGrant(grant);
     if (grantIds.has(projected.grantId)) invalidResponse();
     grantIds.add(projected.grantId);
     if (
       (projected.state === 'active' || projected.state === 'depleted') &&
-      Date.parse(projected.expiresAt) > observedAtMs
+      compareObservedAt(projected.expiresAt, snapshotTime) > 0
     ) {
       currentOriginalTotal += ledgerDecimal(projected.originalAmount)!.scaled;
       currentUsedTotal += ledgerDecimal(projected.usedAmount)!.scaled;

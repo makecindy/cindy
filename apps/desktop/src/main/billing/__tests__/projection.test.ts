@@ -230,6 +230,18 @@ describe('billing response projection', () => {
         promotionalGrantConsistency: ['LAST', 'SETTLED'].join('_'),
       }),
     ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        observedAt: '2026-07-23T12:00:00.000000001Z',
+        promotionalGrants: [
+          {
+            ...valid.promotionalGrants[0],
+            expiresAt: '2026-07-23T12:00:00.000000002Z',
+          },
+        ],
+      }),
+    ).not.toThrow();
 
     const historical = {
       ...valid,
