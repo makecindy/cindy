@@ -24,12 +24,9 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => os.tmpdir()) },
 }));
 vi.mock('../../authManager.js', () => ({
-  getAuthState: vi.fn(() => ({
-    user: { id: 'user-1', membershipKind: 'personal' },
-    mode: runtime.session.mode,
-    dataOwnerId: runtime.session.dataOwnerId,
-  })),
-  getCurrentUserId: vi.fn(() => 'user-1'),
+  getCurrentUserId: vi.fn(() =>
+    runtime.session.mode === 'cloud' ? runtime.session.dataOwnerId : null,
+  ),
 }));
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
@@ -188,10 +185,32 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(read.mock.calls.length).toBeLessThan(10);
   });
 
-  it('does not query the authenticated market in account-free local mode', async () => {
+  it('shows only public market plugins in account-free local mode', async () => {
     runtime.session = {
       mode: 'local',
       dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const publicPlugin = summary();
+    const organizationPlugin = summary({
+      id: `c${'b'.repeat(24)}`,
+      ghostId: 'cindy-team-only',
+      scope: 'organization',
+      organizationId: 'org-1',
+    });
+    const h = harness([publicPlugin, organizationPlugin]);
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ pluginId: publicPlugin.id, scope: 'public' }],
+      unavailableReason: null,
+    });
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps signed-out sessions out of the market until an owner is selected', async () => {
+    runtime.session = {
+      mode: 'signed-out',
+      dataOwnerId: null,
       generation: 2,
     };
     const h = harness([summary()]);
@@ -308,6 +327,83 @@ describe('PluginMarketService migration and defaultInstall', () => {
     );
   });
 
+  it('installs and enables a public defaultInstall package in local mode', async () => {
+    runtime.session = {
+      mode: 'local',
+      dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const item = summary({ defaultInstall: true });
+    runtime.install.mockImplementation(async () => {
+      const ghost = {
+        manifest: manifest(),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const h = harness([item]);
+
+    const snapshot = await h.service.snapshot();
+
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      {
+        ghostId: item.ghostId,
+        version: item.currentRelease.version,
+        initiallyEnabled: true,
+      },
+    );
+    expect(snapshot.items[0]).toMatchObject({
+      installState: 'installed',
+      enabled: true,
+    });
+  });
+
+  it('installs a public market plugin in account-free local mode', async () => {
+    runtime.session = {
+      mode: 'local',
+      dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const item = summary();
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: false,
+    });
+    const h = harness([item]);
+
+    await expect(h.service.install(item.id)).resolves.toMatchObject({
+      ghost: { manifest: { id: 'cindy-test' }, enabled: false },
+    });
+    expect(h.api.download).toHaveBeenCalledWith(item.id, item.currentRelease.id);
+    expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+      pluginId: item.id,
+      installed: true,
+    });
+  });
+
+  it('rejects a non-public plugin returned to account-free local mode', async () => {
+    runtime.session = {
+      mode: 'local',
+      dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const item = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+    });
+    const h = harness([item]);
+
+    await expect(h.service.install(item.id)).rejects.toThrow(
+      'Plugin 不存在或当前身份不可见',
+    );
+    expect(h.api.detail).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('does not re-enable an installed defaultInstall package disabled by the user', async () => {
     const item = summary({ defaultInstall: true });
     runtime.ghosts = [
@@ -366,10 +462,28 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
   });
 
-  it('does not attach local uninstall tracking outside a cloud session', () => {
+  it('records local-mode defaultInstall opt-out under the local owner', async () => {
     runtime.session = {
       mode: 'local',
       dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+
+    const complete = h.service.prepareLocalUninstallTracking(item.ghostId);
+
+    expect(complete).not.toBeNull();
+    await complete?.();
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+    expect(h.ledger.isDefaultInstallSuppressed('local-v1', item.id)).toBe(true);
+  });
+
+  it('does not attach local uninstall tracking without a stable owner', () => {
+    runtime.session = {
+      mode: 'signed-out',
+      dataOwnerId: null,
       generation: 2,
     };
     const h = harness([summary()]);
