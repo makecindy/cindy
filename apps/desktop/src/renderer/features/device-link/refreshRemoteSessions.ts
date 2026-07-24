@@ -98,6 +98,39 @@ interface RefreshTask {
 
 const refreshTasks = new Map<string, RefreshTask>();
 
+/**
+ * 满窗口缺席行的轮询队列(per-device)。不能用 snapshot epoch 推导数组下标：前一轮
+ * 确认终态并移除候选后，数组会收缩，重算下标会跳过紧邻项。队列在每轮开始时与当前
+ * missing ids 对账，保留旧轮询顺序、移除已不缺席项，并把新缺席项追加到队尾。
+ */
+const missingStatusProbeQueues = new Map<string, string[]>();
+
+function reconcileMissingStatusProbeQueue(
+  deviceId: string,
+  missingSessionIds: readonly string[],
+): string[] {
+  if (missingSessionIds.length === 0) {
+    missingStatusProbeQueues.delete(deviceId);
+    return [];
+  }
+  const missingIds = new Set(missingSessionIds);
+  const previous = missingStatusProbeQueues.get(deviceId) ?? [];
+  const queuedIds = new Set<string>();
+  const queue: string[] = [];
+  for (const sessionId of previous) {
+    if (!missingIds.has(sessionId) || queuedIds.has(sessionId)) continue;
+    queuedIds.add(sessionId);
+    queue.push(sessionId);
+  }
+  for (const sessionId of missingSessionIds) {
+    if (queuedIds.has(sessionId)) continue;
+    queuedIds.add(sessionId);
+    queue.push(sessionId);
+  }
+  missingStatusProbeQueues.set(deviceId, queue);
+  return queue;
+}
+
 export async function refreshRemoteDeviceSessions(
   deviceId: string,
   name?: string,
@@ -156,15 +189,10 @@ async function probeMissingSessionStatuses(
   epoch: number,
   missingSessionIds: readonly string[],
 ): Promise<void> {
-  if (missingSessionIds.length === 0) return;
-  // epoch 每轮递增；按已检查的批次宽度推进起点，避免相邻轮次重复检查 count - 1 条。
-  // 使用 epoch - 1 让首轮从 0 开始；满窗口外有很多有效会话时约 ceil(N / limit) 轮覆盖一遍。
-  const count = Math.min(MISSING_STATUS_PROBE_LIMIT, missingSessionIds.length);
-  const start = ((epoch - 1) * count) % missingSessionIds.length;
-  const candidates = Array.from(
-    { length: count },
-    (_, index) => missingSessionIds[(start + index) % missingSessionIds.length],
-  );
+  const queue = reconcileMissingStatusProbeQueue(deviceId, missingSessionIds);
+  if (queue.length === 0) return;
+  const count = Math.min(MISSING_STATUS_PROBE_LIMIT, queue.length);
+  const candidates = queue.slice(0, count);
   const results = await Promise.all(
     candidates.map(async (sessionId) => {
       try {
@@ -181,8 +209,10 @@ async function probeMissingSessionStatuses(
   );
   // 更强的 refresh / remove / disconnect 已使本轮失效时，不应用迟到的补查结果。
   if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return;
+  const terminalIds = new Set<string>();
   for (const result of results) {
     if (result.errorCode === 'NOT_FOUND') {
+      terminalIds.add(result.sessionId);
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
       removeRemoteSessionActivityEntry(result.sessionId);
       continue;
@@ -191,6 +221,7 @@ async function probeMissingSessionStatuses(
     const session = result.value as Partial<Session>;
     if (session.id !== result.sessionId) continue;
     if (session.status === 'archived' || session.status === 'deleted') {
+      terminalIds.add(result.sessionId);
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, {
         status: session.status,
         updatedAt: session.updatedAt,
@@ -201,6 +232,15 @@ async function probeMissingSessionStatuses(
     // sessions:get 返回窗口外 active 行时同样是权威快照，回填 title / pinnedAt / model 等
     // 元数据；否则丢失 patched push 后会永久保留旧字段。
     remoteProjectsStore.applyPatch(deviceId, result.sessionId, { ...session });
+  }
+  const nextQueue = [
+    ...queue.slice(count),
+    ...candidates.filter((sessionId) => !terminalIds.has(sessionId)),
+  ];
+  if (nextQueue.length === 0) {
+    missingStatusProbeQueues.delete(deviceId);
+  } else {
+    missingStatusProbeQueues.set(deviceId, nextQueue);
   }
 }
 
@@ -236,6 +276,7 @@ async function runRefreshRemoteDeviceSessions(
           // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace 并清掉缺席的归档/删除行。
           // 满窗口时先 merge，再用既有只读 sessions:get 有界轮询窗口外缓存 id 的终态。
           if (sessions.length < LIST_LIMIT) {
+            missingStatusProbeQueues.delete(deviceId);
             remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
             for (const sessionId of missingSessionIds) {
               removeRemoteSessionActivityEntry(sessionId);

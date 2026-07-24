@@ -317,6 +317,36 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(secondProbeIds).toEqual(outside.slice(8, 16).map((item) => item.id));
   });
 
+  it('前一批移除终态行后，下一批仍从原队列的紧邻候选继续', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
+    const outside = Array.from({ length: 20 }, (_, index) => session(`outside-${index}`));
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', outside);
+    invoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:list') return recent;
+      const sessionId = String(args[0]);
+      return session(sessionId, {
+        status: sessionId === 'outside-0' || sessionId === 'outside-1' ? 'archived' : 'active',
+      });
+    });
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+    invoke.mockClear();
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+    const secondProbeIds = invoke.mock.calls
+      .filter(([, channel]) => channel === 'local-db:sessions:get')
+      .map(([, , args]) => String(args[0]));
+
+    expect(secondProbeIds).toEqual(outside.slice(8, 16).map((item) => item.id));
+  });
+
   it('同设备并发重拉合并为单飞执行,期间新触发只补跑一次', async () => {
     const d = did();
     invoke.mockResolvedValueOnce([session('old')]).mockResolvedValueOnce([session('fresh')]);
