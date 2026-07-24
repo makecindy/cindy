@@ -12,11 +12,11 @@ describe('ModelPickerSheet window resize stability', () => {
       'utf8',
     );
     const resetEffect = source.match(
-      /\/\/ 每次重新打开重置[\s\S]*?useEffect\(\(\) => \{[\s\S]*?\}, \[([^\]]*)\]\);/,
+      /\/\/ 每次重新打开重置[\s\S]*?useEffect\(\(\) => \{[\s\S]*?\}\s*,\s*\[([^\]]*)\]\);/,
     );
 
     expect(resetEffect).not.toBeNull();
-    expect(resetEffect?.[1]).not.toContain('windowHeight');
+    expect(resetEffect?.[1]).not.toMatch(/\bwindowHeight\b/);
     expect(source).toContain('windowHeightRef.current = windowHeight;');
     expect(source).toContain('secondaryTranslate.setValue(windowHeightRef.current);');
   });
