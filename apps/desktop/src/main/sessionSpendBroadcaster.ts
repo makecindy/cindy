@@ -91,8 +91,9 @@ export async function recordSessionTurnSpend(sessionId: string, costUsdDelta: nu
 }
 
 function broadcast(payload: SessionSpendPayload): void {
-  // device-link 旁路:控制端打开的远程会话按 session:<id> topic 收到累计 cost 镜像
-  // (本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的 $ 永远不更新)。
+  // device-link 旁路:控制端经 sessions topic(列表订阅常开,会话未打开也不丢)收到
+  // 累计 cost 镜像(本模块走裸 UPDATE、不发 sessions:patched,没有这条 tap 控制端的
+  // $ 永远不更新)。
   tapWindowBroadcast(USAGE_SESSION_SPEND_CHANGED, payload);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
