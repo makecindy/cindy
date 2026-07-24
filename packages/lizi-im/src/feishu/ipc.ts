@@ -337,7 +337,9 @@ function delay(ms: number): Promise<void> {
 
 export async function clearAndDisconnect(): Promise<void> {
   cancelAppRegistration();
-  await wsClient.stop({ reason: 'credentials-cleared' });
-  ownerGuard.clear();
+  await wsClient.stop({
+    reason: 'credentials-cleared',
+    clearOwnerBeforeIdle: true,
+  });
   storage.clearAll();
 }

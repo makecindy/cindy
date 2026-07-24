@@ -33,6 +33,7 @@ const mocks = {
   getBoundClient: vi.fn(() => null),
   sendText: vi.fn(),
   firstAllowed: vi.fn<() => string | null>(() => null),
+  clearOwner: vi.fn(),
   checkOwner: vi.fn(() => true),
   tryClaimOwner: vi.fn(() => false),
   eventHandlers: {} as Record<string, EventHandler>,
@@ -73,6 +74,7 @@ vi.doMock('../outbound.js', () => ({
 
 vi.doMock('../ownerGuard.js', () => ({
   firstAllowed: mocks.firstAllowed,
+  clear: mocks.clearOwner,
   check: mocks.checkOwner,
   tryClaimOwner: mocks.tryClaimOwner,
 }));
@@ -215,6 +217,36 @@ describe('Feishu owner binding updates', () => {
         error: undefined,
         botAppId: credentials.appId,
         ownerOpenId: 'ou_new_owner',
+      });
+    } finally {
+      feishuEvents.off('status', onStatus);
+    }
+  });
+
+  it('clears the owner before broadcasting the credentials-cleared idle state', async () => {
+    mocks.firstAllowed.mockReturnValue('ou_previous_owner');
+    mocks.clearOwner.mockImplementationOnce(() => {
+      mocks.firstAllowed.mockReturnValue(null);
+    });
+    const connecting = wsClient.start(credentials, { announceLifecycle: false });
+    latestClient().options.onReady?.();
+    await expect(connecting).resolves.toBe('connected');
+    const onStatus = vi.fn();
+    feishuEvents.on('status', onStatus);
+
+    try {
+      await wsClient.stop({
+        announceOffline: false,
+        clearOwnerBeforeIdle: true,
+        reason: 'credentials-cleared',
+      });
+
+      expect(mocks.clearOwner).toHaveBeenCalledOnce();
+      expect(onStatus).toHaveBeenLastCalledWith({
+        status: 'idle',
+        error: undefined,
+        botAppId: null,
+        ownerOpenId: null,
       });
     } finally {
       feishuEvents.off('status', onStatus);

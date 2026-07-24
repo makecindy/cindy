@@ -371,6 +371,8 @@ interface StopOptions {
   offlineTimeoutMs?: number;
   /** False for transport recovery; true/default for a logical shutdown. */
   announceOffline?: boolean;
+  /** Clear the owner after any offline notice, before broadcasting idle. */
+  clearOwnerBeforeIdle?: boolean;
   reason?: string;
 }
 
@@ -431,6 +433,9 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
     detector = null;
   }
   outbound.unbindClient();
+  if (opts.clearOwnerBeforeIdle) {
+    ownerGuard.clear();
+  }
   if (!opts.keepStatus) {
     currentBotAppId = null;
     setStatus('idle');

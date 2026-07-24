@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   ),
   writeCredentials: vi.fn(() => true),
   writeOwnerOpenId: vi.fn(),
+  clearAll: vi.fn(),
+  clearOwner: vi.fn(),
   loadOwner: vi.fn(),
   requestRegistration: vi.fn(),
   pollRegistration: vi.fn(),
@@ -33,13 +35,13 @@ vi.mock('../storage.js', () => ({
   writeLifecycleAnnouncement: vi.fn(),
   writeCredentials: mocks.writeCredentials,
   writeOwnerOpenId: mocks.writeOwnerOpenId,
-  clearAll: vi.fn(),
+  clearAll: mocks.clearAll,
 }));
 
 vi.mock('../ownerGuard.js', () => ({
   loadFromDisk: mocks.loadOwner,
   firstAllowed: vi.fn(() => null),
-  clear: vi.fn(),
+  clear: mocks.clearOwner,
 }));
 
 vi.mock('../appRegistration.js', () => ({
@@ -50,6 +52,7 @@ vi.mock('../appRegistration.js', () => ({
 import { FeishuIM } from '../index.js';
 import {
   cancelAppRegistration,
+  clearAndDisconnect,
   reconnectSavedCredentials,
   saveAndConnect,
 } from '../ipc.js';
@@ -198,6 +201,17 @@ describe('Feishu IPC account scope', () => {
 
 describe('Feishu credential connection semantics', () => {
   const credentials = { appId: 'cli_test', appSecret: 'secret' };
+
+  it('delegates owner clearing to stop before the idle status is broadcast', async () => {
+    await clearAndDisconnect();
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-cleared',
+      clearOwnerBeforeIdle: true,
+    });
+    expect(mocks.clearOwner).not.toHaveBeenCalled();
+    expect(mocks.clearAll).toHaveBeenCalledOnce();
+  });
 
   it('keeps an already-connected transport untouched when credentials are unchanged', async () => {
     mocks.readCredentials.mockReturnValue(credentials);

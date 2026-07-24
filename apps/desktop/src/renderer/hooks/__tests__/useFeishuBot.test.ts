@@ -94,4 +94,45 @@ describe('useFeishuBot', () => {
     const second = renderHook(() => useFeishuBot());
     expect(second.result.current.ownerOpenId).toBe('ou_new_owner');
   });
+
+  it('does not let an older getState response overwrite a newer owner push', async () => {
+    let resolveState!: (state: {
+      status: 'connected';
+      appId: string;
+      appSecret: null;
+      hasSecret: true;
+      ownerOpenId: null;
+      lifecycleAnnouncement: true;
+    }) => void;
+    const staleState = new Promise<Parameters<typeof resolveState>[0]>((resolve) => {
+      resolveState = resolve;
+    });
+    const { api, statusListeners } = installFeishuApi();
+    api.getState.mockReturnValueOnce(staleState);
+
+    const hook = renderHook(() => useFeishuBot());
+    await waitFor(() => expect(statusListeners.size).toBe(1));
+
+    act(() => {
+      for (const listener of statusListeners) {
+        listener({
+          status: 'connected',
+          botAppId: 'cli_test',
+          ownerOpenId: 'ou_race_owner',
+        });
+      }
+    });
+
+    resolveState({
+      status: 'connected',
+      appId: 'cli_test',
+      appSecret: null,
+      hasSecret: true,
+      ownerOpenId: null,
+      lifecycleAnnouncement: true,
+    });
+
+    expect(api.getState).toHaveBeenCalledOnce();
+    await waitFor(() => expect(hook.result.current.ownerOpenId).toBe('ou_race_owner'));
+  });
 });
