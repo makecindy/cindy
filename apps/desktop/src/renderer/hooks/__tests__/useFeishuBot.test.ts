@@ -165,6 +165,33 @@ describe('useFeishuBot', () => {
     await waitFor(() => expect(hook.result.current.ownerOpenId).toBe('ou_race_owner'));
   });
 
+  it('subscribes before the initial state read so a synchronous push is not lost', async () => {
+    const { api, statusListeners } = installFeishuApi();
+    api.getState.mockImplementationOnce(async () => {
+      for (const listener of statusListeners) {
+        listener({
+          status: 'connected',
+          botAppId: 'cli_test',
+          ownerOpenId: 'ou_mount_race_owner',
+        });
+      }
+      return {
+        status: 'connected',
+        appId: 'cli_test',
+        appSecret: null,
+        hasSecret: true,
+        ownerOpenId: null,
+        lifecycleAnnouncement: true,
+      };
+    });
+
+    const hook = renderHook(() => useFeishuBot());
+
+    await waitFor(() =>
+      expect(hook.result.current.ownerOpenId).toBe('ou_mount_race_owner'),
+    );
+  });
+
   it('does not let an older reload overwrite a newer registration reload', async () => {
     type State = Awaited<ReturnType<ReturnType<typeof installFeishuApi>['api']['getState']>>;
     let resolveOlder!: (state: State) => void;

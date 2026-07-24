@@ -10,6 +10,7 @@ import {
 } from 'vitest';
 
 import { feishuEvents } from '../events.js';
+import { messages as transportMessages } from '../messages.js';
 
 interface CapturingLogger {
   info: (...args: unknown[]) => void;
@@ -281,5 +282,51 @@ describe('Feishu owner binding updates', () => {
     } finally {
       feishuEvents.off('status', onStatus);
     }
+  });
+
+  it('does not carry an old binding offline notice into a replacement app', async () => {
+    mocks.firstAllowed.mockReturnValue('ou_previous_owner');
+    mocks.clearOwner.mockImplementationOnce(() => {
+      mocks.firstAllowed.mockReturnValue(null);
+    });
+    mocks.sendText.mockResolvedValue({ messageId: 'om_lifecycle' });
+
+    const connecting = wsClient.start(credentials, { announceLifecycle: false });
+    latestClient().options.onReady?.();
+    await expect(connecting).resolves.toBe('connected');
+    await wsClient.stop({
+      clearOwnerBeforeIdle: true,
+      reason: 'credentials-replaced',
+    });
+
+    mocks.tryClaimOwner.mockImplementationOnce(() => {
+      mocks.firstAllowed.mockReturnValue('ou_replacement_owner');
+      return true;
+    });
+    const replacementCredentials = {
+      appId: 'cli_replacement',
+      appSecret: 'replacement-secret',
+    };
+    const replacementConnecting = wsClient.start(replacementCredentials, {
+      announceLifecycle: false,
+    });
+    latestClient().options.onReady?.();
+    await expect(replacementConnecting).resolves.toBe('connected');
+
+    await mocks.eventHandlers['im.message.receive_v1']?.({
+      sender: { sender_id: { open_id: 'ou_replacement_owner' } },
+      message: {
+        message_id: 'om_first_replacement',
+        chat_id: 'oc_replacement',
+        chat_type: 'p2p',
+        message_type: 'text',
+        content: JSON.stringify({ text: 'hello' }),
+      },
+    });
+
+    expect(mocks.sendText).not.toHaveBeenCalledWith(
+      'ou_replacement_owner',
+      transportMessages.lifecycle.offlineNotice,
+    );
   });
 });

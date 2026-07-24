@@ -149,11 +149,6 @@ export function useFeishuBot(): UseFeishuBotReturn {
     }
   }, []);
 
-  // ── initial load ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    void reloadState();
-  }, [reloadState]);
-
   // ── status push subscription ─────────────────────────────────────────────
   useEffect(() => {
     const unsub = window.electronAPI.feishuBot.onStatusChange((update) => {
@@ -178,6 +173,12 @@ export function useFeishuBot(): UseFeishuBotReturn {
     });
     return unsub;
   }, []);
+
+  // Subscribe before starting the initial read so a push cannot fall between
+  // getState's snapshot and listener registration.
+  useEffect(() => {
+    void reloadState();
+  }, [reloadState]);
 
   // ── registration success: hydrate from payload + refetch ────────────────
   // device-code 流程不走 save() 路径, payload 里直接有 appId/ownerOpenId,

@@ -180,6 +180,9 @@ export async function saveAndConnect(
 ): Promise<{ verdict: 'connected' | 'conflict' | 'error' | 'pending' }> {
   const saved = storage.readCredentials();
   const credentialsUnchanged = saved?.appId === appId && saved.appSecret === appSecret;
+  if (credentialsUnchanged && options.replacementOwnerOpenId) {
+    persistReplacementOwner(options.replacementOwnerOpenId);
+  }
   if (credentialsUnchanged) {
     const status = wsClient.getCurrentStatus();
     if (status === 'connected') {
@@ -202,14 +205,18 @@ export async function saveAndConnect(
     clearOwnerBeforeIdle: saved?.appId !== appId,
   });
   if (options.replacementOwnerOpenId) {
-    const ownerWritten = storage.writeOwnerOpenId(options.replacementOwnerOpenId);
-    if (!ownerWritten) {
-      throw new Error('[OWNER_PERSIST_FAILED] Failed to persist Feishu owner');
-    }
-    ownerGuard.loadFromDisk();
+    persistReplacementOwner(options.replacementOwnerOpenId);
   }
   const verdict = await wsClient.start({ appId, appSecret }, { reason: 'credentials-replaced' });
   return { verdict };
+}
+
+function persistReplacementOwner(ownerOpenId: string): void {
+  const ownerWritten = storage.writeOwnerOpenId(ownerOpenId);
+  if (!ownerWritten) {
+    throw new Error('[OWNER_PERSIST_FAILED] Failed to persist Feishu owner');
+  }
+  ownerGuard.loadFromDisk();
 }
 
 /** Restart the saved WebSocket connection without changing credentials or owner binding. */

@@ -227,6 +227,38 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.start).not.toHaveBeenCalled();
   });
 
+  it('persists a registration owner before returning for unchanged credentials', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+    mocks.getCurrentStatus.mockReturnValue('connected');
+
+    await expect(
+      saveAndConnect(credentials.appId, credentials.appSecret, {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).resolves.toEqual({ verdict: 'connected' });
+
+    expect(mocks.writeOwnerOpenId).toHaveBeenCalledWith('ou_registered_owner');
+    expect(mocks.loadOwner).toHaveBeenCalledOnce();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an unchanged registration owner cannot be persisted', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+    mocks.getCurrentStatus.mockReturnValue('connected');
+    mocks.writeOwnerOpenId.mockReturnValue(false);
+
+    await expect(
+      saveAndConnect(credentials.appId, credentials.appSecret, {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).rejects.toThrow('[OWNER_PERSIST_FAILED]');
+
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
   it.each(['testing', 'reconnecting'] as const)(
     'keeps an in-flight %s transport untouched when credentials are unchanged',
     async (status) => {

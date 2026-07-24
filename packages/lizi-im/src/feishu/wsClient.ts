@@ -435,6 +435,7 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
   }
   outbound.unbindClient();
   if (opts.clearOwnerBeforeIdle) {
+    pendingOfflineNotice = false;
     ownerGuard.clear();
   }
   if (!opts.keepStatus) {
