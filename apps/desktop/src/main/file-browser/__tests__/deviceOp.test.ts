@@ -24,6 +24,18 @@ const guardMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>(a
 }));
 const sshRequestMock = vi.fn();
 const dbRowsMock = vi.fn((): Array<{ remoteHostId: string | null }> => []);
+const dbWhereMock = vi.fn(async (_condition: unknown) => dbRowsMock());
+
+function hasDeepValue(root: unknown, expected: unknown): boolean {
+  const seen = new Set<object>();
+  const visit = (value: unknown): boolean => {
+    if (value === expected) return true;
+    if (!value || typeof value !== 'object' || seen.has(value)) return false;
+    seen.add(value);
+    return Object.values(value).some(visit);
+  };
+  return visit(root);
+}
 
 vi.mock('electron', () => ({
   app: { once: vi.fn() },
@@ -59,7 +71,7 @@ vi.mock('../../localDb/client/current.js', () => ({
       // 端点判定改用 selectDistinct(歧义检测需要全部 host),where 直接可 await。
       selectDistinct: () => ({
         from: () => ({
-          where: async () => dbRowsMock(),
+          where: (condition: unknown) => dbWhereMock(condition),
         }),
       }),
     },
@@ -298,6 +310,25 @@ describe('file-browser device-op', () => {
     expect(String(caught)).toMatch(/\[INVALID_PARAMS\].*ambiguous/);
     expect(String(caught)).not.toMatch(/host-[12]/);
     expect(sshRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('normalizes an equivalent workdir before looking up its SSH endpoint', async () => {
+    const rawWorkdir = '/remote/home/user/proj/';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockResolvedValue({ entries: [] });
+
+    await handleRemoteOp({ op: 'listDir', workdir: rawWorkdir });
+
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'listDir', {
+      workdir: rawWorkdir,
+      relPath: '',
+      hideMetaFiles: true,
+      docMode: undefined,
+    });
+    const condition = dbWhereMock.mock.calls.at(-1)?.[0];
+    expect(hasDeepValue(condition, '/remote/home/user/proj')).toBe(true);
+    expect(hasDeepValue(condition, rawWorkdir)).toBe(false);
   });
 
   it('ambiguous: workdir that exists locally AND has SSH session rows is rejected', async () => {

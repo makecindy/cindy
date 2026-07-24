@@ -62,6 +62,7 @@ import { WorkdirWatchManager } from '@cindy/remote-file-service';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import {
   checkRemoteWorkingDir,
   remoteWorkingDirRejectionToIpcError,
@@ -181,13 +182,15 @@ async function resolveWorkdirExecution(
   localProbe: RemoteWorkingDirCheckResult,
 ): Promise<WorkdirExecution> {
   const isLocalDir = localProbe.allowed;
+  const normalizedWorkdir = normalizeWorkingDirForStorage(workdir);
+  if (!normalizedWorkdir) return { kind: 'local' };
   let sshHosts: string[] = [];
   try {
     const db = getDbClient().drizzle;
     const rows = await db
       .selectDistinct({ remoteHostId: sessions.remoteHostId })
       .from(sessions)
-      .where(and(eq(sessions.workingDir, workdir), isNotNull(sessions.remoteHostId)));
+      .where(and(eq(sessions.workingDir, normalizedWorkdir), isNotNull(sessions.remoteHostId)));
     sshHosts = rows.map((r) => r.remoteHostId).filter((h): h is string => !!h);
   } catch (err) {
     log.warn('workdir execution lookup failed', { error: String(err) });
