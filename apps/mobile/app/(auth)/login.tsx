@@ -552,7 +552,7 @@ export default function LoginScreen() {
           </LoginSocialButton>
         </LoginSocialRow>
         {/* 协议同意行(figma 600:660:圆钮行下方 22 设计px,组坐标 y=582;
-            仅 identifier 主视图渲染,与安全区抬升的 consent 追加量同条件) */}
+            渲染门 = 所在 identifier 主视图分支,流程底边恒 622 已含其区间) */}
         <LoginConsentRow
           checked={consentAccepted}
           onToggle={() => setConsentAccepted((prev) => !prev)}
@@ -1029,8 +1029,6 @@ export default function LoginScreen() {
   // 流程底边全步骤恒取 622(含协议行的最低内容):一防步骤切换时 lift 释放产生
   // 整组纵向跳变(规则 7,codex 审查 P1),二让下方外层/内层容器 bounds 恒包住
   // 协议行——RN(尤其 Android)对父 bounds 外子节点不派发触摸,协议行必须在界内。
-  const showConsentRow =
-    auth.loginState?.step === 'identifier' && !ssoOrgMode && configIssues.length === 0;
   const flowBottomDesignPx = loginSizes.flowHeight + LOGIN_CONSENT_ROW.bottomOverflow;
   const liftPx = Math.max(
     0,
@@ -1124,6 +1122,9 @@ export default function LoginScreen() {
       {/* 外层未变换测量 wrapper(v5 冻结拓扑):持布局基线,不参与任何 translate */}
       <View
         collapsable={false}
+        // Android 读屏:弹窗打开时隐藏背景登录组(accessibilityViewIsModal 仅 iOS
+        // 生效;codex 审查 P2)。iOS 忽略此属性,无副作用。
+        importantForAccessibility={consentDialogOpen ? 'no-hide-descendants' : 'auto'}
         onLayout={measureBaseline}
         ref={outerGroupRef}
         style={{

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Animated,
+  BackHandler,
   Easing,
   Pressable,
   StyleSheet,
@@ -334,6 +335,15 @@ export function LoginConsentDialog({
   const { colors } = useTheme();
   const login = colors.login;
   const D = LOGIN_CONSENT_DIALOG;
+  // Android 硬件返回键 = 不同意(与 Esc/遮罩语义一致);非 Modal 弹窗需自行拦截,
+  // 否则返回键会触发路由默认行为绕过协议门(codex 审查 P2)。iOS 无此按键,no-op。
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onDisagree();
+      return true;
+    });
+    return () => sub.remove();
+  }, [onDisagree]);
   return (
     <View
       accessibilityViewIsModal

@@ -147,11 +147,7 @@ export function LoginPage() {
     pendingConsentAction.current = null;
     if (!pending) return;
     // 复验:弹窗期间 auth 状态被异步推进(登录完成/步骤切换/in-flight)则丢弃动作
-    const current = makeConsentStamp(
-      loginState?.step,
-      isLoading,
-      loginState?.step === 'completed',
-    );
+    const current = makeConsentStamp(loginState?.step, isLoading, loginState?.step === 'completed');
     if (canResumePendingConsent(pending.stamp, current)) pending.action();
   };
   const dismissConsent = () => {
@@ -187,7 +183,6 @@ export function LoginPage() {
   // 游客入口已移入第三方圆钮行(identifier 视图人形圆钮);footer 仅保留 error 步
   // 的「跳过登录」逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
   const showLocalModeFooter = loginState?.step === 'error';
-  const showConsentRow = loginState?.step === 'identifier' && !ssoOrgMode;
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
   // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
@@ -464,7 +459,7 @@ export function LoginPage() {
           </LoginSocialButton>
         </LoginSocialRow>
         {/* 协议同意行(figma 600:660:圆钮行下方 22 设计px,组坐标 y=582;
-            仅 identifier 主视图渲染,与 bottomReserve 同条件) */}
+            渲染门 = 所在 identifier 主视图分支,面板底部预留恒定已含其区间) */}
         <LoginConsentRow
           checked={consentAccepted}
           onToggle={() => setConsentAccepted((prev) => !prev)}

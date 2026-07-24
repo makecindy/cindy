@@ -844,7 +844,13 @@ export function LoginConsentDialog({
       aria-labelledby="login-consent-dialog-title"
       aria-describedby="login-consent-dialog-body"
       ref={containerRef}
-      className="fixed inset-0 z-50 grid place-items-center"
+      // tabIndex=-1 + 遮罩点击回焦:点遮罩空白会让焦点落到 body,keydown 不再冒泡
+      // 经容器,Esc 会短暂失效——点击遮罩自身时把焦点拉回容器,Esc 恒有效
+      tabIndex={-1}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) event.currentTarget.focus();
+      }}
+      className="fixed inset-0 z-50 grid place-items-center outline-none"
       style={{ background: LOGIN_COLORS.consentOverlay }}
       onKeyDown={handleKeyDown}
     >
