@@ -12,6 +12,7 @@ import { app, shell } from 'electron';
 import { createLogger } from './logger';
 
 const log = createLogger('legacyDevShortcutCleanup');
+const CLEANUP_TIMEOUT_MS = 8_000;
 
 interface ShortcutDirEntry {
   name: string;
@@ -89,20 +90,10 @@ function isArgumentlessDevElectronShortcut(details: Electron.ShortcutDetails): b
   return target.endsWith('\\node_modules\\electron\\dist\\electron.exe') && !details.args;
 }
 
-/**
- * Best-effort cleanup entrypoint. The known SnoreToast shortcut is removed by
- * name; the recursive fallback only removes argumentless links whose resolved
- * target is a development Electron binary.
- */
-export async function cleanupLegacyDevShortcuts(
-  overrides?: Partial<LegacyDevShortcutCleanupDeps>,
+async function runCleanup(
+  deps: LegacyDevShortcutCleanupDeps,
+  appData: string,
 ): Promise<void> {
-  const deps: LegacyDevShortcutCleanupDeps = { ...defaultDeps(), ...overrides };
-  if (deps.platform !== 'win32') return;
-
-  const appData = deps.appDataDir();
-  if (!appData) return;
-
   const startMenuDir = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs');
   let removed = 0;
 
@@ -138,5 +129,37 @@ export async function cleanupLegacyDevShortcuts(
 
   if (removed > 0) {
     deps.logger?.info('legacy dev shortcut cleanup applied', { removed });
+  }
+}
+
+/**
+ * Best-effort cleanup entrypoint. The known SnoreToast shortcut is removed by
+ * name; the recursive fallback only removes argumentless links whose resolved
+ * target is a development Electron binary. Slow or redirected Start Menu
+ * storage must not delay the rest of application startup.
+ */
+export async function cleanupLegacyDevShortcuts(
+  overrides?: Partial<LegacyDevShortcutCleanupDeps>,
+): Promise<void> {
+  const deps: LegacyDevShortcutCleanupDeps = { ...defaultDeps(), ...overrides };
+  if (deps.platform !== 'win32') return;
+
+  const appData = deps.appDataDir();
+  if (!appData) return;
+
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      deps.logger?.warn('legacy dev shortcut cleanup timed out; continuing startup', {
+        timeoutMs: CLEANUP_TIMEOUT_MS,
+      });
+      resolve();
+    }, CLEANUP_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([runCleanup(deps, appData), timeout]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }

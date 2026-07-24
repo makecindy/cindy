@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   app: {
@@ -67,6 +67,7 @@ function makeHarness(options?: {
 
 describe('cleanupLegacyDevShortcuts', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
 
   it('removes the known SnoreToast shortcut by exact legacy name', async () => {
     const knownShortcut = path.join(START_MENU, 'XdtMakerDev.lnk');
@@ -169,5 +170,20 @@ describe('cleanupLegacyDevShortcuts', () => {
 
     await expect(cleanupLegacyDevShortcuts(deps)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('stops blocking startup when the Start Menu scan times out', async () => {
+    vi.useFakeTimers();
+    const { deps, logger } = makeHarness();
+    deps.readdir = () => new Promise(() => {});
+
+    const cleanup = cleanupLegacyDevShortcuts(deps);
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'legacy dev shortcut cleanup timed out; continuing startup',
+      { timeoutMs: 8_000 },
+    );
   });
 });
