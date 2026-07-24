@@ -277,6 +277,101 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 
+  it('只在清单绑定的方法中把 safeStorage 凭证注入 Worker 保留字段', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['mail/action'],
+      },
+    ];
+    const child = makeAutoReplyProcess();
+    const readSecret = vi.fn(() => 'fake-secret-value');
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      readSecret,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+    });
+
+    const result = await broker.handleRequest('node-ghost', {
+      type: 'node-request',
+      method: 'mail/action',
+      params: { action: 'search' },
+      // main.js 自报的同名字段不可信；broker 必须忽略并重铸。
+      cindy: { secrets: { mail_code: 'attacker-value' } },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(readSecret).toHaveBeenCalledWith('node-ghost', 'mail_code');
+    expect(child.received[0]).toMatchObject({
+      method: 'mail/action',
+      params: { action: 'search' },
+      cindy: { secrets: { mail_code: 'fake-secret-value' } },
+    });
+
+    await broker.handleRequest('node-ghost', rpcRequest('account/status', {}));
+    expect(readSecret).toHaveBeenCalledTimes(1);
+    expect(child.received[1]).not.toHaveProperty('cindy');
+    broker.destroyAll();
+  });
+
+  it('绑定凭证未保存时不向 Worker 发送业务请求，也不在日志中泄露值', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['mail/action'],
+      },
+    ];
+    const child = makeAutoReplyProcess();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      readSecret: () => null,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log,
+    });
+
+    expect(await broker.handleRequest('node-ghost', rpcRequest('mail/action', {}))).toMatchObject({
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: expect.stringContaining('邮箱授权码'),
+    });
+    expect(child.received).toHaveLength(0);
+    expect(JSON.stringify(log)).not.toContain('fake-secret-value');
+    broker.destroyAll();
+  });
+
+  it('保险库读取异常时返回固定错误，不发送请求或泄露异常细节', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['mail/action'],
+      },
+    ];
+    const child = makeAutoReplyProcess();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      readSecret: () => {
+        throw new Error('vault failed with sensitive context');
+      },
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+    });
+
+    const result = await broker.handleRequest('node-ghost', rpcRequest('mail/action', {}));
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: '读取 Node 请求所需凭证失败',
+    });
+    expect(JSON.stringify(result)).not.toContain('sensitive context');
+    expect(child.received).toHaveLength(0);
+    broker.destroyAll();
+  });
+
   it('mcp-stdio 由主机先 initialize，再发送 initialized 通知和业务方法', async () => {
     const methods: string[] = [];
     const ghost = fakeGhost({ protocol: 'mcp-stdio' });

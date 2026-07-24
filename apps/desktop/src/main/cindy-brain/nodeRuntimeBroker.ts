@@ -76,6 +76,11 @@ export interface NodeWorkerProcess {
 
 export interface GhostNodeRuntimeBrokerDeps {
   getGhost(id: string): InstalledGhost | null;
+  /**
+   * 读取当前插件自己声明的 Node 凭证。生产接 safeStorage；返回 null =
+   * 未保存或保险库不可用。调用方不得记录返回值。
+   */
+  readSecret?: (ghostId: string, secretKey: string) => string | null;
   spawnProcess?: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess?: (
@@ -407,6 +412,11 @@ export class GhostNodeRuntimeBroker {
       }
       entryRel = request.entry;
     }
+    const secretBindings = (ghost.manifest.node.secretBindings ?? []).filter(
+      (binding) =>
+        binding.methods.includes(request.method as string) &&
+        (binding.entry ?? ghost.manifest.node!.entry) === entryRel,
+    );
 
     let entry: WorkerEntry;
     try {
@@ -420,6 +430,26 @@ export class GhostNodeRuntimeBroker {
     if (entry.pending.size >= MAX_PENDING_REQUESTS) {
       return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
     }
+    let hostSecrets: Record<string, string> | undefined;
+    if (secretBindings.length > 0) {
+      hostSecrets = Object.create(null) as Record<string, string>;
+      try {
+        for (const binding of secretBindings) {
+          const value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          if (value === null) {
+            for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+            return errorResult(
+              'PERMISSION_DENIED',
+              `Node 请求需要先配置凭证「${binding.label}」`,
+            );
+          }
+          hostSecrets[binding.key] = value;
+        }
+      } catch {
+        for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+        return errorResult('INTERNAL', '读取 Node 请求所需凭证失败');
+      }
+    }
 
     try {
       if (ghost.manifest.node.protocol === 'mcp-stdio') {
@@ -431,13 +461,21 @@ export class GhostNodeRuntimeBroker {
           return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
         }
       }
-      const result = await this.sendRpc(
+      const pendingResult = this.sendRpc(
         entry,
         request.method,
         request.params ?? null,
         effectiveTimeoutMs,
         request.maxTotalMs as number | undefined,
+        hostSecrets,
       );
+      // writeLine/JSON.stringify 在 sendRpc 内同步完成；随即抹掉本次临时对象，
+      // 不让凭证明文跟随 Promise 生命周期常驻在 broker 闭包里。
+      if (hostSecrets) {
+        for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+        hostSecrets = undefined;
+      }
+      const result = await pendingResult;
       return { ok: true, result };
     } catch (error) {
       if (error instanceof NodeRpcError) {
@@ -447,6 +485,9 @@ export class GhostNodeRuntimeBroker {
       }
       return errorResult('INTERNAL', error instanceof Error ? error.message : String(error));
     } finally {
+      if (hostSecrets) {
+        for (const key of Object.keys(hostSecrets)) hostSecrets[key] = '';
+      }
       this.scheduleIdleStop(entry);
     }
   }
@@ -848,6 +889,7 @@ export class GhostNodeRuntimeBroker {
     params: unknown,
     timeoutMs: number,
     maxTotalMs?: number,
+    hostSecrets?: Readonly<Record<string, string>>,
   ): Promise<unknown> {
     this.clearIdleTimer(entry);
     const id = String(entry.nextId++);
@@ -868,7 +910,15 @@ export class GhostNodeRuntimeBroker {
       entry.pending.set(id, pending);
       this.armPendingTimer(pending);
       try {
-        this.writeLine(entry, { jsonrpc: '2.0', id, method, params });
+        this.writeLine(entry, {
+          jsonrpc: '2.0',
+          id,
+          method,
+          params,
+          ...(hostSecrets && Object.keys(hostSecrets).length > 0
+            ? { cindy: { secrets: hostSecrets } }
+            : {}),
+        });
       } catch (error) {
         entry.pending.delete(id);
         this.clearTimer(pending.timer);

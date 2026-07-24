@@ -348,6 +348,8 @@ describe('FORGE_GUIDE', () => {
       '会话上下文(session-context 槽)',
       'workdir_is_local',
       'node.entries',
+      'node.secretBindings',
+      'request.cindy.secrets',
       '目录选择(pick 槽)',
       'cindy.pick',
       '面板预览(preview 槽)',

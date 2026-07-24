@@ -78,6 +78,9 @@ function deriveRequirementGroups(manifest: GhostManifest): GhostSetupRequirement
     if (s.source === 'login-email') continue; // 登录派生恒就绪,不构成配置需求
     implicit.push({ kind: 'secret', key: s.key });
   }
+  for (const s of manifest.node?.secretBindings ?? []) {
+    implicit.push({ kind: 'secret', key: s.key });
+  }
   for (const c of manifest.network?.connections ?? []) {
     implicit.push({ kind: 'connection', key: c.key });
   }
@@ -94,9 +97,10 @@ function toStatusItem(manifest: GhostManifest, req: GhostSetupRequirement): Ghos
     return { ref: `connection:${req.key}`, label: decl?.label ?? req.key, kind: 'connection' };
   }
   const decl = manifest.network?.secrets?.find((s) => s.key === req.key);
+  const nodeDecl = manifest.node?.secretBindings?.find((s) => s.key === req.key);
   return {
     ref: `secret:${req.key}`,
-    label: decl?.label ?? req.key,
+    label: decl?.label ?? nodeDecl?.label ?? req.key,
     kind: decl?.source === 'oauth' ? 'oauth' : 'key',
   };
 }
@@ -109,8 +113,11 @@ function verdictOf(manifest: GhostManifest, req: GhostSetupRequirement, probes: 
     return probes.connectionCount(req.key) > 0 ? 'satisfied' : 'missing';
   }
   const decl = manifest.network?.secrets?.find((s) => s.key === req.key);
+  const nodeDecl = manifest.node?.secretBindings?.find((s) => s.key === req.key);
   // 清单漂移防御(setup 引用在校验期保证存在,这里只可能是运行期清单被
   // 换过):查无声明按已就绪放行,交给运行期 networkSlot 兜底,不误拦。
+  if (!decl && !nodeDecl) return 'satisfied';
+  if (nodeDecl) return probes.secretSaved(req.key) ? 'satisfied' : 'missing';
   if (!decl) return 'satisfied';
   if (decl.source === 'login-email') return 'satisfied';
   if (decl.source === 'oauth') {
