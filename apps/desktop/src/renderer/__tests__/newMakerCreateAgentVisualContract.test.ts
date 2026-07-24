@@ -123,6 +123,20 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('boxShadow');
   });
 
+  it('lays out quick-start cards icon-top/label-bottom with a 4px minimum gap (2026-07-25 redesign)', () => {
+    // 用户改稿 2026-07-25:两档(narrow/常态)统一竖排——icon 固定左上,文字挪到卡片
+    // 中下方与 icon 左对齐(flex-col + justify-between,gap-1 兜底最小间距),取代原
+    // 窄态横排 / 常态竖排自适应(#562)。卡片高度不变(narrow 84 / 常态 112)。
+    expect(source).toContain(
+      "'group flex flex-col items-start justify-between gap-1 rounded-xl border",
+    );
+    expect(source).toContain("isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4'");
+    expect(source).toContain('className="w-full min-w-0 text-13 font-semibold leading-[16px]"');
+    // 旧的窄态横排(items-center)/常态竖排(gap-3)特判已被统一竖排取代。
+    expect(source).not.toContain("'flex min-h-[84px] items-center gap-3 p-3'");
+    expect(source).not.toContain("'flex min-h-[112px] flex-col items-start gap-3 p-4'");
+  });
+
   it('uses exact CREATE AGENT quick-start and avatar tokens from the Figma slices', () => {
     // head_image 切图方案(用户裁决 2026-07-17):边框烧入图,仅投影走 CSS
     expect(brandLockupSource).toContain('head-image-dark.png');
