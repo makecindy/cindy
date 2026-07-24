@@ -91,7 +91,7 @@ export function GhostPluginPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm, confirmWithCheckbox } = useConfirmDialog();
-  const { user } = useAuth();
+  const { user, mode, dataOwnerId } = useAuth();
   const showEnterprise = user?.membershipKind === 'org';
   const ghosts = useInstalledGhosts();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -113,7 +113,7 @@ export function GhostPluginPage() {
   }, []);
   useEffect(() => {
     void refreshMarket();
-  }, [refreshMarket]);
+  }, [refreshMarket, mode, dataOwnerId]);
   const activeSessionWorkingDir = useSyncExternalStore(
     subscribeToLastWorkingDir,
     getLastWorkingDir,
