@@ -32,10 +32,16 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
-  // 与真实实现同判定:仅 authenticated + oauth 视为 ChatGPT 已连接
-  // (#268 起向导直接消费此 helper,mock 必须同步导出)。
-  isChatGptConnectionConnected: (state: { kind: string; authSource?: string }) =>
-    state.kind === 'authenticated' && state.authSource === 'oauth',
+  // 与真实实现同签名同判定(loading 沿用 providerConnected,其余仅
+  // authenticated + oauth 视为已连接;#268 起向导直接消费此 helper,
+  // mock 必须同步导出)。
+  isChatGptConnectionConnected: (
+    state: { kind: string; authSource?: string },
+    providerConnected: boolean,
+  ) =>
+    state.kind === 'loading'
+      ? providerConnected
+      : state.kind === 'authenticated' && state.authSource === 'oauth',
   useCodexAuth: () => ({
     state: codexAuthMock.state,
     triggerLogin,
@@ -127,5 +133,26 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
 
     await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('openai'));
+  });
+
+  it('点击授权但本次登录被取消时不完成绑定', async () => {
+    // 负向边界:点击本身不算完成——登录取消、状态未翻转,不得收口。
+    codexAuthMock.state = { kind: 'unauthenticated' };
+    triggerLogin.mockImplementation(async () => 'cancelled');
+    const onDone = vi.fn();
+    render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        entry={{ kind: 'builtin', providerId: 'openai' }}
+        onOpenCustomForm={vi.fn()}
+        onClose={vi.fn()}
+        onDone={onDone}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('settings.providers.button.authorize'));
+
+    await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onDone).not.toHaveBeenCalled());
   });
 });
