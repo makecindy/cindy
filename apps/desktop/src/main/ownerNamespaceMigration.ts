@@ -44,16 +44,24 @@ interface ClaimMarker {
   complete: boolean;
 }
 
-interface MigrationDeps {
-  userDataDir(): string;
-  readFile(file: string): Promise<string>;
-  writeFileExclusive(file: string, text: string): Promise<void>;
-  writeFile(file: string, text: string): Promise<void>;
+/**
+ * moveWithoutOverwrite 需要的最小 fs 面。单独成型是为了让其它 owner 数据搬迁
+ * 模块(如 localOwnerDataAdoption)复用同一套「合并式不覆盖搬移」语义,而不必
+ * 构造整个 MigrationDeps。
+ */
+export interface MoveFsDeps {
   lstat(file: string): Promise<{ isDirectory(): boolean }>;
   readdir(dir: string): Promise<string[]>;
   mkdir(dir: string): Promise<void>;
   rename(source: string, target: string): Promise<void>;
   rmdir(dir: string): Promise<void>;
+}
+
+interface MigrationDeps extends MoveFsDeps {
+  userDataDir(): string;
+  readFile(file: string): Promise<string>;
+  writeFileExclusive(file: string, text: string): Promise<void>;
+  writeFile(file: string, text: string): Promise<void>;
   readlink(file: string): Promise<string>;
   /** 共享 userData 的 passive dev(--preserve-running / --passive 非 isolated)。 */
   passiveSharedUserData(): boolean;
@@ -242,8 +250,20 @@ export function hasLegacyOwnerNamespaceClaim(
   return !hasConcurrentLiveInstanceSync(userDataDir, isPidAlive);
 }
 
+/**
+ * 是否存在共享本 userData 的其它活实例(dev/packaged 实例注册表 + packaged
+ * SingletonLock 双信号,同 hasLegacyOwnerNamespaceClaim 的 gate 语义)。供其它
+ * owner 数据搬迁模块(localOwnerDataAdoption)在破坏性 rename 前做独占确认。
+ */
+export function hasConcurrentLiveInstancesSharingUserData(
+  userDataDir = app.getPath('userData'),
+  isPidAlive: (pid: number) => boolean = isPidAliveDefault,
+): boolean {
+  return hasConcurrentLiveInstanceSync(userDataDir, isPidAlive);
+}
+
 async function pathType(
-  deps: MigrationDeps,
+  deps: MoveFsDeps,
   file: string,
 ): Promise<'missing' | 'directory' | 'other'> {
   try {
@@ -272,8 +292,8 @@ class ClaimInterruptedError extends Error {
   }
 }
 
-async function moveWithoutOverwrite(
-  deps: MigrationDeps,
+export async function moveWithoutOverwrite(
+  deps: MoveFsDeps,
   source: string,
   target: string,
   abortCheck?: () => Promise<void>,

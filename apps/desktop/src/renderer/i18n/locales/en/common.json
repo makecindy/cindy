@@ -2832,6 +2832,15 @@
     "failedTitle": "Migration incomplete",
     "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in."
   },
+  "localAdoption": {
+    "title": "Bring Local Sessions Into Your Account",
+    "description": "Sessions created on this device while you were signed out were found. You can bring them into the account you just signed in with and keep using them, or keep them in local mode where they are only visible when you skip sign-in. Either way, all data stays on this device — nothing is uploaded.",
+    "adopt": "Bring Into This Account",
+    "keep": "Keep in Local Mode",
+    "migrating": "Bringing local sessions in, please wait…",
+    "failedTitle": "Transfer incomplete",
+    "failedDescription": "Your local sessions could not be transferred this time. You can keep using {{appName}} — it will retry automatically the next time you sign in."
+  },
   "splash": {
     "tips": {
       "checkingUpdate": "Checking for updates...",

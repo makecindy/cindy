@@ -215,6 +215,10 @@ import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
+import {
+  registerLocalOwnerAdoptionIpc,
+  runLocalOwnerDataAdoptionForUser,
+} from './localOwnerDataAdoption';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
@@ -516,8 +520,10 @@ import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
   beginAppSessionBoundary,
+  dataOwnerStorageKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
+  LOCAL_DATA_OWNER_ID,
   ownerScopedUserDataPath,
 } from './appSessionState.js';
 import {
@@ -5226,6 +5232,9 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  // local 模式数据认领(local-v1 → 登录账号)的确认弹窗 IPC:同 mToc,必须先于
+  // registerLocalDbIpc 注册,beforeEnsureReady 推送 confirm 态时 renderer 才能应答。
+  registerLocalOwnerAdoptionIpc();
   registerLocalDbIpc({
     isOwnerCurrent: (userId) =>
       isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending()),
@@ -5237,6 +5246,10 @@ app.on('ready', async () => {
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
       // 全量兜底,绝不 throw,失败不阻塞登录(ensureReady 照常建新库)。
       await runLegacyUserDataMigrationForUser(user.id);
+      // local 模式数据认领(local-v1 → 账号):必须排在 mToc 之后——mToc 若为该
+      // 账号迁入了老库,认领的「账号库已存在」前置检查会自然跳过,不做行级合并。
+      // 同样绝不 throw、失败不阻塞登录。
+      await runLocalOwnerDataAdoptionForUser(user.id);
     },
     onReady: async (userId) => {
       // 必须先 await ensureLifecycleDbClient(内部 await createDbClient → worker
@@ -5288,7 +5301,19 @@ app.on('ready', async () => {
           userDataDir: app.getPath('userData'),
           legacyUserDataDirNames: BRAND_IDENTITY.legacyUserDataDirNames,
           currentDialoguesRoot: ownerScopedUserDataPath('dialogues'),
-          additionalLegacyDialogueRoots: [path.join(app.getPath('userData'), 'dialogues')],
+          // local 模式数据认领(localOwnerDataAdoption)把 owners/<localKey> 搬进
+          // 账号命名空间后,DB 里 dialogue 会话的 working_dir 仍是 local 前缀,
+          // 靠这里改写到账号 dialogues 根(sweep 自身会滤掉等于 currentRoot 的项,
+          // local 模式下运行时该根即 currentRoot,天然 no-op)。
+          additionalLegacyDialogueRoots: [
+            path.join(app.getPath('userData'), 'dialogues'),
+            path.join(
+              app.getPath('userData'),
+              'owners',
+              dataOwnerStorageKey(LOCAL_DATA_OWNER_ID),
+              'dialogues',
+            ),
+          ],
           log: createLogger('dialogue-workdir-self-heal'),
         });
       } catch (err) {

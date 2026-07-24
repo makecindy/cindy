@@ -2959,6 +2959,18 @@ interface ElectronAPI {
     confirm: () => Promise<void>;
   };
 
+  // ── local 模式数据认领 — 登录后把 local-v1 的本机会话一次性并入账号 ──
+  localAdoption: {
+    /** 订阅弹窗阶段推送。payload: { phase } */
+    onState: (
+      cb: (data: { phase: 'confirm' | 'running' | 'done' | 'failed' }) => void,
+    ) => () => void;
+    /** 挂载时补拉当前阶段(main 先推送、renderer 后订阅时不丢态)。 */
+    getState: () => Promise<{ phase: 'confirm' | 'running' | 'done' | 'failed' | null }>;
+    /** confirm 态传回用户裁决('adopt' 并入 / 'keep' 保留本机);failed 态清态。 */
+    decide: (decision: 'adopt' | 'keep') => Promise<void>;
+  };
+
   // ── chat-data-localization (M-FE2) — local SQLite IPC bridge ──
   localDb: {
     /** Open / migrate the per-user db file. Failure → fatal dialog + ready:false. */

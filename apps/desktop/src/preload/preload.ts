@@ -262,6 +262,8 @@ const fanOutFullscreenChange = createIpcFanOut('fullscreen-change');
 const fanOutApplicationMenuCommand = createIpcFanOut('app-menu:command');
 // 首登轻量数据迁移(mToc)弹窗阶段推送(confirm / running / done / failed)
 const fanOutLegacyMigrationState = createIpcFanOut('legacy-migration:state');
+// local 模式数据认领(local-v1 → 账号)弹窗阶段推送(confirm / running / done / failed)
+const fanOutLocalAdoptionState = createIpcFanOut('local-adoption:state');
 const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored');
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
@@ -3082,6 +3084,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('legacy-migration:get-state'),
     /** 用户点「确定」(confirm 态放行迁移)或「继续」(failed 态清态关窗)。 */
     confirm: (): Promise<void> => ipcRenderer.invoke('legacy-migration:confirm'),
+  },
+
+  // ── local 模式数据认领:登录后把 local-v1 的本机会话一次性并入账号 ──
+  // main 在 ensureReady 前推送弹窗阶段;renderer 全局弹窗组件消费。
+  localAdoption: {
+    /** 订阅认领弹窗阶段推送。payload: { phase: 'confirm'|'running'|'done'|'failed' } */
+    onState: fanOutLocalAdoptionState,
+    /** 组件挂载时补拉当前阶段(避免 main 先推送、renderer 后订阅丢事件)。 */
+    getState: (): Promise<{ phase: 'confirm' | 'running' | 'done' | 'failed' | null }> =>
+      ipcRenderer.invoke('local-adoption:get-state'),
+    /** confirm 态传回用户裁决('adopt' 并入 / 'keep' 保留本机);failed 态清态关窗。 */
+    decide: (decision: 'adopt' | 'keep'): Promise<void> =>
+      ipcRenderer.invoke('local-adoption:decide', decision),
   },
 
   // ── chat-data-localization (M-FE2)：本地 SQLite IPC 桥接 ──
