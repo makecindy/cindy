@@ -1785,8 +1785,19 @@ export async function installOrUpdateMarketGhostPackage(
 
   const runtime = getGhostRuntime();
   runtime.stop(expected.ghostId);
-  const result = await manager.update(cindyFilePath);
-  if ('rejection' in result) throwInstallError(result.rejection);
+  getGhostNodeRuntimeBroker().stop(expected.ghostId);
+  getGhostAgentSlot().clearGhost(expected.ghostId);
+  let result: Awaited<ReturnType<typeof manager.update>>;
+  try {
+    result = await manager.update(cindyFilePath);
+  } catch (error) {
+    spawnIfResident(installed);
+    throw error;
+  }
+  if ('rejection' in result) {
+    spawnIfResident(installed);
+    throwInstallError(result.rejection);
+  }
   runtime.resetFuse(expected.ghostId);
   const store = getLayoutStore();
   const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
@@ -1812,6 +1823,8 @@ export async function uninstallGhostAndCleanup(id: string): Promise<void> {
   const manager = getGhostManager();
   const runtime = getGhostRuntime();
   runtime.stop(id);
+  getGhostNodeRuntimeBroker().stop(id);
+  getGhostAgentSlot().clearGhost(id);
   getGhostSubscriptionGateway().dropGhost(id);
   const result = await manager.uninstall(id, { notify: false });
   if ('rejection' in result) throwUninstallError(result.rejection);

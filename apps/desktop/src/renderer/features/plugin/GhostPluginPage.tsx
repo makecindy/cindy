@@ -255,7 +255,6 @@ export function GhostPluginPage() {
     const counts: Record<PluginPresentationOrigin, number> = {
       public: 0,
       organization: 0,
-      personal: 0,
       local: 0,
     };
     for (const item of searchedInstalledItems) counts[item.origin] += 1;

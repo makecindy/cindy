@@ -170,6 +170,7 @@ export class PluginMarketService {
 
   async detail(pluginId: string): Promise<PluginMarketDetail> {
     if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
+    this.requireConfigured();
     const owner = captureCloudOwner();
     const plugin = await this.api.detail(pluginId);
     requireSameCloudOwner(owner);
@@ -188,6 +189,7 @@ export class PluginMarketService {
     options?: { allowPermissionExpansion?: boolean },
   ): Promise<{ ghost: InstalledGhost }> {
     if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
+    this.requireConfigured();
     const owner = captureCloudOwner();
     return this.withMutation(pluginId, async () => {
       requireSameCloudOwner(owner);
@@ -285,6 +287,12 @@ export class PluginMarketService {
       return ghost;
     } finally {
       await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private requireConfigured(): void {
+    if (!getClientEndpoint('pluginApiBaseUrl')) {
+      throw new Error('Plugin 市场未配置');
     }
   }
 

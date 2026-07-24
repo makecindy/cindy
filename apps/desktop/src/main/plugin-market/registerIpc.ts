@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron';
 
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireString } from '../utils/ipcValidate.js';
 import { PluginMarketService } from './service.js';
 
@@ -15,13 +16,18 @@ function service(): PluginMarketService {
 export function registerPluginMarketIpc(): void {
   if (registered) return;
   registered = true;
-  ipcMain.handle('plugin-market:snapshot', () => service().snapshot());
-  ipcMain.handle('plugin-market:detail', (_event, pluginId: unknown) =>
-    service().detail(requireString(pluginId, 'pluginId')),
-  );
+  ipcMain.handle('plugin-market:snapshot', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return service().snapshot();
+  });
+  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return service().detail(requireString(pluginId, 'pluginId'));
+  });
   ipcMain.handle(
     'plugin-market:install',
-    (_event, pluginId: unknown, options: unknown) => {
+    (event, pluginId: unknown, options: unknown) => {
+      assertTrustedAppRendererEvent(event);
       const allowPermissionExpansion =
         typeof options === 'object' &&
         options !== null &&
@@ -31,7 +37,8 @@ export function registerPluginMarketIpc(): void {
       });
     },
   );
-  ipcMain.handle('plugin-market:uninstall', (_event, pluginId: unknown) =>
-    service().uninstall(requireString(pluginId, 'pluginId')),
-  );
+  ipcMain.handle('plugin-market:uninstall', (event, pluginId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return service().uninstall(requireString(pluginId, 'pluginId'));
+  });
 }

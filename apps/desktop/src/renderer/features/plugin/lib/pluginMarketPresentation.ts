@@ -10,11 +10,15 @@ import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 export type PluginPresentationOrigin =
   | 'public'
   | 'organization'
-  | 'personal'
   | 'local';
 
 export function pluginPresentationOrigin(
   item: Pick<PluginMarketItem, 'scope'> | null | undefined,
 ): PluginPresentationOrigin {
-  return item?.scope ?? 'local';
+  if (item?.scope === 'public' || item?.scope === 'organization') {
+    return item.scope;
+  }
+  // Personal market publishing is intentionally not exposed by the client.
+  // Keep the renderer taxonomy closed even if an older/newer server returns it.
+  return 'local';
 }

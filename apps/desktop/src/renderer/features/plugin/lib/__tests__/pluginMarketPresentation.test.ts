@@ -10,8 +10,8 @@ describe('pluginPresentationOrigin', () => {
     expect(pluginPresentationOrigin({ scope: 'organization' })).toBe('organization');
   });
 
-  it('maps personal plugins to their personal source', () => {
-    expect(pluginPresentationOrigin({ scope: 'personal' })).toBe('personal');
+  it('keeps personal plugins out of the client-facing market taxonomy', () => {
+    expect(pluginPresentationOrigin({ scope: 'personal' })).toBe('local');
   });
 
   it.each([null, undefined])('keeps unmatched installed plugins local', (item) => {
