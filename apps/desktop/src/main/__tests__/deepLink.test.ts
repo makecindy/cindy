@@ -126,6 +126,22 @@ describe('parseDeepLink', () => {
     });
   });
 
+  it('tolerates the device-frozen link format when routing a click', () => {
+    // 远程会话深链带 `?device=`(renderer 生成);main 端点击路由按 sessionId
+    // 导航即可,未知参数不拖累 session / message 解析。
+    expect(parseDeepLink(buildSessionDeepLink('abc-123', { deviceId: 'dev-1' }))).toEqual({
+      type: 'session',
+      id: 'abc-123',
+    });
+    expect(
+      parseDeepLink(buildSessionMessageDeepLink('abc-123', 'm1', { deviceId: 'dev-1' })),
+    ).toEqual({
+      type: 'session',
+      id: 'abc-123',
+      messageClientId: 'm1',
+    });
+  });
+
   it('ignores empty or malformed message anchor but keeps session id', () => {
     expect(parseDeepLink('xdt-maker://session/abc-123?message=')).toEqual({
       type: 'session',

@@ -55,6 +55,7 @@ import {
   remoteProjectsStore,
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -5285,11 +5286,10 @@ function extractSessionRefs(
   text: string,
   previous?: readonly AgentInputSessionRef[],
 ): NonNullable<AgentInputQueuedMessage['sessionRefs']> {
-  return reconcileSessionRefsForText(
-    text,
-    previous,
-    (sessionId) => remoteProjectsStore.getSessionDeviceId(sessionId),
-  );
+  // 粘滞版归属解析(与 learn/goal/makerTransport 链路对齐):relay 瞬时重连
+  // 会 clear sessionId→deviceId 注册表,裸查表在这个窗口把远程会话错判成
+  // 本地 → 引用解析落到控制端空本地库,内容注入失败。
+  return reconcileSessionRefsForText(text, previous, getStickySessionDeviceId);
 }
 
 function buildCreateOptsForCurrentSession(

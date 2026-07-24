@@ -19,26 +19,56 @@ describe('session links', () => {
     expect(parseSessionDeepLinkUrl('cindy://session/abc-123')).toEqual({
       sessionId: 'abc-123',
       messageClientId: null,
+      deviceId: null,
     });
     expect(parseSessionDeepLinkUrl('xdt-maker://session/abc-123')).toEqual({
       sessionId: 'abc-123',
       messageClientId: null,
+      deviceId: null,
     });
     expect(parseSessionDeepLinkUrl(buildMobileSessionMessageDeepLink('abc', 'client/9'))).toEqual({
       sessionId: 'abc',
       messageClientId: 'client/9',
+      deviceId: null,
     });
     expect(parseSessionDeepLinkUrl('xdt-maker://session/abc?message=')).toEqual({
       sessionId: 'abc',
       messageClientId: null,
+      deviceId: null,
     });
     expect(parseSessionDeepLinkUrl('xdt-maker://session/abc?message=%ZZ')).toEqual({
       sessionId: 'abc',
       messageClientId: null,
+      deviceId: null,
     });
     expect(parseSessionDeepLinkUrl('xdt-maker://project/foo')).toBeNull();
     expect(parseSessionDeepLinkUrl('xdt-maker://session/')).toBeNull();
     expect(parseSessionDeepLinkUrl('xdt-maker://session/%ZZ')).toBeNull();
+  });
+
+  it('parses the frozen device parameter emitted by desktop deep links', () => {
+    // 桌面端远程会话深链把归属设备冻进 `?device=`;手机端解析同口径,
+    // 空值 / 编码非法回退 null,不拖累整条链接。
+    expect(parseSessionDeepLinkUrl('cindy://session/abc?device=dev-studio')).toEqual({
+      sessionId: 'abc',
+      messageClientId: null,
+      deviceId: 'dev-studio',
+    });
+    expect(parseSessionDeepLinkUrl('cindy://session/abc?message=m1&device=dev-1')).toEqual({
+      sessionId: 'abc',
+      messageClientId: 'm1',
+      deviceId: 'dev-1',
+    });
+    expect(parseSessionDeepLinkUrl('cindy://session/abc?device=')).toEqual({
+      sessionId: 'abc',
+      messageClientId: null,
+      deviceId: null,
+    });
+    expect(parseSessionDeepLinkUrl('cindy://session/abc?device=%ZZ&message=m1')).toEqual({
+      sessionId: 'abc',
+      messageClientId: 'm1',
+      deviceId: null,
+    });
   });
 
   it('extracts unique session ids from message text', () => {
