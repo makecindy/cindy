@@ -275,21 +275,46 @@ export function hostKey(remoteHostId?: string | null): string {
 type CodexPermissionConfig = {
   approvalPolicy: AskForApproval;
   sandbox: SandboxMode;
-  approvalsReviewer: ApprovalsReviewer;
+  approvalsReviewer?: ApprovalsReviewer;
 };
-function mapPermissionToCodex(permissionMode?: string): CodexPermissionConfig {
+function mapPermissionToCodex(
+  permissionMode?: string,
+  approvalsReviewerSupported = true,
+): CodexPermissionConfig {
   // 严格 kebab-case (v2.rs serde rename_all="kebab-case"), camelCase 会被 server -32600 reject
   switch (permissionMode) {
     case 'bypassPermissions':
-      return { approvalPolicy: 'never', sandbox: 'danger-full-access', approvalsReviewer: 'user' };
+      return { approvalPolicy: 'never', sandbox: 'danger-full-access' };
     case 'auto':
+      if (!approvalsReviewerSupported) {
+        // 旧 app-server 没有 approvalsReviewer 字段时回退到原生 untrusted:
+        // 可信命令自动执行,其余请求交给用户。不能发送未知字段让整次 RPC 失败。
+        return { approvalPolicy: 'untrusted', sandbox: 'workspace-write' };
+      }
       // Codex app-server 原生 auto_review 与 Claude Auto 的分工一致:
       // 常规 workspace 动作直接执行,越界动作交给内置 reviewer 判断,而不是交给 UI。
       // workspace-write 仍是硬安全边界; auto_review 只替换审批者,不扩大沙箱。
       return { approvalPolicy: 'on-request', sandbox: 'workspace-write', approvalsReviewer: 'auto_review' };
     default:
-      return { approvalPolicy: 'on-request', sandbox: 'workspace-write', approvalsReviewer: 'user' };
+      return { approvalPolicy: 'on-request', sandbox: 'workspace-write' };
   }
+}
+
+/**
+ * `approvalsReviewer` is verified against the app-server bundled with Codex 0.144.6.
+ * Remote hosts may keep an older standalone binary across desktop upgrades, so parse the
+ * initialize userAgent and conservatively omit the field unless that verified floor is met.
+ */
+function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean {
+  const match = /\/(\d+)\.(\d+)\.(\d+)(?:[-+ )]|$)/.exec(userAgent ?? '');
+  if (!match) return false;
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  const minimum = [0, 144, 6] as const;
+  for (let i = 0; i < minimum.length; i += 1) {
+    if (version[i]! > minimum[i]!) return true;
+    if (version[i]! < minimum[i]!) return false;
+  }
+  return true;
 }
 
 /**
@@ -2033,6 +2058,12 @@ export class CodexAgent extends BaseAgent {
       throw error;
     }
     if (initResp.codexHome) this.codexHome = initResp.codexHome;
+    const approvalsReviewerSupported = supportsCodexApprovalsReviewer(initResp.userAgent);
+    if (mutablePermissionMode === 'auto' && !approvalsReviewerSupported) {
+      log.warn('Codex Auto falling back to untrusted approvals: app-server lacks verified auto-review support', {
+        userAgent: initResp.userAgent,
+      });
+    }
     // 闭包 capture 一次, 整个 session 复用 — codexHome 是 server 进程级常量, host 不变就不变。
     // memories 目录是 codex 自家私域 (<CODEX_HOME>/memories/), 永远塞进 writableRoots,
     // 即使用户当前没开 memories: 写权限多给一个固定子目录开销可忽略, 还能避免"开关 memories
@@ -2097,7 +2128,7 @@ export class CodexAgent extends BaseAgent {
       }
     };
     function currentApprovalConfig(): CodexPermissionConfig {
-      return mapPermissionToCodex(mutablePermissionMode);
+      return mapPermissionToCodex(mutablePermissionMode, approvalsReviewerSupported);
     }
 
     /**
@@ -2297,7 +2328,7 @@ export class CodexAgent extends BaseAgent {
         threadId: opts.resumeSessionId,
         cwd: opts.workingDir,
         approvalPolicy,
-        approvalsReviewer,
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
         sandbox,
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
@@ -2362,7 +2393,7 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
         approvalPolicy,
-        approvalsReviewer,
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
         sandbox,
         ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
@@ -2589,8 +2620,8 @@ export class CodexAgent extends BaseAgent {
     /**
      * 强制 resolve 所有挂起的 approval, emit interaction_dismissed 让 UI 关 dialog。
      * 调用场景: setPermissionMode 切换 / close session。
-     *   - resolveAs='allow' (mode 切到 auto/bypass): codex decision='accept'
-     *   - resolveAs='deny'  (mode 切到 ask 或 close): codex decision='decline'
+     *   - resolveAs='allow' (mode 切到 bypass; forcePrompt 仍 fail-closed): decision='accept'
+     *   - resolveAs='deny'  (mode 切到 ask/auto 或 close): decision='decline'
      */
     function dismissAllPending(reason: string, resolveAs: 'allow' | 'deny'): void {
       if (pendingApprovals.size === 0) return;
@@ -3797,7 +3828,7 @@ export class CodexAgent extends BaseAgent {
           threadId,
           input: turnInput,
           approvalPolicy,
-          approvalsReviewer,
+          ...(approvalsReviewer ? { approvalsReviewer } : {}),
           sandboxPolicy: sandboxModeToPolicy(sandbox, codexExtraWritableRoots),
           effort: clampEffortForCodex(mutableEffort),
           // 强制 reasoning summary='auto' — 不依赖用户 ~/.codex/config.toml 写没写
@@ -3892,7 +3923,7 @@ export class CodexAgent extends BaseAgent {
                 threadId,
                 cwd: opts.workingDir,
                 approvalPolicy,
-                approvalsReviewer,
+                ...(approvalsReviewer ? { approvalsReviewer } : {}),
                 sandbox,
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),

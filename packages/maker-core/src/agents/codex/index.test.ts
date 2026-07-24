@@ -301,9 +301,9 @@ async function waitForExpectation(assertion: () => void | Promise<void>, timeout
 function installFakeHost(
   agent: CodexAgent,
   requestImpl?: (method: string, params: unknown) => Promise<unknown> | unknown,
-  opts: { codexProxyActive?: boolean } = {},
+  opts: { codexProxyActive?: boolean; userAgent?: string } = {},
 ) {
-  const ensureStarted = vi.fn(async () => ({}));
+  const ensureStarted = vi.fn(async () => ({ userAgent: opts.userAgent ?? 'mock-codex/0.144.6' }));
   let threadHandlers: ThreadEventHandlers | null = null;
   const request = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
     if (requestImpl) {
@@ -3096,6 +3096,38 @@ describe('CodexAgent MCP thread context hooks', () => {
       sandboxPolicy: { type: 'workspaceWrite' },
     });
 
+    await handle.close();
+  });
+
+  it('falls back to untrusted approvals without reviewer fields on an older app-server', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-legacy-auto' } };
+      }
+      return undefined;
+    }, { userAgent: 'mock-codex/0.143.0 (Linux; x86_64)' });
+    const handle = await agent.startSession({
+      sessionId: 'session-legacy-auto',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+    };
+    expect(startParams.approvalPolicy).toBe('untrusted');
+    expect(startParams).not.toHaveProperty('approvalsReviewer');
+
+    await handle.send({ type: 'user', content: 'hello' });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+    };
+    expect(turnParams.approvalPolicy).toBe('untrusted');
+    expect(turnParams).not.toHaveProperty('approvalsReviewer');
     await handle.close();
   });
 
