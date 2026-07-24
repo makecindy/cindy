@@ -103,6 +103,18 @@ describe('codex account usage source slots', () => {
     expect(payload?.accountId).toBe('acc-1');
   });
 
+  it('rejects a corrupted array webSnapshot on hydration (与 renderer 守卫同口径)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue({
+      snapshot: JSON.stringify({ ...APP_SERVER_SNAPSHOT, webSnapshot: [] }),
+    });
+
+    const payload = await broadcaster.readCodexAccountUsageSnapshot();
+    expect(payload?.primary?.usedPercent).toBe(82);
+    // 数组不是合法快照: 归 null, 不得被再次广播 / 回写
+    expect(payload?.webSnapshot ?? null).toBeNull();
+  });
+
   it('hydrates a legacy app-server row into the top-level slot', async () => {
     const broadcaster = await import('../usageBroadcaster');
     mocks.queryOne.mockResolvedValue({ snapshot: JSON.stringify(APP_SERVER_SNAPSHOT) });

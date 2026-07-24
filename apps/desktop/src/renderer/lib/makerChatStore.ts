@@ -55,6 +55,7 @@ import {
   remoteProjectsStore,
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -3638,6 +3639,37 @@ function initGlobalListeners(): void {
         case 'usage:message-model-mismatch':
           handleUsageMessageModelMismatchRaw(push.payload);
           break;
+        case 'usage:session-spend-changed': {
+          // 被控端 session 终身累计 cost 落库推送(sessionSpendBroadcaster 走裸 UPDATE、
+          // 不发 sessions:patched)→ 镜像进远程项目分片;打开中的远程会话底部 $ chip 经
+          // session.totalCostUsd → useSessionSpend 初值重置显示最新值。
+          const p = push.payload as { sessionId?: string; totalCostUsd?: number } | null;
+          // 跨设备 payload 防御:NaN / 负数不入镜像(否则 chip 显示 $NaN / 污染后续计算)。
+          if (
+            push.deviceId && p?.sessionId
+            && typeof p.totalCostUsd === 'number'
+            && Number.isFinite(p.totalCostUsd) && p.totalCostUsd >= 0
+          ) {
+            remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
+              totalCostUsd: p.totalCostUsd,
+            });
+          }
+          break;
+        }
+        case 'usage:session-tokens-changed': {
+          // 同上:session 终身累计 token 镜像(chip tooltip 的 token 累计行)。
+          const p = push.payload as { sessionId?: string; totalTokens?: number } | null;
+          if (
+            push.deviceId && p?.sessionId
+            && typeof p.totalTokens === 'number'
+            && Number.isFinite(p.totalTokens) && p.totalTokens >= 0
+          ) {
+            remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
+              totalTokenUsage: p.totalTokens,
+            });
+          }
+          break;
+        }
         case 'local-db:sessions:patched': {
           // 被控端会话元数据 / 设置变更 → 就地镜像到远程项目分片(取代乐观覆盖)。
           const p = push.payload as { sessionId?: string; patch?: Record<string, unknown> } | null;
@@ -5285,11 +5317,10 @@ function extractSessionRefs(
   text: string,
   previous?: readonly AgentInputSessionRef[],
 ): NonNullable<AgentInputQueuedMessage['sessionRefs']> {
-  return reconcileSessionRefsForText(
-    text,
-    previous,
-    (sessionId) => remoteProjectsStore.getSessionDeviceId(sessionId),
-  );
+  // 粘滞版归属解析(与 learn/goal/makerTransport 链路对齐):relay 瞬时重连
+  // 会 clear sessionId→deviceId 注册表,裸查表在这个窗口把远程会话错判成
+  // 本地 → 引用解析落到控制端空本地库,内容注入失败。
+  return reconcileSessionRefsForText(text, previous, getStickySessionDeviceId);
 }
 
 function buildCreateOptsForCurrentSession(

@@ -128,6 +128,16 @@ function makeFakeHost(deviceId: string, deviceName: string) {
       sessionsMeta.set(sid, { ...(sessionsMeta.get(sid) ?? {}), ...patch });
       pushCb?.({ deviceId, channel: 'local-db:sessions:patched', payload: { sessionId: sid, patch } });
     },
+    /** 被控端 turn 结束落库累计 cost → usage:session-spend-changed(sessionSpendBroadcaster tap)。 */
+    hostSessionSpend(sid: string, totalCostUsd: number): void {
+      sessionsMeta.set(sid, { ...(sessionsMeta.get(sid) ?? {}), totalCostUsd });
+      pushCb?.({ deviceId, channel: 'usage:session-spend-changed', payload: { sessionId: sid, totalCostUsd } });
+    },
+    /** 被控端 turn 结束落库累计 token → usage:session-tokens-changed。 */
+    hostSessionTokens(sid: string, totalTokens: number): void {
+      sessionsMeta.set(sid, { ...(sessionsMeta.get(sid) ?? {}), totalTokenUsage: totalTokens });
+      pushCb?.({ deviceId, channel: 'usage:session-tokens-changed', payload: { sessionId: sid, totalTokens } });
+    },
   };
 }
 
@@ -215,6 +225,21 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
     await flush();
     const mirrored = remoteProjectsStore.getMergedRemoteSessions().find((x) => x.id === s);
     expect(mirrored?.model).toBe('claude-opus-4-8');
+  });
+
+  it('被控端累计 cost / token 推送 → 控制端远程会话行镜像(底部 $ chip 数据源)', async () => {
+    const s = sid();
+    host.seedSession(s, {});
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+
+    // 被控端 sessionSpendBroadcaster 落库后 tap 转发(裸 UPDATE 不发 sessions:patched,
+    // 控制端只有这条通道能看到累计值增长)。
+    host.hostSessionSpend(s, 1.23);
+    host.hostSessionTokens(s, 45_000);
+    await flush();
+    const mirrored = remoteProjectsStore.getMergedRemoteSessions().find((x) => x.id === s);
+    expect(mirrored?.totalCostUsd).toBe(1.23);
+    expect(mirrored?.totalTokenUsage).toBe(45_000);
   });
 
   it('丢帧后 reconcile 是合并而非替换:本机已有的不被清、in-flight 顺序不乱', async () => {

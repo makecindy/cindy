@@ -342,7 +342,11 @@ export function splitPersistedCodexAccountUsage(parsed: Record<string, unknown>)
     const { webSnapshot, ...rest } = parsed as CodexAccountUsagePayload;
     return {
       appServer: hasCodexSnapshotContent(rest) ? rest : null,
-      web: webSnapshot && typeof webSnapshot === 'object' ? webSnapshot : null,
+      // 拒绝数组等畸形持久化值(与 renderer 的 isRateLimitSnapshot 守卫同口径),
+      // 否则损坏行会被当有效快照再次广播 + 回写。
+      web: webSnapshot && typeof webSnapshot === 'object' && !Array.isArray(webSnapshot)
+        ? webSnapshot
+        : null,
     };
   }
   const legacy = parsed as RateLimitSnapshot;

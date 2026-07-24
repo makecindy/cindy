@@ -6,7 +6,11 @@ import { messages, sessions } from '../../localDb/schema.js';
 
 const state = vi.hoisted(() => ({ db: null as ReturnType<typeof drizzle> | null }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: state.db }) }));
-vi.mock('../../device-link/index.js', () => ({ remoteInvoke: vi.fn() }));
+const remoteInvoke = vi.hoisted(() => vi.fn());
+vi.mock('../../device-link/index.js', () => ({
+  remoteInvoke,
+  getSelfDeviceId: () => 'self-device',
+}));
 
 import { resolveSessionReferences } from '../sessionReferenceResolver.js';
 
@@ -84,5 +88,18 @@ describe('sessionReferenceResolver local visibility', () => {
     insertMessage(sqlite, { id: 'ssh-message', role: 'user', content: 'ssh history', createdAt: 101 });
     const [context] = await resolveSessionReferences([{ sessionId: 'local-session' }]);
     expect(context.messages).toEqual([{ role: 'user', content: 'ssh history', createdAt: 101 }]);
+  });
+
+  // 深链是可复制的字符串:控制端生成的 `?device=` 链接被带回归属设备本机
+  // 粘贴发送时,ref.deviceId 指向本机自己——必须按本地会话解析,不得对
+  // 自己发起 device-link 隧道。
+  it('resolves refs pointing at the own device locally instead of tunneling', async () => {
+    insertMessage(sqlite, { id: 'own', role: 'user', content: 'own history', createdAt: 101 });
+    const [context] = await resolveSessionReferences([
+      { sessionId: 'local-session', deviceId: 'self-device' },
+    ]);
+    expect(context.messages).toEqual([{ role: 'user', content: 'own history', createdAt: 101 }]);
+    expect(context.source).toBe('local');
+    expect(remoteInvoke).not.toHaveBeenCalled();
   });
 });

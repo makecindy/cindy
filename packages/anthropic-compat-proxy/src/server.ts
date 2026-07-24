@@ -128,44 +128,59 @@ function isRetryableListenError(error: unknown): boolean {
   return code === 'EADDRINUSE' || code === 'EACCES';
 }
 
-function candidateLoopbackPort(firstOffset: number, attempt: number): number {
-  const offset = (firstOffset + attempt - 1) % LOOPBACK_CANDIDATE_PORT_COUNT;
-  return LOOPBACK_CANDIDATE_PORT_MIN + offset;
+function randomLoopbackPort(): number {
+  return LOOPBACK_CANDIDATE_PORT_MIN + Math.floor(Math.random() * LOOPBACK_CANDIDATE_PORT_COUNT);
 }
 
 async function listenOnLoopbackPort(server: Server, host: string, port: number): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    const onError = (error: Error): void => {
+    const cleanup = (): void => {
       server.removeListener('error', onError);
+      server.removeListener('listening', onListening);
+    };
+    const onError = (error: Error): void => {
+      cleanup();
       reject(error);
     };
+    const onListening = (): void => {
+      cleanup();
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') {
+        const error = new Error('anthropic-compat-proxy: failed to bind loopback port');
+        server.close(() => reject(error));
+        return;
+      }
+      resolve(addr.port);
+    };
+
     server.once('error', onError);
+    server.once('listening', onListening);
     try {
-      server.listen(port, host, () => {
-        server.removeListener('error', onError);
-        const addr = server.address();
-        if (!addr || typeof addr === 'string') {
-          reject(new Error('anthropic-compat-proxy: failed to bind loopback port'));
-          return;
-        }
-        resolve(addr.port);
-      });
+      server.listen(port, host);
     } catch (error) {
-      server.removeListener('error', onError);
+      cleanup();
       reject(error);
     }
   });
 }
 
-async function listenOnFetchSafeLoopbackPort(
+/** @internal Exported for deterministic port-retry tests; not part of the package entrypoint. */
+export async function listenOnFetchSafeLoopbackPort(
   server: Server,
   host: string,
   logger: ProxyLogger,
 ): Promise<number> {
-  const firstOffset = Math.floor(Math.random() * LOOPBACK_CANDIDATE_PORT_COUNT);
+  const triedPorts = new Set<number>();
   let lastRetryableError: Error | null = null;
   for (let attempt = 1; attempt <= LOOPBACK_BIND_MAX_ATTEMPTS; attempt += 1) {
-    const port = candidateLoopbackPort(firstOffset, attempt);
+    // Windows exclusions are contiguous ranges (often hundreds of ports), so
+    // retrying adjacent candidates can deterministically exhaust every attempt.
+    let port = randomLoopbackPort();
+    while (triedPorts.has(port)) {
+      port = port === LOOPBACK_CANDIDATE_PORT_MAX ? LOOPBACK_CANDIDATE_PORT_MIN : port + 1;
+    }
+    triedPorts.add(port);
+
     if (isFetchBlockedPort(port)) {
       logger.warn?.('anthropic-compat-proxy skipped Fetch-blocked loopback port candidate', {
         port,

@@ -25,7 +25,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
-import { useCodexAuth } from '@/hooks/useCodexAuth';
+import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
 import { sortPresetsForLocale } from '@cindy/model-providers';
@@ -261,6 +261,14 @@ export function AddProviderWizard({
     setStep(2);
   }, []);
 
+  /**
+   * 本向导内是否发起过 OpenAI 登录。codexAuth 反映的是整机 ChatGPT 凭证,不含
+   * 「凭证归哪个账号」的 native binding —— 换账号后本机可能已有别人绑定的登录,
+   * 此时 codexAuth 一挂载就是 connected;若不加此限定,检测建议直达打开的向导会
+   * 挂载即自关,既不弹任何 UI 也不给当前账号补绑定,「去授权」永远点不出效果。
+   */
+  const openaiLoginStartedRef = useRef(false);
+
   // ── OAuth 授权(复用既有鉴权流;成功即完成,无第 3 步)────────────────────
   const handleAuthorize = useCallback(async () => {
     if (!sel || sel.kind !== 'oauth') return;
@@ -277,6 +285,7 @@ export function AddProviderWizard({
         }
         if (!r.ok && r.reason === 'login_cancelled') return;
       } else if (id === 'openai') {
+        openaiLoginStartedRef.current = true;
         const outcome = await codexAuth.triggerLogin();
         ok = outcome === 'authenticated';
         if (outcome === 'cancelled') return;
@@ -321,6 +330,22 @@ export function AddProviderWizard({
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
+
+  // OpenAI 走 useCodexAuth:hook 状态翻 connected 时视为完成(triggerLogin 也会返回,
+  // oneshot ref 保证只收口一次)。只收口本向导内发起的登录(openaiLoginStartedRef),
+  // 不把「本机已有凭证」误当成完成 —— 见 openaiLoginStartedRef 的注释。
+  const openaiDoneRef = useRef(false);
+  useEffect(() => {
+    if (openaiDoneRef.current || !openaiLoginStartedRef.current) return;
+    if (
+      sel?.kind === 'oauth' &&
+      sel.provider.id === 'openai' &&
+      isChatGptConnectionConnected(codexAuth.state, false)
+    ) {
+      openaiDoneRef.current = true;
+      onDone('openai');
+    }
+  }, [codexAuth.state, sel, onDone]);
 
   // ── 预设:进入 Step 3 时自动拉取模型 ─────────────────────────────────────
   const startFetch = useCallback(async () => {

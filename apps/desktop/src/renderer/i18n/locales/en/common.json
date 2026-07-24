@@ -3679,7 +3679,7 @@
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Runs trusted commands automatically. Untrusted commands, escalation requests, and high-risk built-in actions still ask. Unlike Full access."
+            "description": "Runs commands automatically inside the protected workspace sandbox. Actions that cross the sandbox boundary go to an automatic reviewer; high-risk actions may still be denied or require confirmation."
           },
           "bypassPermissions": {
             "label": "Full access",

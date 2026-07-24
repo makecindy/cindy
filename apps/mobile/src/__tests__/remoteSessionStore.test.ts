@@ -149,6 +149,39 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('dev-1');
   });
 
+  it('mirrors session-level usage pushes into totalCostUsd / totalTokenUsage', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+
+    // 被控端裸 UPDATE 不发 sessions:patched,这两条(sessions topic)是唯一更新通道。
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: 1.23,
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: 45_000,
+    });
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      id: 's1',
+      totalCostUsd: 1.23,
+      totalTokenUsage: 45_000,
+    });
+
+    // 跨设备 payload 防御:NaN / 负数不入镜像。
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalCostUsd: Number.NaN,
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-tokens-changed', {
+      sessionId: 's1',
+      totalTokens: -1,
+    });
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      totalCostUsd: 1.23,
+      totalTokenUsage: 45_000,
+    });
+  });
+
   it('removes archived sessions from the active mirror', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1'), session('s2')]);
     remoteSessionStore.applySessionPatch('dev-1', 's1', { status: 'archived' });

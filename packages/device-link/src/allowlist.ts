@@ -167,6 +167,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:messages:around',
   // 以 message clientId 定位上下文,供移动端轻量跳转 / fork 来源定位；只读,与 messages:around 同安全级。
   'local-db:messages:around-client-id',
+  // 订阅形态会话「本会话价值」历史汇总(assistant agent_meta 估算值求和):只读聚合,
+  // 无 sender 依赖、无副作用,与 messages:list 同安全级。控制端底部 $ chip 的历史初值
+  // 必须查被控端(查本机是空库恒 0);老被控端无此 channel → CHANNEL_NOT_ALLOWED →
+  // 控制端吞错,仅靠已加载消息 + 实时 turn-cost 推送呈现部分值。
+  'local-db:messages:estimatedSessionValue',
   'local-db:recent-workdirs:list',
   // 窄口径写:从被控端「最近项目」列表移除一条(专用 handler,path 归一后按主键删,
   // 幂等,不动 sessions / 磁盘)。控制端项目选择器的删除入口与本机语义对等;
@@ -400,6 +405,11 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // 本轮模型降级标记(payload 顶层 sessionId → 默认路由到 session:<id> topic):
   // 控制端把 agent_meta.modelMismatch 实时 patch 进已打开的远程会话消息流。
   'usage:message-model-mismatch',
+  // session 终身累计 cost / token(topics.ts 归入 sessions topic:列表订阅常开,会话
+  // 未打开也保持镜像新鲜):被控端 sessionSpendBroadcaster 走裸 UPDATE 落库、不发
+  // sessions:patched,控制端远程会话底部 $ chip 依赖这两条把累计值镜像成被控端真相。
+  'usage:session-spend-changed',
+  'usage:session-tokens-changed',
   // local-db 推送(读模型增量)
   'local-db:sessions:created',
   'local-db:sessions:patched',

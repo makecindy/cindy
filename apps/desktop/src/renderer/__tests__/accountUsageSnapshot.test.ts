@@ -216,9 +216,9 @@ describe('mergeCodexAccountUsageSnapshot', () => {
     // 白耗后台请求; review 反馈) —— bridge 槽保鲜走 main 的 bridge turn-done
     // 触发 + mount 读 + 悬念期催刷
     expect(hookSource).not.toContain('refreshWebUsage');
-    // module 常驻订阅: chip 全部卸载期间的换号清空广播不丢 (与 claude hook 同语义)
+    // module 常驻订阅的安装行为由下方 'module subscription install' 行为测试
+    // 覆盖 (renderToString 挂真 hook), 不再用脆弱的源码字符串断言 (review 反馈)。
     expect(hookSource).toContain('function ensureModuleSubscription(');
-    expect(hookSource).toContain('ensureModuleSubscription();');
     // web-only 组合 payload 上浮归属字段, WHAM reader 的 accountId 归属判断不失配
     expect(mainSource).toContain('accountId: web.accountId');
   });
@@ -272,5 +272,53 @@ describe('splitCodexAccountUsagePayload', () => {
       source: 'codex-app-server',
     });
     expect('web' in bare).toBe(false);
+  });
+});
+
+describe('module subscription install (behavior)', () => {
+  // 真行为测试 (review 反馈: 源码字符串断言验不出等价重构 / 回归):
+  // ensureModuleSubscription 在 hook render 阶段安装, renderToString 即可驱动
+  // (不需要 effects / jsdom)。stub window.electronAPI 统计注册次数。
+  it('installs the codex usage listener once, and only for codex sessions', async () => {
+    const listeners: unknown[] = [];
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      electronAPI: {
+        maker: {
+          usage: {
+            onCodexAccountChanged: (cb: unknown) => {
+              listeners.push(cb);
+              return () => {};
+            },
+          },
+        },
+      },
+    };
+    try {
+      const { resetModules } = await import('vitest').then((m) => ({ resetModules: m.vi.resetModules }));
+      resetModules();
+      const [{ useAccountUsage: freshUseAccountUsage }, { renderToString }, React] =
+        await Promise.all([
+          import('@/hooks/useAccountUsage'),
+          import('react-dom/server'),
+          import('react'),
+        ]);
+      function Probe({ vendor }: { vendor?: 'cc' | 'codex' }) {
+        freshUseAccountUsage(undefined, vendor);
+        return null;
+      }
+      // 非 codex 会话: 不注册
+      renderToString(React.createElement(Probe, { vendor: 'cc' }));
+      renderToString(React.createElement(Probe, {}));
+      expect(listeners.length).toBe(0);
+      // 首个 codex 会话: 注册一次
+      renderToString(React.createElement(Probe, { vendor: 'codex' }));
+      expect(listeners.length).toBe(1);
+      // 幂等: 再挂 codex 实例不重复注册
+      renderToString(React.createElement(Probe, { vendor: 'codex' }));
+      expect(listeners.length).toBe(1);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
   });
 });

@@ -159,13 +159,22 @@ function parseSessionMessageParam(rawValue: string): string | null {
  * 注意:'new-session' 不提供 builder——它只由 --open-folder argv 产生,不进入
  * "可复制 / 可粘贴"的 URL 域,避免和现有 project deep link 在 URL 域语义混淆。
  */
-export function buildSessionDeepLink(sessionId: string): string {
-  return `${URL_PREFIX}session/${encodeURIComponent(sessionId)}`;
+export function buildSessionDeepLink(
+  sessionId: string,
+  opts?: { deviceId?: string | null },
+): string {
+  const device = opts?.deviceId ? `?device=${encodeURIComponent(opts.deviceId)}` : '';
+  return `${URL_PREFIX}session/${encodeURIComponent(sessionId)}${device}`;
 }
 
 /** 带消息锚点(`?message=<clientId>`)的会话深链,与 renderer 侧实现等价镜像。 */
-export function buildSessionMessageDeepLink(sessionId: string, messageClientId: string): string {
-  return `${buildSessionDeepLink(sessionId)}?message=${encodeURIComponent(messageClientId)}`;
+export function buildSessionMessageDeepLink(
+  sessionId: string,
+  messageClientId: string,
+  opts?: { deviceId?: string | null },
+): string {
+  const device = opts?.deviceId ? `&device=${encodeURIComponent(opts.deviceId)}` : '';
+  return `${URL_PREFIX}session/${encodeURIComponent(sessionId)}?message=${encodeURIComponent(messageClientId)}${device}`;
 }
 
 /**

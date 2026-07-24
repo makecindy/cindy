@@ -925,8 +925,11 @@ export function TodaySpendChip({
   deviceLinkDeviceId,
 }: TodaySpendChipProps) {
   const { t } = useTranslation();
+  // device-link 远程会话:turn 跑在被控端、消耗被控端账号,计费形态(订阅/网关)与账号
+  // 余量的事实都在被控端 —— 本机的 route 观察 / 账号快照与之无关,一律不读、不据此分类。
+  const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);
   const { authInjection: codexAuthInjection } = useCodexRuntimeRoute({
-    enabled: vendorKey === 'codex',
+    enabled: vendorKey === 'codex' && !isDeviceLinkRemote,
     refreshKey: sessionId,
   });
   // cc 订阅判定对齐 main 的 isClaudeSubscriptionSession(register.ts)+ proxy 实际路由:
@@ -946,14 +949,16 @@ export function TodaySpendChip({
   // 远端 Claude 会话恒走网关(runtime-configs 的 remoteEndpoint),本机订阅快照与实际
   // 服务账号无关 —— 排除出订阅形态,回落 gateway quota 展示(与 Codex 远端口径一致)。
   const isRemoteClaudeSession = vendorKey === 'cc' && Boolean(remoteHostId);
+  // device-link 远程会话不参与默认路由观察:本机 proxy 永远看不到被控端会话的请求,
+  // 用本机 OAuth / 网关 key 状态推断只会张冠李戴(形态由下方 device-link 专属分支接管)。
   const isDefaultRouteClaudeSession =
-    vendorKey === 'cc' && !isRemoteClaudeSession && providerId == null;
+    vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null;
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
   const observedClaudeRoute = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
   const ccBillingFormPending = isDefaultRouteClaudeSession && observedClaudeRoute == null
     && (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const isClaudeSubscription = vendorKey === 'cc' && !isRemoteClaudeSession && (
+  const isClaudeSubscription = vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && (
     providerId === 'anthropic'
     || (providerId == null && (
       observedClaudeRoute != null
@@ -991,24 +996,33 @@ export function TodaySpendChip({
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 用
   // deviceLinkDeviceId 判(两者互斥,任一非空即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
-  // Claude 网关/订阅配额的本地读取只对 device-link 加门:SSH 远程 cc 维持既有口径
-  // (isRemoteClaudeSession 已排除订阅形态、回落 gateway quota 展示);device-link 的 turn
-  // 与凭证都在被控端,控制端本机的 LiteLLM / Claude.ai 配额与之无关。
-  const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);
+  // Claude 网关/订阅配额的本地读取只对 device-link 加门(isDeviceLinkRemote,声明在组件
+  // 顶部):SSH 远程 cc 维持既有口径(isRemoteClaudeSession 已排除订阅形态、回落 gateway
+  // quota 展示);device-link 的 turn 与凭证都在被控端,控制端本机的 LiteLLM / Claude.ai
+  // 配额与之无关。
   const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
   // 订阅直连 bridge 轮真实计费恒 0(不写 sessions.total_cost_usd),spend hook 无意义 → 关。
+  // device-link 远程会话形态未知 → 无条件启用(与 tokens / 估算价值同口径),否则被控端
+  // 若是本机判不出的形态(如 codex+xai)累计 cost 镜像永远不展示。
   const sessionCostUsd = useSessionSpend(
-    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionId : undefined,
-    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionInitialCostUsd : null,
+    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
+      ? sessionId
+      : undefined,
+    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
+      ? sessionInitialCostUsd
+      : null,
   );
   const sessionTokens = useSessionTokens(
-    isCodexApi || isCodexSubscription || isSubscriptionBridge ? sessionId : undefined,
+    isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote
+      ? sessionId
+      : undefined,
     sessionInitialTokens,
   );
   // 订阅会话的"本会话价值"估算 (isEstimate 消息汇总): Codex OAuth / Claude 订阅 / bridge 订阅同管道。
+  // device-link 远程会话形态未知(被控端账号事实拿不到)→ 无条件启用,有估算数据就显示。
   const sessionEstimatedValueUsd = useSessionEstimatedValue(
     sessionId,
-    isCodexSubscription || isClaudeSubscription || isSubscriptionBridge,
+    isCodexSubscription || isClaudeSubscription || isSubscriptionBridge || isDeviceLinkRemote,
   );
   // 按会话形态选配额槽: chatgpt/ bridge 消耗 WHAM(openai-web)报告的配额,
   // Codex CLI 会话消耗 app-server 报告的配额 —— 不跨槽回退, 绝不显示不是这个
@@ -1035,22 +1049,27 @@ export function TodaySpendChip({
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
   // codex-oauth / cc+chatgpt bridge → ChatGPT 用量看板; cc+xai bridge → xAI 账户页;
   // cc Claude 订阅 → claude.ai 用量页; 其余(cc 网关 / codex-api)→ 暂无看板(null,见文件头 TODO)。
-  const usageDashboardUrl: string | null = usesXaiQuotaForm
-    ? XAI_ACCOUNT_URL
-    : isCodexOauth || isChatgptBridge
-      ? CODEX_USAGE_DASHBOARD_URL
-      : isClaudeSubscription
-        ? CLAUDE_USAGE_DASHBOARD_URL
-        : null;
+  // device-link 远程会话额度属于被控端账号,本机浏览器打开的看板是控制端自己的账号 → 不跳。
+  const usageDashboardUrl: string | null = isDeviceLinkRemote
+    ? null
+    : usesXaiQuotaForm
+      ? XAI_ACCOUNT_URL
+      : isCodexOauth || isChatgptBridge
+        ? CODEX_USAGE_DASHBOARD_URL
+        : isClaudeSubscription
+          ? CLAUDE_USAGE_DASHBOARD_URL
+          : null;
   // 看板链接行文案:与 usageDashboardUrl 一一对应;网关账号无看板 → null
   // (tooltip 不显示"打开看板"行,chip 也不可点)。
-  const usageDashboardLabel: string | null = usesXaiQuotaForm
-    ? t('todaySpend.openXaiUsage')
-    : isCodexOauth || isChatgptBridge
-      ? t('todaySpend.openCodexUsage')
-      : isClaudeSubscription
-        ? t('todaySpend.openClaudeUsage')
-        : null;
+  const usageDashboardLabel: string | null = isDeviceLinkRemote
+    ? null
+    : usesXaiQuotaForm
+      ? t('todaySpend.openXaiUsage')
+      : isCodexOauth || isChatgptBridge
+        ? t('todaySpend.openCodexUsage')
+        : isClaudeSubscription
+          ? t('todaySpend.openClaudeUsage')
+          : null;
   const [windowLabelNowMs, setWindowLabelNowMs] = React.useState(() => Date.now());
 
   // 当前形态下 chip 展示的限额窗口段 (Codex 订阅 / Claude 订阅共用结构);
@@ -1176,7 +1195,31 @@ export function TodaySpendChip({
 
   let labelNode: React.ReactNode;
   let tooltipNode: React.ReactNode = usageDashboardLabel;
-  if (usesCodexQuotaForm) {
+  if (isDeviceLinkRemote) {
+    // device-link 远程会话:不做订阅/网关形态分类(计费事实在被控端,本机账号状态无关),
+    // 数据驱动展示镜像值 —— 订阅估算价值(estimatedSessionValueFor 隧道汇总 + 转发的
+    // turn-cost 推送)与真实累计 cost(usage:session-spend-changed 镜像)有哪个显哪个;
+    // 被控端账号的限额窗口本机拿不到,不显示、不猜。
+    const chipSegments: string[] = [];
+    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+      chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
+        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+      }));
+    }
+    if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
+      chipSegments.push(t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` }));
+    }
+    labelNode = chipSegments.length > 0
+      ? renderSegmentedLabel(chipSegments)
+      : <span className="tabular-nums opacity-60">$</span>;
+    const tooltipLines: string[] = [];
+    pushSessionValueLines(tooltipLines, sessionEstimatedValueUsd, sessionTokens, t);
+    if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
+      tooltipLines.push(t('todaySpend.tooltip.sessionUsed', { cost: `$${sessionCostUsd.toFixed(2)}` }));
+    }
+    appendLatestTurnUsageLines(tooltipLines, latestTurnUsage, t);
+    tooltipNode = tooltipLines.length > 0 ? buildTooltipNode(tooltipLines) : null;
+  } else if (usesCodexQuotaForm) {
     // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户,复用同一套限额窗口 + 价值估算渲染。
     const chipSegments = [...windowSegments];
     if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {

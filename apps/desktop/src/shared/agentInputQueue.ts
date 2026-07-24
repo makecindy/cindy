@@ -448,24 +448,34 @@ export function reconcileSessionRefsForText(
     }
     if (!sessionId) continue;
     let messageClientId: string | undefined;
+    let linkDeviceId: string | undefined;
     // 链接常作为句子末尾的一部分出现；句号等标点不属于 query，
     // 否则锚点 clientId 会被解析成 `id.` 而无法命中消息。
     const query = (match[2] ?? '').replace(/[.,;:!?]+$/, '');
     for (const pair of query.split('&')) {
       const eq = pair.indexOf('=');
-      if (eq <= 0 || pair.slice(0, eq) !== 'message') continue;
+      if (eq <= 0) continue;
+      const paramKey = pair.slice(0, eq);
+      if (paramKey !== 'message' && paramKey !== 'device') continue;
+      if (paramKey === 'message' ? messageClientId !== undefined : linkDeviceId !== undefined) {
+        continue;
+      }
       try {
         const decoded = decodeURIComponent(pair.slice(eq + 1));
-        if (decoded) messageClientId = decoded;
+        if (!decoded) continue;
+        if (paramKey === 'message') messageClientId = decoded;
+        else linkDeviceId = decoded;
       } catch {
-        // Invalid anchor: treat it as an unanchored session reference.
+        // Invalid parameter: treat it as absent.
       }
-      break;
     }
     const key = `${sessionId}\u0000${messageClientId ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const deviceId = deviceIdForSession?.(sessionId) ?? hints.get(sessionId);
+    // 深链里冻结的 `?device=`(chip 生成时刻的会话归属)最可信;其次才是
+    // 发送时刻的实时查表与旧 ref 的 device hint——会话归属不会迁移,冻结值
+    // 不受 relay 重连窗口内 sessionId→deviceId 注册表被 clear 的时序影响。
+    const deviceId = linkDeviceId ?? deviceIdForSession?.(sessionId) ?? hints.get(sessionId);
     refs.push({
       sessionId,
       ...(messageClientId ? { messageClientId } : {}),

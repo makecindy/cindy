@@ -110,6 +110,19 @@ describe('mobile session-reference links', () => {
     )).toEqual([{ sessionId: 'source', deviceId: 'source-device' }]);
   });
 
+  it('prefers the device frozen into the link over store lookup and hints', () => {
+    // 桌面端深链冻结的 `?device=` 优先;store 查不到时也不丢远程判定。
+    expect(extractMobileSessionReferences(
+      'cindy://session/source?device=dev-frozen',
+      () => 'dev-live',
+      [{ sessionId: 'source', deviceId: 'dev-hint' }],
+    )).toEqual([{ sessionId: 'source', deviceId: 'dev-frozen' }]);
+    expect(extractMobileSessionReferences(
+      'cindy://session/source?message=anchor&device=dev-frozen',
+      () => undefined,
+    )).toEqual([{ sessionId: 'source', messageClientId: 'anchor', deviceId: 'dev-frozen' }]);
+  });
+
   it('clears stale refs and trusted snapshots when an edit removes the link', async () => {
     const invoke = vi.fn();
     const prepared = await prepareMobileQueuedSessionReferences({
