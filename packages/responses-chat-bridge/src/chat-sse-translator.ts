@@ -260,7 +260,7 @@ export class ChatSseTranslator {
       this.tools.set(index, state);
     }
     const callId = stringField(raw.id);
-    if (callId) state.callId = callId;
+    if (callId && !state.added) state.callId = callId;
     const fn = isPlainObject(raw.function) ? raw.function : {};
     const name = stringField(fn.name);
     if (name) state.name += name;

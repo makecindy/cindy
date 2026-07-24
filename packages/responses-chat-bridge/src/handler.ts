@@ -37,7 +37,7 @@ function writeSse(res: ServerResponse, event: unknown, sequenceNumber: number): 
 
 function joinUrl(base: string, path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${base.replace(/\/+$/, '')}${normalizedPath}`;
+  return `${base.replace(/\/*$/, '')}${normalizedPath}`;
 }
 
 function responsesError(status: number, code: string, message: string): Record<string, unknown> {
@@ -86,7 +86,9 @@ export function createResponsesChatHandler(
         chatRequest = translateResponsesRequest(request, {
           model: realModel,
           capabilities: provider.capabilities,
-          onDroppedTool: undefined,
+          onDroppedTool: (type, index) => {
+            log.warn?.('responses-chat bridge dropped non-function tool', { type, index });
+          },
         });
       } catch (error) {
         if (error instanceof UnsupportedResponsesFeatureError) {
@@ -153,21 +155,7 @@ export function createResponsesChatHandler(
 
       if (!upstream.ok || !upstream.body) {
         const text = await readErrorText(upstream);
-        if (provider.onUpstreamError) {
-          try {
-            await provider.onUpstreamError({
-              status: upstream.status,
-              body: text,
-              requestHeaders: providerHeaders,
-            });
-          } catch (error) {
-            log.warn?.('responses-chat bridge onUpstreamError failed', {
-              model: request.model,
-              status: upstream.status,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
+        await reportUpstreamError(upstream.status, text);
         res.off('close', abortUpstream);
         writeJson(
           res,
