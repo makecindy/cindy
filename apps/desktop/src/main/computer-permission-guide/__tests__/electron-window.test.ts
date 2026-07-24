@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import type { WebContents } from 'electron';
+import type { BrowserWindowConstructorOptions, WebContents } from 'electron';
 
 const originalPlatform = process.platform;
 const VALID_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
@@ -93,7 +93,7 @@ const harness = vi.hoisted(() => {
     });
     destroyed = false;
 
-    constructor() {
+    constructor(readonly options: BrowserWindowConstructorOptions) {
       windows.push(this);
     }
 
@@ -367,6 +367,24 @@ describe('Electron Computer Use permission guide window', () => {
     );
     expect(harness.windows[1].loadURL).toHaveBeenCalledWith(
       expect.stringContaining('view=computer-permission-guide'),
+    );
+    const requiredSecurityPreferences = {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      plugins: false,
+      navigateOnDragDrop: false,
+    };
+    expect(harness.windows[0].options.webPreferences).toMatchObject(
+      requiredSecurityPreferences,
+    );
+    expect(harness.windows[1].options.webPreferences).toMatchObject(
+      requiredSecurityPreferences,
     );
     expect(guide.isComputerPermissionGuideWebContents(
       harness.windows[1].webContents as unknown as WebContents,
