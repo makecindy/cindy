@@ -60,6 +60,7 @@ import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.j
 import {
   checkComputerDriverUpdate,
   cancelComputerDriverPermissionGrant,
+  getComputerDriverAppBundlePath,
   getComputerDriverAppIcon,
   getComputerDriverStatus,
   grantComputerDriverPermissions,
@@ -77,6 +78,7 @@ import {
   showComputerPermissionGuideWindow,
   startComputerPermissionAppDrag,
 } from '../computer-permission-guide/window.js';
+import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -6969,7 +6971,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     initialStatus?: Awaited<ReturnType<typeof getComputerDriverStatus>>;
     openedPaneUrl?: string;
   }) => {
-    const shouldShowGuide = process.platform === 'darwin' && options?.showGuide === true;
+    const shouldShowGuide = shouldUseComputerPermissionGuide({
+      platform: process.platform,
+      showGuide: options?.showGuide === true,
+      appBundlePath: getComputerDriverAppBundlePath(),
+    });
     try {
       const initialStatus = options?.initialStatus
         ?? (shouldShowGuide
