@@ -23,7 +23,10 @@ import {
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
+  getActiveAppSession,
   isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
+  type ActiveAppSession,
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
@@ -167,7 +170,6 @@ import { recordGhostCallMedia } from './ghostMediaLedger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
 import { eq } from 'drizzle-orm';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import { requireAppCapability } from '../appCapabilities.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
@@ -202,13 +204,35 @@ let managerSingleton: GhostManager | null = null;
 const ghostMutationCoordinator = new GhostMutationCoordinator();
 
 /**
- * Acquire a lease for a market/local Ghost filesystem mutation. New leases
- * fail closed once an account boundary starts; teardown waits for existing
- * leases before switching the active owner.
+ * Capture the stable owner before a mutation performs any asynchronous
+ * preparation that cannot safely hold a lease (for example, user approval).
  */
-function beginGhostMutation(): () => void {
+function captureGhostMutationOwner(): ActiveAppSession {
   if (isAppSessionBoundaryPending()) {
     throw new Error('账号切换中，已取消本次 Plugin 操作');
+  }
+  return getActiveAppSession();
+}
+
+/**
+ * Acquire a lease for a market/local Ghost filesystem mutation. When an owner
+ * was captured before asynchronous preparation, generation equality prevents
+ * a completed account switch from turning a stale approval into a mutation for
+ * the new owner. New leases also fail closed while a boundary is still active.
+ */
+function beginGhostMutation(expectedOwner?: ActiveAppSession): () => void {
+  if (isAppSessionBoundaryPending()) {
+    throw new Error('账号切换中，已取消本次 Plugin 操作');
+  }
+  if (expectedOwner) {
+    const currentOwner = getActiveAppSession();
+    if (
+      currentOwner.mode !== expectedOwner.mode ||
+      currentOwner.dataOwnerId !== expectedOwner.dataOwnerId ||
+      currentOwner.generation !== expectedOwner.generation
+    ) {
+      throw new Error('账号已切换，已取消本次 Plugin 操作');
+    }
   }
   return ghostMutationCoordinator.acquire();
 }
@@ -1805,6 +1829,7 @@ export async function installOrUpdateMarketGhostPackage(
     nodeAuthorizationWebContents?: WebContents;
   },
 ): Promise<InstalledGhost> {
+  const mutationOwner = captureGhostMutationOwner();
   let releaseMutation: (() => void) | null = null;
   try {
     const manager = getGhostManager();
@@ -1845,7 +1870,7 @@ export async function installOrUpdateMarketGhostPackage(
     // mutation. Node authorization is an unbounded user interaction; keeping
     // the lease across it would block account teardown indefinitely if the
     // dialog is left unanswered.
-    releaseMutation = beginGhostMutation();
+    releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
       // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
       return installAndDock(manager, cindyFilePath, {
