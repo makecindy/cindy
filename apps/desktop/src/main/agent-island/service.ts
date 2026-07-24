@@ -102,6 +102,11 @@ import {
 } from './layoutPreferenceStore.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import {
+  detectProtectedFolderEperm,
+  openFolderPrivacySettings,
+  shouldShowEpermGuidance,
+} from '../file-access/permissions.js';
 import { SessionActivityRelay } from './sessionActivityRelay.js';
 
 const log = createLogger('agent-island');
@@ -608,6 +613,13 @@ export class AgentIslandService {
       this.clearCompletedSilencedRunForNewActivity(hydrated.sessionId);
       this.deferredCompletions.delete(hydrated.sessionId);
     }
+    if (event.type === 'tool_result_full') {
+      const data = event.data as { fullText?: string } | undefined;
+      const folderKind = data?.fullText ? detectProtectedFolderEperm(data.fullText) : null;
+      if (folderKind && shouldShowEpermGuidance(folderKind)) {
+        void this.showFolderEpermGuidance(folderKind);
+      }
+    }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
@@ -883,7 +895,24 @@ export class AgentIslandService {
     };
   }
 
-  private ensureMetadata(sessionId: string): void {
+  private async showFolderEpermGuidance(kind: 'Desktop' | 'Documents' | 'Downloads'): Promise<void> {
+    const mainWindow = this.deps.getMainWindow();
+    const result = await dialog.showMessageBox(mainWindow ?? undefined!, {
+      type: 'warning',
+      title: 'macOS folder access denied',
+      message: 'Cindy cannot access your ' + kind + ' folder',
+      detail:
+        'macOS denied access silently. Open System Settings to grant permission, then re-run your agent command.',
+      buttons: ['Open System Settings', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (result.response === 0) {
+      await openFolderPrivacySettings(kind);
+    }
+  }
+
+    private ensureMetadata(sessionId: string): void {
     const cached = this.metadataCache.get(sessionId);
     if (this.metadataLoading.has(sessionId) || (cached && !isPlaceholderSessionTitle(cached.title))) return;
     this.metadataLoading.add(sessionId);
