@@ -109,7 +109,14 @@ export function GhostPluginPage() {
     const requestId = ++marketRefreshRequestRef.current;
     try {
       const snapshot = await window.electronAPI.pluginMarket.snapshot();
-      if (requestId === marketRefreshRequestRef.current) setMarketSnapshot(snapshot);
+      if (requestId !== marketRefreshRequestRef.current) return;
+      // Main intentionally represents market outages as data so the initial page can render a
+      // non-blocking empty state. During icon renewal, convert that fulfilled unavailable result
+      // back into a failure: the catch path preserves the visible snapshot and the hook retries.
+      if (preserveOnError && snapshot.unavailableReason !== null) {
+        throw new Error(snapshot.unavailableReason);
+      }
+      setMarketSnapshot(snapshot);
     } catch (error) {
       if (requestId !== marketRefreshRequestRef.current) return;
       setMarketSnapshot((current) =>
