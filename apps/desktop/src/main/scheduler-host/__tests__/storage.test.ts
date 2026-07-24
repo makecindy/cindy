@@ -141,9 +141,7 @@ describe('scheduleToCamel', () => {
 
 describe('scheduleCreateToRow', () => {
   it('拆 notify 为两列', () => {
-    const row = scheduleCreateToRow(
-      baseSchedule({ notify: { desktop: false, feishu: true } }),
-    );
+    const row = scheduleCreateToRow(baseSchedule({ notify: { desktop: false, feishu: true } }));
     expect(row.notifyDesktop).toBe(false);
     expect(row.notifyFeishu).toBe(true);
     // 嵌套字段不直接出现在行里
@@ -232,9 +230,7 @@ describe('schedulePatchToRow — patch 清空语义', () => {
 // 2. ScheduleRun mapper
 // ============================================================================
 
-function baseRunRow(
-  overrides: Partial<ScheduleRunRowLike> = {},
-): ScheduleRunRowLike {
+function baseRunRow(overrides: Partial<ScheduleRunRowLike> = {}): ScheduleRunRowLike {
   return {
     id: 'run-1',
     scheduleId: 'sch-1',
@@ -245,6 +241,10 @@ function baseRunRow(
     errorMsg: null,
     costUsd: 0,
     estimatedValueUsd: 0,
+    costAmount: 0,
+    estimatedValueAmount: 0,
+    costCurrency: null,
+    costIsApproximate: false,
     costAttribution: 'legacy',
     resultText: null,
     preRunHookResult: null,
@@ -293,7 +293,52 @@ describe('scheduleRunToCamel / scheduleRunCreateToRow', () => {
     };
     const row = scheduleRunCreateToRow(original);
     const back = scheduleRunToCamel(row as ScheduleRunRowLike);
-    expect(back).toEqual(original);
+    expect(back).toEqual({
+      ...original,
+      costMoney: {
+        amount: 2.814,
+        currency: 'CNY',
+        approximate: true,
+        kind: 'actual-cost',
+        estimateReasons: ['fixed-fx', 'legacy-usd'],
+      },
+      estimatedValueMoney: {
+        amount: expect.closeTo(1.273, 10),
+        currency: 'CNY',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+      },
+    });
+  });
+
+  it('订阅估值不写入真实费用的约值标记', () => {
+    const run: ScheduleRun = {
+      id: 'run-money',
+      scheduleId: 'sch-1',
+      firedAt: 1,
+      status: 'success',
+      costMoney: {
+        amount: 0.42,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      estimatedValueMoney: {
+        amount: 0.19,
+        currency: 'CNY',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['subscription-value'],
+      },
+    };
+    expect(scheduleRunCreateToRow(run).costIsApproximate).toBe(false);
+    expect(
+      'costIsApproximate' in
+        scheduleRunPatchToRow({
+          estimatedValueMoney: run.estimatedValueMoney,
+        }),
+    ).toBe(false);
   });
 
   it('可选字段 undefined → null 写入', () => {

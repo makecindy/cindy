@@ -119,8 +119,20 @@ export interface RemoteScheduleRun {
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;
+  costMoney?: RemoteScheduleRunMoney;
+  estimatedValueMoney?: RemoteScheduleRunMoney;
   costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   readAt?: RemoteTimestamp;
+}
+
+export interface RemoteScheduleRunMoney {
+  amount: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
+  kind: 'actual-cost' | 'value-estimate';
+  estimateReasons?: Array<
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price'
+  >;
 }
 
 export interface ScheduleListFilter {

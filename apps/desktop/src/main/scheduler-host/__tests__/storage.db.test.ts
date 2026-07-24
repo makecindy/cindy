@@ -17,6 +17,41 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import { recordScheduleRunCostDirect } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage';
 
+function actualMoneyFromLegacyUsd(amountUsd: number) {
+  return {
+    amount: expect.closeTo(amountUsd * 6.7, 10),
+    currency: 'CNY' as const,
+    approximate: true,
+    kind: 'actual-cost' as const,
+    estimateReasons: ['fixed-fx', 'legacy-usd'] as const,
+  };
+}
+
+function estimatedMoneyFromLegacyUsd(amountUsd: number) {
+  return {
+    amount: expect.closeTo(amountUsd * 6.7, 10),
+    currency: 'CNY' as const,
+    approximate: true,
+    kind: 'value-estimate' as const,
+    estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'] as const,
+  };
+}
+
+const ZERO_ACTUAL_MONEY = {
+  amount: 0,
+  currency: 'CNY' as const,
+  approximate: false,
+  kind: 'actual-cost' as const,
+};
+
+const ZERO_ESTIMATED_MONEY = {
+  amount: 0,
+  currency: 'CNY' as const,
+  approximate: true,
+  kind: 'value-estimate' as const,
+  estimateReasons: ['subscription-value'] as const,
+};
+
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
     id: 'sch-1',
@@ -66,7 +101,10 @@ const SCHEDULER_DDL = [
       user_send_at INTEGER,
       created_at INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0,
-      total_cost_usd REAL
+      total_cost_usd REAL,
+      total_cost_amount REAL NOT NULL DEFAULT 0,
+      total_cost_currency TEXT,
+      total_cost_is_approximate INTEGER NOT NULL DEFAULT 0
     )
   `,
   `
@@ -138,6 +176,10 @@ const SCHEDULER_DDL = [
       error_msg TEXT,
       cost_usd REAL NOT NULL DEFAULT 0,
       estimated_value_usd REAL NOT NULL DEFAULT 0,
+      cost_amount REAL NOT NULL DEFAULT 0,
+      estimated_value_amount REAL NOT NULL DEFAULT 0,
+      cost_currency TEXT,
+      cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
       result_text TEXT,
       pre_run_hook_result TEXT,
@@ -209,6 +251,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         ...run,
         costUsd: 0,
         estimatedValueUsd: 0,
+        costMoney: ZERO_ACTUAL_MONEY,
+        estimatedValueMoney: ZERO_ESTIMATED_MONEY,
         costAttribution: 'exact',
       });
       const completed = await harness.storage.updateRun(run.id, {
@@ -264,8 +308,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
         expect.objectContaining({
           id: 'run-exact',
-          costUsd: 0.42,
-          estimatedValueUsd: 0.29,
+          costUsd: 0,
+          estimatedValueUsd: 0,
+          costMoney: actualMoneyFromLegacyUsd(0.42),
+          estimatedValueMoney: estimatedMoneyFromLegacyUsd(0.29),
           costAttribution: 'exact',
         }),
       ]);
@@ -321,19 +367,28 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         (await harness.storage.listCostSummaries()).map((summary) => [summary.scheduleId, summary]),
       );
       expect(summaries.get('sch-a')).toMatchObject({
-        totalCostUsd: 0.4,
-        totalEstimatedValueUsd: 0,
+        totalMoney: actualMoneyFromLegacyUsd(0.4),
+        totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
       });
       expect(summaries.get('sch-b')).toMatchObject({
-        totalCostUsd: 0.2,
-        totalEstimatedValueUsd: 0,
+        totalMoney: actualMoneyFromLegacyUsd(0.2),
+        totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
       });
       expect(await harness.storage.listRuns('sch-a')).toEqual([
-        expect.objectContaining({ id: 'run-a2', costUsd: 0.3 }),
-        expect.objectContaining({ id: 'run-a1', costUsd: 0.1 }),
+        expect.objectContaining({
+          id: 'run-a2',
+          costMoney: actualMoneyFromLegacyUsd(0.3),
+        }),
+        expect.objectContaining({
+          id: 'run-a1',
+          costMoney: actualMoneyFromLegacyUsd(0.1),
+        }),
       ]);
       expect(await harness.storage.listRuns('sch-b')).toEqual([
-        expect.objectContaining({ id: 'run-b1', costUsd: 0.2 }),
+        expect.objectContaining({
+          id: 'run-b1',
+          costMoney: actualMoneyFromLegacyUsd(0.2),
+        }),
       ]);
     } finally {
       harness.close();
@@ -641,14 +696,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0.75,
-          totalEstimatedValueUsd: 9.99,
+          totalMoney: actualMoneyFromLegacyUsd(0.75),
+          totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(9.99),
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-bound',
-              totalCostUsd: 0.75,
-              totalEstimatedValueUsd: 9.99,
+              totalMoney: actualMoneyFromLegacyUsd(0.75),
+              totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(9.99),
             },
           ],
         },
@@ -687,14 +742,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0,
-          totalEstimatedValueUsd: 0.29,
+          totalMoney: ZERO_ACTUAL_MONEY,
+          totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(0.29),
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-subscription',
-              totalCostUsd: 0,
-              totalEstimatedValueUsd: 0.29,
+              totalMoney: ZERO_ACTUAL_MONEY,
+              totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(0.29),
             },
           ],
         },
@@ -733,14 +788,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0.42,
-          totalEstimatedValueUsd: 0,
+          totalMoney: actualMoneyFromLegacyUsd(0.42),
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-api',
-              totalCostUsd: 0.42,
-              totalEstimatedValueUsd: 0,
+              totalMoney: actualMoneyFromLegacyUsd(0.42),
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -773,14 +828,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0.42,
-          totalEstimatedValueUsd: 0,
+          totalMoney: actualMoneyFromLegacyUsd(0.42),
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-direct',
-              totalCostUsd: 0.42,
-              totalEstimatedValueUsd: 0,
+              totalMoney: actualMoneyFromLegacyUsd(0.42),
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -808,26 +863,27 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
       await recordScheduleRunCostDirect({
         runId: 'run-direct-segments',
-        costUsd: 0.42,
-        isEstimate: false,
+        money: { amount: 0.42, currency: 'CNY', approximate: false, kind: 'actual-cost' },
       });
       await recordScheduleRunCostDirect({
         runId: 'run-direct-segments',
-        costUsd: 0.18,
-        isEstimate: false,
+        money: { amount: 0.18, currency: 'CNY', approximate: false, kind: 'actual-cost' },
       });
       await recordScheduleRunCostDirect({
         runId: 'run-direct-segments',
-        costUsd: 0,
-        isEstimate: false,
+        money: { amount: 0, currency: 'CNY', approximate: false, kind: 'actual-cost' },
       });
 
       await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
         expect.objectContaining({
           id: 'run-direct-segments',
-          costUsd: 0.6,
-          estimatedValueUsd: 0,
-          costAttribution: 'exact',
+          costMoney: {
+            amount: expect.closeTo(0.6, 10),
+            currency: 'CNY',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+          costAttribution: 'direct',
         }),
       ]);
     } finally {
@@ -867,14 +923,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0.6,
-          totalEstimatedValueUsd: 0,
+          totalMoney: actualMoneyFromLegacyUsd(0.6),
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-mixed-ledger',
-              totalCostUsd: 0.6,
-              totalEstimatedValueUsd: 0,
+              totalMoney: actualMoneyFromLegacyUsd(0.6),
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -906,8 +962,13 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       setCurrentDbClient(dbClient, 'test-user');
       await recordScheduleRunCostDirect({
         runId: 'run-direct-only-snapshot',
-        costUsd: 0.6,
-        isEstimate: false,
+        money: {
+          amount: 4.02,
+          currency: 'CNY',
+          approximate: true,
+          kind: 'actual-cost',
+          estimateReasons: ['fixed-fx'],
+        },
       });
       harness.db.run(sql`
         INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
@@ -921,22 +982,21 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
         expect.objectContaining({
           id: 'run-direct-only-snapshot',
-          costUsd: 1,
-          estimatedValueUsd: 0,
+          costMoney: actualMoneyFromLegacyUsd(1),
           costAttribution: 'exact',
         }),
       ]);
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 1,
-          totalEstimatedValueUsd: 0,
+          totalMoney: actualMoneyFromLegacyUsd(1),
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-direct-only',
-              totalCostUsd: 1,
-              totalEstimatedValueUsd: 0,
+              totalMoney: actualMoneyFromLegacyUsd(1),
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -969,15 +1029,15 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0,
-          totalEstimatedValueUsd: 0,
+          totalMoney: ZERO_ACTUAL_MONEY,
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           hasUnavailableCost: true,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-unavailable',
-              totalCostUsd: 0,
-              totalEstimatedValueUsd: 0,
+              totalMoney: ZERO_ACTUAL_MONEY,
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -1004,8 +1064,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 0,
-          totalEstimatedValueUsd: 0,
+          totalMoney: ZERO_ACTUAL_MONEY,
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 0,
           sessions: [],
         },
@@ -1038,6 +1098,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         VALUES
           ('mixed-user', 'mixed-user', 'sess-legacy', 'user', '{}', '{"origin":{"kind":"scheduler","scheduleId":"sch-mixed","scheduleName":"legacy task"}}', 40),
           ('mixed-assistant', 'mixed-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCostUsd":1.25}', 50),
+          ('structured-assistant', 'structured-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCost":{"amount":5,"currency":"CNY","approximate":false,"kind":"actual-cost"}}', 52),
           ('manual-user', 'manual-user', 'sess-legacy', 'user', '{}', NULL, 55),
           ('manual-assistant', 'manual-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCostUsd":2}', 60)
       `);
@@ -1045,14 +1106,20 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 2.25,
-          totalEstimatedValueUsd: 0,
+          totalMoney: {
+            ...actualMoneyFromLegacyUsd(2.25),
+            amount: expect.closeTo(2.25 * 6.7 + 5, 10),
+          },
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-legacy',
-              totalCostUsd: 2.25,
-              totalEstimatedValueUsd: 0,
+              totalMoney: {
+                ...actualMoneyFromLegacyUsd(2.25),
+                amount: expect.closeTo(2.25 * 6.7 + 5, 10),
+              },
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -1090,14 +1157,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await expect(harness.storage.listCostSummaries()).resolves.toEqual([
         {
           scheduleId: schedule.id,
-          totalCostUsd: 1.5,
-          totalEstimatedValueUsd: 0,
+          totalMoney: actualMoneyFromLegacyUsd(1.5),
+          totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-unlinked',
-              totalCostUsd: 1.5,
-              totalEstimatedValueUsd: 0,
+              totalMoney: actualMoneyFromLegacyUsd(1.5),
+              totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
             },
           ],
         },
@@ -1144,9 +1211,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           )
       `);
 
-      expect(
-        (await harness.storage.listRuns(oldSchedule.id)).map((run) => run.sessionId),
-      ).toEqual(
+      expect((await harness.storage.listRuns(oldSchedule.id)).map((run) => run.sessionId)).toEqual(
         expect.arrayContaining(['sess-old-retained', 'sess-old-archived', 'sess-old-deleted']),
       );
 

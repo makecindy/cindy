@@ -2911,7 +2911,11 @@ interface ElectronAPI {
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // today aggregate 已搬到 electronAPI.maker.usage.* (Claude USD + Codex token 统一)。
   onUsageSessionSpendChanged: (
-    cb: (data: { sessionId: string; totalCostUsd: number }) => void,
+    cb: (data: {
+      sessionId: string;
+      totalMoney: import('../shared/regionalMoney').RegionalMoney;
+      totalCostUsd?: number;
+    }) => void,
   ) => () => void;
   onUsageSessionTokensChanged: (
     cb: (data: { sessionId: string; totalTokens: number }) => void,
@@ -2922,9 +2926,11 @@ interface ElectronAPI {
     cb: (data: {
       sessionId: string;
       clientId: string;
-      turnCostUsd: number;
+      turnMoney: import('../shared/regionalMoney').RegionalMoney;
+      turnCostUsd?: number;
       turnCostIsEstimate: boolean;
-      userTurnCostUsd: number;
+      userTurnMoney: import('../shared/regionalMoney').RegionalMoney;
+      userTurnCostUsd?: number;
       userTurnCostIsEstimate: boolean;
       turnUsageDetails?: import('../shared/turnUsageDetails').TurnUsageDetails;
     }) => void,
@@ -3195,8 +3201,14 @@ interface ElectronAPI {
       estimatedSessionValue: (
         sessionId: string,
       ) => Promise<{
-        totalValueUsd: number;
-        entries: Array<{ clientId: string; costUsd: number }>;
+        totalValueMoney?: import('../shared/regionalMoney').RegionalMoney | null;
+        totalValueUsd?: number;
+        entries: Array<{
+          clientId: string;
+          money?: import('../shared/regionalMoney').RegionalMoney;
+          costUsd?: number;
+          turnUsageDetails?: unknown;
+        }>;
       }>;
       around: (
         sessionId: string,
@@ -4118,6 +4130,7 @@ interface ElectronAPI {
     usage: {
       getToday: (agentKind: 'claude-code' | 'codex') => Promise<{
         day: string;
+        money?: import('../shared/regionalMoney').RegionalMoney;
         costUsd?: number;
         totalTokens?: number;
         promptTokens?: number;
@@ -4126,52 +4139,24 @@ interface ElectronAPI {
         cachedTokens?: number;
       }>;
       getAccount: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
-      /** 模型单价表 (model id → USD/Mtok), main 端内存 + 磁盘缓存, 拉取失败时 null。 */
-      getModelPricing: () => Promise<Record<
-        string,
-        {
-          inputUsdPerMtok: number;
-          outputUsdPerMtok: number;
-        }
-      > | null>;
+      /** provider-scoped 模型单价表；XD 价格与 model-access /models 同快照更新。 */
+      getModelPricing: () => Promise<
+        import('../shared/regionalMoney').ModelPricingCatalog | null
+      >;
+      onModelPricingChanged: (
+        cb: (
+          pricing: import('../shared/regionalMoney').ModelPricingCatalog | null,
+        ) => void,
+      ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
-      getHistory: (opts?: { days?: number; forceRefresh?: boolean }) => Promise<{
-        generatedAt: number;
-        todayKey: string;
-        stale?: boolean;
-        estimatesPending?: boolean;
-        days: Array<{ day: string; costUsd: number; tokens: number }>;
-        modelDaily: Array<{
-          day: string;
-          agentKind: 'claude-code' | 'codex';
-          model: string;
-          amountUsd: number;
-          apiCostUsd: number;
-          subscriptionEstimateUsd: number;
-          tokens: number;
-        }>;
-        models: Array<{
-          agentKind: 'claude-code' | 'codex';
-          model: string;
-          costUsd: number;
-          estimatedCostUsd: number | null;
-          inputTokens: number;
-          outputTokens: number;
-          cacheReadTokens: number;
-          cacheCreateTokens: number;
-        }>;
-        streak: { current: number; longest: number };
-        totals: {
-          today: number;
-          last30Days: number;
-          last30DaysWithEstimatedValue: number;
-          last30DaysEstimatedValue: number;
-          todayTokens: number;
-          last30DaysTokens: number;
-        };
-        anomaly: { isAnomalous: boolean; trailing7DayAvg: number | null };
-      }>;
-      onTodaySpendChanged: (cb: (p: { day: string; costUsd: number }) => void) => () => void;
+      getHistory: (
+        opts?: { days?: number; forceRefresh?: boolean },
+      ) => Promise<import('../main/usage/usageHistory').UsageHistoryPayload>;
+      onTodaySpendChanged: (cb: (p: {
+        day: string;
+        money: import('../shared/regionalMoney').RegionalMoney;
+        costUsd?: number;
+      }) => void) => () => void;
       onTodayTokensChanged: (cb: (p: CodexUsageSnapshot) => void) => () => void;
       onClaudeAccountChanged: (
         cb: (p: {

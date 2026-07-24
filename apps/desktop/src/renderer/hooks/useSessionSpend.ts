@@ -10,29 +10,54 @@
  */
 
 import { useEffect, useState } from 'react';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import {
+  normalizeRegionalMoney,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from '../../shared/regionalMoney';
 
 export function useSessionSpend(
   sessionId: string | undefined,
+  initialMoney: RegionalMoney | null | undefined,
   initialCostUsd: number | null | undefined,
-): number | null {
-  const [costUsd, setCostUsd] = useState<number | null>(
-    typeof initialCostUsd === 'number' ? initialCostUsd : null,
+): RegionalMoney | null {
+  const initial =
+    normalizeRegionalMoney(initialMoney) ??
+    (typeof initialCostUsd === 'number'
+      ? regionalizeLegacyUsd(initialCostUsd, CURRENT_CINDY_REGION)
+      : null);
+  const [money, setMoney] = useState<RegionalMoney | null>(
+    initial,
   );
 
   // sessionId 切换时, 用新初始值复位 —— 否则会带着上一个 session 的累计串台
   useEffect(() => {
-    setCostUsd(typeof initialCostUsd === 'number' ? initialCostUsd : null);
-  }, [sessionId, initialCostUsd]);
+    setMoney(
+      normalizeRegionalMoney(initialMoney) ??
+        (typeof initialCostUsd === 'number'
+          ? regionalizeLegacyUsd(initialCostUsd, CURRENT_CINDY_REGION)
+          : null),
+    );
+  }, [sessionId, initialMoney, initialCostUsd]);
 
   useEffect(() => {
     if (!sessionId) return;
     const unsubscribe = window.electronAPI.onUsageSessionSpendChanged((res) => {
       if (res.sessionId === sessionId) {
-        setCostUsd(res.totalCostUsd);
+        setMoney(
+          normalizeRegionalMoney(res.totalMoney) ??
+            (typeof res.totalCostUsd === 'number'
+              ? regionalizeLegacyUsd(
+                  res.totalCostUsd,
+                  CURRENT_CINDY_REGION,
+                )
+              : null),
+        );
       }
     });
     return unsubscribe;
   }, [sessionId]);
 
-  return costUsd;
+  return money;
 }

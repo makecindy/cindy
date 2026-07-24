@@ -14,6 +14,10 @@ import {
 import { getActiveCatalog, setXdGatewayModels } from '../maker-host/active-catalog.js';
 import { isDev } from '../manifestService.js';
 import { overlayCindyModelMeta } from './devMetaOverlay.js';
+import {
+  replaceGatewayModelPricing,
+  trackGatewayModelPricingSync,
+} from '../usage/modelPricing.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
@@ -108,8 +112,7 @@ function broadcastStatus(status: ModelAccessStatus): void {
 // ─── XD 网关模型目录同步(网关为准,目录仅补元数据)────────────────────
 // 凭据同步成功后从 model-access-server 拉 GET /models(AIGateway /model-groups
 // 的 mode=chat 投影),整体重建 xd 供应商的模型列表(active-catalog
-// setXdGatewayModels)。拉取失败或返回空列表时立即清空 XD 模型:产品目录与历史快照
-// 都不能证明模型当前可用,不得继续显示。
+// setXdGatewayModels)。拉取失败保留最后一次完整成功快照；成功空列表同时清空模型和价格。
 
 let modelsSyncInflight: Promise<void> | null = null;
 /** 在途目录请求所属的认证世代。 */
@@ -125,6 +128,10 @@ let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 
 function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
+  // 同一次 /models 响应先建立 provider-scoped 价格投影，再做仅影响展示元数据的
+  // dev overlay。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
+  // 因而保留上一份完整成功快照。
+  replaceGatewayModelPricing(models);
   // dev:本地目录文件(catalog/providers.json)的 cindyModelMeta 段覆盖服务端下发的
   // 元数据,改本地 json + 重启即可自测,无需发 OSS / 等服务端热加载;只覆盖同 id,
   // 清单成员资格仍以网关为准。packaged 不走此分支(语义见 devMetaOverlay.ts)。
@@ -184,6 +191,7 @@ function scheduleModelsSync(): void {
     .finally(() => {
       modelsSyncInflight = null;
     });
+  trackGatewayModelPricingSync(modelsSyncInflight);
 }
 
 let syncInstance: CredentialsSync | null = null;
@@ -299,5 +307,5 @@ export function resetModelAccessForTest(): void {
   modelsSyncRerunQueued = false;
   authGeneration = 0;
   lastAuthUserId = null;
-  setXdGatewayModels([]);
+  applyGatewayModels([]);
 }

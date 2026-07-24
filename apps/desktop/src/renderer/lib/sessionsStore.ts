@@ -285,9 +285,14 @@ if (typeof window !== 'undefined') {
     void sessionsStore.forceRefreshAll();
   });
 
-  window.electronAPI?.onUsageSessionSpendChanged?.(({ sessionId, totalCostUsd }) => {
-    sessionsStore.patchLocal(sessionId, { totalCostUsd });
-  });
+  window.electronAPI?.onUsageSessionSpendChanged?.(
+    ({ sessionId, totalMoney, totalCostUsd }) => {
+      sessionsStore.patchLocal(sessionId, {
+        ...(totalMoney ? { totalMoney } : {}),
+        ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
+      });
+    },
+  );
 
   const sessionsPush = window.electronAPI?.localDb?.sessionsPush;
   if (sessionsPush) {

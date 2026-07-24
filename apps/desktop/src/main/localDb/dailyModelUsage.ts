@@ -1,81 +1,92 @@
-/**
- * dailyModelUsage — 每日按模型用量聚合 CRUD。
- *
- * 数据流：
- *   - register.ts 在每个 turn done 后调用 incrementDailyModelUsage(deltas, ts)
- *   - claude-code: SDK modelUsage 累计值经 modelUsageDelta.ts delta 化后的 per-turn 增量
- *   - codex: done.data.usage 的 per-turn token 数 (costUsdDelta 恒 0, 美元读取时估算)
- *
- * 与 dailySpend 的关系: daily_spend 仍是日总额 canonical 来源;
- * 本表只做按模型拆分展示, 两边求和因舍入可能有微小差异 — 设计取舍。
- *
- * 时区: day key 与 dailySpend 同口径, 用 localDayKey (本地时区 YYYY-MM-DD)。
- */
-
 import { sql } from 'drizzle-orm';
 
-import { dailyModelUsage } from './schema';
-import { localDayKey } from './dailySpend';
-import { getDbClient } from './client/current';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import {
+  addRegionalMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from '../../shared/regionalMoney.js';
+import { dailyModelUsage } from './schema.js';
+import { localDayKey } from './dailySpend.js';
+import { getDbClient } from './client/current.js';
 
-/** 一笔 per-turn 增量 (全部字段为本 turn 的 delta, 不是累计)。 */
 export interface DailyModelUsageDelta {
   agentKind: 'claude-code' | 'codex';
   model: string;
-  costUsdDelta: number;
+  money?: RegionalMoney | null;
   inputTokensDelta: number;
   outputTokensDelta: number;
   cacheReadTokensDelta: number;
   cacheCreateTokensDelta: number;
 }
 
-/** 近 N 天按模型聚合读出的原始行。 */
 export interface DailyModelUsageRow {
   day: string;
   agentKind: string;
   model: string;
-  costUsd: number;
+  money: RegionalMoney;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreateTokens: number;
 }
 
-/** 非有限值 / 负数一律归 0; cost 沿用 dailySpend 的 1e-10 浮点噪声守卫。 */
-function sanitizeCost(v: number): number {
-  return Number.isFinite(v) && v >= 1e-10 ? v : 0;
+function sanitizeTokens(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
-function sanitizeTokens(v: number): number {
-  return Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
-}
-
-/**
- * 累加一笔 per-turn 用量到 (day, agentKind, model) 聚合行 (upsert)。
- * 全部 delta 清洗后均为 0 时跳过写库 (防止空 turn 刷 updatedAt)。
- */
 export async function incrementDailyModelUsage(
   delta: DailyModelUsageDelta,
   ts: number = Date.now(),
 ): Promise<void> {
-  const costUsd = sanitizeCost(delta.costUsdDelta);
+  const money = delta.money ? normalizeRegionalMoney(delta.money) : undefined;
+  if (money && money.currency !== regionalCurrencyForRegion(CURRENT_CINDY_REGION)) {
+    throw new Error('daily model usage currency mismatch');
+  }
   const inputTokens = sanitizeTokens(delta.inputTokensDelta);
   const outputTokens = sanitizeTokens(delta.outputTokensDelta);
   const cacheReadTokens = sanitizeTokens(delta.cacheReadTokensDelta);
   const cacheCreateTokens = sanitizeTokens(delta.cacheCreateTokensDelta);
-  if (costUsd === 0 && inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreateTokens === 0) {
+  if (
+    !money?.amount &&
+    inputTokens === 0 &&
+    outputTokens === 0 &&
+    cacheReadTokens === 0 &&
+    cacheCreateTokens === 0
+  ) {
     return;
   }
 
   const day = localDayKey(ts);
+  const model = delta.model || 'unknown';
   const db = getDbClient().drizzle;
+  const existing = await db
+    .select({ costCurrency: dailyModelUsage.costCurrency })
+    .from(dailyModelUsage)
+    .where(
+      sql`${dailyModelUsage.day} = ${day}
+        AND ${dailyModelUsage.agentKind} = ${delta.agentKind}
+        AND ${dailyModelUsage.model} = ${model}`,
+    )
+    .get();
+  if (
+    money &&
+    existing?.costCurrency &&
+    existing.costCurrency !== money.currency
+  ) {
+    throw new Error('daily model usage row has conflicting currency');
+  }
   await db
     .insert(dailyModelUsage)
     .values({
       day,
       agentKind: delta.agentKind,
-      model: delta.model || 'unknown',
-      costUsd,
+      model,
+      costAmount: money?.amount ?? 0,
+      costCurrency: money?.currency ?? null,
+      costIsApproximate: money?.approximate ?? false,
       inputTokens,
       outputTokens,
       cacheReadTokens,
@@ -83,9 +94,15 @@ export async function incrementDailyModelUsage(
       updatedAt: ts,
     })
     .onConflictDoUpdate({
-      target: [dailyModelUsage.day, dailyModelUsage.agentKind, dailyModelUsage.model],
+      target: [
+        dailyModelUsage.day,
+        dailyModelUsage.agentKind,
+        dailyModelUsage.model,
+      ],
       set: {
-        costUsd: sql`${dailyModelUsage.costUsd} + ${costUsd}`,
+        costAmount: sql`${dailyModelUsage.costAmount} + ${money?.amount ?? 0}`,
+        ...(money ? { costCurrency: money.currency } : {}),
+        costIsApproximate: sql`${dailyModelUsage.costIsApproximate} OR ${money?.approximate ? 1 : 0}`,
         inputTokens: sql`${dailyModelUsage.inputTokens} + ${inputTokens}`,
         outputTokens: sql`${dailyModelUsage.outputTokens} + ${outputTokens}`,
         cacheReadTokens: sql`${dailyModelUsage.cacheReadTokens} + ${cacheReadTokens}`,
@@ -96,15 +113,18 @@ export async function incrementDailyModelUsage(
     .run();
 }
 
-/** 读出 day >= sinceDayKey 的全部原始行 (按模型聚合在 usageHistory.ts 做)。 */
-export async function getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]> {
-  const db = getDbClient().drizzle;
-  return db
+export async function getModelUsageSince(
+  sinceDayKey: string,
+): Promise<DailyModelUsageRow[]> {
+  const rows = await getDbClient().drizzle
     .select({
       day: dailyModelUsage.day,
       agentKind: dailyModelUsage.agentKind,
       model: dailyModelUsage.model,
       costUsd: dailyModelUsage.costUsd,
+      costAmount: dailyModelUsage.costAmount,
+      costCurrency: dailyModelUsage.costCurrency,
+      costIsApproximate: dailyModelUsage.costIsApproximate,
       inputTokens: dailyModelUsage.inputTokens,
       outputTokens: dailyModelUsage.outputTokens,
       cacheReadTokens: dailyModelUsage.cacheReadTokens,
@@ -113,4 +133,31 @@ export async function getModelUsageSince(sinceDayKey: string): Promise<DailyMode
     .from(dailyModelUsage)
     .where(sql`${dailyModelUsage.day} >= ${sinceDayKey}`)
     .all();
+  return rows.map((row) => {
+    const legacy = regionalizeLegacyUsd(row.costUsd, CURRENT_CINDY_REGION);
+    const current =
+      row.costCurrency && row.costAmount > 0
+        ? normalizeRegionalMoney({
+            amount: row.costAmount,
+            currency: row.costCurrency,
+            approximate: row.costIsApproximate,
+            kind: 'actual-cost',
+          })
+        : undefined;
+    return {
+      day: row.day,
+      agentKind: row.agentKind,
+      model: row.model,
+      money:
+        legacy.amount > 0 && current
+          ? legacy.currency === current.currency
+            ? addRegionalMoney([legacy, current])
+            : current
+          : current ?? legacy,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cacheReadTokens: row.cacheReadTokens,
+      cacheCreateTokens: row.cacheCreateTokens,
+    };
+  });
 }

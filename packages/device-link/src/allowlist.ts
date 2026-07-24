@@ -293,8 +293,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 人工 reset。mutation 不接收 creditId,不能泛化成任意账号/凭证控制入口。
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
-  // 模型单价表(只读,main 侧 LiteLLM /model_group/info 缓存):控制端模型选择器展示被控端
-  // 视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
+  // 模型单价表(只读,main 侧 Model Access model-groups 投影缓存):控制端模型选择器展示
+  // 被控端视角的单价(与被控端桌面 tooltip 同源)。无 sender 依赖、无副作用;老被控端无此 channel
   // → CHANNEL_NOT_ALLOWED → 控制端隐藏价格(与桌面「无价不显示」口径一致)。
   'maker:usage:model-pricing',
   // 网关 API key **presence-only** 探测:只回 { present: boolean },不回、也永不扩展为读取

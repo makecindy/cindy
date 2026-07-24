@@ -38,7 +38,10 @@ describe('formatModelShort', () => {
 });
 
 describe('buildTurnUsageTooltipLines — 按模型成本明细', () => {
-  function lines(perModelCost?: Array<{ model: string; costUsd: number }>, costUsd = 1.74): string[] {
+  function lines(
+    perModelCost?: Array<{ model: string; costUsd: number }>,
+    costUsd = 1.74,
+  ): string[] {
     const details = buildTurnUsageDetails({
       inputTokens: 133,
       outputTokens: 9_899,
@@ -56,8 +59,22 @@ describe('buildTurnUsageTooltipLines — 按模型成本明细', () => {
       { model: 'claude-haiku-4-5-20251001', costUsd: 0.8 },
     ]);
     expect(out).toContain('usageDetails.costBreakdownHeader');
-    expect(out.some((l) => l.startsWith('usageDetails.modelCostLine') && l.includes('Opus 4.8') && l.includes('$0.94'))).toBe(true);
-    expect(out.some((l) => l.startsWith('usageDetails.modelCostLine') && l.includes('Haiku 4.5') && l.includes('$0.80'))).toBe(true);
+    expect(
+      out.some(
+        (l) =>
+          l.startsWith('usageDetails.modelCostLine') &&
+          l.includes('Opus 4.8') &&
+          l.includes('≈¥6.30'),
+      ),
+    ).toBe(true);
+    expect(
+      out.some(
+        (l) =>
+          l.startsWith('usageDetails.modelCostLine') &&
+          l.includes('Haiku 4.5') &&
+          l.includes('≈¥5.36'),
+      ),
+    ).toBe(true);
     expect(out.some((l) => l.startsWith('usageDetails.modelLine'))).toBe(false);
   });
 
@@ -81,8 +98,9 @@ describe('buildTurnUsageTooltipLines — 建议行 (只在真正有价值时出�
     cacheCreateTokens?: number;
   }): string[] {
     const details = buildTurnUsageDetails({ outputTokens: 100, ...tokens })!;
-    return buildTurnUsageTooltipLines({ details, t, costUsd: 1 })
-      .filter((l) => l.startsWith('usageDetails.suggestionLine'));
+    return buildTurnUsageTooltipLines({ details, t, costUsd: 1 }).filter((l) =>
+      l.startsWith('usageDetails.suggestionLine'),
+    );
   }
 
   it('总量大但缓存命中率高 (健康长会话) → 无建议', () => {
@@ -126,8 +144,26 @@ describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
       ],
     });
     expect(d!.perModelCost).toEqual([
-      { model: 'claude-opus-4-8', costUsd: 0.94 },
-      { model: 'claude-haiku-4-5', costUsd: 0.8 },
+      {
+        model: 'claude-opus-4-8',
+        money: {
+          amount: expect.closeTo(6.298, 10),
+          currency: 'CNY',
+          approximate: true,
+          kind: 'actual-cost',
+          estimateReasons: ['fixed-fx', 'legacy-usd'],
+        },
+      },
+      {
+        model: 'claude-haiku-4-5',
+        money: {
+          amount: expect.closeTo(5.36, 10),
+          currency: 'CNY',
+          approximate: true,
+          kind: 'actual-cost',
+          estimateReasons: ['fixed-fx', 'legacy-usd'],
+        },
+      },
     ]);
   });
 
@@ -140,7 +176,18 @@ describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
         { model: 'claude-opus-4-8', costUsd: 0.4 },
       ],
     });
-    expect(d!.perModelCost).toEqual([{ model: 'claude-opus-4-8', costUsd: 0.9 }]);
+    expect(d!.perModelCost).toEqual([
+      {
+        model: 'claude-opus-4-8',
+        money: {
+          amount: expect.closeTo(6.03, 10),
+          currency: 'CNY',
+          approximate: true,
+          kind: 'actual-cost',
+          estimateReasons: ['fixed-fx', 'legacy-usd'],
+        },
+      },
+    ]);
   });
 
   it('缺 perModelCost 字段 → undefined, 其它明细仍构建', () => {

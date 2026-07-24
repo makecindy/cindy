@@ -15,7 +15,16 @@ import type {
   scheduleRuns,
 } from './schema';
 // 类型从 renderer 共享（仅 type-only import，运行时无 import 副作用）
-import type { Session, SessionStatus, Message, MessageRole, AgentKind, AgentMeta, OrcaRole, WorkspaceKind } from '../../renderer/lib/ccAgent.types';
+import type {
+  Session,
+  SessionStatus,
+  Message,
+  MessageRole,
+  AgentKind,
+  AgentMeta,
+  OrcaRole,
+  WorkspaceKind,
+} from '../../renderer/lib/ccAgent.types';
 import type { Effort, PermissionMode } from '../../renderer/lib/userPreferences.types';
 // scheduler 模块的纯类型/接口契约——零运行时依赖（package main 是 src/index.ts，
 // type-only import 编译期消除）。
@@ -32,6 +41,14 @@ import type {
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import {
+  addRegionalMoney,
+  normalizeRegionalMoney,
+  regionalizeLegacyUsd,
+  regionalizeUsd,
+  zeroRegionalMoney,
+} from '../../shared/regionalMoney.js';
 
 type SessionRow = typeof sessions.$inferSelect;
 type SessionInsert = typeof sessions.$inferInsert;
@@ -98,9 +115,7 @@ export function extractMessagePreview(
   if (isSyntheticTriggerText(text)) return null;
   const collapsed = text.replace(/\s+/g, ' ').trim();
   if (!collapsed) return null;
-  return collapsed.length > PREVIEW_MAX_CHARS
-    ? collapsed.slice(0, PREVIEW_MAX_CHARS)
-    : collapsed;
+  return collapsed.length > PREVIEW_MAX_CHARS ? collapsed.slice(0, PREVIEW_MAX_CHARS) : collapsed;
 }
 
 /**
@@ -110,6 +125,23 @@ export function extractMessagePreview(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
+  const legacyMoney =
+    row.totalCostUsd > 0 ? regionalizeLegacyUsd(row.totalCostUsd, CURRENT_CINDY_REGION) : undefined;
+  const currentMoney =
+    row.totalCostCurrency && row.totalCostAmount > 0
+      ? normalizeRegionalMoney({
+          amount: row.totalCostAmount,
+          currency: row.totalCostCurrency,
+          approximate: row.totalCostIsApproximate,
+          kind: 'actual-cost',
+        })
+      : undefined;
+  const totalMoney =
+    legacyMoney && currentMoney
+      ? legacyMoney.currency === currentMoney.currency
+        ? addRegionalMoney([legacyMoney, currentMoney])
+        : currentMoney
+      : (currentMoney ?? legacyMoney ?? zeroRegionalMoney(CURRENT_CINDY_REGION));
   return {
     id: row.id,
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
@@ -124,6 +156,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     sdkSessionId: row.sdkSessionId,
     totalTokenUsage: row.totalTokenUsage,
     totalCostUsd: row.totalCostUsd,
+    totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
     fastMode: !!row.fastMode,
@@ -201,29 +234,31 @@ export function normalizeRemoteHostId(raw: string | null | undefined): string | 
 /** Session create 入口字段映射。生成 timestamps + 默认值由调用方保证必填。 */
 export function sessionCreateToRow(
   id: string,
-  body: {
-    id?: string;
-    workingDir?: string;
-    workspaceKind?: WorkspaceKind;
-    model?: string;
-    effort?: string;
-    permissionMode?: string;
-    fastMode?: boolean;
-    planModeEnabled?: boolean;
-    agentKind?: AgentKind;
-    orcaRole?: OrcaRole | null;
-    parentSessionId?: string | null;
-    forkedAtMessageId?: string | null;
-    extraDirs?: string[];
-    /** Remote codex (P2): 远端 SSH host alias; null/undefined = 本地。 */
-    remoteHostId?: string | null;
-    /**
-     * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
-     * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
-     * create 由 renderer 透传用户在草稿里选定的来源,使新会话首个请求就走对供应商。
-     */
-    providerId?: string | null;
-  } | undefined,
+  body:
+    | {
+        id?: string;
+        workingDir?: string;
+        workspaceKind?: WorkspaceKind;
+        model?: string;
+        effort?: string;
+        permissionMode?: string;
+        fastMode?: boolean;
+        planModeEnabled?: boolean;
+        agentKind?: AgentKind;
+        orcaRole?: OrcaRole | null;
+        parentSessionId?: string | null;
+        forkedAtMessageId?: string | null;
+        extraDirs?: string[];
+        /** Remote codex (P2): 远端 SSH host alias; null/undefined = 本地。 */
+        remoteHostId?: string | null;
+        /**
+         * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
+         * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
+         * create 由 renderer 透传用户在草稿里选定的来源,使新会话首个请求就走对供应商。
+         */
+        providerId?: string | null;
+      }
+    | undefined,
   now: number,
 ): SessionInsert {
   return {
@@ -233,8 +268,7 @@ export function sessionCreateToRow(
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
-    permissionMode:
-      (body?.permissionMode as SessionInsert['permissionMode']) ?? 'ask',
+    permissionMode: (body?.permissionMode as SessionInsert['permissionMode']) ?? 'ask',
     status: 'active',
     sdkSessionId: null,
     totalTokenUsage: 0,
@@ -298,7 +332,8 @@ export function sessionPatchToRow(
 ): Partial<SessionInsert> {
   const out: Partial<SessionInsert> = {};
   if (patch.title !== undefined) out.title = patch.title;
-  if (patch.workingDir !== undefined) out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
+  if (patch.workingDir !== undefined)
+    out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   if (patch.model !== undefined) out.model = patch.model;
   if (patch.effort !== undefined) out.effort = patch.effort as SessionInsert['effort'];
@@ -440,13 +475,7 @@ function parseScriptConfig(raw: string | null): ScriptExecutionConfig | undefine
   }
 }
 
-const PRE_RUN_HOOK_STATUSES = new Set([
-  'passed',
-  'skipped',
-  'failed',
-  'timed_out',
-  'aborted',
-]);
+const PRE_RUN_HOOK_STATUSES = new Set(['passed', 'skipped', 'failed', 'timed_out', 'aborted']);
 const PRE_RUN_HOOK_DECISIONS = new Set(['run', 'skip', 'block']);
 
 /** 兼容损坏/手工写入的 JSON：非法结果不应让整个运行历史加载失败。 */
@@ -457,7 +486,8 @@ function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefi
     if (!PRE_RUN_HOOK_STATUSES.has(String(value.status))) return undefined;
     if (!PRE_RUN_HOOK_DECISIONS.has(String(value.decision))) return undefined;
     if (value.exitCode !== null && typeof value.exitCode !== 'number') return undefined;
-    if (typeof value.durationMs !== 'number' || !Number.isFinite(value.durationMs)) return undefined;
+    if (typeof value.durationMs !== 'number' || !Number.isFinite(value.durationMs))
+      return undefined;
     if (typeof value.stdout !== 'string' || typeof value.stderr !== 'string') return undefined;
     if (
       typeof value.stdoutTruncated !== 'boolean' ||
@@ -592,8 +622,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
-  if (hasKey(patch, 'projectConfigId'))
-    out.projectConfigId = patch.projectConfigId ?? null;
+  if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
   if (hasKey(patch, 'kind')) out.kind = patch.kind as ScheduleInsert['kind'];
   if (hasKey(patch, 'cronExpr')) out.cronExpr = patch.cronExpr as string;
   if (hasKey(patch, 'timezone')) out.timezone = patch.timezone as string;
@@ -601,22 +630,17 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'manual')) out.manual = patch.manual as boolean;
   // intervalMs：undefined → null（清空，回退到 cron 槽位语义）；数字原样写
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
-  if (hasKey(patch, 'agentKind'))
-    out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
+  if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
-  if (hasKey(patch, 'effort'))
-    out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
+  if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = !!patch.fastMode;
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
-  if (hasKey(patch, 'targetSessionId'))
-    out.targetSessionId = patch.targetSessionId ?? null;
-  if (hasKey(patch, 'persistentSession'))
-    out.persistentSession = !!patch.persistentSession;
-  if (hasKey(patch, 'silentWhenIdle'))
-    out.silentWhenIdle = !!patch.silentWhenIdle;
+  if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;
+  if (hasKey(patch, 'persistentSession')) out.persistentSession = !!patch.persistentSession;
+  if (hasKey(patch, 'silentWhenIdle')) out.silentWhenIdle = !!patch.silentWhenIdle;
   if (hasKey(patch, 'preRunHook')) {
     // 嵌套对象整体替换(同 notify):出现即两列同写;undefined = 关闭 hook,双列清 NULL
     out.preRunHookCommand = patch.preRunHook?.command ?? null;
@@ -633,8 +657,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'updatedAt')) out.updatedAt = patch.updatedAt as number;
   // 三个可空时间戳：undefined 也要写成 null（业务语义"清空 nextFireAt"）
   if (hasKey(patch, 'lastFiredAt')) out.lastFiredAt = patch.lastFiredAt ?? null;
-  if (hasKey(patch, 'lastFinishedAt'))
-    out.lastFinishedAt = patch.lastFinishedAt ?? null;
+  if (hasKey(patch, 'lastFinishedAt')) out.lastFinishedAt = patch.lastFinishedAt ?? null;
   if (hasKey(patch, 'nextFireAt')) out.nextFireAt = patch.nextFireAt ?? null;
   if (hasKey(patch, 'expireAt')) out.expireAt = patch.expireAt ?? null;
   return out;
@@ -668,6 +691,45 @@ export function projectAutomationConsentToRow(
 
 /** ScheduleRun 行 → 内存对象。 */
 export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
+  const legacyCost =
+    row.costUsd > 0 ? regionalizeLegacyUsd(row.costUsd, CURRENT_CINDY_REGION) : undefined;
+  const currentCost =
+    row.costCurrency && row.costAmount > 0
+      ? normalizeRegionalMoney({
+          amount: row.costAmount,
+          currency: row.costCurrency,
+          approximate: row.costIsApproximate,
+          kind: 'actual-cost',
+        })
+      : undefined;
+  const costMoney =
+    legacyCost && currentCost
+      ? legacyCost.currency === currentCost.currency
+        ? addRegionalMoney([legacyCost, currentCost])
+        : currentCost
+      : (currentCost ?? legacyCost ?? zeroRegionalMoney(CURRENT_CINDY_REGION));
+  const legacyEstimate =
+    row.estimatedValueUsd > 0
+      ? regionalizeUsd(row.estimatedValueUsd, CURRENT_CINDY_REGION, 'legacy-usd', 'value-estimate')
+      : undefined;
+  const currentEstimate =
+    row.costCurrency && row.estimatedValueAmount > 0
+      ? normalizeRegionalMoney({
+          amount: row.estimatedValueAmount,
+          currency: row.costCurrency,
+          approximate: true,
+          kind: 'value-estimate',
+          estimateReasons: ['subscription-value'],
+        })
+      : undefined;
+  const estimatedValueMoney =
+    legacyEstimate && currentEstimate
+      ? legacyEstimate.currency === currentEstimate.currency
+        ? addRegionalMoney([legacyEstimate, currentEstimate])
+        : currentEstimate
+      : (currentEstimate ??
+        legacyEstimate ??
+        zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'));
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -678,6 +740,8 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     errorMsg: row.errorMsg ?? undefined,
     costUsd: row.costUsd,
     estimatedValueUsd: row.estimatedValueUsd,
+    costMoney,
+    estimatedValueMoney,
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
@@ -698,6 +762,10 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     errorMsg: r.errorMsg ?? null,
     costUsd: r.costUsd ?? 0,
     estimatedValueUsd: r.estimatedValueUsd ?? 0,
+    costAmount: r.costMoney?.amount ?? 0,
+    estimatedValueAmount: r.estimatedValueMoney?.amount ?? 0,
+    costCurrency: r.costMoney?.currency ?? r.estimatedValueMoney?.currency ?? null,
+    costIsApproximate: r.costMoney?.approximate ?? false,
     // 新写入的 run 从创建起就带 runId origin；迁移前旧行由列默认值标为 legacy。
     costAttribution: r.costAttribution ?? 'exact',
     resultText: r.resultText ?? null,
@@ -712,9 +780,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
  * 与 schedulePatchToRow 同样的 hasOwn 语义：key 不存在 = 不更新；
  * key 存在但 undefined = 写 NULL。
  */
-export function scheduleRunPatchToRow(
-  patch: Partial<ScheduleRun>,
-): Partial<ScheduleRunInsert> {
+export function scheduleRunPatchToRow(patch: Partial<ScheduleRun>): Partial<ScheduleRunInsert> {
   const out: Partial<ScheduleRunInsert> = {};
   if (hasKey(patch, 'scheduleId')) out.scheduleId = patch.scheduleId as string;
   // 空字符串等同 null：FireResult.sessionId 是 required string，但 runner
@@ -722,21 +788,27 @@ export function scheduleRunPatchToRow(
   if (hasKey(patch, 'sessionId')) out.sessionId = patch.sessionId || null;
   if (hasKey(patch, 'firedAt')) out.firedAt = patch.firedAt as number;
   if (hasKey(patch, 'finishedAt')) out.finishedAt = patch.finishedAt ?? null;
-  if (hasKey(patch, 'status'))
-    out.status = patch.status as ScheduleRunInsert['status'];
+  if (hasKey(patch, 'status')) out.status = patch.status as ScheduleRunInsert['status'];
   if (hasKey(patch, 'errorMsg')) out.errorMsg = patch.errorMsg ?? null;
   if (hasKey(patch, 'costUsd')) out.costUsd = patch.costUsd ?? 0;
   if (hasKey(patch, 'estimatedValueUsd')) {
     out.estimatedValueUsd = patch.estimatedValueUsd ?? 0;
+  }
+  if (hasKey(patch, 'costMoney')) {
+    out.costAmount = patch.costMoney?.amount ?? 0;
+    out.costCurrency = patch.costMoney?.currency ?? null;
+    out.costIsApproximate = patch.costMoney?.approximate ?? false;
+  }
+  if (hasKey(patch, 'estimatedValueMoney')) {
+    out.estimatedValueAmount = patch.estimatedValueMoney?.amount ?? 0;
+    out.costCurrency = patch.estimatedValueMoney?.currency ?? out.costCurrency ?? null;
   }
   if (hasKey(patch, 'costAttribution')) {
     out.costAttribution = patch.costAttribution ?? 'legacy';
   }
   if (hasKey(patch, 'resultText')) out.resultText = patch.resultText ?? null;
   if (hasKey(patch, 'preRunHookResult')) {
-    out.preRunHookResult = patch.preRunHookResult
-      ? JSON.stringify(patch.preRunHookResult)
-      : null;
+    out.preRunHookResult = patch.preRunHookResult ? JSON.stringify(patch.preRunHookResult) : null;
   }
   if (hasKey(patch, 'readAt')) out.readAt = patch.readAt ?? null;
   if (hasKey(patch, 'heartbeatAt')) out.heartbeatAt = patch.heartbeatAt ?? null;

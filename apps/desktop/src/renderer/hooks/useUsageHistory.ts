@@ -21,12 +21,22 @@
  */
 
 import { useEffect, useState } from 'react';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import {
+  addCompatibleRegionalMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeLegacyUsd,
+  regionalizeUsd,
+  type RegionalMoney,
+  zeroRegionalMoney,
+} from '../../shared/regionalMoney';
 
 export interface UsageHistoryModel {
   agentKind: 'claude-code' | 'codex';
   model: string;
-  costUsd: number;
-  estimatedCostUsd: number | null;
+  money: RegionalMoney;
+  estimatedMoney: RegionalMoney | null;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -38,9 +48,9 @@ export interface UsageHistoryModelDay {
   day: string;
   agentKind: 'claude-code' | 'codex';
   model: string;
-  amountUsd: number;
-  apiCostUsd: number;
-  subscriptionEstimateUsd: number;
+  money: RegionalMoney;
+  apiMoney: RegionalMoney;
+  subscriptionEstimateMoney: RegionalMoney;
   tokens: number;
 }
 
@@ -50,20 +60,20 @@ export interface UsageHistoryPayload {
   stale?: boolean;
   estimatesPending?: boolean;
   /** tokens: 当日合计 (旧快照可能缺该字段, 消费端用 ?? 0 兜底)。 */
-  days: Array<{ day: string; costUsd: number; tokens?: number }>;
+  days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   /** 近 30 天每日 × 模型明细 (旧快照缺该字段时补 [])。 */
   modelDaily: UsageHistoryModelDay[];
   models: UsageHistoryModel[];
   streak: { current: number; longest: number };
   totals: {
-    today: number;
-    last30Days: number;
-    last30DaysWithEstimatedValue: number;
-    last30DaysEstimatedValue: number;
+    today: RegionalMoney;
+    last30Days: RegionalMoney;
+    last30DaysWithEstimatedValue: RegionalMoney;
+    last30DaysEstimatedValue: RegionalMoney;
     todayTokens: number;
     last30DaysTokens: number;
   };
-  anomaly: { isAnomalous: boolean; trailing7DayAvg: number | null };
+  anomaly: { isAnomalous: boolean; trailing7DayAvg: RegionalMoney | null };
 }
 
 /** 热力图窗口: 20 周 = 140 天。 */
@@ -80,38 +90,192 @@ function storageKeyForScope(scopeKey: string): string {
   return `${SNAPSHOT_STORAGE_KEY}.${encodeURIComponent(scopeKey)}`;
 }
 
+interface StoredUsageHistoryDay {
+  day?: unknown;
+  money?: unknown;
+  costUsd?: unknown;
+  tokens?: unknown;
+}
+
+interface StoredUsageHistoryModelDay {
+  day?: unknown;
+  agentKind?: unknown;
+  model?: unknown;
+  money?: unknown;
+  amountUsd?: unknown;
+  apiMoney?: unknown;
+  apiCostUsd?: unknown;
+  subscriptionEstimateMoney?: unknown;
+  subscriptionEstimateUsd?: unknown;
+  tokens?: unknown;
+}
+
+interface StoredUsageHistoryModel {
+  agentKind?: unknown;
+  model?: unknown;
+  money?: unknown;
+  costUsd?: unknown;
+  estimatedMoney?: unknown;
+  estimatedCostUsd?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  cacheReadTokens?: unknown;
+  cacheCreateTokens?: unknown;
+}
+
+interface StoredUsageHistoryPayload {
+  generatedAt?: unknown;
+  todayKey?: unknown;
+  stale?: unknown;
+  estimatesPending?: unknown;
+  days?: unknown;
+  modelDaily?: unknown;
+  models?: unknown;
+  streak?: unknown;
+  totals?: unknown;
+  anomaly?: unknown;
+}
+
+function finiteNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
+  return value === 'claude-code' || value === 'codex';
+}
+
 function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
   try {
     const raw = localStorage.getItem(storageKeyForScope(scopeKey));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as UsageHistoryPayload;
+    const parsed = JSON.parse(raw) as StoredUsageHistoryPayload;
     // 最小结构校验 — 大结构对不上才丢弃; 旧版快照缺 token 字段时补 0 继续用,
     // 避免升级后首启空一帧 (首帧照常渲染, ~200ms 后真实数据静默覆盖)。
     if (!Array.isArray(parsed.days) || !Array.isArray(parsed.models)) return null;
-    if (!parsed.totals || !parsed.streak || !parsed.anomaly) return null;
-    if (typeof parsed.stale !== 'boolean') parsed.stale = false;
-    if (typeof parsed.estimatesPending !== 'boolean') parsed.estimatesPending = false;
-    if (typeof parsed.totals.last30DaysWithEstimatedValue !== 'number') {
-      parsed.totals.last30DaysWithEstimatedValue = parsed.totals.last30Days;
+    if (
+      !parsed.totals ||
+      typeof parsed.totals !== 'object' ||
+      Array.isArray(parsed.totals) ||
+      !parsed.streak ||
+      typeof parsed.streak !== 'object' ||
+      Array.isArray(parsed.streak) ||
+      !parsed.anomaly ||
+      typeof parsed.anomaly !== 'object' ||
+      Array.isArray(parsed.anomaly)
+    ) {
+      return null;
     }
-    if (typeof parsed.totals.last30DaysEstimatedValue !== 'number') {
-      parsed.totals.last30DaysEstimatedValue = Math.max(
-        0,
-        parsed.totals.last30DaysWithEstimatedValue - parsed.totals.last30Days,
-      );
-    }
-    if (typeof parsed.totals.todayTokens !== 'number') parsed.totals.todayTokens = 0;
-    if (typeof parsed.totals.last30DaysTokens !== 'number') parsed.totals.last30DaysTokens = 0;
-    if (!Array.isArray(parsed.modelDaily)) parsed.modelDaily = [];
-    for (const row of parsed.modelDaily) {
-      if (typeof row.apiCostUsd !== 'number') {
-        row.apiCostUsd = row.agentKind === 'codex' ? 0 : row.amountUsd;
-      }
-      if (typeof row.subscriptionEstimateUsd !== 'number') {
-        row.subscriptionEstimateUsd = row.agentKind === 'codex' ? row.amountUsd : 0;
-      }
-    }
-    return parsed;
+    const totals = parsed.totals as Record<string, unknown>;
+    const streak = parsed.streak as Record<string, unknown>;
+    const anomaly = parsed.anomaly as Record<string, unknown>;
+    const legacyActual = (value: unknown): RegionalMoney =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? regionalizeLegacyUsd(value, CURRENT_CINDY_REGION)
+        : zeroRegionalMoney(CURRENT_CINDY_REGION);
+    const legacyEstimate = (value: unknown): RegionalMoney =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? regionalizeUsd(
+            value,
+            CURRENT_CINDY_REGION,
+            'subscription-value',
+            'value-estimate',
+          )
+        : zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate');
+
+    const days = (parsed.days as StoredUsageHistoryDay[])
+      .filter((row) => typeof row?.day === 'string')
+      .map((row) => ({
+        day: row.day as string,
+        money: normalizeRegionalMoney(row.money) ?? legacyActual(row.costUsd),
+        tokens: finiteNumber(row.tokens),
+      }));
+    const modelDaily = (Array.isArray(parsed.modelDaily) ? parsed.modelDaily : [])
+      .filter(
+        (row: StoredUsageHistoryModelDay) =>
+          typeof row?.day === 'string' &&
+          typeof row.model === 'string' &&
+          isAgentKind(row.agentKind),
+      )
+      .map((row: StoredUsageHistoryModelDay): UsageHistoryModelDay => ({
+        day: row.day as string,
+        agentKind: row.agentKind as UsageHistoryModelDay['agentKind'],
+        model: row.model as string,
+        money:
+          normalizeRegionalMoney(row.money) ??
+          (row.agentKind === 'codex'
+            ? legacyEstimate(row.amountUsd)
+            : legacyActual(row.amountUsd)),
+        apiMoney: normalizeRegionalMoney(row.apiMoney) ?? legacyActual(row.apiCostUsd),
+        subscriptionEstimateMoney:
+          normalizeRegionalMoney(row.subscriptionEstimateMoney) ??
+          legacyEstimate(row.subscriptionEstimateUsd),
+        tokens: finiteNumber(row.tokens),
+      }));
+    const models = (parsed.models as StoredUsageHistoryModel[])
+      .filter(
+        (row) =>
+          typeof row?.model === 'string' &&
+          isAgentKind(row.agentKind),
+      )
+      .map((row): UsageHistoryModel => ({
+        agentKind: row.agentKind as UsageHistoryModel['agentKind'],
+        model: row.model as string,
+        money: normalizeRegionalMoney(row.money) ?? legacyActual(row.costUsd),
+        estimatedMoney:
+          normalizeRegionalMoney(row.estimatedMoney) ??
+          (typeof row.estimatedCostUsd === 'number'
+            ? legacyEstimate(row.estimatedCostUsd)
+            : null),
+        inputTokens: finiteNumber(row.inputTokens),
+        outputTokens: finiteNumber(row.outputTokens),
+        cacheReadTokens: finiteNumber(row.cacheReadTokens),
+        cacheCreateTokens: finiteNumber(row.cacheCreateTokens),
+      }));
+    const today = normalizeRegionalMoney(totals.today) ?? legacyActual(totals.today);
+    const last30Days =
+      normalizeRegionalMoney(totals.last30Days) ?? legacyActual(totals.last30Days);
+    const last30DaysEstimatedValue =
+      normalizeRegionalMoney(totals.last30DaysEstimatedValue) ??
+      legacyEstimate(totals.last30DaysEstimatedValue);
+    const last30DaysWithEstimatedValue =
+      normalizeRegionalMoney(totals.last30DaysWithEstimatedValue) ??
+      (last30DaysEstimatedValue.amount > 0
+        ? (addCompatibleRegionalMoney(
+            [last30Days, last30DaysEstimatedValue],
+            regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+          ) ?? last30Days)
+        : last30Days);
+    const trailing7DayAvg =
+      anomaly.trailing7DayAvg === null
+        ? null
+        : normalizeRegionalMoney(anomaly.trailing7DayAvg) ??
+          legacyActual(anomaly.trailing7DayAvg);
+
+    return {
+      generatedAt: finiteNumber(parsed.generatedAt, Date.now()),
+      todayKey: typeof parsed.todayKey === 'string' ? parsed.todayKey : '',
+      stale: parsed.stale === true,
+      estimatesPending: parsed.estimatesPending === true,
+      days,
+      modelDaily,
+      models,
+      streak: {
+        current: finiteNumber(streak.current),
+        longest: finiteNumber(streak.longest),
+      },
+      totals: {
+        today,
+        last30Days,
+        last30DaysWithEstimatedValue,
+        last30DaysEstimatedValue,
+        todayTokens: finiteNumber(totals.todayTokens),
+        last30DaysTokens: finiteNumber(totals.last30DaysTokens),
+      },
+      anomaly: {
+        isAnomalous: anomaly.isAnomalous === true,
+        trailing7DayAvg,
+      },
+    };
   } catch {
     return null;
   }
@@ -309,6 +473,7 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
     };
     const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
     const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(scheduleRefresh);
+    const offPricing = window.electronAPI.maker.usage.onModelPricingChanged(scheduleRefresh);
 
     return () => {
       activeScope.listeners.delete(setScopedHistory);
@@ -317,6 +482,7 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
       if (timer) clearTimeout(timer);
       offSpend();
       offTokens();
+      offPricing();
     };
   }, [paused, scopeKey]);
 

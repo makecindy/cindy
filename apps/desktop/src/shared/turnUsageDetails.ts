@@ -3,6 +3,15 @@
  * message. Stored in messages.agent_meta so old DB schema stays unchanged.
  */
 
+import { CURRENT_CINDY_REGION } from './brandRegion.js';
+import {
+  addCompatibleRegionalMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from './regionalMoney.js';
+
 export interface TurnUsageDetails {
   /** 新输入 token：未命中缓存、按输入价计费的部分。 */
   inputTokens: number;
@@ -25,7 +34,7 @@ export interface TurnUsageDetails {
    * (来自 resolveClaudeTurnCostSinks 的 perModel)，含 subagent (如 Task 工具
    * 跑的 Haiku) —— tooltip 据此展示「按模型成本明细」。老消息无此字段。
    */
-  perModelCost?: Array<{ model: string; costUsd: number }>;
+  perModelCost?: Array<{ model: string; money: RegionalMoney }>;
 }
 
 export interface BuildTurnUsageDetailsInput {
@@ -35,13 +44,20 @@ export interface BuildTurnUsageDetailsInput {
   cacheCreateTokens?: number;
   model?: string | null;
   models?: Array<string | null | undefined> | readonly (string | null | undefined)[];
-  perModelCost?: ReadonlyArray<{ model?: string | null; costUsd?: number | null } | null | undefined>;
+  perModelCost?: ReadonlyArray<
+    | {
+        model?: string | null;
+        money?: RegionalMoney | null;
+        /** 旧消息兼容：历史事实始终是 USD。 */
+        costUsd?: number | null;
+      }
+    | null
+    | undefined
+  >;
 }
 
 function sanitizeToken(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function sanitizeModel(value: unknown): string | undefined {
@@ -64,18 +80,36 @@ function uniqueModels(models: BuildTurnUsageDetailsInput['models']): string[] | 
  */
 function sanitizePerModelCost(
   list: BuildTurnUsageDetailsInput['perModelCost'],
-): Array<{ model: string; costUsd: number }> | undefined {
+): Array<{ model: string; money: RegionalMoney }> | undefined {
   if (!list || !Array.isArray(list)) return undefined;
-  const byModel = new Map<string, number>();
+  const byModel = new Map<string, RegionalMoney>();
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const model = sanitizeModel(item.model);
-    const cost = item.costUsd;
-    if (!model || typeof cost !== 'number' || !Number.isFinite(cost) || cost <= 0) continue;
-    byModel.set(model, (byModel.get(model) ?? 0) + cost);
+    const structured = normalizeRegionalMoney(item.money);
+    const legacy =
+      typeof item.costUsd === 'number' && Number.isFinite(item.costUsd) && item.costUsd > 0
+        ? regionalizeLegacyUsd(item.costUsd, CURRENT_CINDY_REGION)
+        : undefined;
+    const money = structured ?? legacy;
+    if (!model || !money || money.amount <= 0) continue;
+    const current = byModel.get(model);
+    byModel.set(
+      model,
+      current
+        ? (addCompatibleRegionalMoney(
+            [current, money],
+            regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+          ) ?? money)
+        : money,
+    );
   }
-  if (byModel.size === 0) return undefined;
-  return Array.from(byModel, ([model, costUsd]) => ({ model, costUsd }));
+  return byModel.size > 0
+    ? [...byModel.entries()].map(([model, money]) => ({
+        model,
+        money,
+      }))
+    : undefined;
 }
 
 /** Build a normalized usage detail object. Returns null when all token counts are 0. */
@@ -110,19 +144,28 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
 export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const raw = value as Record<string, unknown>;
-  return buildTurnUsageDetails({
-    inputTokens: typeof raw.inputTokens === 'number' ? raw.inputTokens : undefined,
-    outputTokens: typeof raw.outputTokens === 'number' ? raw.outputTokens : undefined,
-    cacheReadTokens: typeof raw.cacheReadTokens === 'number' ? raw.cacheReadTokens : undefined,
-    cacheCreateTokens: typeof raw.cacheCreateTokens === 'number' ? raw.cacheCreateTokens : undefined,
-    model: typeof raw.model === 'string' ? raw.model : undefined,
-    models: Array.isArray(raw.models) ? raw.models.filter((m): m is string => typeof m === 'string') : undefined,
-    perModelCost: Array.isArray(raw.perModelCost)
-      ? raw.perModelCost.map((e) =>
-          e && typeof e === 'object'
-            ? { model: (e as Record<string, unknown>).model as string | null | undefined, costUsd: (e as Record<string, unknown>).costUsd as number | null | undefined }
-            : null,
-        )
-      : undefined,
-  }) ?? undefined;
+  return (
+    buildTurnUsageDetails({
+      inputTokens: typeof raw.inputTokens === 'number' ? raw.inputTokens : undefined,
+      outputTokens: typeof raw.outputTokens === 'number' ? raw.outputTokens : undefined,
+      cacheReadTokens: typeof raw.cacheReadTokens === 'number' ? raw.cacheReadTokens : undefined,
+      cacheCreateTokens:
+        typeof raw.cacheCreateTokens === 'number' ? raw.cacheCreateTokens : undefined,
+      model: typeof raw.model === 'string' ? raw.model : undefined,
+      models: Array.isArray(raw.models)
+        ? raw.models.filter((m): m is string => typeof m === 'string')
+        : undefined,
+      perModelCost: Array.isArray(raw.perModelCost)
+        ? raw.perModelCost.map((e) =>
+            e && typeof e === 'object'
+              ? {
+                  model: (e as Record<string, unknown>).model as string | null | undefined,
+                  money: (e as Record<string, unknown>).money as RegionalMoney | null | undefined,
+                  costUsd: (e as Record<string, unknown>).costUsd as number | null | undefined,
+                }
+              : null,
+          )
+        : undefined,
+    }) ?? undefined
+  );
 }

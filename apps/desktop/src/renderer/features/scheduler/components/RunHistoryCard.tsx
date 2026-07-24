@@ -31,7 +31,13 @@ import {
 
 import { AgentMark } from './AgentMark';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { formatDuration, formatRunTimestamp, formatStartedAgo, formatUsd } from '../lib/formatters';
+import { formatDuration, formatRunTimestamp, formatStartedAgo } from '../lib/formatters';
+import { formatTurnCostMoney } from '@/lib/usageFormat';
+import { CURRENT_CINDY_REGION } from '../../../../shared/brandRegion';
+import {
+  regionalizeLegacyUsd,
+  regionalizeUsd,
+} from '../../../../shared/regionalMoney';
 import { isUnreadScheduleRun } from '../lib/runUnread';
 import { markScheduleRunReadAndSync } from '../lib/scheduleRunReadSync';
 
@@ -162,16 +168,35 @@ export function RunHistoryCard({
             run.costAttribution === 'direct' ||
             run.costAttribution === 'mixed' ||
             run.costAttribution === 'zero'
-          ? [
-              (run.costUsd ?? 0) > 0
-                ? t('scheduler.runs.runCost', { cost: formatUsd(run.costUsd ?? 0) })
-                : null,
-              (run.estimatedValueUsd ?? 0) > 0
-                ? t('scheduler.runs.runValue', { value: formatUsd(run.estimatedValueUsd ?? 0) })
-                : null,
-            ]
-              .filter(Boolean)
-              .join(' · ') || t('scheduler.runs.runCost', { cost: formatUsd(0) })
+          ? (() => {
+          const costMoney =
+            run.costMoney ??
+            regionalizeLegacyUsd(
+              run.costUsd ?? 0,
+              CURRENT_CINDY_REGION,
+            );
+          const valueMoney =
+            run.estimatedValueMoney ??
+            regionalizeUsd(
+              run.estimatedValueUsd ?? 0,
+              CURRENT_CINDY_REGION,
+              'legacy-usd',
+              'value-estimate',
+            );
+          return [
+          costMoney.amount > 0
+            ? t('scheduler.runs.runCost', { cost: formatTurnCostMoney(costMoney) })
+            : null,
+          valueMoney.amount > 0
+            ? t('scheduler.runs.runValue', { value: formatTurnCostMoney(valueMoney) })
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ') ||
+            t('scheduler.runs.runCost', {
+              cost: formatTurnCostMoney(costMoney),
+            });
+            })()
           : null;
 
   // 终态且未读 → 在 agent 图标右上角点一个状态点(全端统一色表:失败结局红 / 成功绿)。

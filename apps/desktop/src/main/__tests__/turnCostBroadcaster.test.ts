@@ -24,7 +24,7 @@ vi.mock('../localDb/ipc/messages.js', () => ({
     previous: {},
     next: patch,
   })),
-  readPriorUserRoundCost: vi.fn(async () => ({ costUsd: 0, hasEstimatedValue: false })),
+  readPriorUserRoundCost: vi.fn(async () => ({ money: null, costUsd: 0, hasEstimatedValue: false })),
 }));
 vi.mock('../scheduler-host/runCostLedger.js', () => ({
   applyScheduleRunCostMetaChange: vi.fn(async () => undefined),
@@ -45,10 +45,40 @@ import {
   buildTurnUsageDetails,
   type TurnUsageDetails,
 } from '../../shared/turnUsageDetails.js';
+import type { RegionalMoney } from '../../shared/regionalMoney.js';
+
+function usdMoney(
+  amount: number,
+  kind: RegionalMoney['kind'] = 'actual-cost',
+): RegionalMoney {
+  return {
+    amount,
+    currency: 'USD',
+    approximate: kind === 'value-estimate',
+    kind,
+    ...(kind === 'value-estimate'
+      ? { estimateReasons: ['subscription-value'] }
+      : {}),
+  };
+}
+
+function cnyMoney(amount: number): RegionalMoney {
+  return {
+    amount,
+    currency: 'CNY',
+    approximate: false,
+    kind: 'actual-cost',
+  };
+}
 
 function makeDeps(
   patchResult: boolean | Error = true,
-  prior: { costUsd: number; hasEstimatedValue: boolean } | Error = {
+  prior: {
+    money: RegionalMoney | null;
+    costUsd: number;
+    hasEstimatedValue: boolean;
+  } | Error = {
+    money: null,
     costUsd: 0,
     hasEstimatedValue: false,
   },
@@ -83,7 +113,7 @@ function makeDeps(
   return { deps, broadcasts, patchCalls, runCostCalls };
 }
 
-const ARGS = { sessionId: 's1', clientId: 'm1', costUsd: 0.042, isEstimate: false };
+const ARGS = { sessionId: 's1', clientId: 'm1', money: usdMoney(0.042) };
 const DETAILS = buildTurnUsageDetails({
   inputTokens: 1000,
   outputTokens: 200,
@@ -105,8 +135,10 @@ describe('recordTurnCostOnMessage', () => {
         sessionId: 's1',
         clientId: 'm1',
         patch: {
+          turnCost: usdMoney(0.042),
           turnCostUsd: 0.042,
           turnCostIsEstimate: false,
+          userTurnCost: usdMoney(0.042),
           userTurnCostUsd: 0.042,
           userTurnCostIsEstimate: false,
         },
@@ -116,8 +148,10 @@ describe('recordTurnCostOnMessage', () => {
       {
         sessionId: 's1',
         clientId: 'm1',
+        turnMoney: usdMoney(0.042),
         turnCostUsd: 0.042,
         turnCostIsEstimate: false,
+        userTurnMoney: usdMoney(0.042),
         userTurnCostUsd: 0.042,
         userTurnCostIsEstimate: false,
       },
@@ -128,8 +162,10 @@ describe('recordTurnCostOnMessage', () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     await recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps);
     expect(patchCalls[0]?.patch).toEqual({
+      turnCost: usdMoney(0.042),
       turnCostUsd: 0.042,
       turnCostIsEstimate: false,
+      userTurnCost: usdMoney(0.042),
       userTurnCostUsd: 0.042,
       userTurnCostIsEstimate: false,
       turnUsageDetails: DETAILS,
@@ -137,8 +173,10 @@ describe('recordTurnCostOnMessage', () => {
     expect(broadcasts[0]).toEqual({
       sessionId: 's1',
       clientId: 'm1',
+      turnMoney: usdMoney(0.042),
       turnCostUsd: 0.042,
       turnCostIsEstimate: false,
+      userTurnMoney: usdMoney(0.042),
       userTurnCostUsd: 0.042,
       userTurnCostIsEstimate: false,
       turnUsageDetails: DETAILS,
@@ -147,7 +185,10 @@ describe('recordTurnCostOnMessage', () => {
 
   it('订阅模式 token 价值标记(isEstimate=true)原样透传', async () => {
     const { deps, broadcasts } = makeDeps(true);
-    await recordTurnCostOnMessage({ ...ARGS, isEstimate: true }, deps);
+    await recordTurnCostOnMessage(
+      { ...ARGS, money: usdMoney(0.042, 'value-estimate') },
+      deps,
+    );
     expect(broadcasts[0]?.turnCostIsEstimate).toBe(true);
     expect(broadcasts[0]?.userTurnCostIsEstimate).toBe(true);
   });
@@ -168,6 +209,7 @@ describe('recordTurnCostOnMessage', () => {
       previous: {},
       next: expect.objectContaining({
         origin: turnOrigin,
+        turnCost: usdMoney(0.042),
         turnCostUsd: 0.042,
         turnCostIsEstimate: false,
       }),
@@ -176,14 +218,17 @@ describe('recordTurnCostOnMessage', () => {
 
   it('多段 SDK done 的展示累计完整，但原始分段成本不变', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true, {
+      money: usdMoney(51.452182),
       costUsd: 51.452182,
       hasEstimatedValue: false,
     });
-    await recordTurnCostOnMessage({ ...ARGS, costUsd: 0.777042 }, deps);
+    await recordTurnCostOnMessage({ ...ARGS, money: usdMoney(0.777042) }, deps);
 
     expect(patchCalls[0]?.patch).toEqual({
+      turnCost: usdMoney(0.777042),
       turnCostUsd: 0.777042,
       turnCostIsEstimate: false,
+      userTurnCost: usdMoney(52.229224),
       userTurnCostUsd: 52.229224,
       userTurnCostIsEstimate: false,
     });
@@ -195,6 +240,7 @@ describe('recordTurnCostOnMessage', () => {
 
   it('先前任一分段为估算值时，累计展示也标为估算', async () => {
     const { deps, broadcasts } = makeDeps(true, {
+      money: usdMoney(1.2, 'value-estimate'),
       costUsd: 1.2,
       hasEstimatedValue: true,
     });
@@ -205,6 +251,46 @@ describe('recordTurnCostOnMessage', () => {
     });
   });
 
+  it('CNY 只写结构化金额，不伪造 legacy USD 投影', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true);
+    await recordTurnCostOnMessage(
+      { ...ARGS, money: cnyMoney(3) },
+      deps,
+    );
+
+    expect(patchCalls[0]?.patch).toEqual({
+      turnCost: cnyMoney(3),
+      turnCostIsEstimate: false,
+      userTurnCost: cnyMoney(3),
+      userTurnCostIsEstimate: false,
+    });
+    expect(broadcasts[0]).toEqual({
+      sessionId: 's1',
+      clientId: 'm1',
+      turnMoney: cnyMoney(3),
+      turnCostIsEstimate: false,
+      userTurnMoney: cnyMoney(3),
+      userTurnCostIsEstimate: false,
+    });
+  });
+
+  it('混币历史估值不污染当前实际金额', async () => {
+    const { deps, broadcasts } = makeDeps(true, {
+      money: usdMoney(1.2, 'value-estimate'),
+      costUsd: 1.2,
+      hasEstimatedValue: true,
+    });
+    await recordTurnCostOnMessage(
+      { ...ARGS, money: cnyMoney(3) },
+      deps,
+    );
+
+    expect(broadcasts[0]).toMatchObject({
+      userTurnMoney: cnyMoney(3),
+      userTurnCostIsEstimate: false,
+    });
+  });
+
   it('patch 返回 false(行不存在,典型 rewind 已删)→ 不广播', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(false);
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
@@ -212,10 +298,13 @@ describe('recordTurnCostOnMessage', () => {
     expect(broadcasts).toHaveLength(0);
   });
 
-  it('costUsd ≤ 0 / NaN / Infinity → 跳过(不 patch 不广播)', async () => {
+  it('金额 ≤ 0 / NaN / Infinity → 跳过(不 patch 不广播)', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
     for (const bad of [0, -1, NaN, Infinity, 1e-12]) {
-      await recordTurnCostOnMessage({ ...ARGS, costUsd: bad }, deps);
+      await recordTurnCostOnMessage({
+        ...ARGS,
+        money: { ...usdMoney(0), amount: bad },
+      }, deps);
     }
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
@@ -272,8 +361,7 @@ describe('recordSchedulerTurnCost', () => {
     await expect(recordSchedulerTurnCost(
       {
         sessionId: 's1',
-        costUsd: 0.42,
-        isEstimate: false,
+        money: usdMoney(0.42),
         turnOrigin: schedulerOrigin,
       },
       { recordOnMessage, recordDirect },
@@ -282,8 +370,7 @@ describe('recordSchedulerTurnCost', () => {
     expect(recordOnMessage).not.toHaveBeenCalled();
     expect(recordDirect).toHaveBeenCalledWith({
       runId: 'run-1',
-      costUsd: 0.42,
-      isEstimate: false,
+      money: usdMoney(0.42),
     });
   });
 
@@ -329,8 +416,7 @@ describe('recordSchedulerTurnCost', () => {
     await expect(recordSchedulerTurnCost(
       {
         sessionId: 's1',
-        costUsd: 0,
-        isEstimate: false,
+        money: usdMoney(0),
         turnOrigin: schedulerOrigin,
       },
       { recordOnMessage, recordDirect },
@@ -338,8 +424,7 @@ describe('recordSchedulerTurnCost', () => {
 
     expect(recordDirect).toHaveBeenCalledWith({
       runId: 'run-1',
-      costUsd: 0,
-      isEstimate: false,
+      money: usdMoney(0),
     });
   });
 });

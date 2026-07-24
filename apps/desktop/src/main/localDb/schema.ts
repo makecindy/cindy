@@ -62,6 +62,14 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
+    totalCostAmount: real('total_cost_amount').notNull().default(0),
+    totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
+    totalCostIsApproximate: integer('total_cost_is_approximate', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(false),
     contextTokens: integer('context_tokens').notNull().default(0),
     contextWindow: integer('context_window').notNull().default(0),
     fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
@@ -764,6 +772,13 @@ export const scheduleRuns = sqliteTable(
     costUsd: real('cost_usd').notNull().default(0),
     /** 单次 run 的订阅 token 估算价值，不计入真实账单。 */
     estimatedValueUsd: real('estimated_value_usd').notNull().default(0),
+    /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
+    costAmount: real('cost_amount').notNull().default(0),
+    estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     /**
      * zero 表示已确认零费用；unavailable 表示 agent run 尚无可靠计价；legacy
      * 表示迁移前数据缺少 runId，不能精确拆分。SQLite 无 CHECK，无需 migration。
@@ -902,6 +917,11 @@ export const dailySpend = sqliteTable('daily_spend', {
   day: text('day').primaryKey(),
   /** 当日累计 USD (real)。SDK 单 turn 的 cost 通常是小数 (如 0.0391)。 */
   costUsd: real('cost_usd').notNull().default(0),
+  costAmount: real('cost_amount').notNull().default(0),
+  costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+  costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   /** 最后一次更新的 unix ms。 */
   updatedAt: integer('updated_at').notNull(),
 });
@@ -931,6 +951,11 @@ export const dailyModelUsage = sqliteTable(
     model: text('model').notNull(),
     /** 当日该模型累计 USD (仅 claude-code 实报; codex 恒 0)。 */
     costUsd: real('cost_usd').notNull().default(0),
+    costAmount: real('cost_amount').notNull().default(0),
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
     cacheReadTokens: integer('cache_read_tokens').notNull().default(0),

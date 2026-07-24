@@ -108,8 +108,9 @@ export interface ModelGroupTieredPricing {
 }
 
 /**
- * model-access-server 从 AIGateway /model-groups 白名单透传的公开价格字段。
- * 字段名和 per-token 单位保持 Gateway 原样；客户端只在展示时换算为每百万 token。
+ * model-access-server 从 AIGateway /model-groups 白名单透传的价格字段。
+ * 字段名和单位保持 Gateway 原样（per token）；Desktop 在构建 quote 时才转
+ * per-million-token，并按构建区域赋予币种。
  */
 export interface ModelGroupPricing {
   costDiscount?: number;

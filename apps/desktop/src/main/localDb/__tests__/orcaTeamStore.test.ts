@@ -44,15 +44,19 @@ describe('orcaTeamStore', () => {
 
     await seedOrcaWorkers(client);
 
-    await expect(getWorkerLink({
-      workerId: 'worker-1',
-      workerSessionId: 'worker-session-2',
-    })).resolves.toBeNull();
+    await expect(
+      getWorkerLink({
+        workerId: 'worker-1',
+        workerSessionId: 'worker-session-2',
+      }),
+    ).resolves.toBeNull();
 
-    await expect(getWorkerLink({
-      workerId: 'worker-1',
-      workerSessionId: 'worker-session-1',
-    })).resolves.toMatchObject({
+    await expect(
+      getWorkerLink({
+        workerId: 'worker-1',
+        workerSessionId: 'worker-session-1',
+      }),
+    ).resolves.toMatchObject({
       workerId: 'worker-1',
       workerSessionId: 'worker-session-1',
       leadSessionId: 'lead-session-1',
@@ -74,10 +78,12 @@ describe('orcaTeamStore', () => {
       'worker-session-2',
     ]);
 
-    expect(await client.query<{ id: string; status: string }>(
-      'SELECT id, status FROM sessions WHERE id IN (?, ?) ORDER BY id',
-      ['worker-session-1', 'worker-session-2'],
-    )).toEqual([
+    expect(
+      await client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM sessions WHERE id IN (?, ?) ORDER BY id',
+        ['worker-session-1', 'worker-session-2'],
+      ),
+    ).toEqual([
       { id: 'worker-session-1', status: 'archived' },
       { id: 'worker-session-2', status: 'archived' },
     ]);
@@ -99,8 +105,7 @@ describe('orcaTeamStore', () => {
   });
 
   it('executes worker status CAS updates and only rolls back idle acknowledgements', async () => {
-    const { markWorkerIdleIfStatus, restoreWorkerDoneIfIdle } =
-      await import('../orcaTeamStore.js');
+    const { markWorkerIdleIfStatus, restoreWorkerDoneIfIdle } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
 
@@ -140,6 +145,9 @@ describe('orcaTeamStore', () => {
         sdk_session_id TEXT,
         total_token_usage INTEGER NOT NULL DEFAULT 0,
         total_cost_usd REAL NOT NULL DEFAULT 0,
+        total_cost_amount REAL NOT NULL DEFAULT 0,
+        total_cost_currency TEXT,
+        total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
         context_tokens INTEGER NOT NULL DEFAULT 0,
         context_window INTEGER NOT NULL DEFAULT 0,
         fast_mode INTEGER NOT NULL DEFAULT 0,

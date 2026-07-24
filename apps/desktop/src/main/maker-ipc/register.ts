@@ -224,11 +224,14 @@ import {
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import { getCodexBudgetEffectiveCostMultiplier, getCodexSubscriptionValuePrice, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { getCodexBudgetEffectiveCostMultiplier, getCodexSubscriptionValuePrice, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
 import { computeModelUsageDeltas, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageHistory.js';
-import { buildClaudeTurnUsageDetails, computeGatewayTurnCost, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks } from '../usage/turnCostCalculator.js';
+import { buildClaudeTurnUsageDetails, computePriceQuoteTurnMoney, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks, type BillingRoute } from '../usage/turnCostCalculator.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import { regionalizeModelPriceQuote } from '../../shared/modelPriceQuote.js';
+import { addRegionalMoney, regionalizeUsd, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
 import {
   rebroadcastCodexTodayUsage,
@@ -2569,27 +2572,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 由同一份解析结果驱动。价格表走 main 端内存 + 磁盘缓存, stale 快返并后台刷新。
         const deltas = modelUsageDeltas;
         void (async () => {
-          // 纯 Anthropic 轮 (绝大多数 Claude Code 会话) resolveTurnCost 一律信任 SDK、
-          // 不看 gateway 价 —— 此时跳过 getModelPricing() 的网络往返, 避免冷缓存 / 离线
-          // 时把 cost 记账拖到 fetch 超时 (最长 5s), 甚至在等待期间 app 退出而丢整轮账
-          // (rule 10: 不在记账热路径加阻塞)。只要有一个非 Anthropic 模型就照常拉价。
-          // 订阅直连模型(chatgpt/ / xai/)同样跳过 —— resolveTurnCost 对它们恒 cost 0 不查价,
-          // 价值估算走静态参考表;带前缀 id 也不可能出现在 gateway 价表里,拉了纯属白等超时。
-          const gatewayPricingModels = Array.from(new Set(
-            deltas
-              .map((d) => normalizeModelIdForPricing(d.model))
-              .filter((model) => !isAnthropicModel(model) && !isSubscriptionDirectModel(model)),
-          ));
-          let pricing = null;
-          for (const model of gatewayPricingModels) {
-            pricing = await getModelPricingForModel(model);
-          }
-          const { turnTotalUsd, perModel } = resolveClaudeTurnCostSinks(deltas, pricing);
-          // 订阅轮判定对齐 proxy 实际路由(远端恒走网关, 排除):
-          //   - 显式选 Anthropic 供应商 → 订阅直连;
-          //   - 默认路由 (providerId=null) → 优先使用 proxy 按请求记录的会话实际路由;
-          //     未观察到时再回落到「当前无网关 key」启发式。显式选了其它自定义供应商
-          //     的会话不打订阅标记(cost 语义未知)。
           const sessionProviderForBilling = getSessionProvider(session.id);
           const observedClaudeRoute =
             sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
@@ -2602,6 +2584,31 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 : !readClaudeApiKey())
             )
           );
+          const billingRoute: BillingRoute = session.remoteHostId
+            ? 'unknown'
+            : isClaudeSubscriptionSession
+              ? 'subscription'
+              : sessionProviderForBilling === 'xd' || observedClaudeRoute === 'gateway'
+                ? 'xd-gateway'
+                : sessionProviderForBilling
+                  ? 'provider-api'
+                  : 'unknown';
+          const pricing =
+            billingRoute === 'xd-gateway'
+              ? await getModelPricingForModel(
+                  'xd',
+                  normalizeModelIdForPricing(deltas[0]?.model),
+                )
+              : await getModelPricing();
+          const { turnMoney, perModel } = resolveClaudeTurnCostSinks(
+            deltas,
+            pricing,
+            {
+              providerId: sessionProviderForBilling,
+              billingRoute,
+              region: CURRENT_CINDY_REGION,
+            },
+          );
           // 按模型记账 (首页仪表盘"按模型拆分"): 写归一化裸 id, 与 codex 行 / 价格表对齐。
           // 订阅轮打 #billing=subscription 标记(Claude 订阅:Anthropic 模型 + cost=0),
           // 或 bridge 订阅轮(chatgpt// xai/ 前缀,source==='subscription');两类均需触发
@@ -2610,14 +2617,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           let hasSubscriptionValueRow = false;
           for (const m of perModel) {
             const isClaudeSubscriptionValueRow =
-              isClaudeSubscriptionSession && m.costUsd === 0 && isAnthropicModel(m.model);
+              isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model);
             const isBridgeSubscriptionRow =
               m.source === 'subscription' && isSubscriptionDirectModel(m.model);
             if (isClaudeSubscriptionValueRow || isBridgeSubscriptionRow) hasSubscriptionValueRow = true;
             modelUsageWrites.push(recordModelTurnUsage({
               agentKind: 'claude-code',
               model: isClaudeSubscriptionValueRow ? claudeSubscriptionUsageModelKey(m.model) : m.model,
-              costUsdDelta: m.costUsd,
+              money: m.money,
               inputTokensDelta: m.deltas.inputTokens,
               outputTokensDelta: m.deltas.outputTokens,
               cacheReadTokensDelta: m.deltas.cacheReadTokens,
@@ -2627,28 +2634,25 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 纯订阅轮 (turnTotalUsd=0) 不走 recordTurnSpend, 没有任何 usage push ——
           // 等模型行落库后重广播今日 spend 快照, 通知已打开的首页仪表盘刷新
           // (对齐 codex 订阅轮的 rebroadcastCodexTodayUsage)。
-          if (hasSubscriptionValueRow && turnTotalUsd === 0) {
+          if (hasSubscriptionValueRow && !turnMoney) {
             void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());
           }
-          if (turnTotalUsd > 0) {
+          if (turnMoney && turnMoney.amount > 0) {
             // 保留 #216 的 token/cache 明细随费用落库 (MessageActionBar tooltip)。
             // deltas 非空 → buildClaudeTurnUsageDetails 用 deltas 里的 model, fallbackModel 不取用。
             // 传 perModel → 落「按模型成本明细」(含 subagent 跑的模型, 如 Haiku)。
             const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, deltas, 'unknown', perModel);
-            recordTurnSpend(turnTotalUsd);
-            // session 级别的"终身 cost"持久化到 sessions.total_cost_usd 并广播。
-            recordSessionTurnSpend(session.id, turnTotalUsd);
-            // per-message 维度: 把本 turn 费用 + 明细挂到该轮最后一条 assistant 的 agent_meta。
-            if (turnAssistantPersistId) {
-              void recordTurnCostOnMessage({
-                sessionId: session.id,
-                clientId: turnAssistantPersistId,
-                costUsd: turnTotalUsd,
-                isEstimate: false,
-                turnUsageDetails,
-                turnOrigin: event.turnOrigin,
-              });
-            }
+            recordTurnSpend(turnMoney);
+            recordSessionTurnSpend(session.id, turnMoney);
+            // per-message 维度优先挂 assistant；纯 tool turn 则按 scheduler runId 直接归因。
+            const changedScheduleId = await recordSchedulerTurnCost({
+              sessionId: session.id,
+              clientId: turnAssistantPersistId,
+              money: turnMoney,
+              turnUsageDetails,
+              turnOrigin: event.turnOrigin,
+            });
+            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
           } else if (turnAssistantPersistId) {
             // 纯订阅轮(无真实计费)的「本轮价值」估算,挂到消息(isEstimate:true,chip 的
             // "本会话价值"由 useSessionEstimatedValue 汇总),不进 daily_spend /
@@ -2659,26 +2663,39 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             //     (纯 Anthropic 轮 pricing 为 null → 家族牌价兜底表,不为估值发起网络请求)。
             // 混合轮(真实计费 > 0)走上面的真实分支,订阅部分不另挂估算 —— 一条消息只有一个
             // cost 字段,真实计费优先;订阅 token 明细仍在 turnUsageDetails.perModelCost 里。
-            let turnEstimatedValueUsd = 0;
+            const estimatedValues: RegionalMoney[] = [];
             for (const m of perModel) {
               if (m.source !== 'subscription') continue;
-              const value = computeGatewayTurnCost(m.deltas, getSubscriptionDirectValuePrice(m.model));
-              if (value != null) turnEstimatedValueUsd += value;
+              const quote = getSubscriptionDirectValuePrice(m.model);
+              const value = computePriceQuoteTurnMoney(
+                m.deltas,
+                quote
+                  ? regionalizeModelPriceQuote(quote, CURRENT_CINDY_REGION)
+                  : undefined,
+              );
+              if (value?.amount) estimatedValues.push(value);
             }
             if (isClaudeSubscriptionSession) {
-              const claudeEstimated = estimateClaudeSubscriptionTurnValue(perModel, pricing);
-              if (claudeEstimated != null && claudeEstimated > 0) turnEstimatedValueUsd += claudeEstimated;
+              const claudeEstimated = estimateClaudeSubscriptionTurnValue(
+                perModel,
+                CURRENT_CINDY_REGION,
+              );
+              if (claudeEstimated?.amount) estimatedValues.push(claudeEstimated);
             }
-            if (turnEstimatedValueUsd > 0) {
+            const turnEstimatedValue =
+              estimatedValues.length > 0
+                ? addRegionalMoney(estimatedValues)
+                : null;
+            if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
               const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, deltas, 'unknown', perModel);
-              void recordTurnCostOnMessage({
+              const changedScheduleId = await recordSchedulerTurnCost({
                 sessionId: session.id,
                 clientId: turnAssistantPersistId,
-                costUsd: turnEstimatedValueUsd,
-                isEstimate: true,
+                money: turnEstimatedValue,
                 turnUsageDetails,
                 turnOrigin: event.turnOrigin,
               });
+              if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
             }
           }
         })();
@@ -2688,31 +2705,44 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         const rawDelta = Math.max(0, cumulative - prevReportedCost);
         if (rawDelta > 0) {
           void (async () => {
-            let multiplier = 1;
             let resolvedModel = 'unknown';
             try {
               const model = await modelPromise;
               resolvedModel = model;
-              multiplier = getCodexBudgetEffectiveCostMultiplier(model);
             } catch { /* non-fatal: 保留 SDK 原始 cost */ }
             // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
             // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
             // 避免把订阅 SDK 自报 cost 误记进计费)。
             if (isSubscriptionDirectModel(resolvedModel)) return;
-            const delta = rawDelta * multiplier;
+            const providerId = getSessionProvider(session.id);
+            const observedRoute =
+              providerId == null ? readClaudeSessionRoute(session.id) : null;
+            const route: BillingRoute = session.remoteHostId
+              ? 'unknown'
+              : providerId === 'anthropic' || observedRoute === 'subscription'
+                ? 'subscription'
+                : providerId === 'xd' || observedRoute === 'gateway'
+                  ? 'xd-gateway'
+                  : providerId
+                    ? 'provider-api'
+                    : 'unknown';
+            if (route === 'subscription' || route === 'xd-gateway') return;
+            const money = regionalizeUsd(
+              rawDelta * getCodexBudgetEffectiveCostMultiplier(resolvedModel),
+              CURRENT_CINDY_REGION,
+              'fixed-fx',
+            );
             const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
-            recordTurnSpend(delta);
-            recordSessionTurnSpend(session.id, delta);
-            if (turnAssistantPersistId) {
-              void recordTurnCostOnMessage({
-                sessionId: session.id,
-                clientId: turnAssistantPersistId,
-                costUsd: delta,
-                isEstimate: false,
-                turnUsageDetails,
-                turnOrigin: event.turnOrigin,
-              });
-            }
+            recordTurnSpend(money);
+            recordSessionTurnSpend(session.id, money);
+            const changedScheduleId = await recordSchedulerTurnCost({
+              sessionId: session.id,
+              clientId: turnAssistantPersistId,
+              money,
+              turnUsageDetails,
+              turnOrigin: event.turnOrigin,
+            });
+            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
           })();
         }
       }
@@ -2791,7 +2821,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           await recordModelTurnUsage({
             agentKind: 'codex',
             model: modelUsageKey,
-            costUsdDelta: 0,
             inputTokensDelta: promptTokens,
             outputTokensDelta: completionTokens,
             cacheReadTokensDelta: cachedTokens,
@@ -2811,18 +2840,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               ? await getModelPricing()
               : isSubscriptionValue
                 ? null
-                : await getModelPricingForModel(pricingModel);
+                : await getModelPricingForModel('xd', pricingModel);
             const price = isCodexXaiProviderRoute
               ? getSubscriptionDirectValuePrice(pricingModel)
               : isSubscriptionValue
                 ? getCodexSubscriptionValuePrice(pricingModel, pricing)
-                : pricing?.[pricingModel];
-            const cost = computeGatewayTurnCost(codexUsageToTokens(u), price);
-            if (!isSubscriptionValue && cost != null) {
+                : getModelPriceQuote(pricing, 'xd', pricingModel);
+            const money = computePriceQuoteTurnMoney(
+              codexUsageToTokens(u),
+              price
+                ? regionalizeModelPriceQuote(price, CURRENT_CINDY_REGION)
+                : undefined,
+            );
+            if (!isSubscriptionValue && money) {
               await recordModelTurnUsage({
                 agentKind: 'codex',
                 model: modelUsageKey,
-                costUsdDelta: cost,
+                money,
                 inputTokensDelta: 0,
                 outputTokensDelta: 0,
                 cacheReadTokensDelta: 0,
@@ -2836,18 +2870,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               cacheCreateTokens: 0,
               model: turnModel,
             });
-            if (cost != null && cost > 0) {
+            if (money && money.amount > 0) {
               if (!isSubscriptionValue) {
-                void recordTurnSpend(cost);
-                void recordSessionTurnSpend(session.id, cost);
+                void recordTurnSpend(money);
+                void recordSessionTurnSpend(session.id, money);
               }
-            }
-            if (cost != null) {
               const changedScheduleId = await recordSchedulerTurnCost({
                 sessionId: session.id,
                 clientId: turnAssistantPersistId,
-                costUsd: cost,
-                isEstimate: isSubscriptionValue,
+                money,
                 turnUsageDetails,
                 turnOrigin: event.turnOrigin,
               });

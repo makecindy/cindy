@@ -9,19 +9,25 @@ import { eq, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { scheduleRuns } from '../localDb/schema';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import { normalizeRegionalMoney, regionalizeLegacyUsd } from '../../shared/regionalMoney.js';
 
 interface RunCostEntry {
   runId: string;
-  costUsd: number;
-  estimatedValueUsd: number;
+  costAmount: number;
+  estimatedValueAmount: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
 }
 
 const MIN_RECORDED_COST_USD = 1e-10;
 
 export interface ScheduleRunCostDelta {
   runId: string;
-  costUsdDelta: number;
-  estimatedValueUsdDelta: number;
+  costAmountDelta: number;
+  estimatedValueAmountDelta: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
 }
 
 function finitePositive(value: unknown): number {
@@ -38,10 +44,22 @@ function runCostEntry(meta: Record<string, unknown>): RunCostEntry | null {
   const runId = parsedOrigin.runId;
   if (typeof runId !== 'string' || runId.length === 0) return null;
 
-  const amount = finitePositive(meta.turnCostUsd);
-  return meta.turnCostIsEstimate === true
-    ? { runId, costUsd: 0, estimatedValueUsd: amount }
-    : { runId, costUsd: amount, estimatedValueUsd: 0 };
+  const money =
+    normalizeRegionalMoney(meta.turnCost) ??
+    (finitePositive(meta.turnCostUsd) > 0
+      ? regionalizeLegacyUsd(finitePositive(meta.turnCostUsd), CURRENT_CINDY_REGION)
+      : undefined);
+  if (!money || money.amount <= 0) return null;
+  const isEstimate = meta.turnCostIsEstimate === true || money.kind === 'value-estimate';
+  return {
+    runId,
+    costAmount: isEstimate ? 0 : money.amount,
+    estimatedValueAmount: isEstimate ? money.amount : 0,
+    currency: money.currency,
+    // cost_is_approximate 只描述真实费用；订阅价值本身始终由
+    // estimatedValueMoney 标成 value-estimate，不能污染真实费用。
+    approximate: !isEstimate && money.approximate,
+  };
 }
 
 /** 计算消息元数据变化对 run 聚合的幂等差值，最多影响旧/新两个 run。 */
@@ -54,19 +72,27 @@ export function computeScheduleRunCostDeltas(
     if (!entry) return;
     const current = changes.get(entry.runId) ?? {
       runId: entry.runId,
-      costUsdDelta: 0,
-      estimatedValueUsdDelta: 0,
+      costAmountDelta: 0,
+      estimatedValueAmountDelta: 0,
+      currency: entry.currency,
+      approximate: false,
     };
-    current.costUsdDelta += direction * entry.costUsd;
-    current.estimatedValueUsdDelta += direction * entry.estimatedValueUsd;
+    if (current.currency !== entry.currency) {
+      throw new Error('schedule run cost currency mismatch');
+    }
+    current.costAmountDelta += direction * entry.costAmount;
+    current.estimatedValueAmountDelta += direction * entry.estimatedValueAmount;
+    // 这里是消息快照替换，不是新费用累加。只让 next 决定新的近似状态，
+    // 避免 approximate 消息被精确金额替换后永久保持 true。
+    if (direction === 1) current.approximate = entry.approximate;
     changes.set(entry.runId, current);
   };
   apply(runCostEntry(previous), -1);
   apply(runCostEntry(next), 1);
   return [...changes.values()].filter(
     (change) =>
-      Math.abs(change.costUsdDelta) >= MIN_RECORDED_COST_USD ||
-      Math.abs(change.estimatedValueUsdDelta) >= MIN_RECORDED_COST_USD,
+      Math.abs(change.costAmountDelta) >= MIN_RECORDED_COST_USD ||
+      Math.abs(change.estimatedValueAmountDelta) >= MIN_RECORDED_COST_USD,
   );
 }
 
@@ -86,15 +112,21 @@ export async function applyScheduleRunCostMetaChange(
         // keep the message ledger in agent_meta and let read paths add it;
         // otherwise a successful message update would make a later read
         // unable to tell whether the snapshot already contains that segment.
-        costUsd: sql<number>`CASE
+        costAmount: sql<number>`CASE
           WHEN ${scheduleRuns.costAttribution} = 'direct'
-            THEN ${scheduleRuns.costUsd}
-          ELSE MAX(0, ${scheduleRuns.costUsd} + ${change.costUsdDelta})
+            THEN ${scheduleRuns.costAmount}
+          ELSE MAX(0, ${scheduleRuns.costAmount} + ${change.costAmountDelta})
         END`,
-        estimatedValueUsd: sql<number>`CASE
+        estimatedValueAmount: sql<number>`CASE
           WHEN ${scheduleRuns.costAttribution} = 'direct'
-            THEN ${scheduleRuns.estimatedValueUsd}
-          ELSE MAX(0, ${scheduleRuns.estimatedValueUsd} + ${change.estimatedValueUsdDelta})
+            THEN ${scheduleRuns.estimatedValueAmount}
+          ELSE MAX(0, ${scheduleRuns.estimatedValueAmount} + ${change.estimatedValueAmountDelta})
+        END`,
+        costCurrency: change.currency,
+        costIsApproximate: sql`CASE
+          WHEN ${scheduleRuns.costAttribution} IN ('direct', 'mixed')
+            THEN ${scheduleRuns.costIsApproximate} OR ${change.approximate ? 1 : 0}
+          ELSE ${change.approximate ? 1 : 0}
         END`,
         costAttribution: sql<string>`CASE
           WHEN ${scheduleRuns.costAttribution} IN ('direct', 'mixed')
@@ -115,31 +147,40 @@ export async function applyScheduleRunCostMetaChange(
  */
 export async function recordScheduleRunCostDirect(args: {
   runId: string;
-  costUsd: number;
-  isEstimate: boolean;
+  money: import('../../shared/regionalMoney.js').RegionalMoney;
 }): Promise<string | null> {
-  const { runId, costUsd, isEstimate } = args;
-  if (!runId || typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) {
-    return null;
-  }
-  const amount = finitePositive(costUsd);
+  const { runId } = args;
+  const money = normalizeRegionalMoney(args.money);
+  if (!runId || !money) return null;
+  const amount = finitePositive(money.amount);
   // Match the message ledger's delta threshold; a tiny positive residue must
   // not create a direct-only run segment or a misleading changed broadcast.
-  if (costUsd > 0 && amount === 0) return null;
+  if (money.amount > 0 && amount === 0) return null;
+  const isEstimate = money.kind === 'value-estimate';
 
   const db = getDbClient().drizzle;
   const [run] = await db
-    .select({ scheduleId: scheduleRuns.scheduleId })
+    .select({
+      scheduleId: scheduleRuns.scheduleId,
+      costCurrency: scheduleRuns.costCurrency,
+    })
     .from(scheduleRuns)
     .where(eq(scheduleRuns.id, runId))
     .limit(1);
   if (!run) return null;
+  if (run.costCurrency && run.costCurrency !== money.currency) {
+    throw new Error('schedule run cost currency mismatch');
+  }
 
   const result = await db
     .update(scheduleRuns)
     .set({
-      costUsd: sql<number>`MAX(0, ${scheduleRuns.costUsd} + ${isEstimate ? 0 : amount})`,
-      estimatedValueUsd: sql<number>`MAX(0, ${scheduleRuns.estimatedValueUsd} + ${isEstimate ? amount : 0})`,
+      costAmount: sql<number>`MAX(0, ${scheduleRuns.costAmount} + ${isEstimate ? 0 : amount})`,
+      estimatedValueAmount: sql<number>`MAX(0, ${scheduleRuns.estimatedValueAmount} + ${isEstimate ? amount : 0})`,
+      costCurrency: money.currency,
+      costIsApproximate: sql`${scheduleRuns.costIsApproximate} OR ${
+        !isEstimate && money.approximate ? 1 : 0
+      }`,
       // A confirmed zero-cost segment must not downgrade a run that already
       // contains an exact segment; otherwise later summary reads lose the
       // accumulated direct cost.

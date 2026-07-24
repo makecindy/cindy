@@ -225,14 +225,14 @@ export function TaskListPane({
                         schedule={s}
                         selected={s.id === selectedId}
                         unreadCount={unreadRunCounts.get(s.id) ?? 0}
-                        totalCostUsd={
+                        totalMoney={
                           costSummariesLoaded
-                            ? costSummaries.get(s.id)?.totalCostUsd
+                            ? costSummaries.get(s.id)?.totalMoney
                             : undefined
                         }
-                        totalEstimatedValueUsd={
+                        totalEstimatedValueMoney={
                           costSummariesLoaded
-                            ? costSummaries.get(s.id)?.totalEstimatedValueUsd
+                            ? costSummaries.get(s.id)?.totalEstimatedValueMoney
                             : undefined
                         }
                         hasUnavailableCost={

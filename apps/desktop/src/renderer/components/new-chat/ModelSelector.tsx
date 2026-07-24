@@ -26,11 +26,9 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
-  formatModelPriceAmount,
   formatModelPricePair,
-  resolveModelDisplayPrice,
-  type ModelDisplayPrice,
-} from '@/lib/modelPriceDisplay';
+  modelPriceDetailRows,
+} from '@/lib/modelPriceFormat';
 import {
   filterChatBridgedCodexProviders,
   providerMonogram,
@@ -50,10 +48,14 @@ import {
   resolveModelIconKind,
   sourcesForModel,
   visibleModelUnion,
-  type ModelCost,
   type ProviderView,
 } from '@cindy/model-providers';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  getModelPriceQuote,
+  regionalizeModelPriceQuote,
+} from '../../../shared/modelPriceQuote';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
@@ -630,46 +632,26 @@ export function ModelSelectorContent({
   };
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
-  const modelPriceOf = (
+  // providerId 是价格索引的一部分。同模型经 XD / OpenAI / Anthropic 等来源出现时，
+  // 必须按实际行来源查价，不能退化为 pricing[modelId]。
+  const priceQuoteOf = (
     providerId: string | null,
     id: string,
-  ): ModelDisplayPrice | null => {
-    if (!currentAgentKind) return null;
+  ): ModelPriceQuote | null => {
     const effectiveProviderId =
       providerId ??
-      effectiveSourceIdForModel(
-        providers,
-        currentProviderId,
-        id,
-        currentAgentKind,
-      );
-    const provider = effectiveProviderId
-      ? providers.find((candidate) => candidate.id === effectiveProviderId)
-      : undefined;
-    const catalogCost = provider
-      ? getModel(provider, id, currentAgentKind)?.cost
-      : undefined;
-    const fallback = pricing?.[id];
-    const referenceUsdCost: ModelCost | undefined =
-      catalogCost ??
-      (fallback
-        ? {
-            input: fallback.inputUsdPerMtok,
-            output: fallback.outputUsdPerMtok,
-            ...(fallback.cacheReadUsdPerMtok !== undefined
-              ? { cacheRead: fallback.cacheReadUsdPerMtok }
-              : {}),
-            ...(fallback.cacheCreateUsdPerMtok !== undefined
-              ? { cacheWrite: fallback.cacheCreateUsdPerMtok }
-              : {}),
-          }
-        : undefined);
-    return resolveModelDisplayPrice({
-      providerId: effectiveProviderId,
-      gatewayCost: catalogCost,
-      referenceUsdCost,
-      region: CURRENT_CINDY_REGION,
-    });
+      (currentAgentKind
+        ? effectiveSourceIdForModel(
+            providers,
+            currentProviderId,
+            id,
+            currentAgentKind,
+          )
+        : null);
+    const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
+    return quote
+      ? regionalizeModelPriceQuote(quote, CURRENT_CINDY_REGION)
+      : null;
   };
   const modelDisabledOf = (id: string): boolean => {
     if (!deviceId) return id.startsWith('codex/') && !hasSavedKey;
@@ -911,7 +893,7 @@ export function ModelSelectorContent({
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
   }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId]);
   const editingPrice = editingModel
-    ? modelPriceOf(editingProvider?.id ?? editingProviderId, editingModel.id)
+    ? priceQuoteOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
 
   // 每个模型行的信息 / 配置内容由一个独立的 portaled Popover 承载,而不是拼进主菜单宽度。
@@ -995,6 +977,36 @@ export function ModelSelectorContent({
       {(editShowFast || editHasEfforts) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
+      {editingPrice && (
+        <>
+          <div className="px-2 pb-1 pt-1">
+            <div className="mb-1.5 text-11 font-medium text-[var(--text-tertiary)]">
+              {t('newChat.modelSelector.pricing.title')}
+            </div>
+            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-12 leading-[1.4]">
+              {modelPriceDetailRows(editingPrice).map((row) => (
+                <div key={row.kind} className="contents">
+                  <span className="text-[var(--text-secondary)]">
+                    {t(`newChat.modelSelector.pricing.${row.kind}`)}
+                  </span>
+                  <span className="tabular-nums text-[var(--model-item-text)]">
+                    {editingPrice.approximate ? '≈' : ''}
+                    {row.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-1.5 text-11 leading-[1.4] text-[var(--text-tertiary)]">
+              {editingPrice.source === 'subscription-reference'
+                ? t('newChat.modelSelector.pricing.subscriptionEstimate')
+                : editingPrice.approximate
+                  ? t('newChat.modelSelector.pricing.fixedFx')
+                  : t('newChat.modelSelector.pricing.perMillion')}
+            </div>
+          </div>
+          <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+        </>
+      )}
       <div className="px-2 py-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-11 font-normal leading-[1.4] text-[var(--text-tertiary)]">
           {editingProvider && (
@@ -1014,40 +1026,6 @@ export function ModelSelectorContent({
           {editingModel.supportsFastMode && (
             <span>{t('newChat.modelSelector.meta.fastBadge')}</span>
           )}
-          {editingPrice && (
-            <span>
-              {t('newChat.modelSelector.priceTip', {
-                input: formatModelPriceAmount(
-                  editingPrice.input,
-                  editingPrice.currency,
-                ),
-                output: formatModelPriceAmount(
-                  editingPrice.output,
-                  editingPrice.currency,
-                ),
-              })}
-            </span>
-          )}
-          {editingPrice?.cacheRead !== undefined && (
-            <span>
-              {t('newChat.modelSelector.cacheReadPriceTip', {
-                price: formatModelPriceAmount(
-                  editingPrice.cacheRead,
-                  editingPrice.currency,
-                ),
-              })}
-            </span>
-          )}
-          {editingPrice?.cacheWrite !== undefined && (
-            <span>
-              {t('newChat.modelSelector.cacheWritePriceTip', {
-                price: formatModelPriceAmount(
-                  editingPrice.cacheWrite,
-                  editingPrice.currency,
-                ),
-              })}
-            </span>
-          )}
         </div>
       </div>
     </div>
@@ -1063,7 +1041,7 @@ export function ModelSelectorContent({
     const disabled = modelDisabledOf(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
-    const rowPrice = modelPriceOf(providerId, model.id);
+    const rowPrice = priceQuoteOf(providerId, model.id);
     // 信息面板对所有可用模型开放;能否编辑 effort / Fast 在面板内部另行判定。
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态

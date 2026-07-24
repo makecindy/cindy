@@ -25,6 +25,14 @@ import { sessions } from './localDb/schema';
 import { getDbClient } from './localDb/client/current';
 import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
+import {
+  addRegionalMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from '../shared/regionalMoney.js';
 
 const log = createLogger('sessionSpendBroadcaster');
 
@@ -44,8 +52,9 @@ export const USAGE_SESSION_CONTEXT_CHANGED = 'usage:session-context-changed';
 
 export interface SessionSpendPayload {
   sessionId: string;
-  /** session 终身累计 USD（已持久化到 sessions.total_cost_usd）。 */
-  totalCostUsd: number;
+  totalMoney: RegionalMoney;
+  /** 仅当累计金额仍是 USD 时给旧 renderer 的兼容投影。 */
+  totalCostUsd?: number;
 }
 
 export interface SessionTokensPayload {
@@ -66,22 +75,72 @@ export interface SessionContextPayload {
  *
  * 极小 / 非法 delta 跳过（与 dailySpend 同阈值）。
  */
-export async function recordSessionTurnSpend(sessionId: string, costUsdDelta: number): Promise<void> {
+export async function recordSessionTurnSpend(
+  sessionId: string,
+  money: RegionalMoney,
+): Promise<void> {
   if (!sessionId) return;
-  if (!Number.isFinite(costUsdDelta) || costUsdDelta < 1e-10) return;
+  const normalized = normalizeRegionalMoney(money);
+  if (!normalized || normalized.amount < 1e-10) return;
+  if (normalized.currency !== regionalCurrencyForRegion(CURRENT_CINDY_REGION)) {
+    log.warn('recordSessionTurnSpend rejected currency mismatch');
+    return;
+  }
   try {
     const db = getDbClient().drizzle;
-    await db.update(sessions)
-      .set({ totalCostUsd: sql`${sessions.totalCostUsd} + ${costUsdDelta}` })
-      .where(sql`${sessions.id} = ${sessionId}`)
-      .run();
-    const row = await db
-      .select({ totalCostUsd: sessions.totalCostUsd })
+    const existing = await db
+      .select({ totalCostCurrency: sessions.totalCostCurrency })
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    const totalCostUsd = row?.totalCostUsd ?? 0;
-    broadcast({ sessionId, totalCostUsd });
+    if (
+      existing?.totalCostCurrency &&
+      existing.totalCostCurrency !== normalized.currency
+    ) {
+      log.warn('recordSessionTurnSpend rejected persisted currency mismatch');
+      return;
+    }
+    await db.update(sessions)
+      .set({
+        totalCostAmount: sql`${sessions.totalCostAmount} + ${normalized.amount}`,
+        totalCostCurrency: normalized.currency,
+        totalCostIsApproximate: sql`${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}`,
+      })
+      .where(sql`${sessions.id} = ${sessionId}`)
+      .run();
+    const row = await db
+      .select({
+        totalCostUsd: sessions.totalCostUsd,
+        totalCostAmount: sessions.totalCostAmount,
+        totalCostCurrency: sessions.totalCostCurrency,
+        totalCostIsApproximate: sessions.totalCostIsApproximate,
+      })
+      .from(sessions)
+      .where(sql`${sessions.id} = ${sessionId}`)
+      .get();
+    const legacy = regionalizeLegacyUsd(
+      row?.totalCostUsd ?? 0,
+      CURRENT_CINDY_REGION,
+    );
+    const current = normalizeRegionalMoney({
+      amount: row?.totalCostAmount ?? 0,
+      currency: row?.totalCostCurrency ?? normalized.currency,
+      approximate: row?.totalCostIsApproximate ?? false,
+      kind: 'actual-cost',
+    });
+    const totalMoney =
+      legacy.amount > 0 && current
+        ? legacy.currency === current.currency
+          ? addRegionalMoney([legacy, current])
+          : current
+        : current ?? legacy;
+    broadcast({
+      sessionId,
+      totalMoney,
+      ...(totalMoney.currency === 'USD'
+        ? { totalCostUsd: totalMoney.amount }
+        : {}),
+    });
   } catch (err) {
     log.warn(
       'recordSessionTurnSpend failed:',

@@ -3668,8 +3668,16 @@
       "edit": "編集",
       "options": "オプション",
       "priceTip": "入力 {{input}} · 出力 {{output}} / 100万トークン",
-      "cacheReadPriceTip": "キャッシュ読み取り {{price}} / 100万トークン",
-      "cacheWritePriceTip": "キャッシュ書き込み {{price}} / 100万トークン",
+      "pricing": {
+        "title": "100万トークンあたり",
+        "input": "入力",
+        "output": "出力",
+        "cacheRead": "キャッシュ読み取り",
+        "cacheCreate": "キャッシュ書き込み",
+        "perMillion": "モデル標準価格",
+        "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
+        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
+      },
       "trigger": {
         "placeholder": "モデルを選択",
         "aria": "モデルを選択。現在：{{model}}",

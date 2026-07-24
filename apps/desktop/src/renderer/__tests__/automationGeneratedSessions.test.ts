@@ -930,7 +930,9 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain('turnCostIsEstimate === true');
     expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
     expect(storageSource).toContain("when 'user' then 0 else 1 end");
-    expect(storageSource).toContain('entry.totalCostUsd += cost');
+    expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
+    expect(storageSource).toContain('addCompatibleRegionalMoney(summary.costValues)');
+    expect(storageSource).toContain('totalMoney');
     expect(storageSource).toContain('listLegacySessionRuns');
     expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
     expect(storageSource).toContain("LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:'");
@@ -946,7 +948,7 @@ describe('automation-generated sessions', () => {
     expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
     expect(taskListPaneSource).toContain('costSummariesLoaded');
     expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatUsd(totalCostUsd ?? 0)');
+    expect(taskListCellSource).toContain('formatTurnCostMoney(totalMoney)');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');

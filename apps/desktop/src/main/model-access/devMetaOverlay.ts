@@ -58,8 +58,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * 去掉可由 dev 元数据覆盖的字段，保留模型成员资格、token 上限和 Gateway 价格。
- * 本地 overlay 只模拟展示元数据覆盖，不能把同一响应里的价格静默丢掉。
+ * 去掉可由 dev 元数据覆盖的字段，保留模型成员资格、token 上限和全部 Gateway
+ * 价格。这样本地 overlay 或 null 撤销登记都不会把同快照里的价格静默丢掉。
  */
 function gatewayFields(m: ModelAccessGatewayModel): ModelAccessGatewayModel {
   const {

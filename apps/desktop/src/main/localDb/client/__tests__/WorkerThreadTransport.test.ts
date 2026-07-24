@@ -3,10 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildDbWorkerBundle,
-  createMigratedSmokeDb,
-} from '../../__tests__/dbWorkerTestUtils.js';
+import { buildDbWorkerBundle, createMigratedSmokeDb } from '../../__tests__/dbWorkerTestUtils.js';
 import type { LogEvent, VecStatusEvent } from '../DbTransport.js';
 import { WorkerThreadTransport } from '../WorkerThreadTransport.js';
 
@@ -21,9 +18,11 @@ describe('WorkerThreadTransport', () => {
         sql: 'INSERT INTO t (name) VALUES (?)',
         params: ['alice'],
       });
-      await expect(transport.send('query', {
-        sql: 'SELECT id, name FROM t',
-      })).resolves.toEqual([{ id: 1, name: 'alice' }]);
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT id, name FROM t',
+        }),
+      ).resolves.toEqual([{ id: 1, name: 'alice' }]);
     } finally {
       await transport.close();
     }
@@ -45,9 +44,9 @@ describe('WorkerThreadTransport', () => {
     try {
       const active = transport.send('sleep', { ms: 30 });
       const queued = transport.send('echoTransfer', { buffer: new ArrayBuffer(4) });
-      await expect(
-        transport.send('query', { sql: 'SELECT 1' }),
-      ).rejects.toThrow(/RPC queue overloaded/);
+      await expect(transport.send('query', { sql: 'SELECT 1' })).rejects.toThrow(
+        /RPC queue overloaded/,
+      );
 
       await expect(active).resolves.toEqual({ slept: 30 });
       await expect(queued).resolves.toEqual({ byteLength: 4 });
@@ -122,6 +121,9 @@ describe('WorkerThreadTransport', () => {
           sdk_session_id TEXT,
           total_token_usage INTEGER NOT NULL,
           total_cost_usd REAL NOT NULL,
+          total_cost_amount REAL NOT NULL DEFAULT 0,
+          total_cost_currency TEXT,
+          total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
           context_tokens INTEGER NOT NULL,
           context_window INTEGER NOT NULL,
           fast_mode INTEGER NOT NULL,
@@ -202,10 +204,12 @@ describe('WorkerThreadTransport', () => {
         },
       });
 
-      await expect(transport.send('queryOne', {
-        sql: 'SELECT working_dir FROM sessions WHERE id = ?',
-        params: ['forked'],
-      })).resolves.toEqual({ working_dir: 'D:/repo/project' });
+      await expect(
+        transport.send('queryOne', {
+          sql: 'SELECT working_dir FROM sessions WHERE id = ?',
+          params: ['forked'],
+        }),
+      ).resolves.toEqual({ working_dir: 'D:/repo/project' });
       const copiedSwitch = await transport.send<{ content: string }>('queryOne', {
         sql: 'SELECT content FROM messages WHERE id = ?',
         params: ['forked-switch'],
@@ -240,13 +244,17 @@ describe('WorkerThreadTransport', () => {
       useInlineWorker: true,
     });
     try {
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
-        params: ['table', 'worker_smoke'],
-      })).resolves.toEqual([{ name: 'worker_smoke' }]);
-      await expect(transport.send('queryOne', {
-        sql: "SELECT value FROM migration_meta WHERE key='schema_version'",
-      })).resolves.toEqual({ value: '0' });
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
+          params: ['table', 'worker_smoke'],
+        }),
+      ).resolves.toEqual([{ name: 'worker_smoke' }]);
+      await expect(
+        transport.send('queryOne', {
+          sql: "SELECT value FROM migration_meta WHERE key='schema_version'",
+        }),
+      ).resolves.toEqual({ value: '0' });
     } finally {
       await transport.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -276,13 +284,17 @@ describe('WorkerThreadTransport', () => {
       useInlineWorker: true,
     });
     try {
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
-        params: ['table', 'worker_smoke'],
-      })).resolves.toEqual([{ name: 'worker_smoke' }]);
-      await expect(transport.send('queryOne', {
-        sql: "SELECT value FROM migration_meta WHERE key='schema_version'",
-      })).resolves.toEqual({ value: '0' });
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
+          params: ['table', 'worker_smoke'],
+        }),
+      ).resolves.toEqual([{ name: 'worker_smoke' }]);
+      await expect(
+        transport.send('queryOne', {
+          sql: "SELECT value FROM migration_meta WHERE key='schema_version'",
+        }),
+      ).resolves.toEqual({ value: '0' });
     } finally {
       await transport.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -290,14 +302,14 @@ describe('WorkerThreadTransport', () => {
   });
 
   it('fails fast when the real worker script is missing', () => {
-    const missingWorkerPath = path.join(
-      os.tmpdir(),
-      `xdt-missing-db-worker-${Date.now()}.js`,
-    );
+    const missingWorkerPath = path.join(os.tmpdir(), `xdt-missing-db-worker-${Date.now()}.js`);
 
-    expect(() => new WorkerThreadTransport({
-      workerScriptPath: missingWorkerPath,
-    })).toThrow(/db worker script not found/i);
+    expect(
+      () =>
+        new WorkerThreadTransport({
+          workerScriptPath: missingWorkerPath,
+        }),
+    ).toThrow(/db worker script not found/i);
   });
 
   it('runs queries through a real worker bundle', async () => {
@@ -329,18 +341,22 @@ describe('WorkerThreadTransport', () => {
       });
       transport.on('log', (event) => logs.push(event));
 
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).resolves.toEqual([{ name: 'file-worker' }]);
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).resolves.toEqual([{ name: 'file-worker' }]);
       expect(logs.map((event) => event.payload)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ event: 'dbWorker.init.ok', runtimeMode: 'file' }),
         ]),
       );
       await expect(transport.send('closeDb')).resolves.toBeUndefined();
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).rejects.toMatchObject({ code: 'INIT_FAILED' });
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).rejects.toMatchObject({ code: 'INIT_FAILED' });
     } finally {
       if (transport) await transport.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -377,9 +393,11 @@ describe('WorkerThreadTransport', () => {
       });
       transport.on('log', (event) => logs.push(event));
 
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).resolves.toEqual([{ name: 'alice' }]);
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).resolves.toEqual([{ name: 'alice' }]);
       expect(logs.map((event) => event.payload)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ event: 'dbWorker.init.ok', runtimeMode: 'file' }),
@@ -421,9 +439,11 @@ describe('WorkerThreadTransport', () => {
         workerScriptPath,
       });
 
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).rejects.toMatchObject({ code: 'MIGRATION_REQUIRED' });
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).rejects.toMatchObject({ code: 'MIGRATION_REQUIRED' });
     } finally {
       if (transport) await transport.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -460,9 +480,11 @@ describe('WorkerThreadTransport', () => {
       });
       transport.on('vec-status', (event) => vecStatus.push(event));
 
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).resolves.toEqual([{ name: 'alice' }]);
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).resolves.toEqual([{ name: 'alice' }]);
       expect(vecStatus).toContainEqual({
         loaded: false,
         error: 'sqlite-vec binary not found at expected path',
@@ -505,9 +527,11 @@ describe('WorkerThreadTransport', () => {
       });
       transport.on('vec-status', (event) => vecStatus.push(event));
 
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).resolves.toEqual([{ name: 'alice' }]);
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).resolves.toEqual([{ name: 'alice' }]);
       expect(vecStatus).toEqual([
         expect.objectContaining({
           loaded: false,
@@ -550,9 +574,11 @@ describe('WorkerThreadTransport', () => {
       });
       transport.on('log', (event) => logs.push(event));
 
-      await expect(transport.send('query', {
-        sql: 'SELECT name FROM worker_smoke',
-      })).resolves.toEqual([{ name: 'alice' }]);
+      await expect(
+        transport.send('query', {
+          sql: 'SELECT name FROM worker_smoke',
+        }),
+      ).resolves.toEqual([{ name: 'alice' }]);
       expect(logs.map((event) => event.payload)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ event: 'dbWorker.schemaDrift.queryFailed' }),

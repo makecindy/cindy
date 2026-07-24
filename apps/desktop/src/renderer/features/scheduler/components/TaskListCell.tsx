@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { Schedule } from '@cindy/maker-scheduler';
+import type { RegionalMoney } from '../../../../shared/regionalMoney';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,14 +38,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-import { formatLastRun, formatNextRun, formatUsd } from '../lib/formatters';
+import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { formatTurnCostMoney } from '@/lib/usageFormat';
 
 interface Props {
   schedule: Schedule;
   selected: boolean;
   unreadCount?: number;
-  totalCostUsd?: number;
-  totalEstimatedValueUsd?: number;
+  totalMoney?: RegionalMoney;
+  totalEstimatedValueMoney?: RegionalMoney;
   hasUnavailableCost?: boolean;
   onSelect: (s: Schedule) => void;
   /** 右键菜单的 Pause/Resume 动作；与 RunHistoryPane ⋯ 菜单同行为。 */
@@ -80,8 +82,8 @@ export function TaskListCell({
   schedule: s,
   selected,
   unreadCount = 0,
-  totalCostUsd,
-  totalEstimatedValueUsd = 0,
+  totalMoney,
+  totalEstimatedValueMoney,
   hasUnavailableCost = false,
   onSelect,
   onTogglePause,
@@ -166,19 +168,28 @@ export function TaskListCell({
     subtitle = lastText ?? nextText;
   }
   const costText =
-    totalCostUsd == null && !hasUnavailableCost
+    totalMoney == null && !hasUnavailableCost
       ? null
       : [
-          (totalCostUsd ?? 0) > 0
-            ? t('scheduler.cell.totalCost', { cost: formatUsd(totalCostUsd ?? 0) })
+          totalMoney && totalMoney.amount > 0
+            ? t('scheduler.cell.totalCost', {
+                cost: formatTurnCostMoney(totalMoney),
+              })
             : null,
-          totalEstimatedValueUsd > 0
-            ? t('scheduler.cell.totalValue', { value: formatUsd(totalEstimatedValueUsd) })
+          (totalEstimatedValueMoney?.amount ?? 0) > 0
+            ? t('scheduler.cell.totalValue', {
+                value: formatTurnCostMoney(totalEstimatedValueMoney!),
+              })
             : null,
           hasUnavailableCost ? t('scheduler.cell.costUnavailable') : null,
         ]
           .filter(Boolean)
-          .join(' · ') || t('scheduler.cell.totalCost', { cost: formatUsd(0) });
+          .join(' · ') ||
+            (totalMoney
+              ? t('scheduler.cell.totalCost', {
+                  cost: formatTurnCostMoney(totalMoney),
+                })
+              : t('scheduler.cell.costUnavailable'));
   // 副标题行是否渲染:决定右下角 Run 按钮的"预留位"落在哪一行(见下方两处 pr-3.5)。
   const hasMetaRow = Boolean(subtitle || costText);
 

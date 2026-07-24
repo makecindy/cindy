@@ -147,27 +147,6 @@ describe('XD 网关权威模型清单重建', () => {
     expect('icon' in (cc.find((m) => m.id === 'plain-model') ?? {})).toBe(false);
   });
 
-  it('Gateway 标准价格原值换成每百万 token，不应用 costDiscount', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([
-      {
-        id: 'claude-sonnet-4',
-        costDiscount: 0.2,
-        inputCostPerToken: 0.000003,
-        outputCostPerToken: 0.000015,
-        cacheReadInputTokenCost: 0.0000003,
-        cacheCreationInputTokenCost: 0.00000375,
-      },
-    ]);
-
-    expect(xdModels('claude-code')[0].cost).toEqual({
-      input: 3,
-      output: 15,
-      cacheRead: 0.3,
-      cacheWrite: 3.75,
-    });
-  });
-
   it('非法 effort 档位被白名单过滤;defaultEffort 不在档位集内时回落 high 规则', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

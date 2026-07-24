@@ -15,10 +15,16 @@
  */
 
 import { useEffect, useState } from 'react';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import {
+  normalizeRegionalMoney,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from '../../shared/regionalMoney';
 
 export interface TodaySpendData {
   day: string;
-  costUsd: number | null;
+  money: RegionalMoney | null;
   codexTokens: number | null;
 }
 
@@ -33,7 +39,7 @@ function localDayKey(): string {
 export function useTodaySpend(): TodaySpendData {
   const [data, setData] = useState<TodaySpendData>({
     day: localDayKey(),
-    costUsd: null,
+    money: null,
     codexTokens: null,
   });
 
@@ -45,9 +51,17 @@ export function useTodaySpend(): TodaySpendData {
       void window.electronAPI.maker.usage.getToday('claude-code').then((res) => {
         if (cancelled) return;
         currentDay = res.day;
+        const money =
+          normalizeRegionalMoney(res.money) ??
+          (typeof res.costUsd === 'number'
+            ? regionalizeLegacyUsd(
+                res.costUsd,
+                CURRENT_CINDY_REGION,
+              )
+            : null);
         setData((prev) => ({
           day: res.day,
-          costUsd: res.costUsd ?? prev.costUsd,
+          money: money ?? prev.money,
           codexTokens: prev.codexTokens,
         }));
       });
@@ -73,9 +87,17 @@ export function useTodaySpend(): TodaySpendData {
       // 只接受"今天"的更新(防御 main 在跨日缝隙推的延迟数据)
       if (res.day === localDayKey()) {
         currentDay = res.day;
+        const money =
+          normalizeRegionalMoney(res.money) ??
+          (typeof res.costUsd === 'number'
+            ? regionalizeLegacyUsd(
+                res.costUsd,
+                CURRENT_CINDY_REGION,
+              )
+            : null);
         setData((prev) => ({
           day: res.day,
-          costUsd: res.costUsd,
+          money,
           codexTokens: prev.codexTokens,
         }));
       }

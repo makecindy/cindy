@@ -112,7 +112,12 @@ describe('TaskListCell 费用展示', () => {
         schedule,
         selected: false,
         onSelect: vi.fn(),
-        totalCostUsd: 0,
+        totalMoney: {
+          amount: 0,
+          currency: 'USD',
+          approximate: false,
+          kind: 'actual-cost',
+        },
         hasUnavailableCost: true,
       }),
     );
@@ -127,7 +132,12 @@ describe('TaskListCell 费用展示', () => {
         schedule,
         selected: false,
         onSelect: vi.fn(),
-        totalCostUsd: 0,
+        totalMoney: {
+          amount: 0,
+          currency: 'USD',
+          approximate: false,
+          kind: 'actual-cost',
+        },
         hasUnavailableCost: false,
       }),
     );

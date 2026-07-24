@@ -12,13 +12,35 @@ function meta(runId: string, costUsd: number, isEstimate = false): Record<string
   };
 }
 
+function structuredMeta(
+  runId: string,
+  amount: number,
+  isEstimate = false,
+): Record<string, unknown> {
+  return {
+    origin: { kind: 'scheduler', scheduleId: 'schedule-1', runId },
+    turnCost: {
+      amount,
+      currency: 'CNY',
+      approximate: isEstimate,
+      kind: isEstimate ? 'value-estimate' : 'actual-cost',
+      ...(isEstimate ? { estimateReasons: ['subscription-value'] } : {}),
+    },
+    turnCostIsEstimate: isEstimate,
+  };
+}
+
 describe('computeScheduleRunCostDeltas', () => {
-  it('首次写入真实费用时累计到对应 run', () => {
-    expect(computeScheduleRunCostDeltas({}, meta('run-1', 0.42))).toEqual([{
-      runId: 'run-1',
-      costUsdDelta: 0.42,
-      estimatedValueUsdDelta: 0,
-    }]);
+  it('旧 USD 真实费用按当前 CN 区域投影后累计到对应 run', () => {
+    expect(computeScheduleRunCostDeltas({}, meta('run-1', 0.42))).toEqual([
+      {
+        runId: 'run-1',
+        costAmountDelta: 2.814,
+        estimatedValueAmountDelta: 0,
+        currency: 'CNY',
+        approximate: true,
+      },
+    ]);
   });
 
   it('相同消息重放时不重复累计', () => {
@@ -27,17 +49,49 @@ describe('computeScheduleRunCostDeltas', () => {
   });
 
   it('估算值转为真实费用时在两栏之间搬移', () => {
-    expect(computeScheduleRunCostDeltas(meta('run-1', 0.42, true), meta('run-1', 0.4))).toEqual([{
+    const [delta] = computeScheduleRunCostDeltas(meta('run-1', 0.42, true), meta('run-1', 0.4));
+    expect(delta).toMatchObject({
       runId: 'run-1',
-      costUsdDelta: 0.4,
-      estimatedValueUsdDelta: -0.42,
-    }]);
+      currency: 'CNY',
+      approximate: true,
+    });
+    expect(delta.costAmountDelta).toBeCloseTo(2.68);
+    expect(delta.estimatedValueAmountDelta).toBeCloseTo(-2.814);
   });
 
   it('归因 runId 修正时从旧 run 扣除并写入新 run', () => {
     expect(computeScheduleRunCostDeltas(meta('run-old', 0.42), meta('run-new', 0.42))).toEqual([
-      { runId: 'run-old', costUsdDelta: -0.42, estimatedValueUsdDelta: 0 },
-      { runId: 'run-new', costUsdDelta: 0.42, estimatedValueUsdDelta: 0 },
+      {
+        runId: 'run-old',
+        costAmountDelta: -2.814,
+        estimatedValueAmountDelta: 0,
+        currency: 'CNY',
+        approximate: false,
+      },
+      {
+        runId: 'run-new',
+        costAmountDelta: 2.814,
+        estimatedValueAmountDelta: 0,
+        currency: 'CNY',
+        approximate: true,
+      },
+    ]);
+  });
+
+  it('结构化 CN 金额原样累计，订阅估值不污染真实费用约值标记', () => {
+    expect(
+      computeScheduleRunCostDeltas(
+        structuredMeta('run-1', 0.29, true),
+        structuredMeta('run-1', 0.42),
+      ),
+    ).toEqual([
+      {
+        runId: 'run-1',
+        costAmountDelta: 0.42,
+        estimatedValueAmountDelta: -0.29,
+        currency: 'CNY',
+        approximate: false,
+      },
     ]);
   });
 });
@@ -46,8 +100,12 @@ describe('recordScheduleRunCostDirect', () => {
   it('忽略低于消息账本阈值的正费用', async () => {
     await expect(recordScheduleRunCostDirect({
       runId: 'run-near-zero',
-      costUsd: 1e-12,
-      isEstimate: false,
+      money: {
+        amount: 1e-12,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      },
     })).resolves.toBeNull();
   });
 
@@ -84,8 +142,12 @@ describe('recordScheduleRunCostDirect', () => {
     try {
       await expect(recordScheduleRunCostDirect({
         runId: 'run-raced-delete',
-        costUsd: 0.42,
-        isEstimate: false,
+        money: {
+          amount: 0.42,
+          currency: 'USD',
+          approximate: false,
+          kind: 'actual-cost',
+        },
       })).resolves.toBeNull();
     } finally {
       clearCurrentDbClient(dbClient);

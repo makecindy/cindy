@@ -199,14 +199,20 @@ export function listMessagesFor(
  * 后退化为只显示已加载消息 + 实时推送的部分值。
  */
 export function estimatedSessionValueFor(sessionId: string): Promise<{
-  totalValueUsd: number;
-  entries: Array<{ clientId: string; costUsd: number }>;
+  totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
+  totalValueUsd?: number;
+  entries: Array<{
+    clientId: string;
+    money?: import('../../shared/regionalMoney').RegionalMoney;
+    costUsd?: number;
+    turnUsageDetails?: unknown;
+  }>;
 }> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return messageService.estimatedSessionValue(sessionId);
   return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
     sessionId,
-  ]) as Promise<{ totalValueUsd: number; entries: Array<{ clientId: string; costUsd: number }> }>;
+  ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
 
 /** 会话内搜索跳转定位:远程走隧道 local-db:messages:around(否则查控制端空库,跳转必失败)。 */
