@@ -411,6 +411,35 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
     expect(marker.adoptedAt).toBe('2026-07-24T00:00:00.000Z');
   });
 
+  it('并入时 safe-storage 的 owner 前缀凭证一并改名到账号命名空间(冲突跳过)', async () => {
+    const { mem, deps } = createHarness({ decision: 'adopt' });
+    const secretsDir = path.join(USER_DATA, 'safe-storage');
+    mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(path.join(secretsDir, `owner_${LOCAL_KEY}_provider_key_x.enc`), 'secret-x');
+    mem.addFile(path.join(secretsDir, `owner_${LOCAL_KEY}_custom_mcp_y.enc`), 'secret-y');
+    // 账号侧已有同逻辑键 → 冲突跳过,双方都保留。
+    mem.addFile(path.join(secretsDir, `owner_${USER_KEY}_custom_mcp_y.enc`), 'account-y');
+    // 其它 owner 与非 .enc 文件不受影响。
+    mem.addFile(path.join(secretsDir, 'owner_other_provider_key_z.enc'), 'other');
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result.status).toBe('adopted');
+    expect(
+      mem.files.get(path.normalize(path.join(secretsDir, `owner_${USER_KEY}_provider_key_x.enc`))),
+    ).toBe('secret-x');
+    expect(
+      mem.files.get(path.normalize(path.join(secretsDir, `owner_${USER_KEY}_custom_mcp_y.enc`))),
+    ).toBe('account-y');
+    expect(
+      mem.files.get(path.normalize(path.join(secretsDir, `owner_${LOCAL_KEY}_custom_mcp_y.enc`))),
+    ).toBe('secret-y');
+    expect(
+      mem.files.get(path.normalize(path.join(secretsDir, 'owner_other_provider_key_z.enc'))),
+    ).toBe('other');
+    expect(
+      mem.files.has(path.normalize(path.join(secretsDir, `owner_${LOCAL_KEY}_provider_key_x.enc`))),
+    ).toBe(false);
+  });
+
   it('并入时 local 无 owners 目录也成立(只搬库)', async () => {
     const { mem, deps } = createHarness({ decision: 'adopt' });
     mem.addFile(LOCAL_DB, 'local-data');

@@ -67,8 +67,11 @@ export interface SecretStorageIo {
   list(): string[];
 }
 
+/** userData 下加密凭证目录名(localOwnerDataAdoption 的 owner 前缀搬迁共用)。 */
+export const SAFE_STORAGE_DIR_NAME = 'safe-storage';
+
 function secretDir(): string {
-  return path.join(app.getPath('userData'), 'safe-storage');
+  return path.join(app.getPath('userData'), SAFE_STORAGE_DIR_NAME);
 }
 
 const DYNAMIC_SECRET_PREFIXES = [
@@ -88,6 +91,15 @@ function isManagedSecretStorageKey(key: string): boolean {
 
 function ownerStoragePrefix(ownerId: string): string {
   return `owner_${dataOwnerStorageKey(ownerId)}_`;
+}
+
+/**
+ * 某 owner 的加密凭证文件名前缀(`owner_<key>_`;文件形如 `<前缀><逻辑键>.enc`)。
+ * 导出给 localOwnerDataAdoption:local 模式数据认领时按前缀把凭证文件改名到
+ * 账号命名空间——凭证由 safeStorage 机器级加密,前缀只是 owner 归属,改名即换主。
+ */
+export function ownerSecretStoragePrefix(ownerId: string): string {
+  return ownerStoragePrefix(ownerId);
 }
 
 /** Resolve a renderer/main logical provider-secret key into the active owner's key. */

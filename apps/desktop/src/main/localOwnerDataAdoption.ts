@@ -44,6 +44,10 @@ import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { LOCAL_DATA_OWNER_ID, dataOwnerStorageKey } from './appSessionState.js';
 import {
+  SAFE_STORAGE_DIR_NAME,
+  ownerSecretStoragePrefix,
+} from './secrets/providerSecretStore.js';
+import {
   hasConcurrentLiveInstancesSharingUserData,
   moveWithoutOverwrite,
   type MoveFsDeps,
@@ -357,6 +361,31 @@ export async function runLocalOwnerDataAdoption(
         ownersMoved = moveResult.moved;
         ownersConflicts = moveResult.conflicts;
       }
+      // 加密凭证不在 owners/ 树内,而在 safe-storage/owner_<key>_*.enc(providerSecretStore
+      // 的 owner 前缀命名空间):随认领按前缀改名到账号命名空间,否则被并入的自定义
+      // 供应商/MCP/ghost 配置全部缺鉴权(Codex review)。目标已存在跳过不覆盖;幂等。
+      const secretsDir = path.join(deps.userDataDir, SAFE_STORAGE_DIR_NAME);
+      const localSecretPrefix = ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID);
+      const accountSecretPrefix = ownerSecretStoragePrefix(userId);
+      let secretsMoved = 0;
+      let secretsConflicts = 0;
+      if (await deps.fs.pathExists(secretsDir)) {
+        for (const name of await deps.fs.readdir(secretsDir)) {
+          if (!name.startsWith(localSecretPrefix) || !name.endsWith('.enc')) continue;
+          await abortCheck();
+          const target = `${accountSecretPrefix}${name.slice(localSecretPrefix.length)}`;
+          try {
+            await deps.fs.renameNoReplace(
+              path.join(secretsDir, name),
+              path.join(secretsDir, target),
+            );
+            secretsMoved += 1;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+            secretsConflicts += 1;
+          }
+        }
+      }
       if (accountDbToDisplace) {
         // 空账号库(前置已验证未被使用)改名备份让位:文件保留不删,时间戳后缀
         // 防多次重试撞名。窗口期内该库可能残留的少量非关键数据随备份保留,可找回。
@@ -394,10 +423,12 @@ export async function runLocalOwnerDataAdoption(
       }
       deps.ui.publish('done');
       deps.log.info(
-        'local owner adoption completed: sessions=%d ownersMoved=%d ownersConflicts=%d',
+        'local owner adoption completed: sessions=%d ownersMoved=%d ownersConflicts=%d secretsMoved=%d secretsConflicts=%d',
         sessionCount,
         ownersMoved,
         ownersConflicts,
+        secretsMoved,
+        secretsConflicts,
       );
       return { status: 'adopted', ownersMoved, ownersConflicts };
     } catch (err) {
@@ -520,6 +551,7 @@ const ACCOUNT_USAGE_TABLES = [
   'custom_providers',
   'custom_mcp_servers',
   'im_bindings',
+  'project_aliases',
 ] as const;
 
 async function accountDbLooksUsedInClosedDb(dbPath: string): Promise<boolean> {
