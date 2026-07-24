@@ -410,8 +410,14 @@ export const LOGIN_CONSENT_ROW = {
   lineHeight: 23,
   /** 行底(622)超出登录组(560)的设计 px,安全区抬升按此追加预留 */
   bottomOverflow: 62,
-  /** 对勾线宽 3(figma 600:632 stroke-width 3 round,设计 px) */
-  radio: { hitSize: 24, ringSize: 20, ringRadius: 9, ringStroke: 2, checkStroke: 3 },
+  /**
+   * 对勾线宽 3(figma 600:632 stroke-width 3 round,设计 px)。
+   * pressSize 88 = 无障碍触摸目标(codex P1):登录组 phone 缩放 ~0.5 → 88 设计px
+   * ≈ 44 物理pt(iOS HIG)/ ≥48dp 近似达标;命中区右下锚定扩张(向左/向上),
+   * 右缘与视觉 24 槽位右缘对齐(不侵入协议链接命中区)、底缘与协议行底 622 对齐
+   * (不越父容器 flowBottom bounds——Android 界外触摸不派发,hitSlop 方案已被否)。
+   */
+  radio: { hitSize: 24, ringSize: 20, ringRadius: 9, ringStroke: 2, checkStroke: 3, pressSize: 88 },
 } as const;
 
 /**

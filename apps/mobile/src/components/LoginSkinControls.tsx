@@ -178,32 +178,47 @@ export function LoginConsentRow({
   const { colors } = useTheme();
   const login = colors.login;
   const { radio } = LOGIN_CONSENT_ROW;
+  // 行容器向上扩出 pressSize-height(48 设计px)容纳放大的命中区:行底 622 不变,
+  // paddingTop 把文字/视觉内容压回原 40 高内容带(582..622),视觉零变化
+  const pressExpand = radio.pressSize - LOGIN_CONSENT_ROW.height;
+  // 读屏标签 = 协议声明整行纯文本(剥掉 <terms>/<privacy> 标记;四语随 i18n;codex P1)
+  const statementLabel = parseLegalSegments(statement)
+    .map((segment) => segment.text)
+    .join('');
   return (
     <View
       style={{
         alignItems: 'center',
         flexDirection: 'row',
         gap: LOGIN_CONSENT_ROW.gap,
-        height: LOGIN_CONSENT_ROW.height,
+        height: radio.pressSize,
         justifyContent: 'center',
         left: 0,
+        paddingTop: pressExpand,
         position: 'absolute',
-        top: LOGIN_CONSENT_ROW.y,
+        top: LOGIN_CONSENT_ROW.y - pressExpand,
         width: LOGIN_CONSENT_ROW.width,
       }}
       testID="login.consentRow"
     >
-      {/* 命中区 = 权威 24×24,不加 hitSlop:水平扩张会越过 gap 6.5 侵入协议链接
-          点击区(ja 文案句首即链接,边缘点击产生 radio/链接竞争;codex 审查 P1) */}
+      {/* 命中区 88×88 设计px(≈44 物理pt,codex P1),不加 hitSlop(父 bounds 裁剪、
+          Android 界外不派发——历史结论)。右下锚定:右缘 = 视觉 24 槽位右缘(不越 gap 6.5
+          侵入协议链接命中区,ja 句首即链接)、底缘 = 行底 622(不越父容器 bounds);
+          布局占位仍 24(marginLeft 负回收),视觉圆圈位置与 24×24 时代逐像素一致 */}
       <Pressable
+        accessibilityLabel={statementLabel}
         accessibilityRole="checkbox"
         accessibilityState={{ checked }}
         onPress={onToggle}
         style={{
-          alignItems: 'center',
-          height: radio.hitSize,
-          justifyContent: 'center',
-          width: radio.hitSize,
+          alignItems: 'flex-end',
+          alignSelf: 'flex-end',
+          height: radio.pressSize,
+          justifyContent: 'flex-end',
+          marginLeft: -(radio.pressSize - radio.hitSize),
+          paddingBottom: (LOGIN_CONSENT_ROW.height - radio.ringSize) / 2,
+          paddingRight: (radio.hitSize - radio.ringSize) / 2,
+          width: radio.pressSize,
         }}
         testID="login.consentRadio"
       >

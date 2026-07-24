@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { parseLegalSegments } from '@/auth/legalText';
+import { LOGIN_CONSENT_ROW } from '@/auth/loginSkinLayout';
 import { LEGAL_LINKS } from '@/config/legalLinks';
 import { loginPalettes } from '@/theme/tokens';
 import { loginMessages } from '@/auth/loginMessages';
@@ -176,6 +177,50 @@ describe('login.tsx 接线(源码断言)', () => {
 
   it('协议链接经 Linking.openURL 打开(settings.tsx 同款模式)', () => {
     expect(loginSource).toMatch(/Linking\.openURL\(\s*\n?\s*kind === 'terms'/);
+  });
+});
+
+describe('consent radio 无障碍(codex P1 双修:读屏标签 + 44pt 触摸区)', () => {
+  it('触摸区常量:pressSize ≥88 设计px(phone ~0.5 缩放 → ≈44pt),行底 622 不变', () => {
+    const { radio } = LOGIN_CONSENT_ROW;
+    expect(radio.pressSize).toBeGreaterThanOrEqual(88);
+    // 视觉几何冻结:圈体/槽位不随命中区扩大而变
+    expect(radio.hitSize).toBe(24);
+    expect(radio.ringSize).toBe(20);
+    // 右下锚定不变式:行容器向上扩、底边恒 622(= 组高 560 + bottomOverflow 62),
+    // 命中区完整落在父容器 flowBottom bounds 内(Android 界外不派发)
+    expect(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height).toBe(560 + LOGIN_CONSENT_ROW.bottomOverflow);
+    expect(radio.pressSize).toBeLessThanOrEqual(LOGIN_CONSENT_ROW.y + LOGIN_CONSENT_ROW.height);
+  });
+
+  it('组件接线:命中区右下锚定 + 负 margin 占位回收 + 禁 hitSlop(历史结论回归锁)', () => {
+    // 行容器:top 上移 pressExpand、paddingTop 压回原内容带,行底不动
+    expect(controlsSource).toContain('const pressExpand = radio.pressSize - LOGIN_CONSENT_ROW.height');
+    expect(controlsSource).toContain('top: LOGIN_CONSENT_ROW.y - pressExpand');
+    expect(controlsSource).toContain('paddingTop: pressExpand');
+    // Pressable:88×88 bounds,右缘对齐 24 槽位右缘(不侵协议链接命中区)、底缘对齐行底
+    expect(controlsSource).toContain('height: radio.pressSize');
+    expect(controlsSource).toContain('width: radio.pressSize');
+    expect(controlsSource).toContain('marginLeft: -(radio.pressSize - radio.hitSize)');
+    expect(controlsSource).toMatch(/alignSelf: 'flex-end'/);
+    // hitSlop 方案已被否(父 bounds 裁剪、Android 界外触摸不派发),不许倒退
+    // (只拦属性用法 hitSlop= / hitSlop:,注释中说明历史结论的字样放行)
+    expect(controlsSource).not.toMatch(/hitSlop[=:]/);
+  });
+
+  it('读屏标签:accessibilityLabel = 协议声明剥标记纯文本,四语随 i18n 无新增 key', () => {
+    expect(controlsSource).toContain('accessibilityLabel={statementLabel}');
+    expect(controlsSource).toMatch(/parseLegalSegments\(statement\)[\s\S]{0,120}?\.join\(''\)/);
+    expect(controlsSource).toContain('accessibilityRole="checkbox"');
+    expect(controlsSource).toContain('accessibilityState={{ checked }}');
+    // 剥标记结果对 4 语 catalog 均为非空、无残留标记的完整句子
+    for (const locale of ['zh-CN', 'en', 'ja', 'ko'] as const) {
+      const label = parseLegalSegments(loginMessages[locale].consentStatement)
+        .map((segment) => segment.text)
+        .join('');
+      expect(label.length).toBeGreaterThan(5);
+      expect(label).not.toMatch(/[<>]/);
+    }
   });
 });
 
