@@ -53,7 +53,9 @@ export const LOGIN_LOCAL_MODE = {
 /** 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。 */
 export const PANEL = { width: 680, height: 440, radius: 36 } as const;
 export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
-export const SUBTITLE = { x: 41, y: 75, width: 599, fontSize: 20 } as const;
+// 2026-07-24 拍板:副标题禁省略号、完整展示 ≤2 行,宽度对齐下方控件列(540@70);
+// 原 figma 单行几何 599@41 作废(长语言单行必省略,违反登录长文本口径)。
+export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20 } as const;
 export const GLOBAL_PILL = { left: 425, top: 4, width: 70, height: 30, radius: 40 } as const; // §4.10
 export const GLOBAL_TITLE_SPAN = { left: 185, width: 236 } as const; // demo titleBlock global 变体
 export const CONTROL = {

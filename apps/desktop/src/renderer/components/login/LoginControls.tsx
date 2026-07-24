@@ -119,19 +119,26 @@ export function LoginTitleBlock({
         )}
       </div>
       {subtitle != null && (
+        // 副标题(2026-07-24 拍板):禁省略号截断,长语言完整展示——顶对齐 + ≤2 行
+        // clamp + 只向下伸展(y75 + 2×23 = 121,距输入框顶 158 留 37px),宽度对齐
+        // 下方控件列(540@70)。单行时行高 23 与旧 23px 槽同位,视觉零变化;
+        // 超两行按登录长文本口径属文案超预算(修文案不改布局)。
         <div
-          className="absolute overflow-hidden whitespace-nowrap text-center"
+          data-testid="login-subtitle"
+          className="absolute overflow-hidden text-center"
           style={{
             left: SUBTITLE.x,
             top: SUBTITLE.y,
             width: SUBTITLE.width,
-            height: 23,
-            // 同标题:显式行高 = 容器高,避免继承行高溢出后被 overflow-hidden 裁字形
-            // (与回调页 .body line-height:23px 同款)。
+            maxHeight: 46,
+            // 显式行高(避免继承行高溢出后被 overflow-hidden 裁字形,
+            // 与回调页 .body line-height:23px 同款)。
             lineHeight: '23px',
             fontSize: SUBTITLE.fontSize,
             color: LOGIN_COLORS.secondaryText,
-            textOverflow: 'ellipsis',
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
           }}
         >
           {subtitle}

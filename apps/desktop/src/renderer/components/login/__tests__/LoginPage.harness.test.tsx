@@ -253,6 +253,15 @@ describe('ssoOrgMode 子视图', () => {
     expect(hint.style.webkitLineClamp).toBe('2');
     expect(hint.style.display).toBe('-webkit-box');
     expect(hint.className).not.toContain('items-center');
+    // 副标题(2026-07-24 拍板):禁省略号,完整展示 ≤2 行顶对齐,宽度对齐控件列 540@70。
+    // 回归锚:禁止回到 599@41 单行 nowrap+ellipsis 写法。
+    const subtitle = screen.getByTestId('login-subtitle');
+    expect(subtitle.textContent).toBe('login.ssoOrgSubtitle');
+    expect(subtitle.style.left).toBe('70px');
+    expect(subtitle.style.width).toBe('540px');
+    expect(subtitle.style.maxHeight).toBe('46px');
+    expect(subtitle.style.webkitLineClamp).toBe('2');
+    expect(subtitle.className).not.toContain('whitespace-nowrap');
   });
 
   it('sso-org 填写态:输入企业 ID 后继续可用,提交派发 discover-sso-org', async () => {

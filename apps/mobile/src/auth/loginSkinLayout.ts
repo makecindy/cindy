@@ -338,8 +338,9 @@ export function resolveLoginSurface(
 export const LOGIN_GROUP = { x: 35, width: 680, height: 560 } as const;
 /** 标题(figma §5.1:y=31 h=38 32 Bold 居中)。 */
 export const LOGIN_TITLE = { y: 31, height: 38, font: 32 } as const;
-/** 副标题(figma §5.1:x=41 y=75 w=599 20 Regular 居中)。 */
-export const LOGIN_SUBTITLE = { x: 41, y: 75, width: 599, height: 23, font: 20 } as const;
+/** 副标题(2026-07-24 拍板:禁省略号完整展示 ≤2 行,宽度对齐控件列 540@70;
+ *  原 figma 单行几何 599@41 作废;height=单行行高,折行只向下)。 */
+export const LOGIN_SUBTITLE = { x: 70, y: 75, width: 540, height: 23, font: 20 } as const;
 /** 输入/主按钮(figma §4.1/§4.3:540×80 r40;文本 x=31 §4.1)。 */
 export const LOGIN_CONTROL = {
   x: 70,

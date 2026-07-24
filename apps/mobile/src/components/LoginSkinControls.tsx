@@ -115,7 +115,9 @@ export function LoginTitleBlock({
         {title}
       </Text>
       {subtitle != null ? (
-        <Text numberOfLines={1} style={styles.subtitle}>
+        // 2026-07-24 拍板:副标题禁省略号,长语言完整展示 ≤2 行——RN Text 从 top 锚点
+        // 向下生长天然顶对齐;numberOfLines={2} 与桌面 clamp 同约束。
+        <Text numberOfLines={2} style={styles.subtitle}>
           {subtitle}
         </Text>
       ) : null}
