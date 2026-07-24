@@ -141,6 +141,10 @@ export function applyTemplateToMobileScheduleDraft(
     effort: template.effort ?? '',
     fastMode: template.fastMode === true,
     useWorktree: template.useWorktree ?? draft.useWorktree,
+    // useWorktree 只在 project workspace 下会被 buildMobileScheduleInput 保留；
+    // 模板要求 worktree 时把 draft 一并切到 project 模式，否则保存会被静默打回
+    // false，与模板承诺的隔离工作区不符（workingDir 为空由 draft 校验兜底）。
+    workspaceKind: template.useWorktree ? 'project' : draft.workspaceKind,
     persistentSession: template.persistentSession ?? draft.persistentSession,
     notifyDesktop: template.notify?.desktop ?? draft.notifyDesktop,
     notifyFeishu: template.notify?.feishu ?? draft.notifyFeishu,
