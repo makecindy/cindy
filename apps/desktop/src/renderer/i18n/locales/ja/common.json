@@ -1,4 +1,151 @@
 {
+  "billing": {
+    "sidebar": "クレジットとプラン",
+    "settings": {
+      "title": "使用状況と請求",
+      "subtitle": "現在のサブスクリプションを確認し、サーバーから提供されるプランやクレジットを購入できます。",
+      "loading": "サブスクリプションの状態を取得中…",
+      "subscriptionCard": {
+        "title": "現在のプラン",
+        "empty": "有効なサブスクリプションはありません",
+        "emptyTitle": "サブスクリプションなし",
+        "unnamedPlan": "サブスクリプションプラン",
+        "unavailable": "サブスクリプションの状態を取得できません。更新してもう一度お試しください。",
+        "action": "プランを見る"
+      },
+      "topupCard": {
+        "title": "クレジット",
+        "description": "従量制のモデルや機能で使うクレジットを購入します。",
+        "cardTitle": "必要に応じてクレジットを購入",
+        "cardDescription": "購入可能なクレジット商品はサーバーで設定されます。",
+        "action": "クレジットを購入"
+      }
+    },
+    "balance": {
+      "title": "利用可能残高",
+      "plan": "プランクレジット",
+      "purchased": "購入済みクレジット",
+      "promotional": "特典クレジット",
+      "notProvisioned": "このアカウントではクレジットがまだ有効になっていません。",
+      "notSupported": "このアカウントでは残高照会を利用できません。",
+      "unavailable": "残高を取得できません。更新してもう一度お試しください。"
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "サブスクリプションプランを選択",
+        "description": "サーバーで現在設定されているプランのみ表示します。プランを選択すると支払い方法が表示されます。"
+      },
+      "topup": {
+        "title": "クレジットを購入",
+        "description": "サーバーで現在設定されているクレジット商品のみ表示します。商品を選択すると支払い方法が表示されます。"
+      }
+    },
+    "eyebrow": "アカウントと使用量",
+    "title": "最適なプランを選択",
+    "subtitle": "プランと支払い方法はサーバーから配信されます。先にプランを選ぶと、現在利用可能な支払い方法が表示されます。",
+    "steps": {
+      "offer": {
+        "title": "プランを選択",
+        "description": "現在購入できるチャージとサブスクリプションのみ表示します。"
+      },
+      "channel": {
+        "title": "支払い方法を選択",
+        "description": "利用できる支払い方法はプランごとに異なります。",
+        "selectOfferFirst": "プランを選ぶと、対応する支払い方法が表示されます"
+      },
+      "confirm": {
+        "title": "確認して支払う",
+        "description": "プランと支払い方法を確認して決済を作成します。",
+        "selectChannelFirst": "支払い方法を選択してください"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "更新",
+      "retry": "再試行",
+      "pay": "確認して支払う",
+      "refresh": "状態を更新",
+      "cancelPayment": "支払いをキャンセル",
+      "close": "閉じる"
+    },
+    "catalog": {
+      "errorTitle": "プランを取得できません",
+      "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
+      "emptyTitle": "利用可能なプランはありません",
+      "emptyDescription": "購入可能なプランと支払い方法がまだ設定されていません。"
+    },
+    "offerKinds": {
+      "topup": "クレジットチャージ",
+      "subscription": "サブスクリプション"
+    },
+    "amount": {
+      "custom": "金額を指定",
+      "label": "チャージ金額",
+      "placeholder": "金額を入力",
+      "rangeHint": "{{min}}〜{{max}}を入力",
+      "rangeError": "金額は{{min}}〜{{max}}の範囲で入力してください",
+      "formatError": "有効な金額を小数点以下{{digits}}桁以内で入力してください"
+    },
+    "intervals": {
+      "MONTH": "月",
+      "YEAR": "年"
+    },
+    "credits": "{{amount}} クレジット",
+    "confirm": {
+      "channel": "{{provider}}で支払う"
+    },
+    "paymentActions": {
+      "QR_CODE": "QRコードで支払う",
+      "REDIRECT": "支払いページを開く"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "カード"
+    },
+    "securityNotice": "支払いは選択した事業者が安全に処理し、Cindyは支払い認証情報を保存しません",
+    "currentSubscription": {
+      "title": "現在のサブスクリプション",
+      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。"
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "支払い待ち",
+      "INCOMPLETE_EXPIRED": "支払い期限切れ",
+      "TRIALING": "トライアル中",
+      "ACTIVE": "有効",
+      "PAST_DUE": "支払い遅延",
+      "UNPAID": "未払い",
+      "CANCELED": "キャンセル済み",
+      "PAUSED": "一時停止"
+    },
+    "recovery": {
+      "title": "未完了の支払いがあります",
+      "description": "前回の支払いを続け、最新状態をサーバーで確認できます。",
+      "continueTopup": "{{amount}}の支払いを続ける",
+      "continueSubscription": "サブスクリプションの支払いを続ける"
+    },
+    "checkout": {
+      "creatingTitle": "支払いを作成中",
+      "awaitingTitle": "支払い待ち",
+      "completedTitle": "支払い完了",
+      "failedTitle": "完了できませんでした",
+      "expiredTitle": "支払い期限切れ",
+      "canceledTitle": "支払いキャンセル済み",
+      "topupSubtitle": "クレジットチャージ",
+      "subscriptionSubtitle": "サブスクリプション",
+      "creatingBody": "支払いサービスで注文を確認しています…",
+      "qrAlt": "支払いQRコード",
+      "scanHint": "対応する支払いアプリでスキャンしてください",
+      "checkingExpiry": "有効期限を確認中…",
+      "expiresIn": "QRコードの有効期限 {{minutes}}:{{seconds}}",
+      "redirectHint": "支払いページで完了後、Cindyに戻ってください。",
+      "openPayment": "支払いページを開く",
+      "refreshingAction": "支払い情報を取得中…",
+      "paymentCompleted": "支払いが完了しました。",
+      "requestFailed": "リクエストに失敗しました。不明な作成結果では同じ冪等キーで安全に再試行します。",
+      "expiredBody": "支払いリンクの期限が切れました。新しい支払いを作成してください。",
+      "canceledBody": "この支払いはキャンセルされました。",
+      "failedBody": "支払いに失敗しました。しばらくしてからもう一度お試しください。"
+    }
+  },
   "ipcError": {
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
     "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回の提供元切り替えは適用されませんでした（セッションは元の提供元のままです）。他のタスクが終わってからもう一度お試しください。"
@@ -78,6 +225,7 @@
     },
     "tabs": {
       "general": "一般",
+      "billing": "使用状況と請求",
       "personalization": "パーソナライズ",
       "apiKeys": "ツールキー",
       "voiceInput": "音声入力",
@@ -99,6 +247,7 @@
     },
     "sections": {
       "user": "ユーザー",
+      "billing": "使用状況と請求",
       "appearance": "外観",
       "notifications": "通知",
       "agentIsland": "Agent Island",

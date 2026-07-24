@@ -935,6 +935,7 @@ interface ElectronAPI {
   pageZoomReset: () => Promise<{ ok: true; zoomLevel: number }>;
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
+  billing: import('../shared/billing').BillingRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
   // systemNetworkErrorToast.ts 负责节流 + 多语言 toast。

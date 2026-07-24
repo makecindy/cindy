@@ -35,6 +35,16 @@ export interface ModelAccessStatus {
   endpoint: string | null;
 }
 
+/** 当前登录身份在 AIGateway Credit Ledger 中的同一时点余额快照。 */
+export interface ModelAccessBalance {
+  planCredits: string;
+  purchasedCredits: string;
+  promotionalCredits: string;
+  available: string;
+  scale: 9;
+  observedAt: string;
+}
+
 /** main → renderer 的状态推送通道。 */
 export const MODEL_ACCESS_STATUS_CHANNEL = 'model-access:status-change';
 

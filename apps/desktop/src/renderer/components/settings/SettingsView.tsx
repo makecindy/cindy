@@ -39,6 +39,7 @@ import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
+import { BillingSettingsSection } from '@/features/billing/BillingPage';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -297,6 +298,21 @@ export function SettingsView() {
                 {/* Section — Logout (pt 18) */}
                 <section className="pt-[18px]" aria-label={t('settings.sections.logout')}>
                   <LogoutSection />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'billing' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-billing"
+                aria-labelledby="settings-tab-billing"
+              >
+                <section aria-label={t('settings.sections.billing')}>
+                  <BillingSettingsSection
+                    key={`billing:${dataOwnerId ?? 'none'}`}
+                    accountId={dataOwnerId}
+                  />
                 </section>
               </div>
             )}

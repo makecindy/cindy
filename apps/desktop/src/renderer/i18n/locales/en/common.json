@@ -1,4 +1,151 @@
 {
+  "billing": {
+    "sidebar": "Credits & plans",
+    "settings": {
+      "title": "Usage and billing",
+      "subtitle": "Review your current subscription or purchase server-provided plans and credits.",
+      "loading": "Loading subscription status…",
+      "subscriptionCard": {
+        "title": "Current plan",
+        "empty": "No active subscription",
+        "emptyTitle": "No subscription plan",
+        "unnamedPlan": "Subscription plan",
+        "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
+        "action": "View plans"
+      },
+      "topupCard": {
+        "title": "Credits",
+        "description": "Purchase credits for usage-based models and features.",
+        "cardTitle": "Buy credits as needed",
+        "cardDescription": "Available credit products are configured by the server.",
+        "action": "Buy credits"
+      }
+    },
+    "balance": {
+      "title": "Available balance",
+      "plan": "Plan credits",
+      "purchased": "Purchased credits",
+      "promotional": "Promotional credits",
+      "notProvisioned": "Credits have not been enabled for this account.",
+      "notSupported": "Balance lookup is not supported for this account.",
+      "unavailable": "Balance is temporarily unavailable. Refresh to try again."
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "Choose a subscription plan",
+        "description": "Only currently configured server plans are shown. Choose a plan before selecting its payment method."
+      },
+      "topup": {
+        "title": "Buy credits",
+        "description": "Only currently configured server credit products are shown. Choose a product before selecting its payment method."
+      }
+    },
+    "eyebrow": "Account & usage",
+    "title": "Choose the plan that fits",
+    "subtitle": "Plans and payment methods are delivered by the server. Choose a plan first to see its currently supported payment methods.",
+    "steps": {
+      "offer": {
+        "title": "Choose a plan",
+        "description": "Only currently purchasable credit and subscription offers are shown."
+      },
+      "channel": {
+        "title": "Choose a payment method",
+        "description": "Supported payment methods can differ by plan.",
+        "selectOfferFirst": "Choose a plan to see its supported payment methods"
+      },
+      "confirm": {
+        "title": "Review and pay",
+        "description": "Review the plan and payment method before creating payment.",
+        "selectChannelFirst": "Choose a payment method to continue"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "Refresh",
+      "retry": "Retry",
+      "pay": "Review and pay",
+      "refresh": "Refresh status",
+      "cancelPayment": "Cancel payment",
+      "close": "Close"
+    },
+    "catalog": {
+      "errorTitle": "Plans are temporarily unavailable",
+      "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
+      "emptyTitle": "No plans are available",
+      "emptyDescription": "The server has not configured a purchasable plan and payment method yet."
+    },
+    "offerKinds": {
+      "topup": "Credit top-up",
+      "subscription": "Subscription"
+    },
+    "amount": {
+      "custom": "Custom amount",
+      "label": "Top-up amount",
+      "placeholder": "Enter an amount",
+      "rangeHint": "Enter between {{min}} and {{max}}",
+      "rangeError": "Amount must be between {{min}} and {{max}}",
+      "formatError": "Enter a valid amount with no more than {{digits}} decimal places"
+    },
+    "intervals": {
+      "MONTH": "month",
+      "YEAR": "year"
+    },
+    "credits": "{{amount}} credits",
+    "confirm": {
+      "channel": "Pay with {{provider}}"
+    },
+    "paymentActions": {
+      "QR_CODE": "Scan to pay",
+      "REDIRECT": "Open payment page"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "Card"
+    },
+    "securityNotice": "Payments are securely handled by the selected provider; Cindy does not store payment credentials",
+    "currentSubscription": {
+      "title": "Current subscription",
+      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "Awaiting payment",
+      "INCOMPLETE_EXPIRED": "Payment expired",
+      "TRIALING": "Trial",
+      "ACTIVE": "Active",
+      "PAST_DUE": "Past due",
+      "UNPAID": "Unpaid",
+      "CANCELED": "Canceled",
+      "PAUSED": "Paused"
+    },
+    "recovery": {
+      "title": "Unfinished payment found",
+      "description": "Continue the previous payment and confirm its latest state with the server.",
+      "continueTopup": "Continue {{amount}} payment",
+      "continueSubscription": "Continue subscription payment"
+    },
+    "checkout": {
+      "creatingTitle": "Creating payment",
+      "awaitingTitle": "Awaiting payment",
+      "completedTitle": "Payment successful",
+      "failedTitle": "Unable to complete",
+      "expiredTitle": "Payment expired",
+      "canceledTitle": "Payment canceled",
+      "topupSubtitle": "Credit top-up",
+      "subscriptionSubtitle": "Subscription",
+      "creatingBody": "Confirming the order with the payment service…",
+      "qrAlt": "Payment QR code",
+      "scanHint": "Scan with the corresponding payment app",
+      "checkingExpiry": "Checking expiration…",
+      "expiresIn": "QR code expires in {{minutes}}:{{seconds}}",
+      "redirectHint": "Complete payment on the provider page, then return to Cindy.",
+      "openPayment": "Open payment page",
+      "refreshingAction": "Loading payment instructions…",
+      "paymentCompleted": "Your payment was completed.",
+      "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
+      "expiredBody": "This payment link expired. Create a new payment to continue.",
+      "canceledBody": "This payment was canceled.",
+      "failedBody": "Payment failed. Try again later or contact support."
+    }
+  },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
@@ -78,6 +225,7 @@
     },
     "tabs": {
       "general": "General",
+      "billing": "Usage and billing",
       "personalization": "Personalization",
       "apiKeys": "Tool Keys",
       "voiceInput": "Voice Input",
@@ -99,6 +247,7 @@
     },
     "sections": {
       "user": "User",
+      "billing": "Usage and billing",
       "appearance": "Appearance",
       "notifications": "Notifications",
       "agentIsland": "Agent Island",

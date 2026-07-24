@@ -86,6 +86,7 @@ import type {
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
+import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 
 // Codex 元 IPC 全部升级到 maker.* (agentKind 参数化), preload 不再 import vendor/codex/ipcChannels。
 //   auth      → maker:auth:*(agentKind)
@@ -1420,6 +1421,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // apiRequest(renderer → main → 主 server 通用代理)与 imageUpload.putToOss
   // (presign 直传桥)已随 2026-07 apiBaseUrl 清理退役:renderer 对业务 server
   // 零请求;头像等上传走 main 侧 profileEdit 链路。
+  billing: {
+    getBalance: () => ipcRenderer.invoke(BILLING_INVOKE.GET_BALANCE),
+    getCatalog: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CATALOG),
+    listOrders: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_ORDERS, payload),
+    getOrder: (payload) => ipcRenderer.invoke(BILLING_INVOKE.GET_ORDER, payload),
+    createTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CREATE_TOPUP, payload),
+    refreshTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REFRESH_TOPUP, payload),
+    cancelTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CANCEL_TOPUP, payload),
+    retryTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.RETRY_TOPUP, payload),
+    createSubscription: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.CREATE_SUBSCRIPTION, payload),
+    getCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION),
+    refreshSubscriptionPurchase: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE, payload),
+    openPaymentRedirect: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
+  } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──
   // All paths in/out are workdir-relative POSIX. Main side blocks traversal.

@@ -499,6 +499,7 @@ import {
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
+import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
   noteManualXdKeySaved,
@@ -2308,6 +2309,8 @@ const registerIpcHandlers = () => {
     const windows = BrowserWindow.getAllWindows();
     return windows.find((w) => !w.isDestroyed() && w.isMinimizable()) ?? windows[0];
   };
+
+  registerBillingIpc({ getMainWindow: () => mainWindowRef });
 
   initAppBadgeService({
     getWindow: () => getWindow() ?? null,

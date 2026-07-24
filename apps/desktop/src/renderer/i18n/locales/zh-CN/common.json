@@ -1,4 +1,151 @@
 {
+  "billing": {
+    "sidebar": "点数与订阅",
+    "settings": {
+      "title": "使用情况和计费",
+      "subtitle": "查看当前订阅，或按需购买由服务端提供的订阅套餐和点数。",
+      "loading": "正在获取订阅状态…",
+      "subscriptionCard": {
+        "title": "当前套餐",
+        "empty": "当前没有生效中的订阅",
+        "emptyTitle": "无订阅套餐",
+        "unnamedPlan": "订阅套餐",
+        "unavailable": "暂时无法获取订阅状态，请刷新后重试。",
+        "action": "查看套餐"
+      },
+      "topupCard": {
+        "title": "点数",
+        "description": "购买点数，为按量使用的模型和功能充值。",
+        "cardTitle": "按需购买点数",
+        "cardDescription": "可购买的点数商品由服务端配置。",
+        "action": "购买点数"
+      }
+    },
+    "balance": {
+      "title": "可用额度",
+      "plan": "订阅额度",
+      "purchased": "已购额度",
+      "promotional": "赠送额度",
+      "notProvisioned": "当前账户尚未开通额度。",
+      "notSupported": "当前账户暂不支持额度查询。",
+      "unavailable": "暂时无法获取额度，请刷新后重试。"
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "选择订阅套餐",
+        "description": "仅展示服务端当前配置且可用的订阅套餐。选择套餐后再选择支付方式。"
+      },
+      "topup": {
+        "title": "购买点数",
+        "description": "仅展示服务端当前配置且可用的点数商品。选择商品后再选择支付方式。"
+      }
+    },
+    "eyebrow": "账户与用量",
+    "title": "选择适合你的方案",
+    "subtitle": "套餐和支付方式均由服务端实时下发。先选择方案，再查看该方案当前支持的支付方式。",
+    "steps": {
+      "offer": {
+        "title": "选择套餐",
+        "description": "仅展示当前可购买的充值和订阅方案。"
+      },
+      "channel": {
+        "title": "选择支付方式",
+        "description": "不同套餐支持的支付方式可能不同。",
+        "selectOfferFirst": "选择套餐后，这里会显示该套餐支持的支付方式"
+      },
+      "confirm": {
+        "title": "确认并支付",
+        "description": "核对方案与支付方式后创建支付。",
+        "selectChannelFirst": "选择支付方式后即可确认订单"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "刷新",
+      "retry": "重试",
+      "pay": "确认并支付",
+      "refresh": "刷新状态",
+      "cancelPayment": "取消支付",
+      "close": "关闭"
+    },
+    "catalog": {
+      "errorTitle": "暂时无法获取套餐",
+      "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
+      "emptyTitle": "当前暂无可用套餐",
+      "emptyDescription": "服务端尚未配置可购买的套餐和支付方式。"
+    },
+    "offerKinds": {
+      "topup": "点数充值",
+      "subscription": "订阅套餐"
+    },
+    "amount": {
+      "custom": "自定义金额",
+      "label": "充值金额",
+      "placeholder": "输入金额",
+      "rangeHint": "可输入 {{min}} 至 {{max}}",
+      "rangeError": "金额需在 {{min}} 至 {{max}} 之间",
+      "formatError": "请输入有效金额，最多保留 {{digits}} 位小数"
+    },
+    "intervals": {
+      "MONTH": "月",
+      "YEAR": "年"
+    },
+    "credits": "{{amount}} 点数",
+    "confirm": {
+      "channel": "通过 {{provider}} 支付"
+    },
+    "paymentActions": {
+      "QR_CODE": "扫码支付",
+      "REDIRECT": "跳转支付页面"
+    },
+    "providers": {
+      "alipay": "支付宝",
+      "stripe": "银行卡"
+    },
+    "securityNotice": "支付由所选渠道安全处理，Cindy 不保存你的支付凭证",
+    "currentSubscription": {
+      "title": "当前订阅",
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "等待完成支付",
+      "INCOMPLETE_EXPIRED": "支付已过期",
+      "TRIALING": "试用中",
+      "ACTIVE": "生效中",
+      "PAST_DUE": "付款逾期",
+      "UNPAID": "待付款",
+      "CANCELED": "已取消",
+      "PAUSED": "已暂停"
+    },
+    "recovery": {
+      "title": "发现未完成的支付",
+      "description": "你可以继续上次的支付，状态将从服务端重新确认。",
+      "continueTopup": "继续支付 {{amount}}",
+      "continueSubscription": "继续订阅支付"
+    },
+    "checkout": {
+      "creatingTitle": "正在创建支付",
+      "awaitingTitle": "等待支付",
+      "completedTitle": "支付成功",
+      "failedTitle": "暂时无法完成",
+      "expiredTitle": "支付已过期",
+      "canceledTitle": "支付已取消",
+      "topupSubtitle": "点数充值",
+      "subscriptionSubtitle": "订阅套餐",
+      "creatingBody": "正在向支付服务确认订单…",
+      "qrAlt": "支付二维码",
+      "scanHint": "请使用对应支付应用扫码",
+      "checkingExpiry": "正在确认有效时间…",
+      "expiresIn": "二维码将在 {{minutes}}:{{seconds}} 后过期",
+      "redirectHint": "请在支付页面完成操作，完成后返回 Cindy。",
+      "openPayment": "打开支付页面",
+      "refreshingAction": "正在获取支付方式…",
+      "paymentCompleted": "支付已完成。",
+      "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
+      "expiredBody": "支付链接已过期，请重新创建支付。",
+      "canceledBody": "本次支付已取消。",
+      "failedBody": "支付失败，请稍后重试或联系支持。"
+    }
+  },
   "ipcError": {
     "SESSION_RUNNING": "当前会话正在执行任务，请稍后再试。",
     "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（会话仍使用原来源）。等其他任务结束后再试。"
@@ -78,6 +225,7 @@
     },
     "tabs": {
       "general": "通用",
+      "billing": "使用情况和计费",
       "personalization": "个性化",
       "apiKeys": "工具密钥",
       "voiceInput": "语音输入",
@@ -99,6 +247,7 @@
     },
     "sections": {
       "user": "用户",
+      "billing": "使用情况和计费",
       "appearance": "外观",
       "notifications": "通知",
       "agentIsland": "灵动岛",
