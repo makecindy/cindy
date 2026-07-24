@@ -27,7 +27,8 @@
       "title": "Voice input privacy notice",
       "description": "Voice input uses your microphone and sends audio to your configured speech recognition service for transcription. You can cancel without affecting text input.",
       "confirm": "Agree and continue",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "saveFailed": "We couldn't save your privacy choice, so voice input wasn't started. Please try again."
     }
   },
   "screen": {

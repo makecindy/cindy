@@ -56,7 +56,15 @@ async function resolveMobileVoicePrivacyConsent(): Promise<boolean> {
         {
           text: i18n.t('session.common.voicePrivacyConsent.confirm'),
           onPress: () => {
-            void persistMobileVoicePrivacyConsent().then(finish);
+            void persistMobileVoicePrivacyConsent().then((persisted) => {
+              if (!persisted) {
+                Alert.alert(
+                  i18n.t('session.common.voicePrivacyConsent.title'),
+                  i18n.t('session.common.voicePrivacyConsent.saveFailed'),
+                );
+              }
+              finish(persisted);
+            });
           },
         },
       ],

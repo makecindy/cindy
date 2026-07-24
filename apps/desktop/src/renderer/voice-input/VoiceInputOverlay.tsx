@@ -61,6 +61,7 @@ import { prewarmVoiceInputAudio } from './audioContextPool';
 import { readVoicePrivacyConsent, saveVoicePrivacyConsent } from './voicePrivacyConsent';
 import { createVoiceInputAudioProfile } from './audioProfile';
 import { startVoiceInputCaptureSession } from './captureSession';
+import { runVoiceInputStartPreflight } from './startPreflight';
 import {
   buildBaseVoiceInputRefinementContext,
   resolveBrowserVoiceInputLanguage,
@@ -188,6 +189,7 @@ export function VoiceInputOverlay() {
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
+  const startPreflightInFlightRef = useRef(false);
   const systemAudioMutedRef = useRef(false);
   const pendingSystemAudioMutePromiseRef = useRef<Promise<void> | null>(null);
   const systemAudioMuteGateOpenRef = useRef(true);
@@ -680,16 +682,25 @@ export function VoiceInputOverlay() {
     if (stateRef.current === 'listening' || stateRef.current === 'submitting' || stateRef.current === 'refining') {
       return;
     }
-    if (!readVoicePrivacyConsent()) {
-      const confirmed = await confirmDialog({
-        title: t('voicePrivacyConsent.title'),
-        description: t('voicePrivacyConsent.description'),
-        confirmText: t('voicePrivacyConsent.confirm'),
-        cancelText: t('voicePrivacyConsent.cancel'),
-        autoFocusConfirm: true,
-      });
-      if (!confirmed || !saveVoicePrivacyConsent()) return;
-    }
+    const canStart = await runVoiceInputStartPreflight(startPreflightInFlightRef, async () => {
+      if (!readVoicePrivacyConsent()) {
+        const confirmed = await confirmDialog({
+          title: t('voicePrivacyConsent.title'),
+          description: t('voicePrivacyConsent.description'),
+          confirmText: t('voicePrivacyConsent.confirm'),
+          cancelText: t('voicePrivacyConsent.cancel'),
+          autoFocusConfirm: true,
+        });
+        if (!confirmed) return false;
+        if (!saveVoicePrivacyConsent()) {
+          setError(t('voicePrivacyConsent.saveFailed'));
+          setVoiceState('error');
+          return false;
+        }
+      }
+      return true;
+    });
+    if (!canStart) return;
     clearErrorCloseTimer();
     resetOverlayInteraction();
     const attemptId = startAttemptIdRef.current + 1;

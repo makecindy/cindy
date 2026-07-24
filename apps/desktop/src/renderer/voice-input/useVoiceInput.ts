@@ -52,6 +52,7 @@ import { prewarmVoiceInputAudio } from './audioContextPool';
 import { readVoicePrivacyConsent } from './voicePrivacyConsent';
 import { createVoiceInputAudioProfile } from './audioProfile';
 import { startVoiceInputCaptureSession } from './captureSession';
+import { runVoiceInputStartPreflight } from './startPreflight';
 import {
   buildBaseVoiceInputRefinementContext,
   resolveBrowserVoiceInputLanguage,
@@ -187,6 +188,7 @@ export function useVoiceInput(
   const stopCompletionWaitersRef = useRef<StopCompletionWaiter[]>([]);
   const sentAudioMsRef = useRef(0);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
+  const startPreflightInFlightRef = useRef(false);
   const startAttemptIdRef = useRef(0);
   const startReadyRef = useRef<StartReadyState | null>(null);
   const ownedRunIdRef = useRef<string | null>(null);
@@ -1116,7 +1118,10 @@ export function useVoiceInput(
     ) {
       return;
     }
-    if (options?.onBeforeVoiceInputStart && !(await options.onBeforeVoiceInputStart())) return;
+    if (!(await runVoiceInputStartPreflight(
+      startPreflightInFlightRef,
+      options?.onBeforeVoiceInputStart,
+    ))) return;
     dismissInlineError();
     shouldRestoreEditorFocusRef.current = true;
     insertionRangeRef.current = readEditorSelectionRange();

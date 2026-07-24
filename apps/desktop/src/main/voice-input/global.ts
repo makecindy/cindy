@@ -808,8 +808,6 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
   registeredNativeShortcutKey = null;
   macModifierShortcutListener.stop();
   log.info('global shortcut registered', { accelerator });
-  // First-press warmup: read auth.json now so the very first shortcut press
-  // does not pay for it on the critical path.
   // Pre-create only a hidden idle overlay. It preserves the latency win without
   // letting app activation restore the overlay for normal menu shortcuts.
   setTimeout(() => prewarmGlobalVoiceInputOverlay(), 1500);
@@ -852,11 +850,6 @@ function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcut
   }
 
   if (sendShortcutToActiveInlineVoiceInput(phase)) return;
-
-  // Warm the provider auth path the moment the shortcut is detected. The
-  // overlay/renderer takes ~100ms to ask for `voice-input:start`; doing the
-  // disk read + token parse now overlaps that window so the WebSocket dial
-  // finds the token already hot in memory.
 
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {

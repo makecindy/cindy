@@ -2237,7 +2237,10 @@ export function ChatInput({
           cancelText: t('voicePrivacyConsent.cancel'),
           autoFocusConfirm: true,
         });
-        return confirmed && saveVoicePrivacyConsent();
+        if (!confirmed) return false;
+        if (saveVoicePrivacyConsent()) return true;
+        toast.error(t('voicePrivacyConsent.saveFailed'));
+        return false;
       },
       onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
     }),
