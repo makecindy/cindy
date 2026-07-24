@@ -161,6 +161,10 @@ function buildIpa(env, region) {
     '-archivePath', archivePath, '-sdk', 'iphoneos', 'archive',
     'CODE_SIGN_STYLE=Manual', `DEVELOPMENT_TEAM=${sign.teamId}`,
     `PROVISIONING_PROFILE_SPECIFIER=${sign.profileName}`, `CODE_SIGN_IDENTITY=${sign.identity}`,
+    // Xcode 26 默认开 Explicitly Built Modules,冷构建下 Swift 预扫描解析不到
+    // WechatOpenSDK(post_install 临时落位的手写 modulemap),报 unable to resolve
+    // module dependency。回退隐式模块构建规避(命令行 override,不进包/不影响 fingerprint)。
+    'SWIFT_ENABLE_EXPLICIT_MODULES=NO', 'CLANG_ENABLE_EXPLICIT_MODULES=NO',
   ], { env });
   run('xcodebuild', ['-exportArchive', '-archivePath', archivePath, '-exportOptionsPlist', plistPath, '-exportPath', exportDir], { env });
 
