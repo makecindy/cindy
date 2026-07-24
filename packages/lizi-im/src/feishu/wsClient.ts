@@ -34,6 +34,7 @@ import { ConflictDetector } from './conflictDetector.js';
 import { feishuEvents } from './events.js';
 import * as outbound from './outbound.js';
 import * as ownerGuard from './ownerGuard.js';
+import * as storage from './storage.js';
 import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
@@ -65,7 +66,7 @@ function emitRendererStatus(error?: string): void {
     status: currentStatus,
     error,
     botAppId: currentBotAppId,
-    ownerOpenId: ownerGuard.firstAllowed(),
+    ownerOpenId: ownerGuard.firstAllowed() ?? storage.readOwnerOpenId(),
   });
 }
 

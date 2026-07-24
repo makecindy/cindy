@@ -33,6 +33,7 @@ const mocks = {
   getBoundClient: vi.fn(() => null),
   sendText: vi.fn(),
   firstAllowed: vi.fn<() => string | null>(() => null),
+  readOwnerOpenId: vi.fn<() => string | null>(() => null),
   clearOwner: vi.fn(),
   checkOwner: vi.fn(() => true),
   tryClaimOwner: vi.fn(() => false),
@@ -79,6 +80,10 @@ vi.doMock('../ownerGuard.js', () => ({
   tryClaimOwner: mocks.tryClaimOwner,
 }));
 
+vi.doMock('../storage.js', () => ({
+  readOwnerOpenId: mocks.readOwnerOpenId,
+}));
+
 vi.doMock('../moduleScope.js', () => ({
   getLog: () => mocks.log,
 }));
@@ -106,6 +111,8 @@ beforeEach(async () => {
   mocks.options.length = 0;
   mocks.eventHandlers = {};
   vi.clearAllMocks();
+  mocks.firstAllowed.mockReturnValue(null);
+  mocks.readOwnerOpenId.mockReturnValue(null);
 });
 
 afterEach(async () => {
@@ -120,6 +127,7 @@ afterAll(() => {
   vi.doUnmock('@larksuiteoapi/node-sdk');
   vi.doUnmock('../outbound.js');
   vi.doUnmock('../ownerGuard.js');
+  vi.doUnmock('../storage.js');
   vi.doUnmock('../moduleScope.js');
 });
 
@@ -186,6 +194,28 @@ describe('Feishu WebSocket conflict handling', () => {
 });
 
 describe('Feishu owner binding updates', () => {
+  it('falls back to the persisted owner before the in-memory guard is loaded', async () => {
+    mocks.firstAllowed.mockReturnValue(null);
+    mocks.readOwnerOpenId.mockReturnValue('ou_persisted_owner');
+    const onStatus = vi.fn();
+    feishuEvents.on('status', onStatus);
+
+    try {
+      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      latestClient().options.onReady?.();
+      await expect(connecting).resolves.toBe('connected');
+
+      expect(onStatus).toHaveBeenLastCalledWith({
+        status: 'connected',
+        error: undefined,
+        botAppId: credentials.appId,
+        ownerOpenId: 'ou_persisted_owner',
+      });
+    } finally {
+      feishuEvents.off('status', onStatus);
+    }
+  });
+
   it('emits the claimed owner after the first valid p2p message', async () => {
     mocks.tryClaimOwner.mockReturnValueOnce(true);
     mocks.firstAllowed.mockReturnValueOnce(null).mockReturnValue('ou_new_owner');
