@@ -625,10 +625,9 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
 }
 
 // ─── Sessions push helpers ────────────────────────────────────────────────
-// 同 cardActionHandler.ts / maker-host/index.ts:308 — 之所以重复一份是因为
-// 跨 module 提取一个 sessions-broadcast helper 不在本次范围内。所有 caller
-// 都广播 `local-db:sessions:created`, renderer sessionsStore.onCreated 收到后
-// forceRefreshAll 重拉所有桶。
+// maker-ipc 会话创建路径与 scheduler-host 共享此导出，统一广播
+// `local-db:sessions:created`；renderer sessionsStore.onCreated 收到后
+// forceRefreshAll 重拉所有桶。其它生命周期专属路径仍保留各自的同契约 helper。
 export function broadcastSessionCreated(sessionId: string): void {
   tapWindowBroadcast('local-db:sessions:created', { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
