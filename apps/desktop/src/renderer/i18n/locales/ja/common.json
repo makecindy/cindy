@@ -1315,6 +1315,11 @@
         "cancel": "キャンセル",
         "useApiKey": "API キーで接続する",
         "metaOAuthOrApi": "サブスク認証 · API キー"
+      },
+      "xdSignin": {
+        "badge": "おすすめ",
+        "desc": "Cindy にサインインすると公式 Cindy AI サービスが有効になります。全モデルがすぐ使え、キー管理は不要です。",
+        "cta": "Cindy にサインイン"
       }
     },
     "experimental": {

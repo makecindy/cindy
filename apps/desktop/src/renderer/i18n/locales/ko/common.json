@@ -1315,6 +1315,11 @@
         "cancel": "취소",
         "useApiKey": "API 키로 연결",
         "metaOAuthOrApi": "구독 인증 · API 키"
+      },
+      "xdSignin": {
+        "badge": "추천",
+        "desc": "Cindy에 로그인하면 공식 Cindy AI 서비스가 활성화됩니다. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "cta": "Cindy 로그인"
       }
     },
     "experimental": {

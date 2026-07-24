@@ -184,6 +184,29 @@ describe('ProvidersSection — 深链定位', () => {
     expect(wizardSpy).toHaveBeenCalledWith({ kind: 'preset', presetId: 'deepseek' });
   });
 
+  it('目录无 xd(无账号会话)→ 左栏置顶 Cindy 登录引导行,connect=xd 落到该行,CTA 跳 /login', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    providersState.providers = [makeProvider('anthropic', { name: 'Anthropic' })];
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=providers&connect=xd']}>
+        <Routes>
+          <Route path="/settings" element={<ProvidersSection />} />
+          <Route path="/login" element={<div data-testid="login-page" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // 引导行 + 右栏登录引导(connect=xd 深链选中;列表为空时它也是默认选中)。
+    expect(await screen.findByText('settings.providers.xdSignin.badge')).not.toBeNull();
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.xdSignin.desc')).not.toBeNull(),
+    );
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+
+    fireEvent.click(screen.getByText('settings.providers.xdSignin.cta'));
+    expect(screen.getByTestId('login-page')).not.toBeNull();
+  });
+
   it('wizard=1 → 向导目录第一步(无 entry);参数清除', async () => {
     renderAt('?tab=providers&wizard=1');
 

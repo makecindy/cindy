@@ -1316,6 +1316,11 @@
         "cancel": "Cancel",
         "useApiKey": "Use an API key instead",
         "metaOAuthOrApi": "Subscription (OAuth) · API key"
+      },
+      "xdSignin": {
+        "badge": "Recommended",
+        "desc": "Sign in to Cindy to enable the official Cindy AI service — all models work out of the box, no keys to manage.",
+        "cta": "Sign in to Cindy"
       }
     },
     "experimental": {

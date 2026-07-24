@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
@@ -37,7 +37,10 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
-import { customProviderSubtitleForDisplay, providerSubtitleForDisplay } from '@/lib/providerSubtitle';
+import {
+  customProviderSubtitleForDisplay,
+  providerSubtitleForDisplay,
+} from '@/lib/providerSubtitle';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
@@ -152,14 +155,25 @@ function CustomTag({ label }: { label: string }) {
   return (
     <span
       className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-      style={{ border: '1px solid var(--settings-integration-avatar-border)', color: 'var(--text-tertiary)' }}
+      style={{
+        border: '1px solid var(--settings-integration-avatar-border)',
+        color: 'var(--text-tertiary)',
+      }}
     >
       {label}
     </span>
   );
 }
 
-function RowIconButton({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
+function RowIconButton({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
@@ -264,7 +278,13 @@ function DetailHeader({
 // Anthropic —— OAuth(Claude.ai 订阅),复用 maker.claudeOAuth*。
 // ---------------------------------------------------------------------------
 
-function AnthropicHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
+function AnthropicHeader({
+  provider,
+  onChanged,
+}: {
+  provider?: ProviderView;
+  onChanged: () => void;
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [busy, setBusy] = useState(false);
@@ -323,7 +343,9 @@ function AnthropicHeader({ provider, onChanged }: { provider?: ProviderView; onC
     </div>
   ) : (
     <PillButton
-      label={loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')}
+      label={
+        loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')
+      }
       onClick={() => {
         if (loggingIn) {
           void window.electronAPI.maker.claudeOAuthCancel();
@@ -390,16 +412,26 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const trailing = connected ? (
     <div className="flex shrink-0 items-center gap-2.5">
       <ConnectedPill />
-      <PillButton label={t('settings.providers.button.disconnect')} onClick={() => void handleLogout()} />
+      <PillButton
+        label={t('settings.providers.button.disconnect')}
+        onClick={() => void handleLogout()}
+      />
     </div>
   ) : reconnectRequired ? (
     <div className="flex shrink-0 items-center gap-2.5">
       <ReconnectRequiredPill />
-      <PillButton label={t('settings.providers.openai.reconnect')} onClick={() => void handleLogin()} />
+      <PillButton
+        label={t('settings.providers.openai.reconnect')}
+        onClick={() => void handleLogin()}
+      />
     </div>
   ) : (
     <PillButton
-      label={loggingIn ? t('settings.providers.openai.cancelConnect') : t('settings.providers.openai.connect')}
+      label={
+        loggingIn
+          ? t('settings.providers.openai.cancelConnect')
+          : t('settings.providers.openai.connect')
+      }
       onClick={() => {
         if (loggingIn) void cancelLogin();
         else void handleLogin();
@@ -479,7 +511,9 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
     </div>
   ) : (
     <PillButton
-      label={loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')}
+      label={
+        loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')
+      }
       onClick={() => {
         if (loggingIn) {
           void window.electronAPI.maker.xaiOAuthCancel();
@@ -508,7 +542,13 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
 // 通用 OAuth —— 目录 auth.oauth 描述符驱动的供应商(非 bespoke 四家)。
 // ---------------------------------------------------------------------------
 
-function GenericOAuthHeader({ provider, onChanged }: { provider: ProviderView; onChanged: () => void }) {
+function GenericOAuthHeader({
+  provider,
+  onChanged,
+}: {
+  provider: ProviderView;
+  onChanged: () => void;
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [busy, setBusy] = useState(false);
@@ -525,7 +565,9 @@ function GenericOAuthHeader({ provider, onChanged }: { provider: ProviderView; o
       } else if (r.reason === 'login_cancelled') {
         /* 用户取消,不弹错 */
       } else {
-        toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
+        toast.error(
+          t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
+        );
       }
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
@@ -537,7 +579,9 @@ function GenericOAuthHeader({ provider, onChanged }: { provider: ProviderView; o
   const handleLogout = useCallback(async () => {
     const confirmed = await confirm({
       title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
-      description: t('settings.providers.genericOAuth.logoutConfirm.description', { name: provider.name }),
+      description: t('settings.providers.genericOAuth.logoutConfirm.description', {
+        name: provider.name,
+      }),
       confirmText: t('settings.providers.genericOAuth.logoutConfirm.confirm'),
       cancelText: t('settings.providers.genericOAuth.logoutConfirm.cancel'),
     });
@@ -565,7 +609,9 @@ function GenericOAuthHeader({ provider, onChanged }: { provider: ProviderView; o
     </div>
   ) : (
     <PillButton
-      label={loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')}
+      label={
+        loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')
+      }
       onClick={() => {
         if (loggingIn) {
           void window.electronAPI.maker.providerOAuthCancel(provider.id);
@@ -598,7 +644,13 @@ function maskKey(key: string): string {
   return 'sk-••••••••';
 }
 
-function XdGatewayHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
+function XdGatewayHeader({
+  provider,
+  onChanged,
+}: {
+  provider?: ProviderView;
+  onChanged: () => void;
+}) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { key, hasSavedKey, clearKey } = useApiKey();
@@ -665,7 +717,11 @@ function XdGatewayHeader({ provider, onChanged }: { provider?: ProviderView; onC
         );
       case 'syncing':
         return (
-          <PillButton label={t('settings.providers.xd.sync.syncing')} onClick={() => undefined} disabled />
+          <PillButton
+            label={t('settings.providers.xd.sync.syncing')}
+            onClick={() => undefined}
+            disabled
+          />
         );
       case 'ok':
         if (serverManaged) {
@@ -673,7 +729,11 @@ function XdGatewayHeader({ provider, onChanged }: { provider?: ProviderView; onC
             <div className="flex shrink-0 items-center gap-2.5">
               <ConnectedPill />
               <PillButton
-                label={rotating ? t('settings.providers.xd.sync.rotating') : t('settings.providers.xd.sync.rotate')}
+                label={
+                  rotating
+                    ? t('settings.providers.xd.sync.rotating')
+                    : t('settings.providers.xd.sync.rotate')
+                }
                 onClick={() => void handleRotate()}
                 disabled={rotating}
               />
@@ -694,7 +754,10 @@ function XdGatewayHeader({ provider, onChanged }: { provider?: ProviderView; onC
     return connected ? (
       <div className="flex shrink-0 items-center gap-2.5">
         <ConnectedPill />
-        <PillButton label={t('settings.providers.button.disconnect')} onClick={() => void handleDisconnect()} />
+        <PillButton
+          label={t('settings.providers.button.disconnect')}
+          onClick={() => void handleDisconnect()}
+        />
       </div>
     ) : (
       <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
@@ -772,7 +835,9 @@ function providerViewToConfig(p: ProviderView): CustomProviderConfig {
   return {
     id: p.id,
     name: p.name,
-    ...(p.auth.method === 'oauth' && p.auth.oauth ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } } : {}),
+    ...(p.auth.method === 'oauth' && p.auth.oauth
+      ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } }
+      : {}),
     runtimes,
   };
 }
@@ -793,9 +858,13 @@ function CustomProviderHeader({
     if (provider.connected) {
       try {
         await window.electronAPI.maker.providerOAuthLogout(provider.id);
-        toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
+        toast.success(
+          t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }),
+        );
       } catch {
-        toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }));
+        toast.error(
+          t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }),
+        );
       }
       return;
     }
@@ -807,9 +876,12 @@ function CustomProviderHeader({
     setLoggingIn(true);
     try {
       const r = await window.electronAPI.maker.providerOAuthLogin(provider.id);
-      if (r.ok) toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
+      if (r.ok)
+        toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
       else if (r.reason !== 'login_cancelled') {
-        toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
+        toast.error(
+          t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
+        );
       }
     } catch {
       toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
@@ -859,6 +931,54 @@ function CustomProviderHeader({
 // ---------------------------------------------------------------------------
 // 左栏列表
 // ---------------------------------------------------------------------------
+
+/**
+ * Cindy AI 登录引导行:无账号会话(local/signed-out)的目录被
+ * getDesktopSelectableCatalog 过滤掉 xd 供应商,设置页会完全丢失官方服务的
+ * 发现/购买入口(2026-07-24 用户反馈)。此行在 xd 缺席时置顶出现,点击右栏
+ * 展示登录引导;不触碰 main 的目录过滤(无账号确实不可路由 xd)。
+ */
+const CINDY_SIGNIN_ID = 'xd-signin';
+
+function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected}
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
+        !selected && 'hover:bg-[var(--surface-hover)]',
+      )}
+      style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
+    >
+      <div
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        style={{
+          backgroundColor: 'var(--settings-integration-avatar-bg)',
+          border: '1px solid var(--settings-integration-avatar-border)',
+          color: 'var(--settings-integration-avatar-icon)',
+        }}
+      >
+        <XDIncMark size={14} />
+      </div>
+      <span
+        className="min-w-0 flex-1 truncate text-13 font-medium"
+        style={{ color: 'var(--settings-section-title)' }}
+      >
+        {t('settings.providers.xd.title')}
+      </span>
+      {/* 徽标不大写不加字距:224px 窄栏里 en「RECOMMENDED」会把行名挤成「Cin…」。 */}
+      <span
+        className="shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium"
+        style={{ borderColor: 'var(--border-default)', color: 'var(--text-tertiary)' }}
+      >
+        {t('settings.providers.xdSignin.badge')}
+      </span>
+    </button>
+  );
+}
 
 function ListRow({
   provider,
@@ -910,7 +1030,9 @@ function ListRow({
       <span
         className="h-1.5 w-1.5 shrink-0 rounded-full"
         style={{
-          backgroundColor: provider.connected ? 'var(--remote-status-ready)' : 'var(--border-default)',
+          backgroundColor: provider.connected
+            ? 'var(--remote-status-ready)'
+            : 'var(--border-default)',
         }}
       />
     </button>
@@ -974,6 +1096,7 @@ function SuggestionRow({
 
 export function ProvidersSection() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
   const { providers, loading, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
@@ -1024,7 +1147,10 @@ export function ProvidersSection() {
         if (p.connected || (p.id === 'openai' && openaiReconnectRequired)) rows.push(p);
         continue;
       }
-      if (p.source === 'user' && (providerHasModels(p) || (p.auth.method === 'oauth' && !!p.auth.oauth))) {
+      if (
+        p.source === 'user' &&
+        (providerHasModels(p) || (p.auth.method === 'oauth' && !!p.auth.oauth))
+      ) {
         rows.push(p);
       }
     }
@@ -1064,6 +1190,9 @@ export function ProvidersSection() {
       const target = byId.get(connect);
       if (listProviders.some((p) => p.id === connect)) {
         setSelectedId(connect);
+      } else if (connect === 'xd') {
+        // 无账号会话目录不含 xd → 落到登录引导行(不能当 preset 交给向导)。
+        setSelectedId(CINDY_SIGNIN_ID);
       } else if (target && target.source === 'builtin') {
         setWizard({ entry: { kind: 'builtin', providerId: connect } });
       } else {
@@ -1077,6 +1206,13 @@ export function ProvidersSection() {
     next.delete('wizard');
     setSearchParams(next, { replace: true });
   }, [loading, searchParams, setSearchParams, byId, listProviders]);
+
+  // Cindy AI 登录引导:无账号会话目录不含 xd(见 CindySigninRow 头注释),置顶
+  // 引导行;列表为空时默认选中它(右栏直接展示登录引导,不留「点击添加」空态)。
+  const showCindySignin = !byId.has('xd');
+  const cindySigninActive =
+    showCindySignin &&
+    (selectedId === CINDY_SIGNIN_ID || (selectedId == null && listProviders.length === 0));
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
   const effectiveSelected = useMemo(() => {
@@ -1202,11 +1338,17 @@ export function ProvidersSection() {
             style={{ borderColor: 'var(--settings-theme-card-border)' }}
           >
             <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+              {showCindySignin && (
+                <CindySigninRow
+                  selected={cindySigninActive}
+                  onSelect={() => setSelectedId(CINDY_SIGNIN_ID)}
+                />
+              )}
               {listProviders.map((p) => (
                 <ListRow
                   key={p.id}
                   provider={p}
-                  selected={effectiveSelected?.id === p.id}
+                  selected={!cindySigninActive && effectiveSelected?.id === p.id}
                   onSelect={() => setSelectedId(p.id)}
                 />
               ))}
@@ -1223,13 +1365,18 @@ export function ProvidersSection() {
                       key={s.detection.cli}
                       detection={s.detection}
                       provider={s.provider}
-                      onClick={() => setWizard({ entry: { kind: 'builtin', providerId: s.provider.id } })}
+                      onClick={() =>
+                        setWizard({ entry: { kind: 'builtin', providerId: s.provider.id } })
+                      }
                     />
                   ))}
                 </>
               )}
             </div>
-            <div className="border-t p-2" style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+            <div
+              className="border-t p-2"
+              style={{ borderColor: 'var(--settings-theme-card-border)' }}
+            >
               <button
                 type="button"
                 onClick={() => setWizard({})}
@@ -1247,15 +1394,55 @@ export function ProvidersSection() {
 
           {/* 右栏详情 */}
           <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-            {effectiveSelected ? (
+            {cindySigninActive ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+                <div
+                  className="flex h-12 w-12 items-center justify-center rounded-xl"
+                  style={{
+                    backgroundColor: 'var(--settings-integration-avatar-bg)',
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-integration-avatar-icon)',
+                  }}
+                >
+                  <XDIncMark size={24} />
+                </div>
+                <span
+                  className="text-15 font-medium"
+                  style={{ color: 'var(--settings-section-title)' }}
+                >
+                  {t('settings.providers.xd.title')}
+                </span>
+                <span
+                  className="max-w-[360px] text-13 leading-relaxed"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  {t('settings.providers.xdSignin.desc')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigate('/login')}
+                  className="mt-1 flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity hover:opacity-90"
+                  style={{
+                    backgroundColor: 'var(--accent-cta-bg)',
+                    color: 'var(--accent-pure-cta-fg)',
+                  }}
+                >
+                  {t('settings.providers.xdSignin.cta')}
+                </button>
+              </div>
+            ) : effectiveSelected ? (
               <>
                 {renderDetailHeader(effectiveSelected)}
                 {providerHasModels(effectiveSelected) && (
                   <>
-                    <div className="border-t" style={{ borderColor: 'var(--settings-theme-card-border)' }} />
+                    <div
+                      className="border-t"
+                      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                    />
                     <UnifiedModelList
                       provider={effectiveSelected}
-                      {...(effectiveSelected.source === 'user' && effectiveSelected.auth.method !== 'oauth'
+                      {...(effectiveSelected.source === 'user' &&
+                      effectiveSelected.auth.method !== 'oauth'
                         ? {
                             onRefresh: () => void handleRefreshModels(effectiveSelected),
                             refreshing: refreshingModels,

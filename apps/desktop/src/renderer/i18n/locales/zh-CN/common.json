@@ -1315,6 +1315,11 @@
         "cancel": "取消",
         "useApiKey": "改用 API Key 接入",
         "metaOAuthOrApi": "订阅授权 · API Key"
+      },
+      "xdSignin": {
+        "badge": "推荐",
+        "desc": "登录 Cindy 即可开通官方 Cindy AI 服务,全部模型开箱即用,无需管理任何 Key。",
+        "cta": "登录 Cindy"
       }
     },
     "experimental": {
