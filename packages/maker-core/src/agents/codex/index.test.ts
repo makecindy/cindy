@@ -618,6 +618,44 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await xaiHandle.close();
   });
 
+  it('passes the OpenAI compaction provider for implicit-source sessions on an oauth-effective host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+    // 隐式来源(providerId 缺省 + 普通模型)解析不出凭证家族,回退读 host 登记的
+    // 归一化生效形态(createHost 时写入);oauth spawn → 订阅直连 → 授予 OpenAI 身份。
+    (agent as unknown as { hostEffectiveCredentialModes: Map<string, string> })
+      .hostEffectiveCredentialModes.set('local', 'oauth-bearer');
+
+    const handle = await agent.startSession({
+      sessionId: 'session-implicit-oauth',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(params.modelProvider).toBe('cindy_openai');
+    await handle.close();
+
+    // 对照:host 生效形态为 gateway-key(API key fallback)时,隐式会话不授予。
+    (agent as unknown as { hostEffectiveCredentialModes: Map<string, string> })
+      .hostEffectiveCredentialModes.set('local', 'gateway-key');
+    host.request.mock.calls.length = 0;
+    const gatewayHandle = await agent.startSession({
+      sessionId: 'session-implicit-gateway',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const gatewayParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      modelProvider?: string;
+    };
+    expect(gatewayParams.modelProvider).toBeUndefined();
+    await gatewayHandle.close();
+  });
+
   it('omits the OpenAI compaction provider when the host did not advertise one', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, { codexProxyActive: true });
