@@ -102,7 +102,11 @@ import {
 import {
   Method,
   type AskForApproval,
+  type ApprovalsReviewer,
   type ApprovalDecision,
+  type ItemGuardianApprovalReviewCompletedNotification,
+  type ItemGuardianApprovalReviewStartedNotification,
+  type GuardianWarningNotification,
   type CodexModelListResponse,
   type CommandExecutionRequestApprovalParams,
   type CommandExecutionRequestApprovalResponse,
@@ -266,7 +270,7 @@ export function hostKey(remoteHostId?: string | null): string {
 }
 
 /**
- * maker permissionMode → app-server { approvalPolicy, sandbox }。
+ * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
  * Phase 2 起 'ask' 走 'on-request' — server 真发 CommandExecutionRequestApproval,
  * 我们 setRequestHandler 接住转 dispatchInteraction → UI 弹 PermissionPrompt。
@@ -274,19 +278,46 @@ export function hostKey(remoteHostId?: string | null): string {
 type CodexPermissionConfig = {
   approvalPolicy: AskForApproval;
   sandbox: SandboxMode;
+  approvalsReviewer?: ApprovalsReviewer;
 };
-function mapPermissionToCodex(permissionMode?: string): CodexPermissionConfig {
+function mapPermissionToCodex(
+  permissionMode?: string,
+  approvalsReviewerSupported = true,
+): CodexPermissionConfig {
   // 严格 kebab-case (v2.rs serde rename_all="kebab-case"), camelCase 会被 server -32600 reject
   switch (permissionMode) {
     case 'bypassPermissions':
       return { approvalPolicy: 'never', sandbox: 'danger-full-access' };
     case 'auto':
-      // Codex 原生 untrusted 策略就是它的 Auto-review:可信命令集自动执行，
-      // 非可信命令升级给用户确认。保持 workspace sandbox，绝不等同 Full access。
-      return { approvalPolicy: 'untrusted', sandbox: 'workspace-write' };
+      if (!approvalsReviewerSupported) {
+        // 旧 app-server 没有 approvalsReviewer 字段时回退到原生 untrusted:
+        // 可信命令自动执行,其余请求交给用户。不能发送未知字段让整次 RPC 失败。
+        return { approvalPolicy: 'untrusted', sandbox: 'workspace-write' };
+      }
+      // Codex app-server 原生 auto_review 与 Claude Auto 的分工一致:
+      // 常规 workspace 动作直接执行,越界动作交给内置 reviewer 判断,而不是交给 UI。
+      // workspace-write 仍是硬安全边界; auto_review 只替换审批者,不扩大沙箱。
+      return { approvalPolicy: 'on-request', sandbox: 'workspace-write', approvalsReviewer: 'auto_review' };
     default:
       return { approvalPolicy: 'on-request', sandbox: 'workspace-write' };
   }
+}
+
+/**
+ * `approvalsReviewer` is verified against the app-server bundled with Codex 0.144.6.
+ * Remote hosts may keep an older standalone binary across desktop upgrades, so parse the
+ * initialize userAgent and conservatively omit the field unless that verified floor is met.
+ */
+function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean {
+  const match = /\/(\d+)\.(\d+)\.(\d+)(?:[-+ )]|$)/.exec(userAgent ?? '');
+  if (!match) return false;
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  const minimum = [0, 144, 6] as const;
+  for (let i = 0; i < minimum.length; i += 1) {
+    if (version[i]! > minimum[i]!) return true;
+    if (version[i]! < minimum[i]!) return false;
+  }
+  return true;
 }
 
 /**
@@ -597,7 +628,7 @@ const CODEX_EFFORTS: EffortDescriptor[] = [
 
 const CODEX_PERMISSION_MODES: PermissionModeDescriptor[] = [
   { id: 'ask', displayName: 'Default permissions', description: '工作区内可读写,需要更多权限时询问' },
-  { id: 'auto', displayName: 'Auto-review', description: '可信命令自动执行,非可信命令询问' },
+  { id: 'auto', displayName: 'Auto', description: '工作区沙箱内自动执行,越界操作交给自动审查器;高风险操作可能拒绝或询问' },
   { id: 'bypassPermissions', displayName: 'Full access', description: '可改任意文件、跑联网命令,免询问;风险高' },
 ];
 
@@ -1577,6 +1608,7 @@ export class CodexAgent extends BaseAgent {
     let env: Record<string, string> = {};
     let extraArgs: string[] = [];
     let codexProxyActive = false;
+    let remoteCompactionProviderId: string | undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -1596,6 +1628,7 @@ export class CodexAgent extends BaseAgent {
 
       extraArgs = [];
       codexProxyActive = false;
+      remoteCompactionProviderId = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -1606,6 +1639,11 @@ export class CodexAgent extends BaseAgent {
           Object.assign(env, cfg.extraEnv);
           extraArgs = cfg.extraArgs;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
+          // OpenAI 身份 provider 依赖 loopback proxy 路由订阅直连;proxy 不可用
+          // (退化直连网关)时不得下发,否则远端压缩请求会打到不支持它的上游。
+          if (codexProxyActive && cfg.codexRemoteCompactionProviderId) {
+            remoteCompactionProviderId = cfg.codexRemoteCompactionProviderId;
+          }
           this.deps.logger.info('codex MCP bridge ready', {
             providers: this.deps.mcpProviders?.length ?? 0,
             extraArgsCount: extraArgs.length,
@@ -1672,6 +1710,7 @@ export class CodexAgent extends BaseAgent {
       // (2026-07-17 随品牌翻转改 cindy;上游 gating 走 originator,与此无关)。
       clientInfo: { name: 'cindy', version: '0.0.0' },
       codexProxyActive,
+      remoteCompactionProviderId,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -2030,6 +2069,12 @@ export class CodexAgent extends BaseAgent {
       throw error;
     }
     if (initResp.codexHome) this.codexHome = initResp.codexHome;
+    const approvalsReviewerSupported = supportsCodexApprovalsReviewer(initResp.userAgent);
+    if (mutablePermissionMode === 'auto' && !approvalsReviewerSupported) {
+      log.warn('Codex Auto falling back to untrusted approvals: app-server lacks verified auto-review support', {
+        userAgent: initResp.userAgent,
+      });
+    }
     // 闭包 capture 一次, 整个 session 复用 — codexHome 是 server 进程级常量, host 不变就不变。
     // memories 目录是 codex 自家私域 (<CODEX_HOME>/memories/), 永远塞进 writableRoots,
     // 即使用户当前没开 memories: 写权限多给一个固定子目录开销可忽略, 还能避免"开关 memories
@@ -2094,7 +2139,7 @@ export class CodexAgent extends BaseAgent {
       }
     };
     function currentApprovalConfig(): CodexPermissionConfig {
-      return mapPermissionToCodex(mutablePermissionMode);
+      return mapPermissionToCodex(mutablePermissionMode, approvalsReviewerSupported);
     }
 
     /**
@@ -2168,6 +2213,22 @@ export class CodexAgent extends BaseAgent {
     const hostUsesCodexProxy = host.isCodexProxyActive();
     const isCodexProxyChannelReady = (): boolean =>
       hostUsesCodexProxy && typeof this.deps.registerCodexSystemPromptForThread === 'function';
+
+    // ── OpenAI 远端压缩身份(thread 级,start/resume 冻结)────────────────────
+    // 仅当 ① host 是 oauth spawn 且下发了 OpenAI 身份 provider(见
+    // CodexExtraSpawnConfig.codexRemoteCompactionProviderId),② 本会话的凭证家族
+    // 解析为 oauth-bearer(显式 openai 来源,或隐式来源 + host 归一化形态为订阅)
+    // 时,才让 thread 选 OpenAI 身份 provider → codex 走 OpenAI 远端压缩。
+    // codex/ 骨折(gateway-key)、xai/、chatgpt/ 与显式第三方来源(provider-oauth)
+    // 都被 resolveAgentCredentialMode 排除 —— 它们的上游不支持远端压缩,且 codex
+    // 远端压缩失败无本地回退,错配会打断长会话。
+    const threadModelProvider = (() => {
+      if (opts.remoteHostId) return undefined;
+      const providerIdFromHost = host.getRemoteCompactionProviderId?.();
+      if (!providerIdFromHost) return undefined;
+      const family = credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
+      return family === 'oauth-bearer' ? providerIdFromHost : undefined;
+    })();
 
     let registeredDeveloperInstructions = '';
     const registerCodexDeveloperInstructions = (threadId: string, text: string): void => {
@@ -2282,7 +2343,7 @@ export class CodexAgent extends BaseAgent {
           });
         }
       }
-      const { approvalPolicy, sandbox } = currentApprovalConfig();
+      const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       const developerInstructions = buildCodexDeveloperInstructions({
         makerMemoryRules,
         runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
@@ -2294,7 +2355,9 @@ export class CodexAgent extends BaseAgent {
         threadId: opts.resumeSessionId,
         cwd: opts.workingDir,
         approvalPolicy,
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
         sandbox,
+        ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
         ...(developerInstructions && !useProxyChannel && opts.codexHistoryHasProductPrompt !== true
@@ -2337,7 +2400,7 @@ export class CodexAgent extends BaseAgent {
         throw new Error(message);
       }
     } else {
-      const { approvalPolicy, sandbox } = currentApprovalConfig();
+      const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       // developerInstructions 五段拼接 (协议见 thread/start.developerInstructions):
       //   [2] MAKER_CODEX_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
       //   [3] makerMemoryRules                 — maker memory 写入规范 (条件式)
@@ -2358,8 +2421,10 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
         approvalPolicy,
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
         sandbox,
         ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
+        ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
         ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
@@ -2410,6 +2475,7 @@ export class CodexAgent extends BaseAgent {
       forcePrompt?: boolean;
     }
     const pendingApprovals = new Map<string, PendingEntry>();
+    const seenGuardianReviewIds = new Set<string>();
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
@@ -2546,10 +2612,10 @@ export class CodexAgent extends BaseAgent {
       req: InteractionRequest,
       opts?: { forcePrompt?: boolean },
     ): Promise<ApprovalDecision> {
-      // 只有用户显式选择 Full access 才自动放行审批请求。Auto-review 由 app-server
-      // 的 untrusted 策略先筛可信命令；它仍发出的非可信审批必须交给用户，不能代答。
-      // 例外: forcePrompt(prompt-each-time 高风险 MCP inner tool, 如 contacts delete/merge/
-      // 系统回写)在任何模式下都必须拿到用户的逐次确认, 宽松模式不代答。
+      // Full access 的普通审批不应打断用户。Auto 的越界审批由 app-server
+      // auto_review 负责；如果某个请求仍回到客户端，走 UI 是安全的 fail-to-prompt
+      // 兜底，不能绕过 reviewer 直接放行。forcePrompt 高风险 MCP inner tool
+      // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
       if (
         !opts?.forcePrompt &&
         mutablePermissionMode === 'bypassPermissions'
@@ -2584,8 +2650,8 @@ export class CodexAgent extends BaseAgent {
     /**
      * 强制 resolve 所有挂起的 approval, emit interaction_dismissed 让 UI 关 dialog。
      * 调用场景: setPermissionMode 切换 / close session。
-     *   - resolveAs='allow' (mode 切到 bypass): codex decision='accept'
-     *   - resolveAs='deny'  (mode 切到 ask/auto 或 close): codex decision='decline'
+     *   - resolveAs='allow' (mode 切到 bypass; forcePrompt 仍 fail-closed): decision='accept'
+     *   - resolveAs='deny'  (mode 切到 ask/auto 或 close): decision='decline'
      */
     function dismissAllPending(reason: string, resolveAs: 'allow' | 'deny'): void {
       if (pendingApprovals.size === 0) return;
@@ -2647,8 +2713,8 @@ export class CodexAgent extends BaseAgent {
     }
 
     /**
-     * 权限收紧 (bypass → ask/auto) 的 fail-safe 中断: Full access turn 在 server 侧是
-     * approvalPolicy=never + danger-full-access, turn 内 server 不再发审批请求,
+     * 权限收紧 (auto/bypass → ask) 的 fail-safe 中断: Auto 的 auto_review / Full access
+     * turn 都是无人值守策略,切换到 Ask 时必须中断当前 turn,
      * 本地 awaitApprovalDecision 无从拦截 —— 中断该 turn 是唯一能立即兑现
      * 「从现在起要问我」的机制。语义与用户手动 stop 一致 (interrupted 不算失败)。
      *
@@ -2656,14 +2722,13 @@ export class CodexAgent extends BaseAgent {
      *   - setPermissionMode: turn id 已知 (currentTurnId) 时立即中断;
      *   - turn/start 在飞 (isTurnStartPending, id 未回) 时置 pendingTightenInterrupt,
      *     由 handleTurnStartResp / turnStarted 通知在拿到 id 的瞬间补中断 ——
-     *     那次 turn/start 已携带旧的宽松策略发出, 不补会以 never 免审跑到结束。
+     *     那次 turn/start 已携带旧的宽松策略发出,不补会继续无人值守跑到结束。
      */
     let pendingTightenInterrupt = false;
     /**
-     * 最近一次 send 的 turn 是否以宽松策略 (approvalPolicy=never) 发射 (覆盖
-     * 在飞与运行中两个阶段)。收紧时只有免审发射的 turn 才需要中断 —— ask 策略
-     * 发射的 turn 审批请求照常流经本地、收紧即时生效, 即使期间 UI 短暂切过
-     * 宽松档也不得误杀 (review #969 第三轮)。
+     * 最近一次 send 的 turn 是否以无人值守策略发射 (覆盖在飞与运行中两个阶段)。
+     * auto_review / never 发射的 turn 在收紧时需要中断; user reviewer 发射的 turn
+     * 审批请求照常流经本地、收紧即时生效,即使期间 UI 短暂切过宽松档也不得误杀。
      */
     let turnLaunchedUnattended = false;
     /**
@@ -3478,6 +3543,97 @@ export class CodexAgent extends BaseAgent {
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
+    const GUARDIAN_REVIEW_FAILURE_PREFIX = 'Automatic approval review failed:';
+
+    const emitGuardianUnavailable = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
+      const timedOut = params.review.status === 'timedOut';
+      eventQueue.push({
+        type: 'error',
+        data: {
+          // Renderer uses reason for localized copy. Keep an English fallback for
+          // non-renderer consumers while always stating the blocked action + downgrade.
+          message: timedOut
+            ? 'Codex automatic approval review timed out. The action was blocked and this session is switching to Ask mode.'
+            : 'Codex automatic approval review failed. The action was blocked and this session is switching to Ask mode.',
+          isTerminal: false,
+          reason: 'codex-auto-review-unavailable',
+          reviewId: params.reviewId,
+          reviewRationale: params.review.rationale,
+        },
+        source: 'codex',
+      });
+    };
+
+    /**
+     * Close the race between a Guardian failure notification and the async host
+     * persistence coordinator. The current action is already blocked; changing the
+     * local mode synchronously ensures a message sent immediately afterwards starts
+     * in Ask instead of launching another auto_review turn that is then interrupted.
+     */
+    const switchAutoRuntimeToAskImmediately = (): boolean => {
+      if (mutablePermissionMode !== 'auto') return false;
+      dismissAllPending('permission_mode_changed_to_ask', 'deny');
+      mutablePermissionMode = 'ask';
+      if (!closed && turnLaunchedUnattended) {
+        if (currentTurnId !== null) {
+          void interruptTurnForPermissionTighten(currentTurnId);
+        } else if (isTurnStartPending) {
+          pendingTightenInterrupt = true;
+        }
+      }
+      return true;
+    };
+
+    const notifyAutoPermissionClassifierUnavailable = (
+      params: ItemGuardianApprovalReviewCompletedNotification,
+    ): void => {
+      if (!switchAutoRuntimeToAskImmediately() || typeof opts.sessionId !== 'string') return;
+      const notify = this.deps.onAutoPermissionClassifierUnavailable;
+      if (!notify) return;
+      const status = params.review.status === 'timedOut' ? 408 : 500;
+      queueMicrotask(() => {
+        try {
+          notify({
+            sessionId: opts.sessionId as string,
+            agentKind: 'codex',
+            status,
+          });
+        } catch (error) {
+          log.warn('Codex Auto fallback notification threw', {
+            reviewId: params.reviewId,
+            error: String(error),
+          });
+        }
+      });
+    };
+
+    const handleGuardianReviewCompleted = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
+      if (seenGuardianReviewIds.has(params.reviewId)) return;
+      seenGuardianReviewIds.add(params.reviewId);
+      const rationale = params.review.rationale?.trim();
+      const failedClosedBecauseReviewerUnavailable =
+        params.review.status === 'denied' &&
+        rationale?.startsWith(GUARDIAN_REVIEW_FAILURE_PREFIX) === true;
+      if (params.review.status === 'timedOut' || failedClosedBecauseReviewerUnavailable) {
+        emitGuardianUnavailable(params);
+        notifyAutoPermissionClassifierUnavailable(params);
+        return;
+      }
+      if (params.review.status === 'denied') {
+        // Match Claude Auto: a real classifier verdict is authoritative. Codex has
+        // already blocked the action and returned the denial to the model; do not
+        // weaken Auto by offering a user override prompt.
+        log.info('Codex automatic approval review denied action', {
+          reviewId: params.reviewId,
+          turnId: params.turnId,
+          targetItemId: params.targetItemId,
+          actionType: params.action.type,
+          riskLevel: params.review.riskLevel,
+          rationale: params.review.rationale,
+        });
+      }
+    };
+
     // ── subscribeThread: notification 路由 + approval handlers ─────────────
     const handlers: ThreadEventHandlers = {
       threadStarted: (params) => {
@@ -3634,6 +3790,24 @@ export class CodexAgent extends BaseAgent {
           });
         }
       },
+      autoApprovalReviewStarted: (params: ItemGuardianApprovalReviewStartedNotification) => {
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        log.debug('Codex automatic approval review started', {
+          reviewId: params.reviewId,
+          turnId: params.turnId,
+          targetItemId: params.targetItemId,
+          actionType: params.action.type,
+        });
+      },
+      autoApprovalReviewCompleted: (params) => {
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        handleGuardianReviewCompleted(params);
+      },
+      guardianWarning: (params: GuardianWarningNotification) => {
+        // The completed review carries the actionable denial/timeout details. Keep the
+        // warning for diagnostics to avoid rendering a duplicate error card.
+        log.warn('Codex Guardian warning', { threadId: params.threadId, message: params.message });
+      },
       error: (params) => {
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         const isTerminalError = params.willRetry !== true;
@@ -3753,9 +3927,10 @@ export class CodexAgent extends BaseAgent {
         // mid-session 切 mode 不生效 — 这是已经踩过的坑 (v2.rs:5778)。
         // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
-        const { approvalPolicy, sandbox } = currentApprovalConfig();
-        // 记录本 turn 的发射策略: 只有免审 (never) 发射的 turn 在收紧时需要中断。
-        turnLaunchedUnattended = approvalPolicy === 'never';
+        const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+        // 记录本 turn 是否由无人值守策略发射。Auto-review 也需要在切回 Ask
+        // 时中断当前 turn,避免 reviewer 继续替用户批准新的越界操作。
+        turnLaunchedUnattended = approvalPolicy === 'never' || approvalsReviewer === 'auto_review';
         let turnInput: TurnStartParams['input'];
         try {
           turnInput = await toTurnInput(message.content);
@@ -3792,6 +3967,7 @@ export class CodexAgent extends BaseAgent {
           threadId,
           input: turnInput,
           approvalPolicy,
+          ...(approvalsReviewer ? { approvalsReviewer } : {}),
           sandboxPolicy: sandboxModeToPolicy(sandbox, codexExtraWritableRoots),
           effort: clampEffortForCodex(mutableEffort),
           // 强制 reasoning summary='auto' — 不依赖用户 ~/.codex/config.toml 写没写
@@ -3886,6 +4062,7 @@ export class CodexAgent extends BaseAgent {
                 threadId,
                 cwd: opts.workingDir,
                 approvalPolicy,
+                ...(approvalsReviewer ? { approvalsReviewer } : {}),
                 sandbox,
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
@@ -4138,24 +4315,28 @@ export class CodexAgent extends BaseAgent {
 
       async setPermissionMode(newMode: PermissionMode) {
         log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode });
-        // 只有显式 Full access 是宽松 mode → 挂起的 ask 自动 allow; 其它 mode → deny。
-        // 与 Claude 的 dismissAllPending 行为对齐 (apps/desktop/src/main/agentManager.ts
-        // 老逻辑同款), UI 上挂着的 PermissionPrompt 自动关。
-        const moreOpen = newMode === 'bypassPermissions';
-        dismissAllPending(`permission_mode_changed_to_${newMode}`, moreOpen ? 'allow' : 'deny');
-        const wasOpen = mutablePermissionMode === 'bypassPermissions';
+        // Full access 才能批量放行挂起的 ask。切到 Auto 时，已有请求不能绕过
+        // app-server reviewer，先 fail-closed 关闭；后续重试会按 auto_review 路由。
+        const allowPending = newMode === 'bypassPermissions';
+        dismissAllPending(`permission_mode_changed_to_${newMode}`, allowPending ? 'allow' : 'deny');
+        const wasAuto = mutablePermissionMode === 'auto';
+        const wasBypass = mutablePermissionMode === 'bypassPermissions';
+        const wasOpen = wasAuto || wasBypass;
+        const tightensCurrentTurn =
+          (newMode === 'ask' && wasOpen) ||
+          (newMode === 'auto' && wasBypass);
         mutablePermissionMode = newMode;
         // 下一 turn 通过 TurnStartParams.approvalPolicy + sandbox 透传。
         //
-        // 收紧兜底 (bypass → ask/auto): 见 interruptTurnForPermissionTighten 顶注。
+        // 收紧兜底 (auto/bypass → ask): 见 interruptTurnForPermissionTighten 顶注。
         // turn id 已知 → 立即中断; turn/start 在飞 (id 未回) → 置标记, 由
         // handleTurnStartResp / turnStarted 在拿到 id 的瞬间补中断。放宽则清标记
         // (收紧后又切回宽松档, 在飞的 turn 无需再中断)。
-        if (moreOpen) {
+        if (!tightensCurrentTurn) {
           pendingTightenInterrupt = false;
-        } else if (wasOpen && !closed && turnLaunchedUnattended) {
-          // 只中断免审 (never) 发射的 turn; ask 策略发射的 turn 审批请求照常
-          // 流经本地、收紧即时生效, 期间 UI 短暂切过宽松档不构成中断理由。
+        } else if (!closed && turnLaunchedUnattended) {
+          // 只中断 auto_review / never 发射的 turn; user reviewer 发射的 turn 审批请求
+          // 照常流经本地、收紧即时生效,期间 UI 短暂切过宽松档不构成中断理由。
           if (currentTurnId !== null) {
             await interruptTurnForPermissionTighten(currentTurnId);
           } else if (isTurnStartPending) {

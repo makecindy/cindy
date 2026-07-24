@@ -1099,6 +1099,14 @@ const config: ForgeConfig = {
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
+      // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
+      NSDesktopFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files on your Desktop.",
+      NSDocumentsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Documents folder.",
+      NSDownloadsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Downloads folder.",
       // 智能通讯录导入: 经 osascript 向"通讯录"发 Apple Events(只读拉取)。
       // 缺这条声明 macOS 会不弹授权窗直接拒绝(-1743), 用户只看到静默失败。
       NSAppleEventsUsageDescription:
@@ -1157,6 +1165,12 @@ const config: ForgeConfig = {
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSDesktopFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files on your Desktop.",
+      NSDocumentsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Documents folder.",
+      NSDownloadsFolderUsageDescription:
+        "Cindy's AI agent needs access to read and write files in your Downloads folder.",
     },
     // chat-data-localization F1：drizzle SQL migration 文件需要随包发出，
     // main 通过 process.resourcesPath/drizzle 读取。dev 模式 main 走源码路径，

@@ -147,7 +147,11 @@ export function useHookWorkspacePrefs(
           : `telegram:${telegramBindingId}`
         : 'slack'
       : null;
-  const lastReadyIdentityRef = useRef<string | null>(readyIdentity);
+  // Initialised to null (never a real identity) so the ready-edge effect below
+  // is the single fetch trigger: it performs the first fetch on mount only when
+  // the provider is actually reachable, and cannot double-fetch with a separate
+  // mount effect (issue #279 review).
+  const lastReadyIdentityRef = useRef<string | null>(null);
   const fetchRevisionRef = useRef(0);
   const mutationRevisionRef = useRef(0);
   const telegramBindingIdRef = useRef<string | null>(telegramBindingId);
@@ -208,7 +212,9 @@ export function useHookWorkspacePrefs(
             if (view.provider === 'telegram') applyIncoming(view);
           })
         : window.electronAPI.hookControl.onPrefsChanged(applyIncoming);
-    void fetchPrefs();
+    // The ready-edge effect below performs the initial prefs fetch (only when
+    // reachable). The subscription set up here just needs to exist first so no
+    // server push is missed before that fetch resolves.
     // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可
     void window.electronAPI.maker
       .imDefaultSettingsGet()
@@ -224,8 +230,12 @@ export function useHookWorkspacePrefs(
     };
   }, [fetchPrefs, provider]);
 
-  // 断线 -> 重连成功或 Telegram 绑定身份变化：自动重拉对应 provider 快照。
-  // 只看布尔 ready 会让 A 换绑 B 时继续展示 A 的偏好。
+  // 唯一的拉取触发点: 初次挂载、断线 -> 重连成功、或 Telegram 绑定身份变化时,
+  // 拉取对应 provider 的快照。readyIdentity 为 null(provider 未连接/未绑定)时
+  // 不发起无意义的 prefs IPC —— 否则会以 HOOK_NOT_CONNECTED 失败并在 Main 侧
+  // 打出误导性的 Slack ERROR(issue #279)。lastReadyIdentityRef 初始为 null,
+  // 保证 provider 首次可用即拉取且同一身份不重复触发; 只看布尔 ready 会让 A
+  // 换绑 B 时继续展示 A 的偏好。
   useEffect(() => {
     if (readyIdentity !== null && readyIdentity !== lastReadyIdentityRef.current) {
       void fetchPrefs();

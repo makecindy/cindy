@@ -154,56 +154,6 @@ and are never uploaded automatically.
   `apps/desktop/src/renderer/index.tsx` (implementation lives in
   `apps/desktop/src/renderer/analytics/`).
 
-## Content compliance review (China-region releases only)
-
-To meet mainland-China content-safety compliance requirements for publicly
-offered generative-AI services, the client ships a content-review interface
-(implementation:
-[`apps/desktop/src/main/content-moderation/`](apps/desktop/src/main/content-moderation/)).
-This section discloses its behavior and boundaries to both users and developers.
-
-**When it is NOT enabled (and how to keep it off):**
-
-- **Global-region releases**: never enabled;
-- **Dev / running from source: off by default** — it only activates in test
-  mode if you explicitly pass the `--content-moderation` launch flag (or set
-  `XDT_CONTENT_MODERATION=1` when unpackaged) *and* configure
-  `moderationSignTestApiBaseUrl`; neither exists in the repo defaults, so doing
-  nothing keeps it off;
-- **Local mode (not signed in) or organization accounts**: not enabled;
-- **Building from source yourself**: note that a **packaged** cn-region build
-  fetches the official cn endpoint manifest at startup just like official
-  releases, so review **does activate** once you sign in with a personal
-  account. To keep it off, run unpackaged (dev), package for the global
-  region, or point `cdnBaseUrl` at your own endpoint manifest that omits
-  `moderationSignApiBaseUrl`.
-
-**When it is enabled (all conditions must hold; decision logic in
-[`eligibility.ts`](apps/desktop/src/main/content-moderation/eligibility.ts)):**
-
-1. An official **packaged China-region (cn) build** — the region is baked at
-   build time via `VITE_CINDY_AUTH_REGION` and cannot be switched at runtime;
-2. Signed in with a **personal cloud account** (organization accounts do not go
-   through this interface);
-3. The endpoint manifest fetched at startup from the region CDN carries a
-   non-empty `moderationSignApiBaseUrl` — packaged builds always resolve their
-   endpoint manifest from the official CDN at runtime (resolution logic in
-   `apps/desktop/src/main/clientEndpointsService.ts`), and the official
-   China-region manifest supplies this URL; the in-repo
-   [`config/endpoint.json`](config/endpoint.json) is only used by dev
-   (unpackaged) runs and leaves it empty.
-
-**What is reviewed when enabled:** messages you send to the assistant (text and
-image attachments), the assistant's streamed replies, your custom prompt, and
-your nickname / avatar. That content is submitted through Cindy's moderation
-signing service to a content-safety service for an allow/reject decision. A
-rejected input is not sent and is returned to the composer; when a reply is
-rejected the turn is aborted — text already shown is kept and a fixed notice is
-appended. Internal messages from the
-scheduler and multi-agent (Orca) coordination are not submitted. If the review
-service is unreachable or times out, the client fails open — normal use is never
-blocked by review-infrastructure failures.
-
 ## License / 许可证
 
 Except as otherwise noted, the source code in this repository is licensed under

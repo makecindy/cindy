@@ -45,7 +45,6 @@
   "dependencies": {
     "@cindy/auth-client": "workspace:*",
     "@cindy/plugin-protocol": "workspace:*",
-    "@cindy/content-moderation-protocol": "workspace:*",
     "@cindy/slack-hook-protocol": "workspace:*",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",

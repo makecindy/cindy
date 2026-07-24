@@ -662,6 +662,15 @@ export function closeRemoteLink(deviceId: string): void {
   client?.closeLink(deviceId, 'user');
 }
 
+/**
+ * 本机在 device-link 网络中的设备 id(relay ack 下发);未连接 / 未 ack 时 null。
+ * 供会话引用解析等消费方识别「指向本机自己的 deviceId」——深链是可复制的字符串,
+ * 控制端生成的 `?device=` 链接可能被带回归属设备本机粘贴发送。
+ */
+export function getSelfDeviceId(): string | null {
+  return client?.getSelfDeviceId() ?? null;
+}
+
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。
  *  被控端自身持有执行预算的 channel(desktop-cmd:run)按协议契约放宽隧道超时,
  *  避免与被控端执行超时对撞(见 INVOKE_TIMEOUT_OVERRIDES_MS)。 */

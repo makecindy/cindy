@@ -802,7 +802,7 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('cardActive={composerCardActive}');
     expect(newComposerSource).toContain('toolbar={renderComposerToolbar()}');
     expect(newComposerSource).toContain('voicePlacement={composerVoicePlacement}');
-    expect(newComposerSource).toContain('floatingVoiceButton={renderComposerVoiceButton}');
+    expect(newComposerSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(newComposerSource).toContain('cursorColor={colors.inputCaret}');
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
@@ -939,9 +939,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(newSource).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(newSource).toContain('voiceContext.warmRefiner(input),');
-    expect(newSource).toContain('const composerVoicePlacement = resolveMobileComposerVoiceButtonPlacement({');
+    expect(newSource).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
+    expect(newSource).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(newSource).toContain('hasTrailingAction: composerShowCreateButton');
-    expect(newSource).toContain('const voiceStatusVisible = Boolean(voiceError);');
+    expect(newSource).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
+    expect(newSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(sessionSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_CONTROL_SIZE = 34;');

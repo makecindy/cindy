@@ -247,16 +247,19 @@ export function SessionContentHeader({
     t,
   ]);
 
-  /* ---- 复制对话链接(cindy://session/<id> 深链,与 SessionItem 同语义) ---- */
+  /* ---- 复制对话链接(cindy://session/<id> 深链,与 SessionItem 同语义;
+          远程会话把归属设备冻进 ?device=) ---- */
   const handleCopyDeepLink = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(buildSessionDeepLink(session.id));
+      await navigator.clipboard.writeText(
+        buildSessionDeepLink(session.id, { deviceId: session.deviceLinkDeviceId }),
+      );
       toast.success(t('ccAgent.sidebar.deepLink.copied'));
     } catch (err) {
       log.warn('clipboard write failed', err);
       toast.warning(t('ccAgent.sidebar.deepLink.copyFailed'));
     }
-  }, [session.id, t]);
+  }, [session.deviceLinkDeviceId, session.id, t]);
 
   const handleOpenInNewWindow = useCallback(() => {
     if (remoteWritesBlocked) {

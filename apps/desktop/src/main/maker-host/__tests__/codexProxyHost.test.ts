@@ -123,6 +123,34 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_gateway.supports_websockets=false');
   });
 
+  it('oauth-bearer 模式: 追加 OpenAI 身份 provider(远端压缩)并关掉请求 zstd 压缩', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
+
+    // 默认 model_provider 仍是 cindy_gateway(本地压缩安全缺省);OpenAI 身份靠
+    // thread/start|resume 的 modelProvider 显式选入。
+    expect(args).toContain('model_provider="cindy_gateway"');
+    // name 必须逐字 "OpenAI" —— codex supports_remote_compaction() 按 name 判定。
+    expect(args).toContain('model_providers.cindy_openai.name="OpenAI"');
+    expect(args).toContain('model_providers.cindy_openai.base_url="http://127.0.0.1:12345"');
+    expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
+    expect(args).toContain('model_providers.cindy_openai.requires_openai_auth=true');
+    expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
+    // is_openai + OAuth 命中时 codex 默认 zstd 压缩请求体,loopback proxy 无法解析,必须关。
+    expect(args).toContain('features.enable_request_compression=false');
+  });
+
+  it('env-key / provider-oauth 模式: 不定义 OpenAI 身份 provider', async () => {
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+
+    for (const mode of ['env-key', 'provider-oauth'] as const) {
+      const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
+      expect(args.some((arg) => arg.includes('cindy_openai'))).toBe(false);
+      expect(args).not.toContain('features.enable_request_compression=false');
+    }
+  });
+
   it('env-key 模式: env_key=XDT_CODEX_API_KEY, 不带 requires_openai_auth', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
@@ -141,6 +169,69 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_gateway.env_key="XDT_CODEX_API_KEY"');
     expect(args).not.toContain('model_providers.cindy_gateway.requires_openai_auth=true');
     expect(args).toContain('model_providers.cindy_gateway.supports_websockets=false');
+  });
+});
+
+describe('createCrossProviderCompactionCompatTransform', () => {
+  const CTX_BASE = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 't-1' } };
+  const compactionItem = { type: 'compaction', encrypted_content: 'ENC' };
+  const contextCompactionItem = { type: 'context_compaction', id: 'cc_1', encrypted_content: 'ENC2' };
+  const userMessage = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] };
+
+  it('把加密压缩块替换为明文占位 message(非 ChatGPT 上游)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    const out = transform(
+      { model: 'gpt-5.5', input: [compactionItem, contextCompactionItem, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    ) as { input: Array<Record<string, unknown>> };
+
+    expect(out).not.toBeNull();
+    expect(out.input).toHaveLength(3);
+    expect(out.input[0].type).toBe('message');
+    expect(out.input[1].type).toBe('message');
+    expect(JSON.stringify(out.input)).not.toContain('ENC');
+    expect(JSON.stringify(out.input[0])).toContain('compacted into an encrypted snapshot');
+    // 压缩点之后的原有消息原样保留
+    expect(out.input[2]).toEqual(userMessage);
+  });
+
+  it('ChatGPT 上游原样透传(远端压缩语义不受影响)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'gpt-5.5', input: [compactionItem, userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://chatgpt.com/backend-api/codex' },
+    )).toBeNull();
+  });
+
+  it('upstreamBase 缺失时不改写(保守方向:宁可维持现状,不误伤 ChatGPT 请求)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform({ model: 'gpt-5.5', input: [compactionItem] }, CTX_BASE)).toBeNull();
+  });
+
+  it('无压缩块时零改写', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'codex/gpt-5.5', input: [userMessage] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
+  });
+
+  it('不携带加密内容的 compaction 变体原样透传(只处理"上游解不开"的加密块)', async () => {
+    const { createCrossProviderCompactionCompatTransform } = await import('../codex-proxy-host.js');
+    const transform = createCrossProviderCompactionCompatTransform();
+
+    expect(transform(
+      { model: 'gpt-5.5', input: [{ type: 'context_compaction', id: 'cc_2' }, { type: 'compaction', encrypted_content: '' }] },
+      { ...CTX_BASE, upstreamBase: 'https://gateway.example.com/v1' },
+    )).toBeNull();
   });
 });
 
@@ -361,8 +452,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -917,7 +1008,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(8); // encrypted activeStrip, image generation activeStrip, instructions 注入, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(9); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

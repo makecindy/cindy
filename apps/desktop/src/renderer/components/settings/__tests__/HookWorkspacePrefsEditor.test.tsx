@@ -104,19 +104,34 @@ describe('useHookWorkspacePrefs provider isolation', () => {
     };
   });
 
-  it('Slack 已连接时再确认 Telegram 绑定，也会沿 provider-ready 边沿重新拉偏好', async () => {
+  it('Telegram 未连接时不发起 provider prefs 请求，绑定确认后沿 ready 边沿首次拉取', async () => {
     const { result, rerender } = renderHook(({ hook }) => useHookWorkspacePrefs(hook, 'telegram'), {
       initialProps: { hook: BASE_HOOK },
     });
 
-    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledTimes(1));
+    // Telegram disabled/unbound: 不发起无意义的 provider prefs IPC(issue #279)——
+    // 否则会以 HOOK_NOT_CONNECTED 失败并在 Main 侧打出误导性的 Slack ERROR。
+    // 用 effect 侧信号(imDefaultSettingsGet 在挂载 effect 内无条件调用)确认 effect
+    // 已 flush 再做否定断言 —— editable 首帧即为 false, 直接 waitFor 它会在 effect
+    // 跑之前 resolve, 捕捉不到「挂载即发 IPC」的回归(issue #279 review)。
+    await waitFor(() =>
+      expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalled(),
+    );
+    expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
     expect(getWorkspacePrefs).not.toHaveBeenCalled();
     expect(result.current.editable).toBe(false);
 
     rerender({ hook: TELEGRAM_CONFIRMED });
-    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledTimes(1));
+    expect(getWorkspacePrefs).not.toHaveBeenCalled();
     await waitFor(() => expect(result.current.editable).toBe(true));
     expect(result.current.hint).toBeNull();
+  });
+
+  it('Slack 已连接时挂载即拉取偏好，不触碰 Telegram 通道', async () => {
+    renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
+    await waitFor(() => expect(getWorkspacePrefs).toHaveBeenCalledTimes(1));
+    expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
   });
 
   it('Telegram 换绑时立即隔离旧偏好，直到新 binding 的快照返回', async () => {

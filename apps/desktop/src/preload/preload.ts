@@ -354,12 +354,6 @@ const fanOutGhostCardUpdated = createIpcFanOut('ghosts:card-updated');
 const fanOutGhostSessionActivity = createIpcFanOut('ghosts:session-activity');
 // 用户消息被意识钩子拦下(卡槽①:renderer 把乐观气泡原地降级为被拦态)。
 const fanOutGhostMessageBlocked = createIpcFanOut('ghosts:user-message-blocked');
-const fanOutContentModerationInputBlocked = createIpcFanOut(
-  'content-moderation:input-blocked',
-);
-const fanOutContentModerationOutputBlocked = createIpcFanOut(
-  'content-moderation:output-blocked',
-);
 // 用户消息被意识钩子改写(卡槽①:renderer 把气泡正文换成改写版并留痕署名)。
 const fanOutGhostMessageRewritten = createIpcFanOut('ghosts:user-message-rewritten');
 // AI 回复被出口钩子(will-assistant-message)改写(renderer 气泡静默换文本)。
@@ -875,13 +869,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
   },
-  contentModeration: {
-    onInputBlocked: fanOutContentModerationInputBlocked,
-    onOutputBlocked: fanOutContentModerationOutputBlocked,
-    reviewUserPrompt: (text: string): Promise<'allow' | 'reject' | 'cancelled'> =>
-      ipcRenderer.invoke('content-moderation:review-user-prompt', text),
-  },
-
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:prewarm', payload),

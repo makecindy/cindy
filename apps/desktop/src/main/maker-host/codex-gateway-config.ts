@@ -25,6 +25,19 @@ import { claudeUpstreamEndpoint } from './runtime-configs.js';
 export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
 
 /**
+ * OpenAI 身份 provider id(仅 oauth-bearer spawn 定义)。base_url 同样指向本地
+ * loopback proxy,但 `name` 必须逐字等于 "OpenAI" —— codex 的
+ * `ModelProviderInfo::supports_remote_compaction()` 按 name 判定,命中后订阅会话
+ * 才走 OpenAI 远端压缩(remote compaction v2,经普通 /responses 由服务端压缩),
+ * 否则只有低保真的本地 summarization fallback。
+ *
+ * 只允许「ChatGPT 订阅直连路由」的 thread 用它(thread/start|resume 的
+ * modelProvider 覆盖):网关 / xAI / 自定义供应商的上游不实现远端压缩语义,
+ * 远端压缩失败在 codex 侧是硬失败(无本地回退),错配会打断长会话。
+ */
+export const CODEX_OPENAI_COMPACT_PROVIDER_ID = 'cindy_openai';
+
+/**
  * 注入 codex 子进程的环境变量名 —— codex 通过 config 的 `env_key` 来这里读 API key。
  * 用专名避免撞用户机器上已有的同名变量。
  */
@@ -65,7 +78,7 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
   const authArg = authMode === 'oauth-bearer'
     ? `model_providers.${p}.requires_openai_auth=true`
     : `model_providers.${p}.env_key="${CODEX_GATEWAY_ENV_KEY}"`;
-  return [
+  const args = [
     '-c', `model_provider="${p}"`,
     '-c', `model_providers.${p}.name="Cindy Gateway"`,
     '-c', `model_providers.${p}.base_url="${baseUrl}"`,
@@ -73,4 +86,23 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
     '-c', authArg,
     '-c', `model_providers.${p}.supports_websockets=false`,
   ];
+  if (authMode === 'oauth-bearer') {
+    // OpenAI 身份 provider(见 CODEX_OPENAI_COMPACT_PROVIDER_ID):默认 model_provider
+    // 仍是 cindy_gateway(本地压缩,安全缺省),订阅直连 thread 由 maker-core 在
+    // thread/start|resume 用 modelProvider 显式选它。仅 oauth spawn 定义 —— env-key
+    // 进程没有 OAuth token,误选时宁可 thread/start 报 unknown provider 也不能静默降级。
+    const o = CODEX_OPENAI_COMPACT_PROVIDER_ID;
+    args.push(
+      '-c', `model_providers.${o}.name="OpenAI"`,
+      '-c', `model_providers.${o}.base_url="${baseUrl}"`,
+      '-c', `model_providers.${o}.wire_api="responses"`,
+      '-c', `model_providers.${o}.requires_openai_auth=true`,
+      '-c', `model_providers.${o}.supports_websockets=false`,
+      // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
+      // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse
+      // 改写请求体,无法解 zstd,必须显式关掉(仅少传输优化,无功能损失)。
+      '-c', 'features.enable_request_compression=false',
+    );
+  }
+  return args;
 }

@@ -1,7 +1,4 @@
 {
-  "contentModeration": {
-    "blocked": "申し訳ありませんが、現在この質問には回答できません。質問の表現を変えてください。"
-  },
   "ipcError": {
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
     "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回の提供元切り替えは適用されませんでした（セッションは元の提供元のままです）。他のタスクが終わってからもう一度お試しください。"
@@ -1534,8 +1531,7 @@
       "save": "保存",
       "overLimit": " — 文字数制限を超過",
       "toast": {
-        "saved": "カスタム指示を保存しました",
-        "saveFailed": "カスタム指示を保存できませんでした"
+        "saved": "カスタム指示を保存しました"
       }
     },
     "chipMetrics": {
@@ -2330,6 +2326,7 @@
         "command": "チャット指令 ${{command}}",
         "panelRight": "パネル「{{title}}」· チャットの右側にドッキング",
         "panelLeft": "パネル「{{title}}」· チャットの左側にドッキング",
+        "panelTab": "パネル「{{title}}」· 右サイドバーのタブ",
         "code": "実行コード",
         "codeDetail": "独立したサンドボックスで実行され、ファイルやネットワークにはアクセスできません。",
         "resident": "常駐実行(有効化すると起動し、呼び出されなくてもバックグラウンドプロセスを維持)",
@@ -3057,7 +3054,8 @@
       "menu": {
         "addLabel": "タブを追加",
         "comingSoon": "近日対応",
-        "alreadyOpen": "開いています"
+        "alreadyOpen": "開いています",
+        "pluginGroup": "プラグイン"
       },
       "kinds": {
         "fileBrowser": "ファイルブラウザ",
@@ -3065,7 +3063,8 @@
         "terminal": "ターミナル",
         "review": "レビュー",
         "collaboration": "コラボ",
-        "unknown": "不明なタブ"
+        "unknown": "不明なタブ",
+        "ghostPanel": "プラグインパネル"
       },
       "controls": {
         "maximizeAria": "サイドバーを最大化",
@@ -3090,6 +3089,9 @@
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
         "terminalSub": "Terminal",
+        "pluginSub": "Plugin",
+        "pluginGroup": "プラグインパネル",
+        "pluginGroupSub": "{{count}} 個のプラグイン",
         "addMoreHint": "上部の + ボタンからほかのパネルタイプを選択できます"
       },
       "placeholderHint": "{{kind}} — コンテンツは後続フェーズで追加されます"
@@ -3708,7 +3710,7 @@
           },
           "auto": {
             "label": "自動レビュー",
-            "description": "信頼済みコマンドは自動実行します。未信頼コマンド、権限昇格、高リスクな組み込み操作は引き続き確認します。「フルアクセス」とは異なります。"
+            "description": "保護されたワークスペースサンドボックス内でコマンドを自動実行します。境界を越える操作は自動レビュアーが判断し、高リスクな操作は拒否または確認される場合があります。"
           },
           "bypassPermissions": {
             "label": "フルアクセス",
@@ -6519,7 +6521,8 @@
       "qrExpired": "QR コードが期限切れです。最初からやり直してください",
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
-      "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。"
+      "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
+      "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID と App Secret の両方を入力してください",
@@ -6841,6 +6844,20 @@
     "note": {
       "codexStateSkipped": "このマシンでは Codex がまだ初期化されていないため、セッション状態は完全には復元されていません。Codex セッションを一度実行すれば続行できるようになります。",
       "workdirKeyInexact": "選択したディレクトリのパスが長すぎるためトランスクリプトを配置できず、チャット履歴のみに切り替えました。"
+    }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS のフォルダアクセスが拒否されました",
+      "message": "Cindy は「{{folder}}」フォルダにアクセスできません",
+      "detail": "macOS によりアクセスが拒否されました。「システム設定」を開いて権限を付与し、Agent のコマンドをもう一度実行してください。",
+      "openSystemSettings": "システム設定を開く",
+      "cancel": "キャンセル",
+      "folderNames": {
+        "desktop": "デスクトップ",
+        "documents": "書類",
+        "downloads": "ダウンロード"
+      }
     }
   }
 }

@@ -191,7 +191,7 @@ export function GhostPluginPage() {
     }
     return map;
   }, [marketItems]);
-  const installedItems = useMemo<PresentedGhostPluginItem[]>(
+  const allInstalledItems = useMemo<PresentedGhostPluginItem[]>(
     () =>
       ghosts
         // cindy-mivo was renamed to xd-mivo. Older user data can still
@@ -207,20 +207,20 @@ export function GhostPluginPage() {
         })),
     [ghosts, marketByGhostId],
   );
-  const visibleInstalledItems = useMemo(
+  const installedItems = useMemo(
     () =>
       showEnterprise
-        ? installedItems
-        : installedItems.filter((item) => item.origin !== 'organization'),
-    [installedItems, showEnterprise],
+        ? allInstalledItems
+        : allInstalledItems.filter((item) => item.origin !== 'organization'),
+    [allInstalledItems, showEnterprise],
   );
   const installedShortcutItems = useMemo(
-    () => sortGhostPluginItemsByRecentUse(visibleInstalledItems, recentGhostIds),
-    [recentGhostIds, visibleInstalledItems],
+    () => sortGhostPluginItemsByRecentUse(installedItems, recentGhostIds),
+    [installedItems, recentGhostIds],
   );
   const searchedInstalledItems = useMemo(
-    () => filterGhostPluginItems(visibleInstalledItems, query),
-    [query, visibleInstalledItems],
+    () => filterGhostPluginItems(installedItems, query),
+    [installedItems, query],
   );
   const searchedAvailableMarketItems = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -776,11 +776,11 @@ export function GhostPluginPage() {
             ) : (
               <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
                 <p className="text-13 text-[var(--text-secondary)]">
-                  {visibleInstalledItems.length === 0 && marketItems.length === 0
+                  {installedItems.length === 0 && marketItems.length === 0
                     ? t('settings.ghosts.empty')
                     : t('settings.ghosts.page.emptyFiltered')}
                 </p>
-                {visibleInstalledItems.length === 0 && marketItems.length === 0 ? (
+                {installedItems.length === 0 && marketItems.length === 0 ? (
                   <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">
                     {t('settings.ghosts.emptyHint')}
                   </p>

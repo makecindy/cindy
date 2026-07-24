@@ -3,9 +3,9 @@
  * ---------------------------------------------------------------------------
  * Lark.WSClient + Lark.EventDispatcher wrapper.
  *
- * 关键设计：SDK 既不暴露 EventEmitter 也不接受连接生命周期 callback。
- * 我们注入一个**自定义 Logger** 包装 SDK 内部日志，按消息内容关键字
- * 触发 ConflictDetector：
+ * 关键设计：连接生命周期优先使用 SDK 的 onReady / onError /
+ * onReconnecting / onReconnected callback。自定义 Logger 仍保留同一套
+ * 信号解析作为兼容兜底：
  *
  *   info  '[ws] ws client ready'    → detector.markReady()
  *   info  '[ws] reconnect success'  → detector.markReconnected()
@@ -52,6 +52,7 @@ let currentBotAppId: string | null = null;
 let currentStatus: FeishuConnectionStatus = 'idle';
 let acceptingInbound = false;
 let lifecycleGeneration = 0;
+let conflictTransitionGeneration: number | null = null;
 
 let lifecycleAnnouncementEnabled = true;
 let pendingOfflineNotice = false;
@@ -87,6 +88,106 @@ export function setLifecycleAnnouncement(enabled: boolean): void {
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
+const FEISHU_CONFLICT_ERROR = '该 App 已被另一台设备占用 (exceed_conn_limit)';
+
+function isConflictSignal(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('1000040350') || normalized.includes('exceed_conn_limit');
+}
+
+function isActiveConnection(generation: number, appId: string): boolean {
+  return (
+    acceptingInbound &&
+    lifecycleGeneration === generation &&
+    currentBotAppId === appId
+  );
+}
+
+async function transitionToConflict(
+  generation: number,
+  appId: string,
+): Promise<void> {
+  if (
+    conflictTransitionGeneration === generation ||
+    !isActiveConnection(generation, appId)
+  ) {
+    return;
+  }
+
+  conflictTransitionGeneration = generation;
+  setStatus('conflict', FEISHU_CONFLICT_ERROR);
+  await stop({
+    keepStatus: true,
+    announceOffline: false,
+    reason: 'connection-conflict',
+  });
+  feishuEvents.emit('conflict', { appId });
+}
+
+function handleReadySignal(
+  activeDetector: ConflictDetector,
+  generation: number,
+  appId: string,
+): void {
+  if (!isActiveConnection(generation, appId)) return;
+  activeDetector.markReady();
+  if (
+    activeDetector.getVerdict()?.kind === 'connected' &&
+    currentStatus !== 'connected'
+  ) {
+    setStatus('connected');
+  }
+}
+
+function handleReconnectingSignal(
+  activeDetector: ConflictDetector,
+  generation: number,
+  appId: string,
+): void {
+  if (!isActiveConnection(generation, appId)) return;
+  activeDetector.markReconnecting();
+  if (
+    activeDetector.getVerdict()?.kind !== 'conflict' &&
+    currentStatus === 'connected'
+  ) {
+    setStatus('reconnecting');
+  }
+}
+
+function handleReconnectedSignal(
+  activeDetector: ConflictDetector,
+  generation: number,
+  appId: string,
+): void {
+  if (!isActiveConnection(generation, appId)) return;
+  activeDetector.markReconnected();
+  if (
+    activeDetector.getVerdict()?.kind === 'connected' &&
+    currentStatus !== 'connected'
+  ) {
+    setStatus('connected');
+  }
+}
+
+function handleErrorSignal(
+  error: Error,
+  activeDetector: ConflictDetector,
+  generation: number,
+  appId: string,
+): void {
+  if (!isActiveConnection(generation, appId)) return;
+  if (isConflictSignal(error.message)) {
+    if (
+      !activeDetector.markConflict() &&
+      activeDetector.getVerdict()?.kind !== 'conflict'
+    ) {
+      void transitionToConflict(generation, appId);
+    }
+    return;
+  }
+  activeDetector.markError(error);
+}
+
 // ── SDK logger interceptor ────────────────────────────────────────────────────
 
 interface SdkLogger {
@@ -97,7 +198,11 @@ interface SdkLogger {
   error: (...msg: unknown[]) => void | Promise<void>;
 }
 
-function makeCapturingLogger(activeDetector: ConflictDetector): SdkLogger {
+function makeCapturingLogger(
+  activeDetector: ConflictDetector,
+  generation: number,
+  appId: string,
+): SdkLogger {
   const log = getLog();
   return {
     trace: () => {},
@@ -107,15 +212,13 @@ function makeCapturingLogger(activeDetector: ConflictDetector): SdkLogger {
         .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
         .join(' ');
       log.debug('[feishu/sdk-info]', msg);
+      if (!isActiveConnection(generation, appId)) return;
       if (msg.includes('ws client ready')) {
-        activeDetector.markReady();
-        if (currentStatus !== 'connected') setStatus('connected');
+        handleReadySignal(activeDetector, generation, appId);
       } else if (msg.includes('reconnect success')) {
-        activeDetector.markReconnected();
-        if (currentStatus !== 'connected') setStatus('connected');
+        handleReconnectedSignal(activeDetector, generation, appId);
       } else if (msg.includes('reconnect') && !msg.includes('success')) {
-        activeDetector.markReconnecting();
-        if (currentStatus === 'connected') setStatus('reconnecting');
+        handleReconnectingSignal(activeDetector, generation, appId);
       } else if (msg.includes('unable to connect to the server')) {
         activeDetector.markError(new Error('unable to connect after retries'));
         setStatus('error', '连接失败：飞书服务无法访问，请检查网络');
@@ -132,14 +235,19 @@ function makeCapturingLogger(activeDetector: ConflictDetector): SdkLogger {
         .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
         .join(' ');
       log.error('[feishu/sdk-error]', msg);
+      if (!isActiveConnection(generation, appId)) return;
+      if (isConflictSignal(msg)) {
+        handleErrorSignal(
+          new Error(FEISHU_CONFLICT_ERROR),
+          activeDetector,
+          generation,
+          appId,
+        );
+        return;
+      }
       if (msg.includes('code: 514')) {
         activeDetector.markError(new Error('App ID / App Secret 不正确（auth_failed）'));
         setStatus('error', 'App ID 或 App Secret 不正确');
-      }
-      if (msg.includes('1000040350')) {
-        activeDetector.markError(
-          new Error('该 App 已被另一台设备占用 (exceed_conn_limit)'),
-        );
       }
     },
   };
@@ -175,7 +283,19 @@ export async function start(
     appSecret: creds.appSecret,
     loggerLevel: Lark.LoggerLevel.info,
     autoReconnect: true,
-    logger: makeCapturingLogger(startDetector),
+    logger: makeCapturingLogger(startDetector, startedGeneration, creds.appId),
+    onReady: () => {
+      handleReadySignal(startDetector, startedGeneration, creds.appId);
+    },
+    onError: (error) => {
+      handleErrorSignal(error, startDetector, startedGeneration, creds.appId);
+    },
+    onReconnecting: () => {
+      handleReconnectingSignal(startDetector, startedGeneration, creds.appId);
+    },
+    onReconnected: () => {
+      handleReconnectedSignal(startDetector, startedGeneration, creds.appId);
+    },
   });
 
   outbound.bindClient(creds);
@@ -223,9 +343,7 @@ export async function start(
       }
       return 'connected';
     case 'conflict':
-      setStatus('conflict', '该 App ID 似乎已被另一台设备使用');
-      await stop({ keepStatus: true });
-      feishuEvents.emit('conflict', { appId: creds.appId });
+      await transitionToConflict(startedGeneration, creds.appId);
       return 'conflict';
     case 'error':
       setStatus('error', verdict.message);

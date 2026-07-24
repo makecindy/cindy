@@ -194,7 +194,11 @@ import {
   resolveComposerVoiceHoldActive,
   shouldArmComposerVoiceHold,
 } from '@/session/composerVoiceHold';
-import { isMobileRealtimeAudioAvailable, prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import {
+  isMobileRealtimeAudioAvailable,
+  prewarmMobileRealtimeAudio,
+  shouldShowMobileVoiceUi,
+} from '@/session/mobileRealtimeAudio';
 import {
   discardPendingPrewarm,
   prewarmMobileVoiceStart,
@@ -734,6 +738,7 @@ export default function NewRemoteSessionScreen() {
   );
   const composerHasMessage = draft.firstMessage.trim().length > 0;
   const composerShowCreateButton = composerHasMessage || attachments.length > 0 || pendingUploads.length > 0;
+  const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   // 只有一台可选设备时无可切换项:禁用下拉、隐藏 ⇕(用户反馈:单选项不要出选框)。
@@ -747,11 +752,13 @@ export default function NewRemoteSessionScreen() {
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
-  const voiceStatusVisible = Boolean(voiceError);
-  const composerVoicePlacement = resolveMobileComposerVoiceButtonPlacement({
-    // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
-    hasTrailingAction: composerShowCreateButton,
-  });
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
+  const composerVoicePlacement = voiceUiAvailable
+    ? resolveMobileComposerVoiceButtonPlacement({
+      // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
+      hasTrailingAction: composerShowCreateButton,
+    })
+    : undefined;
   const composerInputContentHeight = firstMessageInputContentHeight;
   const keyboardState = useMobileKeyboardState();
   const windowDimensions = useWindowDimensions();
@@ -1692,7 +1699,7 @@ export default function NewRemoteSessionScreen() {
         <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       </Pressable>
       <ComposerToolbarSpacer />
-      {composerVoicePlacement.inline || composerVoicePlacement.floating
+      {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot />
         : null}
       {composerShowCreateButton ? renderCreateButton() : null}
@@ -2729,7 +2736,7 @@ export default function NewRemoteSessionScreen() {
                   trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}
                   value={draft.firstMessage}
                   voicePlacement={composerVoicePlacement}
-                  floatingVoiceButton={renderComposerVoiceButton}
+                  floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
                 />
               </View>
             </View>

@@ -19,13 +19,39 @@ import {
 const URL_PREFIX = DEEP_LINK_URL_PREFIX;
 const SESSION_PREFIX = `${URL_PREFIX}session/`;
 
-export function buildSessionDeepLink(sessionId: string): string {
-  return `${SESSION_PREFIX}${encodeURIComponent(sessionId)}`;
+/** 深链构建可选项:deviceId = 会话归属的 device-link 设备(远程会话冻结来源)。 */
+export interface SessionDeepLinkOptions {
+  /**
+   * 会话归属设备(device-link deviceId)。远程会话在生成深链时就把来源设备
+   * 冻进 `?device=` 参数——发送时的 sessionRefs 解析不再依赖「被控端此刻
+   * 在线且会话列表已同步」的内存实时状态(relay 重连窗口内查表 miss 会把
+   * 远程会话错判成本地,引用内容注入失败)。本机会话传 undefined/null,
+   * 生成不带参数的旧格式。
+   */
+  deviceId?: string | null;
+}
+
+function sessionDeepLinkQuery(
+  opts: SessionDeepLinkOptions | undefined,
+  messageClientId?: string,
+): string {
+  const pairs: string[] = [];
+  if (messageClientId) pairs.push(`message=${encodeURIComponent(messageClientId)}`);
+  if (opts?.deviceId) pairs.push(`device=${encodeURIComponent(opts.deviceId)}`);
+  return pairs.length > 0 ? `?${pairs.join('&')}` : '';
+}
+
+export function buildSessionDeepLink(sessionId: string, opts?: SessionDeepLinkOptions): string {
+  return `${SESSION_PREFIX}${encodeURIComponent(sessionId)}${sessionDeepLinkQuery(opts)}`;
 }
 
 /** 带消息锚点的会话深链:点击后跳到会话内指定消息(clientId 语义,跨设备稳定)。 */
-export function buildSessionMessageDeepLink(sessionId: string, messageClientId: string): string {
-  return `${buildSessionDeepLink(sessionId)}?message=${encodeURIComponent(messageClientId)}`;
+export function buildSessionMessageDeepLink(
+  sessionId: string,
+  messageClientId: string,
+  opts?: SessionDeepLinkOptions,
+): string {
+  return `${SESSION_PREFIX}${encodeURIComponent(sessionId)}${sessionDeepLinkQuery(opts, messageClientId)}`;
 }
 
 /**
@@ -122,6 +148,8 @@ export interface SessionDeepLinkTarget {
   sessionId: string;
   /** `?message=<clientId>` 锚点;无锚点 / 锚点值非法时为 null(sessionId 仍有效)。 */
   messageClientId: string | null;
+  /** `?device=<deviceId>` 冻结的会话归属设备;旧格式深链 / 参数值非法时为 null。 */
+  deviceId: string | null;
 }
 
 /**
@@ -148,23 +176,28 @@ export function parseSessionDeepLinkHref(href: string): SessionDeepLinkTarget | 
   }
   if (!sessionId) return null;
   let messageClientId: string | null = null;
+  let deviceId: string | null = null;
   if (queryIdx >= 0) {
     const query = noHash.slice(queryIdx + 1);
     for (const pair of query.split('&')) {
       const eqIdx = pair.indexOf('=');
-      if (eqIdx <= 0 || pair.slice(0, eqIdx) !== 'message') continue;
+      if (eqIdx <= 0) continue;
+      const key = pair.slice(0, eqIdx);
+      if (key !== 'message' && key !== 'device') continue;
+      if (key === 'message' ? messageClientId !== null : deviceId !== null) continue;
       const rawValue = pair.slice(eqIdx + 1);
-      if (!rawValue) break;
+      if (!rawValue) continue;
       try {
         const decoded = decodeURIComponent(rawValue);
-        if (decoded) messageClientId = decoded;
+        if (!decoded) continue;
+        if (key === 'message') messageClientId = decoded;
+        else deviceId = decoded;
       } catch {
-        // 锚点编码非法 → 按无锚点处理,不拖累整条链接
+        // 参数编码非法 → 按无该参数处理,不拖累整条链接
       }
-      break;
     }
   }
-  return { sessionId, messageClientId };
+  return { sessionId, messageClientId, deviceId };
 }
 
 /**

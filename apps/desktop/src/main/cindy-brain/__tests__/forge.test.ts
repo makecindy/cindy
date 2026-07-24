@@ -360,6 +360,11 @@ describe('FORGE_GUIDE', () => {
       '宿主代启子进程(childSpawn)',
       '__CINDY_NODE__',
       'spawnEntry',
+      // 2026-07-24 面板页签形态:position 'tab' 进右侧栏,每会话单例,
+      // 停靠专属字段(minWidth/defaultFraction)拒装;§5 面板章节同步。
+      '面板(panel.html/css/js)',
+      'panel.position',
+      '右侧栏页签',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

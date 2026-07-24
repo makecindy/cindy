@@ -56,6 +56,7 @@ import {
   encryptedStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import {
   createClaudeFastModeRequestTransform,
   createClaudeFastModeResponseObserver,
@@ -325,6 +326,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop
       // 与日志盘);诊断请求体时设 XDT_PROXY_DUMP_REQUEST_BODY=1 显式开启。
       debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
+      // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
+      // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
+      resolveOutboundProxy: resolveDesktopOutboundProxy,
     });
     log.debug('proxy ready', { url: _handle.url, upstream: claudeUpstreamEndpoint() });
   } catch (err) {

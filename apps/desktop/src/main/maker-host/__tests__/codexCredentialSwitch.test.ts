@@ -23,7 +23,10 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
     })).toBe(true);
   });
 
-  it('keeps a proxy-active OAuth Codex session when switching to XD gateway routing', () => {
+  it('closes a proxy-active OAuth Codex session when switching to XD gateway routing (远端压缩身份边界)', () => {
+    // 订阅直连 thread 以 OpenAI 身份 provider 创建(远端压缩),身份 thread 级冻结;
+    // 切到网关路由必须关会话重建,否则远端压缩请求会打到不支持它的上游(硬失败)。
+    // host 仍复用(方案 A 的 host 级放宽不变),只是本会话关闭重建。
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'codex',
       currentProviderId: 'openai',
@@ -31,6 +34,38 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'gpt-5.4',
       nextModel: 'codex/gpt-5.5',
       currentCodexProxyActive: true,
+    })).toBe(true);
+  });
+
+  it('keeps a proxy-active gateway Codex session for pure gateway model changes', () => {
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'codex',
+      currentProviderId: 'xd',
+      nextProviderId: 'xd',
+      currentModel: 'codex/gpt-5.5',
+      nextModel: 'codex/gpt-5.4',
+      currentCodexProxyActive: true,
+    })).toBe(false);
+  });
+
+  it('keeps a proxy-active OAuth Codex session for oauth-family model changes', () => {
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'codex',
+      currentProviderId: 'openai',
+      nextProviderId: 'openai',
+      currentModel: 'gpt-5.4',
+      nextModel: 'gpt-5.5',
+      currentCodexProxyActive: true,
+    })).toBe(false);
+    // 隐式来源两侧,注入形态解析同为 oauth 家族 → 不跨边界,保持热切。
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'codex',
+      currentProviderId: null,
+      nextProviderId: null,
+      currentModel: 'gpt-5.4',
+      nextModel: 'gpt-5.5',
+      currentCodexProxyActive: true,
+      codexAuthInjection: 'oauth-bearer',
     })).toBe(false);
   });
 
@@ -82,7 +117,7 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
     })).toBe(true);
   });
 
-  it('keeps existing Codex sessions when switching into xAI provider OAuth on a proxy-active host', () => {
+  it('keeps gateway-family Codex sessions when switching into xAI provider OAuth on a proxy-active host', () => {
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'codex',
       currentProviderId: 'xd',
@@ -91,6 +126,19 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       nextModel: 'xai/grok-4.3',
       currentCodexProxyActive: true,
     })).toBe(false);
+    // 隐式来源 + env-key spawn:解析为 gateway 家族,不涉及远端压缩身份,保持热切。
+    expect(shouldCloseSessionForCredentialSwitch({
+      agentKind: 'codex',
+      currentProviderId: null,
+      nextProviderId: 'xai',
+      currentModel: 'gpt-5.4',
+      nextModel: 'xai/grok-4.3',
+      currentCodexProxyActive: true,
+      codexAuthInjection: 'env-key',
+    })).toBe(false);
+  });
+
+  it('closes oauth-family Codex sessions when switching into xAI provider OAuth on a proxy-active host (远端压缩身份边界)', () => {
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'codex',
       currentProviderId: 'openai',
@@ -98,7 +146,8 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'gpt-5.4',
       nextModel: 'xai/grok-4.3',
       currentCodexProxyActive: true,
-    })).toBe(false);
+    })).toBe(true);
+    // 隐式来源 + oauth spawn:解析为订阅家族(thread 是 OpenAI 身份)→ 必须关会话重建。
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'codex',
       currentProviderId: null,
@@ -106,7 +155,9 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'gpt-5.4',
       nextModel: 'xai/grok-4.3',
       currentCodexProxyActive: true,
-    })).toBe(false);
+      codexAuthInjection: 'oauth-bearer',
+    })).toBe(true);
+    // 隐式来源且未提供注入形态:无法证明不跨边界 → 保守关闭。
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'codex',
       currentProviderId: null,
@@ -114,7 +165,7 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'gpt-5.4',
       nextModel: 'xai/grok-4.3',
       currentCodexProxyActive: true,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('closes when switching from xAI provider OAuth host back to gateway/OpenAI credentials', () => {

@@ -48,7 +48,6 @@ import {
 } from '@cindy/model-providers';
 
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { onReleasedAgentEvent } from '../content-moderation/outputHub.js';
 import { getMaker } from '../maker-host/index.js';
 import {
   wireSessionToIpc,
@@ -597,7 +596,7 @@ export function createMakerHookSessionRunner(deps: {
           }, BG_TASK_IDLE_FALLBACK_MS);
           bgFallbackTimer.unref?.();
         };
-        const off = onReleasedAgentEvent(session, (ev: AgentEvent) => {
+        const off = session.onEvent((ev: AgentEvent) => {
           if (waitingForBgTasks) armBgTimer();
           if (ev.type === 'agent_task_update') {
             const data = ev.data as { taskId?: string; status?: string } | null;

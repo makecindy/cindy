@@ -60,6 +60,10 @@ vi.mock('@/lib/makerTransport', () => ({
   aroundMessagesByClientIdFor: vi.fn(async () => []),
   dismissErrorMessageFor: vi.fn(async () => undefined),
   isRemoteSession: vi.fn(() => false),
+  // useSessionEstimatedValue 的历史初值入口:本套测试全部按本机会话走,直接委托给
+  // 下方 messageService mock(既有用例继续用它驱动/断言调用次数)。
+  estimatedSessionValueFor: vi.fn(async (sessionId: string) =>
+    (await import('@/lib/messageService')).estimatedSessionValue(sessionId)),
 }));
 
 vi.mock('@/lib/messageService', () => ({

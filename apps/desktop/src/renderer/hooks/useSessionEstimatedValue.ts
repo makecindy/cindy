@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
-import * as messageService from '@/lib/messageService';
+import { estimatedSessionValueFor } from '@/lib/makerTransport';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
 import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails';
 
@@ -209,8 +209,8 @@ export function useSessionEstimatedValue(
       if (payload.sessionId !== sessionId) return;
       mergeEntry(resolveEstimatedValueTurnCostEntry(payload));
     });
-    void messageService
-      .estimatedSessionValue(sessionId)
+    // 按会话来源路由:device-link 远程会话查被控端(本地库无该会话的行,查本机恒 0)。
+    void estimatedSessionValueFor(sessionId)
       .then((snapshot) => {
         if (cancelled) return;
         for (const entry of snapshot.entries) mergeEntry(entry);

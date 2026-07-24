@@ -483,6 +483,12 @@ describe('ghost · layoutWithGhostPanel(装入即停靠)', () => {
     // 缺省 position=right,面板在 chat-main 之后(下标 1)。
     expect((next!.content as SplitNode).children[1].fraction).toBeCloseTo(0.2, 5);
   });
+
+  it("position: 'tab' → null,不进布局树(页签形态由右侧栏承载)", () => {
+    const m = manifest();
+    m.panel = { html: 'panel.html', position: 'tab' };
+    expect(layoutWithGhostPanel(createDefaultLayout(), m)).toBeNull();
+  });
 });
 
 describe('ghost · keywords(语义触发扩展词表)', () => {
@@ -706,6 +712,24 @@ describe('ghost · panel.position 校验', () => {
     }
     expect(validateGhostManifest(withPos('center')).ok).toBe(false);
   });
+
+  it("'tab'(右侧栏页签)通过;tab 时 minWidth/defaultFraction 收词明确拒绝", () => {
+    const tab = validateGhostManifest({
+      ...goodManifest(),
+      panel: { title: 'Hello', html: 'panel.html', position: 'tab' },
+    });
+    expect(tab.ok && tab.manifest.panel?.position).toBe('tab');
+
+    // 页签没有拖缝宽度语义:带停靠专属字段必须明确拒绝,不静默忽略(规则 9)。
+    for (const extra of [{ minWidth: 240 }, { defaultFraction: 0.2 }, { minWidth: 240, defaultFraction: 0.2 }]) {
+      const v = validateGhostManifest({
+        ...goodManifest(),
+        panel: { title: 'Hello', html: 'panel.html', position: 'tab', ...extra },
+      });
+      expect(v.ok, JSON.stringify(extra)).toBe(false);
+      expect(!v.ok && v.reason).toContain('仅停靠形态');
+    }
+  });
 });
 
 describe('ghost · whenToUse(语义召回线索)', () => {
@@ -810,6 +834,11 @@ describe('ghost · 逐项权限清单', () => {
     const items = ghostPermissionItems(plain);
     expect(items.map((i) => i.key)).toEqual(['panel:right', 'code']);
     expect(items[0]).toMatchObject({ labelKey: 'panelRight', labelArgs: { title: '说明书' } });
+
+    // 页签形态在确认框同样逐项如实展示(labelKey 独立成 panelTab)。
+    const tabbed = ghostPermissionItems({ ...plain, panel: { html: 'panel.html', position: 'tab' } });
+    expect(tabbed.map((i) => i.key)).toEqual(['panel:tab', 'code']);
+    expect(tabbed[0]).toMatchObject({ labelKey: 'panelTab', labelArgs: { title: '说明书' } });
 
     const chipNoNeeds: GhostManifest = {
       schemaVersion: 2,

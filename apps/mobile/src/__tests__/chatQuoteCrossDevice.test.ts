@@ -2,9 +2,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+function readSource(relativePath: string): string {
+  return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
+}
+
 describe('mobile cross-device quote wiring', () => {
   it('parses interleaved desktop quote segments instead of exposing marker text', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+    const source = readSource('src/session/MessageRenderer.tsx');
     const bubbleStart = source.indexOf('function MessageBubble');
     const bubbleEnd = source.indexOf('function copyActionLabel', bubbleStart);
     const bubbleSource = source.slice(bubbleStart, bubbleEnd);
@@ -19,7 +23,7 @@ describe('mobile cross-device quote wiring', () => {
   });
 
   it('propagates quote metadata through direct and attachment-outbox sends', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const source = readSource('app/sessions/[sessionId].tsx');
 
     expect(source).toContain('quotesEncoded: quotesEncodedAtSend');
     expect(source).toContain('pastedTextRanges: pastedTextRangesAtSend');
@@ -34,7 +38,7 @@ describe('mobile cross-device quote wiring', () => {
   });
 
   it('restores structured quote drafts for mobile fork and rewind actions', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const source = readSource('app/sessions/[sessionId].tsx');
 
     expect(source).toContain('const forkDocument = draft?.document ?? migrateLegacyComposerDraft(');
     expect(source).toContain('saveComposerDocumentDraft(forked.id, forkDocument);');
@@ -43,7 +47,7 @@ describe('mobile cross-device quote wiring', () => {
   });
 
   it('strips private markers from queued and outbox raw-text bubbles', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/InlineQueueSection.tsx'), 'utf8');
+    const source = readSource('src/session/InlineQueueSection.tsx');
     expect(source).toContain('stripChatQuoteMarkerLines(item.text)');
     expect(source).toContain('item.chatMessage.quotesEncoded === true');
     expect(source).toContain('item.quotesEncoded ? stripChatQuoteMarkerLines(item.text)');
