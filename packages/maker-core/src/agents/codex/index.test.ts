@@ -371,7 +371,7 @@ async function nextEvent(iterator: AsyncIterator<AgentEvent>): Promise<AgentEven
 }
 
 describe('CodexAgent permissions', () => {
-  it('advertises distinct Ask, Auto-review, and Full access modes', () => {
+  it('advertises distinct Ask, Auto, and Full access modes', () => {
     const agent = new CodexAgent(createDeps());
     expect(agent.capabilities.permissionModes?.map((mode) => mode.id)).toEqual([
       'ask',
@@ -3011,7 +3011,7 @@ describe('CodexAgent MCP thread context hooks', () => {
   });
 
   it('declines pending prompt-each-time approvals when permission mode switches to auto', async () => {
-    // Auto-review 不是 Full access，切入时必须 fail-closed 关闭挂起的高风险审批。
+    // Auto 也不能批量放行 forcePrompt 高风险审批，必须 fail-closed 关闭挂起请求。
     const agent = new CodexAgent(createDeps({}, {
       getMcpToolApprovalPolicy: () => 'prompt-each-time',
     }));
@@ -3057,7 +3057,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('maps auto permission mode to native trusted-command review', async () => {
+  it('maps auto permission mode to Codex built-in automatic approval review', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
@@ -3075,23 +3075,82 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       approvalPolicy?: string;
+      approvalsReviewer?: string;
       sandbox?: string;
     };
     expect(startParams).toMatchObject({
-      approvalPolicy: 'untrusted',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
       sandbox: 'workspace-write',
     });
 
     await handle.send({ type: 'user', content: 'hello' });
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
       approvalPolicy?: string;
+      approvalsReviewer?: string;
       sandboxPolicy?: { type?: string };
     };
     expect(turnParams).toMatchObject({
-      approvalPolicy: 'untrusted',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
       sandboxPolicy: { type: 'workspaceWrite' },
     });
 
+    await handle.close();
+  });
+
+  it('falls back to the approval UI if Auto-review still forwards a command request', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auto-command-fallback',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    handle.setInteractionResolver(resolver);
+
+    const result = await handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'cmd-1',
+      approvalId: 'approval-1',
+      command: 'pwd',
+      cwd: '/repo',
+    });
+
+    expect(result).toEqual({ decision: 'accept' });
+    expect(resolver).toHaveBeenCalledOnce();
+    await handle.close();
+  });
+
+  it('interrupts an active Auto-review turn when switching back to Ask', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-auto-review-tighten' } };
+      }
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-auto-review-tighten',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+
+    await handle.send({ type: 'user', content: 'do work' });
+    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+    await handle.setPermissionMode('ask');
+
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-auto-review-tighten',
+    });
     await handle.close();
   });
 
@@ -3719,14 +3778,14 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('routes Auto-review command approvals through UI and uses displayCommand on Windows', async () => {
+  it('routes Ask command approvals through UI and uses displayCommand on Windows', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-command-approval-display-command',
       model: 'gpt-5.4',
       workingDir: '/repo',
-      permissionMode: 'auto',
+      permissionMode: 'ask',
     });
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');

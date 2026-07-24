@@ -153,6 +153,9 @@ export interface CodexModelListResponse {
  */
 export type AskForApproval = 'untrusted' | 'on-request' | 'on-failure' | 'never';
 
+/** Codex app-server approval reviewer. */
+export type ApprovalsReviewer = 'user' | 'auto_review' | 'guardian_subagent';
+
 /**
  * sandbox 模式 — v2.rs `#[serde(rename_all = "kebab-case")]`。
  * 同上, kebab-case 不是 camelCase。
@@ -200,6 +203,8 @@ export interface ThreadStartParams {
   model?: string;
   cwd?: string;
   approvalPolicy?: AskForApproval;
+  /** Route interactive approvals to the user or Codex's built-in reviewer. */
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: SandboxMode;
   /** Fast mode override. Undefined = 不覆盖; null = 清空/standard; 'fast' = Fast mode. */
   serviceTier?: ServiceTier | null;
@@ -296,6 +301,8 @@ export interface TurnStartParams {
   summary?: ReasoningSummary;
   cwd?: string;
   approvalPolicy?: AskForApproval;
+  /** Route interactive approvals to the user or Codex's built-in reviewer. */
+  approvalsReviewer?: ApprovalsReviewer;
   /** Fast mode override. Undefined = 不覆盖; null = 清空/standard; 'fast' = Fast mode. */
   serviceTier?: ServiceTier | null;
   /**
@@ -352,6 +359,8 @@ export interface ThreadResumeParams {
   model?: string;
   cwd?: string;
   approvalPolicy?: AskForApproval;
+  /** Route interactive approvals to the user or Codex's built-in reviewer. */
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: SandboxMode;
   /** Fast mode override. Undefined = 不覆盖; null = 清空/standard; 'fast' = Fast mode. */
   serviceTier?: ServiceTier | null;
@@ -405,6 +414,8 @@ export interface ThreadForkParams {
   model?: string;
   cwd?: string;
   approvalPolicy?: AskForApproval;
+  /** Route interactive approvals to the user or Codex's built-in reviewer. */
+  approvalsReviewer?: ApprovalsReviewer;
   sandbox?: SandboxMode;
   [k: string]: unknown;
 }
@@ -431,12 +442,15 @@ export interface ThreadRollbackResponse {
 // 会话中途单独推 model / serviceTier / effort 等设置, server 写入后续 turn 的
 // sticky context (不必等下一个 turn/start 携带)。需要 experimentalApi capability
 // (host.ts 已恒开)。响应仅是 ack, 真正状态经 thread/settings/updated 通知回带。
-// **只镜像我们会发的字段** — 上游 params 还有 approvalPolicy / sandboxPolicy /
+// **只镜像我们会发的字段** — 上游 params 还有 approvalPolicy / approvalsReviewer /
+// sandboxPolicy /
 // personality / collaborationMode 等, 用到再加, 保持最小协议面。
 export interface ThreadSettingsUpdateParams {
   threadId: string;
   /** 覆盖后续 turn 的 model。省略 = 不变。 */
   model?: string;
+  /** Route subsequent interactive approvals to the user or built-in reviewer. */
+  approvalsReviewer?: ApprovalsReviewer;
   /**
    * Fast mode override (双 Option 语义): 省略字段 = 不变; `null` = 清空/standard;
    * 'fast' = Fast mode。发送侧必须用 `...(v !== undefined ? { serviceTier: v } : {})`
