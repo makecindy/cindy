@@ -55,7 +55,8 @@ The interface is built from a three-tier layer system that applies symmetrically
 Small interactive chips (button backgrounds, tag pills, avatar fills, selected-nav pills) sit outside the layer system — they're foreground elements, not background layers.
 
 - **Light Gray** (`#e5e5e5`): Chip/button backgrounds in Light Mode — the workhorse neutral for pressed states, filled pills, tag backgrounds, and avatar fills.
-- **Dark Chip** (`#2c2c2a`): Chip/button backgrounds in Dark Mode — equal to Dark Card; the lifted-pill color against a `#1f1f1e` Surface. (In Dark Mode, the Card layer color and the chip color collapse to the same value — both represent "one step lifted off Surface.")
+- **Dark Chip** (`#3c3c3a`, token `--surface-chip`): the primary chip/button background in Dark Mode — one step lifted above a Card or Surface context.
+- **Dark Chip Alt** (`#2c2c2a`, token `--surface-chip-alt`): the variant that collapses to the Dark Card value — used where a chip sits directly on Surface and only needs the Card-level lift. When in doubt, use `--surface-chip`; see §10 for both slots.
 
 > ~~**Border Light** (`#d4d4d4`)~~ —— 已废弃(2026-06,G2)。原称"white-button 专用边框色",但全仓库无真实组件使用(只有 experimental 视图裸 hardcode)。White Pill 次按钮边框统一走 **Board**(`--border-default` `#d7d7d4`)。
 
@@ -63,7 +64,7 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 
 - **Stone** (`#737373`): Secondary body text, footer links, and de-emphasized content. The primary "muted" tone.
 - **Mid Gray** (`#525252`): Emphasized secondary text, slightly darker than Stone.
-- **Silver** (`#a3a3a3`): Tertiary text and deeply de-emphasized metadata. **不要用作 placeholder**——太显眼、读着像已填(见 §4 Inputs + §13 G3,placeholder 走 `--text-placeholder` `#c4c4c4`)。
+- **Silver** (`#a3a3a3`): Tertiary text and deeply de-emphasized metadata. **不要用作 placeholder**——太显眼、读着像已填(见 §4 Inputs;G3 勘误已归档 [`design-decision-log.md`](./design-decision-log.md),placeholder 走 `--text-placeholder` `#c4c4c4`)。
 
 > ~~**Button Text Dark** (`#404040`)~~ —— 已废弃(2026-06,G1)。原称"white-surface 按钮文字专用色",但全仓库无真实按钮使用(只有 experimental 视图裸 hardcode)。White Pill 次按钮文字统一走 **Near Black**(`--text-primary` `#262626`)。
 
@@ -71,8 +72,8 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
-- **Ring Blue** (`#3b82f6` at 50%): Tailwind's default focus ring, used exclusively for keyboard accessibility. Never visible in normal interaction flow.
-- **Thinking Orange** (`#EA6B17`,设计定稿 2026-07-17 取代 `#FF6600` 冻结红线): Used exclusively for the Running Status Bar in ChatView when the Claude Code SDK is actively processing (streaming / tool_use). Applies only to the sparkles icon and status text (e.g. `Spelunking...`); no background fill, no use outside this surface.
+- **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Never visible in normal interaction flow.
+- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration toggle ON state, the plan-approve icon, the Full Access permission highlight, and the settings integration warning (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). Any NEW consumer must be registered in §10 first.
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
@@ -81,7 +82,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 > - **Permission Selector Mode Highlights** — selected risky permission modes may color only the option text/icon/checkmark and the collapsed trigger text/icon. The selected row background remains grayscale. Auto Approval uses `#417CDD` in both modes(设计定稿 2026-07-17 扩簇,light/dark 同值;取代 light #000050/dark #00D9C5). Full Access uses Heart Orange `#EA6B17` in both modes(随 warning-accent 自动跟随,定稿 2026-07-17). These hex values are the **default-theme palette only** — other themes may override `--perm-auto-selected-text` and `--perm-bypass-selected-text` with their own accent colors, provided both modes remain color-coded, distinguishable from each other, and visually distinct from neutral text. Tokens: `--perm-auto-selected-text` and `--perm-bypass-selected-text` in `apps/desktop/src/renderer/styles/globals.css`.
 > - **Diff Add Green / Diff Del Red** — GitHub-standard diff syntax colors, used on the `+` / `-` symbol glyph, the changed-line text foreground, **and the full row background** inside code-diff renderings. Applied in three places: (1) the Edit-tool DiffView card (F-MSG-6), (2) markdown ````diff` fenced code blocks in the message stream, and (3) `.diff` / `.patch` files opened in TextLightbox (the document previewer) — there hljs `.hljs-addition` / `.hljs-deletion` are forced `display: block` so the background fills to the right edge instead of stopping at the last glyph. Line-number gutter and ctx (unchanged) lines remain strictly grayscale per the layer system. **Foreground** — Add: `#22863a` Light / `#7ee787` Dark; Del: `#b31d28` Light / `#ff7b72` Dark. **Background** — Add: `#f0fff4` Light / `#033a16` Dark; Del: `#ffeef0` Light / `#67060c` Dark. Tokens: `--diff-add-fg/-bg` and `--diff-del-fg/-bg` in `apps/desktop/src/renderer/styles/globals.css`. Updated 2026-04-21: backgrounds switched from grayscale → GitHub red/green for full-row fill so additions / deletions are unambiguous at a glance.
 
-*Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, Stone (`#737373`) for secondary, Silver (`#a3a3a3`) for tertiary. Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds.*
+*Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds.*
 
 ### Gradient System
 
@@ -126,48 +127,62 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 ## 4. Component Stylings
 
+> 以下 Buttons / Cards / Inputs 采用结构化键值规格(2026-07 自 §12 试点采纳并入):`字段 → token → Default Light / Default Dark 解析值`。token 名以 §10 为准。
+
 ### Buttons
 
-**Gray Pill (Primary)**
+```
+button/primary  (Gray Pill — 主按钮)
+  fill      --surface-chip        #e5e5e5 / #3c3c3a
+  text      --text-primary        #262626 / #d4d4d4
+  border    1px solid --surface-chip   (同 fill)
+  radius    9999px (pill)
+  padding   10px 24px
+  height    ⚠ 未定义(规范只给 padding)
+  note      低调、灰阶、永远胶囊
 
-- Background: Light Gray (`#e5e5e5`)
-- Text: Near Black (`#262626`)
-- Padding: 10px 24px
-- Border: thin solid Light Gray (`1px solid #e5e5e5`)
-- Radius: pill-shaped (9999px)
-- The primary action button — understated, grayscale, always pill-shaped
+button/secondary  (White Pill — 次按钮)
+  fill      --surface-elevated    #ffffff / #2c2c2a
+  text      --text-primary        #262626 / #d4d4d4
+  border    --border-default      #d7d7d4 / #3c3c3a
+  radius    9999px (pill)
+  padding   10px 24px
+  note      比主按钮视觉更轻
 
-**White Pill (Secondary)**
-
-- Background: Pure White (`#ffffff`) — `--surface-elevated`
-- Text: Near Black (`#262626`) — `--text-primary`
-- Padding: 10px 24px
-- Border: thin solid Board (`1px solid #d7d7d4`) — `--border-default`
-- Radius: pill-shaped (9999px)
-- Secondary action — visually lighter than Gray Pill
-
-**Black Pill (CTA)**
-
-- Background: Pure Black (`#000000`)
-- Text: Pure White (`#ffffff`)
-- Radius: pill-shaped (9999px)
-- Maximum emphasis — black on white
+button/cta  (Black Pill — 最高强调)
+  fill      --accent-cta-bg-pure  #000000 / #ffffff
+  text      --accent-pure-cta-fg  #ffffff / #000000
+  radius    9999px (pill)
+  padding   10px 24px
+  note      纯黑底白字(dark 反相)
+```
 
 ### Cards & Containers
 
-- Background: Card (`#ffffff` Light / `#2c2c2a` Dark) or Surface (`#f8f8f6` Light / `#1f1f1e` Dark) depending on layer context
-- Border: thin solid Board (`1px solid #d7d7d4` Light / `1px solid #3c3c3a` Dark) when needed
-- Radius: comfortably rounded (12px) — the container radius (see §5 three-tier scale; 8px is reserved for inner controls like textareas / dropdown rows, pill for interactive elements)
-- Shadow: **none** — zero shadows on any element
-- Hover: likely subtle background shift or border darkening
+```
+card/container
+  fill      --surface-elevated    #ffffff / #2c2c2a   (页面级 flat 布局下用 --surface,见 §2 layer rule)
+  border    1px solid --border-default   #d7d7d4 / #3c3c3a   (需要分隔时才加)
+  radius    12px(容器档,Tailwind rounded-xl 直接量)
+            ⚠ 别用 §10 的 --radius——那是 shadcn 原语的 0.5rem(8px),与本 12px 容器圆角是两回事
+  shadow    none
+  hover     --surface-hover       #e5e5e5 / #3c3c3a
+```
 
 ### Inputs & Forms
 
-- Background: Card (`#ffffff` Light / `#2c2c2a` Dark)
-- Border: `1px solid` Board (`#d7d7d4` Light / `#3c3c3a` Dark)
-- Radius: pill-shaped (9999px) — single-line search inputs and form fields are pill-shaped. **多行输入框(textarea)套不了胶囊**(高框会变形),改用 8px 内层圆角(见 §5 三档圆角)。
-- Focus: Ring Blue (`#3b82f6` at 50%) ring
-- Placeholder: **`--text-placeholder`** slot — **Faded Light** (`#c4c4c4`) Light / **Mid Gray** (`#525252`) Dark — must read as clearly empty, not pre-filled. Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 in Dark, ≈2.6:1 in Light) and reads as real input. **所有输入面的 placeholder(chat / ask / settings / plan-action-fb)统一收口于此 slot**(2026-06 G3);非默认主题通过 override `text-placeholder` 表达各自的 placeholder 色。
+```
+input/text
+  fill        --surface-elevated  #ffffff / #2c2c2a
+  text        --text-primary      #262626 / #d4d4d4
+  border      --border-default    #d7d7d4 / #3c3c3a
+  radius      9999px (pill,单行输入)
+  focus       --focus-ring        #417CDD @50%
+  placeholder --text-placeholder  #c4c4c4 / #525252
+```
+
+- **多行输入框(textarea)套不了胶囊**(高框会变形),改用 8px 内层圆角(见 §5 三档圆角)。
+- Placeholder 必须"读着像空"——Silver(`#a3a3a3`)对两种 Card 底都太显眼(≈5:1 Dark / ≈2.6:1 Light),读着像已填,禁用。**所有输入面的 placeholder(chat / ask / settings / plan-action-fb)统一收口于 `--text-placeholder`**(2026-06 G3,归档见 `design-decision-log.md`);非默认主题通过 override `text-placeholder` 表达各自的 placeholder 色。
 
 ### Select & Dropdown
 
@@ -288,10 +303,10 @@ Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait
 - **Surface** (page bg): "Light Surface (#f8f8f6)" / "Dark Surface (#1f1f1e)"
 - **Card** (elevated layer): "Pure White (#ffffff)" / "Dark Card (#2c2c2a)"
 - **Board** (1px dividers/borders): "Light Board (#d7d7d4)" / "Dark Board (#3c3c3a)"
-- Secondary Text: "Dark Gray (#525252)" Light / "Silver (#a3a3a3)" Dark
-- Tertiary Text: "Stone (#737373)" Light / "Stone (#737373)" Dark
+- Secondary Text: "Stone (#737373)" Light / "Silver (#a3a3a3)" Dark — `--text-secondary`
+- Tertiary Text: "Silver (#a3a3a3)" Light / "Stone (#737373)" Dark — `--text-tertiary`
 - Near Black: (#262626) — Light primary reading text
-- Chip/Button Background: "Light Gray (#e5e5e5)" Light / "Dark Chip (#2c2c2a)" Dark
+- Chip/Button Background: "Light Gray (#e5e5e5)" Light / "Dark Chip (#3c3c3a)" Dark — `--surface-chip`(塌缩到 Card 的变体 `--surface-chip-alt` #2c2c2a 见 §2)
 
 ### Example Component Prompts
 
@@ -332,7 +347,7 @@ Cindy 桌面端用 **VSCode 风格的 ColorRegistry + Theme override** 模型管
 
 源码:`apps/desktop/src/renderer/themes/`
 - `color-registry.ts` — `ColorRegistry` 单例和 `registerColor(id, defaults, description)` API
-- `colors.ts` — 注册全部 token(目前 352 个:40 semantic slot + 228 alias + 84 singleton),按"semantic slot 在前,alias 和 singleton 在后"组织
+- `colors.ts` — 注册全部 token,按"semantic slot 在前,alias 和 singleton 在后"组织(计数持续漂移,**数量一律以 `colors.ts` 为准**,本文档不维护总数)
 - `theme-service.ts` — `applyTheme(theme)` 把所有 token 序列化成 `:root{}` 注入 `<style id="theme-vars">`
 - `builtin/` — 内置主题对象(`cindy-light.ts` / `cindy-dark.ts` / `eclipse.ts` / `default-light.ts` / `default-dark.ts` 及各社区配色)
 - `registry.ts` — `builtinThemes` 注册表 + `listThemesByType('light' | 'dark')`
@@ -341,11 +356,11 @@ Cindy 桌面端用 **VSCode 风格的 ColorRegistry + Theme override** 模型管
 
 ### Token 分层
 
-**Tier 1 — Semantic slot (39 个)**:跨语境复用的核心语义槽,加新主题时这一层是 override 的主战场。
+**Tier 1 — Semantic slot**:跨语境复用的核心语义槽,加新主题时这一层是 override 的主战场。下表穷举全部 slot,即 Tier-1 名录。
 
 | 类目 | Slot | Default Light | Default Dark | 主要用途 |
 |---|---|---|---|---|
-| **Surface (12)** | `--surface` | `#f8f8f6` | `#1f1f1e` | 页面 Surface(hex 形式) |
+| **Surface** | `--surface` | `#f8f8f6` | `#1f1f1e` | 页面 Surface(hex 形式) |
 | | `--surface-hsl` | `60 12.5% 97%` | `60 2% 12%` | 同上 HSL 形式,`hsl(var(--xxx))` 消费 |
 | | `--surface-elevated` | `#ffffff` | `#2c2c2a` | Card 抬一层 / 弹窗 / popover |
 | | `--surface-elevated-soft` | `#e5e5e5` | `#2c2c2a` | Disabled 状态 Card |
@@ -356,11 +371,11 @@ Cindy 桌面端用 **VSCode 风格的 ColorRegistry + Theme override** 模型管
 | | `--surface-hover-soft` | `#f8f8f6` | `#3c3c3a` | 柔和 hover bg |
 | | `--surface-hover-hsl` | `0 0% 90%` | `60 2% 17%` | hover HSL 形式 |
 | | `--surface-on-card` | `#ffffff` | `#1f1f1e` | CTA / checked icon 深色前景 |
-| **Border (4)** | `--border-default` | `#d7d7d4` | `#3c3c3a` | 本规范 Board 1px 边框 |
+| **Border** | `--border-default` | `#d7d7d4` | `#3c3c3a` | 本规范 Board 1px 边框 |
 | | `--border-default-hsl` | `60 3% 84%` | `60 2% 23%` | Board HSL 形式 |
 | | `--border-shadcn-hsl` | `0 0% 90%` | `30 4% 28%` | shadcn input/border HSL |
 | | `--border-transparent-mixed` | `transparent` | `#3c3c3a` | progress track 等单边边框 |
-| **Text (16)** | `--text-primary` | `#262626` | `#d4d4d4` | 主标题 / 主正文 |
+| **Text** | `--text-primary` | `#262626` | `#d4d4d4` | 主标题 / 主正文 |
 | | `--text-primary-hsl` | `0 0% 9%` | `0 0% 83%` | Primary HSL 形式 |
 | | `--text-primary-on-dark` | `#262626` | `#ffffff` | 反相文本(stop button icon 等) |
 | | `--text-primary-emphasis` | `#1a1a1a` | `#d4d4d4` | Plan 强调主文字 |
@@ -376,24 +391,24 @@ Cindy 桌面端用 **VSCode 风格的 ColorRegistry + Theme override** 模型管
 | | `--text-disabled` | `#d4d4d4` | `#525252` | Disabled / failed |
 | | `--text-disabled-tertiary` | `#a3a3a3` | `#737373` | Disabled placeholder 变体 |
 | | `--text-placeholder` | `#c4c4c4` | `#525252` | 统一 placeholder slot(比 tertiary 更淡,读着像空);chat/ask/settings/plan-action-fb 输入框 placeholder 均收口于此 |
-| **Accent (7)** | `--accent-cta-bg` | `#262626` | `#ffffff` | 反相 CTA bg |
+| **Accent** | `--accent-cta-bg` | `#262626` | `#ffffff` | 反相 CTA bg |
 | | `--accent-cta-bg-pure` | `#000000` | `#ffffff` | Pure CTA bg |
 | | `--accent-emphasis` | `#262626` | `#d4d4d4` | settings primary button 等 |
 | | `--accent-soft` | `#262626` | `#ffffff` | Soft accent(folder btn 等) |
 | | `--accent-hover` | `#262626` | `#e5e5e5` | CTA pressed/hover |
 | | `--accent-pure-cta-fg` | `#ffffff` | `#000000` | CTA 文字 pure 反相 |
-| | `--accent-fg-on-pure` | `#ffffff` | `#1f1f1e` | CTA 文字 light 白 / dark 沉 |
 
-**Tier 2 — Alias (228 个)**:大量 component-scoped token(如 `--cmd-palette-bg`、`--msg-tool-card-text`、`--settings-input-border`)的 default 改写为 `var(--slot)`。浏览器自动 forward-resolve。组件不感知,**继续直接消费 alias 名字即可**。
+**Tier 2 — Alias**:大量 component-scoped token(如 `--cmd-palette-bg`、`--msg-tool-card-text`、`--settings-input-border`)的 default 改写为 `var(--slot)`。浏览器自动 forward-resolve。组件不感知,**继续直接消费 alias 名字即可**。
 
-**Tier 3 — Singleton (84 个)**:真独立的色值,无法收敛到 slot:语义豁免色(`--destructive` / `--diff-add-*` / `--status-bar-accent` 等)、平台特定色、splash 时长、`--radius` 等非颜色 token。
+**Tier 3 — Singleton**:真独立的色值,无法收敛到 slot:语义豁免色(`--destructive` / `--diff-add-*` / `--status-bar-accent` 等)、平台特定色、splash 时长、`--radius` 等非颜色 token。
 
 ### 语义豁免色(跨主题不变)
 
 | Token | Light | Dark | 用途 |
 |---|---|---|---|
 | `--destructive` (HSL) | `0 84% 60%` | `0 72% 63%` | 通用 destructive 文本/边 |
-| `--login-error-text` 等 5 个 | `#ef4444` | `#ef4444` | 错误文本 |
+| `--error-flat` | `#ef4444` | `#ef4444` | 扁平 danger 前景 |
+| `--login-error-fg` | `#D91F37` | `#D91F37` | 登录错误文本/描边(见 §16.1) |
 | `--error-bg/-border/-fg/-fg-strong` | (red) | (red) | Error alert 卡片子系统 |
 | `--diff-add-fg/-bg`, `--diff-del-fg/-bg` | GitHub palette | GitHub palette | Diff 渲染 |
 | `--status-bar-accent` | `#EA6B17` | `#EA6B17` | Thinking Orange,跨主题统一(定稿 2026-07-17) |
@@ -483,72 +498,19 @@ Cindy 的产品气质和视觉一致:**克制、直接、不自夸**。文案是
 - [ ] 进行中态是"现在进行时 + …"
 - [ ] 4 个 `common.json` 都补齐且符合本语言的大小写/标点(见 `docs/dev-rules/engineering-conventions.md` §5)
 
-## 12. Component Spec(结构化样板 — 待定)
+## 12. Component Spec(已并入 §4)
 
-> **状态:样板,待你 review。** 本节是把 §4 组件散文规格改写成 **Vercel `design.md` 那种「可机读 / 可执行」结构化键值**的试点,先做 Buttons / Inputs / Cards 三个。**确认采用后,就地替换 §4 的散文描述并删除本节**;不采用则整节删掉,§4 不受影响。
->
-> 读法:`字段  →  token  →  Default Light / Default Dark 解析值`。token 名以 §10 表为准;`⚠` 标记"规范里有值但 §10 暂无对应 token / 字段在 §4 未定义"的缺口——这正是结构化格式相对散文的价值:把隐性缺口显性化。
+> 本节的结构化组件规格试点(Buttons / Inputs / Cards)已于 2026-07 采纳并**就地并入 §4**;
+> 编号保留占位,避免 §13–§16 重编号导致仓库内外引用断链(章节编号的最终整理随 §15 重构
+> 一并处理,见 `design-decision-log.md`)。
 
-```
-button/primary  (Gray Pill — 主按钮)
-  fill      --surface-chip        #e5e5e5 / #3c3c3a
-  text      --text-primary        #262626 / #d4d4d4
-  border    1px solid --surface-chip   (同 fill)
-  radius    9999px (pill)
-  padding   10px 24px
-  height    ⚠ §4 未定义(§4 仅给 padding)
+## 13. Open Spec / Token Gaps
 
-button/secondary  (White Pill — 次按钮)
-  fill      --surface-elevated    #ffffff / #2c2c2a
-  text      --text-primary        #262626 / #d4d4d4   (G1 已解决:原 #404040「Button Text Dark」是漂移)
-  border    --border-default      #d7d7d4 / #3c3c3a   (G2 已解决:原 #d4d4d4「Border Light」是漂移)
-  radius    9999px (pill)
-  padding   10px 24px
+No gaps are currently open.
 
-button/cta  (Black Pill — 最高强调)
-  fill      --accent-cta-bg-pure  #000000 / #ffffff
-  text      --accent-pure-cta-fg  #ffffff / #000000
-  radius    9999px (pill)
-  padding   10px 24px
+Resolved items (G1–G4, 2026-06 — button-text drift, border drift, placeholder unification, radius tiering) are archived in [`design-decision-log.md`](./design-decision-log.md); each entry records the drift, the ruling, and where the conclusion was folded back (§2 / §4 / §5 / §10).
 
-input/text
-  fill        --surface-elevated  #ffffff / #2c2c2a
-  text        --text-primary      #262626 / #d4d4d4
-  border      --border-default    #d7d7d4 / #3c3c3a
-  radius      9999px (pill)
-  focus       --focus-ring        #3b82f6 @50%(双层带缝 ring 见外部讨论 ③,待定)
-  placeholder --text-placeholder   #c4c4c4 / #525252   (G3 已解决:新增统一 slot,4 个输入面 alias 全部收口)
-
-card/container
-  fill      --surface-elevated    #ffffff / #2c2c2a   (页面级 flat 布局下改用 --surface,见 §2 layer rule)
-  border    1px solid --border-default   #d7d7d4 / #3c3c3a   (需要分隔时才加)
-  radius    12px (Tailwind rounded-xl,直接量) — 容器档圆角(三档之一,见 §5;8px 仅内层控件 textarea / 下拉行,pill 给交互件)
-            ⚠ 不要用 §10 的 --radius:那是 shadcn 原语用的 0.5rem(8px),与本 12px 容器圆角是两回事
-  shadow    none
-  hover     --surface-hover       #e5e5e5 / #3c3c3a   (§4 原文是「likely」,此处给出可用 token)
-```
-
-## 13. Known Spec / Token Gaps（跟踪中）
-
-> §12 结构化重写过程中暴露的设计系统欠债。本节**持久存在**(独立于 §12 是否被采用),每条解决后打勾并把结论并入 §2 / §4 / §10。下列"现状"均已 grep 源码核实(以源码为准),非臆测。涉及新增/改 token 的(G3 / G4)按第 10 节的 token 规则须先与 owner 确认再动 `colors.ts`。
-
-- [x] **G1 — 白底次按钮文字 `#404040`「Button Text Dark」是文档漂移,非真 token**(已解决 2026-06)
-  现状:§2 / §4 称其"专用于白底按钮文字",但全仓库只有 `features/maker-experimental/MakerExperimentalView.tsx`(实验视图,裸 hardcode)出现 #404040,**无任何真实次按钮**用它做文字色;§10 也无对应 token。
-  处理:§2 标废弃、§4 White Pill 文字改引 `--text-primary`(#262626)。未动 token,纯文档。
-
-- [x] **G2 — 次按钮边框 `#d4d4d4`「Border Light」同为漂移**(已解决 2026-06)
-  现状:§4 称白底按钮边框 `1px solid #d4d4d4`,但无真实组件这么用;#d4d4d4 的线上出现要么在实验视图(裸 hardcode),要么是**暗色主文字**(`--text-primary` dark = #d4d4d4,如 SchedulerPage CTA 注释),与"边框"无关。真边框 token 是 `--border-default`(#d7d7d4)。
-  处理:§2 标废弃、§4 White Pill 边框改引 `--border-default`(#d7d7d4)。纯文档。
-
-- [x] **G3 — placeholder token 碎片化 + 取值自相矛盾(真欠债)**(已解决 2026-06)
-  现状:4 个 per-surface alias 无统一 slot,且取值打架——`--settings-input-placeholder` = #c4c4c4(§4 认证的"淡到读着像空"),但 `--chat-input-placeholder` = `var(--text-tertiary)` = **#a3a3a3(Silver)**,而 §4 白纸黑字说 Silver **太显眼、读着像已填、不可做 placeholder**。即聊天输入框 placeholder 实际违反了我们自己的 §4 规范。
-  处理:`colors.ts` 新增语义 slot `--text-placeholder`(#c4c4c4 / #525252),4 个 alias(chat/ask/settings/plan-action-fb)default 收口为 `var(--text-placeholder)`;7 套非默认主题原 `settings-input-placeholder` override 就地改名为 `text-placeholder`(沿用原常量,避免回退,符合第 10 节对每套主题的 override 评估)。默认主题下 chat placeholder 由 #a3a3a3 修正为 #c4c4c4。2 套亮色主题(atom-one-light / solarized-light)的 `text-placeholder` 进一步从 tertiary 改用各自 **disabled 档**(更淡)——亮色背景下 tertiary≈2.6:1 命中 §4 禁用 Silver 的对比度,placeholder 须更淡才读着像空(2026-06 review 反馈)。**本地/复制主题兼容**:slot 引入前创建的本地主题快照只冻结了旧 per-surface placeholder key、无 `text-placeholder`,加载期 `mapWireTheme` 经 `local-themes-normalize.ts` 归一化——缺 `text-placeholder` 时从旧 `settings-input-placeholder`(或任一 per-surface 值)播种并丢弃 4 个旧 per-surface override,使四个输入面统一走新 slot(不改写盘上 JSON、幂等;2026-06 review 反馈)。
-
-- [x] **G4 — `--radius`(8px)与容器圆角同名不同义(已解决 2026-06)**
-  现状:`--radius` 实为 `0.5rem`(8px,shadcn 原语用);容器 12px 圆角实际靠 Tailwind `rounded-xl` 直接量实现。
-  处理:**圆角体系正式从"二元"改为"三档"**(8px 内层控件 / 12px 容器 / 9999px pill,见 §5 + §7 + §1)。8px 这一档窄范围限定多行输入框、下拉 / 菜单选中行、段内小单元,实现为 `rounded-lg`;shadcn `--radius`(8px)与这个内层档数值相同但语义独立(原语专用),容器仍走 `rounded-xl`(12px)。**本次纯文档,未动 token**。是否进一步 token 化为 `--radius-inner`(8px)/ `--radius-container`(12px)/ `--radius-pill`(9999px),收益偏低、**暂缓**,要做走第 10 节的新增 token 流程。
-
-> **旁注(不在本次范围,仅记录)**:`MakerExperimentalView.tsx` 通篇裸 hardcode hex(#404040 / #d4d4d4 / #262626 / #333),违反第 10 节 token 规则。因是 experimental 视图、且非本次任务,**不在此清理**,仅备忘。
+Known but deliberately-deferred cleanups (e.g. hardcoded hex in `MakerExperimentalView.tsx`) are tracked in the decision log's backlog section, not here.
 
 ## 14. Interaction Conventions(交互约定)
 
@@ -602,13 +564,13 @@ card/container
 | 列表重排 | FLIP,transform 平移 | `components/ui/toast/ToastContainer.tsx` |
 | 按压 | `active:scale-[0.98]`(交互 pill / 按钮通用) | ConfirmDialog 按钮 |
 | 完成 | **全 app 唯一允许 overshoot 的语义**(`status-done-pop`) | `globals.css` |
-| 运行中 | opacity 呼吸,必须挂 HTML wrapper(AGENTS.md 规则 7) | `session-breathing` |
+| 运行中 | opacity 呼吸,必须挂 HTML wrapper(`docs/dev-rules/engineering-conventions.md` §7) | `session-breathing` |
 | hover / 状态色 | `transition-colors`,≤ fast(150ms) | 全 app 现状 |
 | 容器形变(chip 长成弹层) | 220ms,见下方独立类目(显式例外) | composer 权限/模型选择器 |
 
 #### 红线(性能与克制)
 
-- **常驻/循环动画只允许 HTML 元素上的 `transform` / `opacity`**(compositor-only,AGENTS.md 规则 7 全文适用;SVG 上不挂任何动画)。
+- **常驻/循环动画只允许 HTML 元素上的 `transform` / `opacity`**(compositor-only,`docs/dev-rules/engineering-conventions.md` §7 全文适用;SVG 上不挂任何动画)。
 - 高度/grid 等非 compositor 属性只允许**一次性瞬态动画**(用户触发、有明确结束),不允许常驻。
 - 新增 `@keyframes` / `animate-*` 类必须同步登记 `globals.css` 的 `prefers-reduced-motion` 白名单(全局 `* { transition: none }` 兜不住 keyframes)。
 - 实时跟手的交互(resizer 拖动、拖拽跟随)**不加缓动**——跟手即反馈。
@@ -635,9 +597,12 @@ card/container
 
 ## 15. CINDY 皮肤族(品牌化可选 family)
 
-> 本节为 CINDY 皮肤族的规范记录,**不改写 §1-7 默认皮肤规范**。值的权威来源:
-> `skin-docs/10-specs/` 桌面端体系、`skin-docs/30-mobile/2026-07-18-m0-color-mapping.md`
-> 移动端勘误版,以及 2026-07-18 双端验收后的用户最终口头定稿。实现时零自由裁量。
+> 本节为 CINDY 皮肤族的规范记录,**不改写 §1-7 默认皮肤规范**。取值定稿依据为
+> 设计阶段工作文件(`skin-docs/10-specs/` 桌面端体系、`skin-docs/30-mobile/`
+> 移动端勘误版——**均不入仓库**,地位同 §16 的登录工作文件)以及 2026-07-18 双端
+> 验收后的用户最终口头定稿。实现时零自由裁量:仓库内的权威编码是主题文件
+> (`cindy-light.ts` / `cindy-dark.ts`)、`cindyDecisionData.ts` 与各冻结测试,
+> 本节是其散文摘要。
 
 ### 15.1 色板(Figma 文本节点提取)
 
@@ -723,7 +688,7 @@ Splash 品牌块字标是另一套素材(`assets/splash/wordmark.png` 白字 DAR
   - 选中胶囊 = 反相胶囊(2026-07-20 定稿):`sidebar-item-active` light `#3C3F43`/dark `#EEEEEE`,前景 `sidebar-item-active-foreground` light `#FCFCFC`/dark `#252222`,描边 `sidebar-item-active-border` transparent;**凡 `bg-sidebar-item-active` 上的前景必须配 `text-sidebar-item-active-foreground`,禁用 `text-foreground`**(PR#190 全量整改,该 token 缺省=foreground,非 CINDY 零变化);
   - 强调行(running)行首图标(厂商 glyph/Puzzle/RadioTower/Clock)= **Thinking Orange `--warning-accent` `#EA6B17`**(用户拍板 2026-07-20,取代红系时期规则),呼吸动画 `session-status-breathing`;**选中态同样橙(running 取色优先级高于反相前景)**;移动端 `statusAccent` 同值同规则。常驻呼吸动画必须挂 HTML wrapper,SVG 保持静态(常驻动画 compositor-only 红线,见 `docs/dev-rules/engineering-conventions.md` §7;PR#226 治理)。
   - 断言:③ CINDY_EXPECTED 守 4 token 值;⑦ 新增层级断言(二级暗灰 contrast 明显弱于正文 + 选中胶囊前景×红底 ≥4.5)。
-- **backlog(R2 §4.3 五点差异,lead 裁决 2026-07-17 本轮不做,入 backlog)**:Project_List 三态拆分(active-task-pill/project-card/flat-list-row 不共用 `sidebar-item-active`);项目 header/list card 选中应中性底(#312F2F/#F6F6F6 非 #DF0C27 大红);去 Project_List 选中组 `focus-ring-soft` 蓝 ring,改 card stroke #DCDFE3/#434343;小箭头 #A61629 强调(非整行红底)。详见 `2026-07-17-r2-ui-specs.md` §4.3。本轮收敛不扩战线,后续另开。
+- **backlog(R2 §4.3 五点差异,lead 裁决 2026-07-17 本轮不做,入 backlog)**:Project_List 三态拆分(active-task-pill/project-card/flat-list-row 不共用 `sidebar-item-active`);项目 header/list card 选中应中性底(#312F2F/#F6F6F6 非 #DF0C27 大红);去 Project_List 选中组 `focus-ring-soft` 蓝 ring,改 card stroke #DCDFE3/#434343;小箭头 #A61629 强调(非整行红底)。详见设计阶段工作文件 `2026-07-17-r2-ui-specs.md` §4.3(不入仓库)。本轮收敛不扩战线,后续另开。
 
 三份新 map(`NEUTRAL_PRIMARY_EXPECTED_BY_ID`/`FOREGROUND` + `RED_EXCEPTION_ALLOWED_IDS`)替代旧 `BRAND_RED_*`。D2T ⑤/⑦/⑧ 改用新 map(中性 exact + 红例外白名单 + 中性对比度 + 可证伪)。
 
@@ -887,13 +852,13 @@ Splash 品牌块字标是另一套素材(`assets/splash/wordmark.png` 白字 DAR
 
 **平台差异**：桌面 = Web renderer（Electron，Win / Mac 同套）；手机 = React Native（iOS / Android，含 phone / pad-portrait / pad-landscape）。两端同参数源、同 token 语义（手机 `loginColors` 与桌面 `LOGIN_COLORS` 同名同值），仅实现宿主不同（RN 用 `StyleSheet` + `Animated`，桌面用 CSS + Tailwind）。
 
-**交互态**：hover（仅桌面）/ pressed（双端）/ disabled / loading 五态。态叠层挂伪元素（桌面 `::after`）/ overlay View（手机），**不动图标 / 文本子节点**；disabled 叠层走 `--login-disabled-button-overlay` token。hover / pressed 叠层**暗色落地前**为 figma 实测 rgba 字面值（亮色 as-built 现状）；**暗色 PR 起 token 化为 `--login-overlay-*` 二态 token**（叠层方向随模式反转，见 §16.5），此后组件内禁止新增字面 rgba 叠层。态系细则见 `DESIGN.md §2`。
+**交互态**：hover（仅桌面）/ pressed（双端）/ disabled / loading 五态。态叠层挂伪元素（桌面 `::after`）/ overlay View（手机），**不动图标 / 文本子节点**；disabled 叠层走 `--login-disabled-button-overlay` token。hover / pressed 叠层**暗色落地前**为 figma 实测 rgba 字面值（亮色 as-built 现状）；**暗色 PR 起 token 化为 `--login-overlay-*` 二态 token**（叠层方向随模式反转，见 §16.5），此后组件内禁止新增字面 rgba 叠层。态系细则见设计阶段工作文件 `DESIGN-login §2`(不入仓库)。
 
 **常驻动画 compositor-only**：spinner / loading 环动画挂 HTML（桌面）/ `Animated.View`（手机）外层 wrapper，SVG 图形保持静态（呼应 §14.4）；`prefers-reduced-motion` 直落静止。面板入场 handoff 动画是 §14.4 容器形变的窄变体（双端冻结 420ms 升起 + 渐显，`LOGIN_HANDOFF_TIMINGS.panelMs` / `panelInMs`）。
 
 **Apple「Sign in with Apple」按钮**：iOS HIG 硬性要求使用 Apple 官方按钮样式，**不可皮肤化**——iOS 上 Apple 槽位保持原生 `ASAuthorizationAppleIDButton`，不套 `LoginSocialButton` 皮。这是合规底线，非视觉遗漏。其余社交圆钮（Google / WeChat / SSO）正常上皮。
 
-**i18n**：登录文案走 `react-i18next`（桌面 `common.json` `login.*` 节）/ `loginMessages`（手机），4 语对齐 `zh-CN` / `en` / `ja` / `ko`（zh-TW 已随 #488 回退对齐主干四语基线——设计阶段旧文（不在仓库内）的五语门为回退前遗留，待清理，以本节四语为准）。4 语全部翻准，不留空（空 key 静默回退英文）。
+**i18n**：登录文案走 `react-i18next`（桌面 `common.json` `login.*` 节）/ `loginMessages`（手机），4 语对齐 `zh-CN` / `en` / `ja` / `ko`（zh-TW 已随旧仓 #488 回退对齐主干四语基线——设计阶段旧文（不在仓库内）的五语门为回退前遗留，待清理，以本节四语为准）。4 语全部翻准，不留空（空 key 静默回退英文）。
 
 **多语言长文本与翻译长度预算（2026-07-24 拍板）**：
 
