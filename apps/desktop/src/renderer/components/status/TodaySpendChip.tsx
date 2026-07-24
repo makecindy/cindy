@@ -1010,7 +1010,14 @@ export function TodaySpendChip({
     sessionId,
     isCodexSubscription || isClaudeSubscription || isSubscriptionBridge,
   );
-  const accountUsage = useAccountUsage(sessionId, shouldReadLocalCodexAccountUsage ? 'codex' : undefined);
+  // 按会话形态选配额槽: chatgpt/ bridge 消耗 WHAM(openai-web)报告的配额,
+  // Codex CLI 会话消耗 app-server 报告的配额 —— 不跨槽回退, 绝不显示不是这个
+  // 会话在消耗的配额(账号多限额桶会互相污染, 见 useAccountUsage 头注释)。
+  const accountUsage = useAccountUsage(
+    sessionId,
+    shouldReadLocalCodexAccountUsage ? 'codex' : undefined,
+    isChatgptBridge ? 'openai-web' : 'app-server',
+  );
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
   const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession);
   // cc 与 codex-api 共用同一把 XD gateway key 的 LiteLLM quota; codex-oauth 不订阅。
@@ -1143,21 +1150,23 @@ export function TodaySpendChip({
     return () => window.clearTimeout(timer);
   }, [usesCodexQuotaForm, isClaudeSubscription, windowLabelNowMs, chipResetsAtMsList]);
 
-  // 悬念期主动催一次余量刷新, 让「重置揭晓」尽快到来 —— 两侧的 main read 都是
+  // 悬念期主动催一次余量刷新, 让「重置揭晓」尽快到来 —— main read 都是
   // cached-first + 节流(Claude 订阅端点 180s + 退避; Codex WHAM 10s + in-flight
   // 去重), 每个 tick 重试一次是安全的; 新快照落地即结束悬念期。
-  // 分支优先级必须与上面 chipWindows 的形态选择一致(Codex 形态优先): cc 会话跑
-  // chatgpt/ bridge 模型时 usesCodexQuotaForm 与 isClaudeSubscription 可同时为真,
-  // 此时 chip 显示的是 ChatGPT 窗口, 催刷也必须走 Codex 通道。
+  // 催刷通道必须与 chip 实际显示的配额槽一致:
+  //   - chatgpt/ bridge 形态显示 WHAM(openai-web)槽 → 催 WHAM;
+  //   - Codex CLI 形态显示 app-server 槽 —— WHAM 刷新只落 web 槽、帮不上它,
+  //     且无空闲期 app-server 催刷通道, 靠下一个 turn 事件或悬念超时回落兜底;
+  //   - Claude 订阅形态催订阅端点。
   const hasPendingResetWindow = chipWindows.some((window) => window.resetPending);
   React.useEffect(() => {
     if (!hasPendingResetWindow) return;
-    if (usesCodexQuotaForm) {
+    if (isChatgptBridge) {
       requestCodexAccountRefresh();
-    } else if (isClaudeSubscription) {
+    } else if (isClaudeSubscription && !usesCodexQuotaForm) {
       requestClaudeSubscriptionRefresh();
     }
-  }, [hasPendingResetWindow, isClaudeSubscription, usesCodexQuotaForm, windowLabelNowMs]);
+  }, [hasPendingResetWindow, isChatgptBridge, isClaudeSubscription, usesCodexQuotaForm, windowLabelNowMs]);
 
   const isDashboardClickable = usageDashboardUrl !== null;
   const handleClick = () => {

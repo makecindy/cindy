@@ -1,4 +1,7 @@
 {
+  "contentModeration": {
+    "blocked": "Sorry, we can't answer this question right now. Please rephrase your question."
+  },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
@@ -1532,7 +1535,8 @@
       "save": "Save",
       "overLimit": " — over limit",
       "toast": {
-        "saved": "Custom instructions saved"
+        "saved": "Custom instructions saved",
+        "saveFailed": "Failed to save custom instructions"
       }
     },
     "chipMetrics": {

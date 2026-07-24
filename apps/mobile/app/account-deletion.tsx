@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   KeyboardAvoidingView,
@@ -36,6 +37,9 @@ import {
 } from '@/theme/tokens';
 
 export default function AccountDeletionScreen() {
+  // Subscribe to language changes: this screen renders via the non-reactive
+  // loginText(), so useTranslation() is what re-renders it on locale switch.
+  useTranslation();
   const auth = useAuth();
   const router = useRouter();
   const styles = useThemedStyles(makeStyles);

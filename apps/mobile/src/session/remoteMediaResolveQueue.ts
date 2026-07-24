@@ -17,6 +17,7 @@
  *
  * 纯逻辑模块,依赖注入(resolve/isFresh/now),node 环境可单测。
  */
+import { i18n } from '@/i18n';
 import {
   isResolvedRemoteMediaFresh,
   type MobileResolvedRemoteMedia,
@@ -226,7 +227,7 @@ export function createRemoteMediaResolveQueue(
     if (cached && !opts.forceRefresh && isFresh(cached, now())) return Promise.resolve(cached);
     if (opts.cachedOnly) {
       // 只读缓存模式:未命中直接拒绝,不入队、不碰负缓存(不污染同键的真实取件)。
-      return Promise.reject(new Error('远程媒体缓存未命中(cachedOnly)'));
+      return Promise.reject(new Error(i18n.t('composer.attachments.mediaCacheMiss')));
     }
 
     const negative = errorCache.get(key);
@@ -330,5 +331,5 @@ export function createRemoteMediaResolveQueue(
 }
 
 function abortError(): Error {
-  return new Error('远程媒体取件已取消');
+  return new Error(i18n.t('composer.attachments.mediaFetchCancelled'));
 }

@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "リクエストがタイムアウトしました。しばらくしてからもう一度お試しください。",
+  "networkUnavailable": "ネットワークに接続できません。接続を確認してからもう一度お試しください。{{webHint}}",
+  "networkUnavailableWebHint": "Web プレビューはブラウザーの CORS により遮断される場合があります。Expo Go またはシミュレーターでお試しください。",
+  "requestFailed": "リクエストに失敗しました"
+}

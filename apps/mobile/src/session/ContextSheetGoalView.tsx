@@ -9,6 +9,7 @@
  * remoteSessionStore 镜像的状态投影。
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import {
   ActivityIndicator,
@@ -22,6 +23,7 @@ import type {
   MobileGoalStatus,
   MobileGoalStatusPayload,
 } from '@cindy/maker-shared/device-link-contract';
+import { i18n } from '@/i18n';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** 三项上限的推荐预设(与桌面 GoalAdvancedLimits 一致,2026-06 与用户确认)。 */
@@ -44,13 +46,17 @@ function formatTokenPreset(n: number): string {
   return String(n);
 }
 
+/**
+ * 状态标签映射。值用 getter 惰性求值(i18n.t 在访问时调用,不冻结语言),
+ * 既保留 `GOAL_STATUS_LABEL[status]` 索引用法给外部调用方,又跟随语言切换。
+ */
 export const GOAL_STATUS_LABEL: Record<MobileGoalStatus, string> = {
-  active: '进行中',
-  paused: '已暂停',
-  blocked: '待处理',
-  complete: '已完成',
-  budgetLimited: '已达上限',
-  usageLimited: '用量受限',
+  get active() { return i18n.t('interaction.contextSheet.goalStatus.active'); },
+  get paused() { return i18n.t('interaction.contextSheet.goalStatus.paused'); },
+  get blocked() { return i18n.t('interaction.contextSheet.goalStatus.blocked'); },
+  get complete() { return i18n.t('interaction.contextSheet.goalStatus.complete'); },
+  get budgetLimited() { return i18n.t('interaction.contextSheet.goalStatus.budgetLimited'); },
+  get usageLimited() { return i18n.t('interaction.contextSheet.goalStatus.usageLimited'); },
 };
 
 export interface ContextSheetGoalViewProps {
@@ -115,6 +121,7 @@ export function ContextSheetGoalCreateForm({
 }) {
   const styles = useThemedStyles(makeGoalStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [objective, setObjective] = useState(initial?.objective ?? '');
   const [limits, setLimits] = useState<MobileGoalLimitsInput>(initial?.limits ?? DEFAULT_GOAL_LIMITS);
   // 规则 20:只有用户显式改过上限才回传 limits;从未改动 → 省略,让被控端
@@ -137,20 +144,20 @@ export function ContextSheetGoalCreateForm({
 
   return (
     <View testID={testID}>
-      <Text style={styles.groupLabel}>目标</Text>
+      <Text style={styles.groupLabel}>{t('interaction.contextSheet.goalLabel')}</Text>
       <TextInput
-        accessibilityLabel="目标内容"
+        accessibilityLabel={t('interaction.contextSheet.goalObjectiveAccessibility')}
         editable={!busy}
         multiline
         onChangeText={setObjective}
-        placeholder="想要达成什么？agent 会围绕这个目标自动续跑，直到完成或达到限制。"
+        placeholder={t('interaction.contextSheet.goalPlaceholder')}
         placeholderTextColor={colors.textTertiary}
         style={styles.objectiveInput}
         testID="contextSheet.goalObjectiveInput"
         value={objective}
       />
       <Pressable
-        accessibilityLabel="高级设置"
+        accessibilityLabel={t('interaction.contextSheet.advancedSettings')}
         accessibilityRole="button"
         accessibilityState={{ expanded: advancedOpen }}
         onPress={() => setAdvancedOpen((open) => !open)}
@@ -160,15 +167,15 @@ export function ContextSheetGoalCreateForm({
         {advancedOpen
           ? <ChevronDown color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
           : <ChevronRight color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
-        <Text style={styles.advancedToggleText}>高级设置</Text>
+        <Text style={styles.advancedToggleText}>{t('interaction.contextSheet.advancedSettings')}</Text>
       </Pressable>
       {advancedOpen ? (
         <>
-          <Text style={styles.hintText}>未改动时跟随被控端的默认限制；达到任一上限时目标自动停止，可随时手动终止；「不限」表示不设该上限。</Text>
+          <Text style={styles.hintText}>{t('interaction.contextSheet.limitsHint')}</Text>
           <LimitOptionsRow
             disabled={busy}
             format={(n) => String(n)}
-            label="最大轮数"
+            label={t('interaction.contextSheet.maxTurns')}
             onSelect={(next) => patchLimits({ maxTurns: next })}
             presets={MAX_TURNS_PRESETS}
             testID="contextSheet.goalMaxTurnsOptions"
@@ -177,7 +184,7 @@ export function ContextSheetGoalCreateForm({
           <LimitOptionsRow
             disabled={busy}
             format={formatTokenPreset}
-            label="Token 预算"
+            label={t('interaction.contextSheet.tokenBudget')}
             onSelect={(next) => patchLimits({ budgetTokens: next })}
             presets={BUDGET_PRESETS}
             testID="contextSheet.goalBudgetOptions"
@@ -186,7 +193,7 @@ export function ContextSheetGoalCreateForm({
           <LimitOptionsRow
             disabled={busy}
             format={(n) => String(n)}
-            label="无进展上限"
+            label={t('interaction.contextSheet.noProgressLimit')}
             onSelect={(next) => patchLimits({ noProgressLimit: next })}
             presets={NO_PROGRESS_PRESETS}
             testID="contextSheet.goalNoProgressOptions"
@@ -196,7 +203,7 @@ export function ContextSheetGoalCreateForm({
       ) : null}
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <Pressable
-        accessibilityLabel="开始目标"
+        accessibilityLabel={t('interaction.contextSheet.startGoal')}
         accessibilityRole="button"
         accessibilityState={{ disabled: busy || !objective.trim() }}
         disabled={busy || !objective.trim()}
@@ -211,7 +218,7 @@ export function ContextSheetGoalCreateForm({
         {busy ? (
           <ActivityIndicator color={colors.ctaText} size="small" />
         ) : (
-          <Text style={styles.ctaLabel}>开始目标</Text>
+          <Text style={styles.ctaLabel}>{t('interaction.contextSheet.startGoal')}</Text>
         )}
       </Pressable>
     </View>
@@ -237,8 +244,11 @@ function GoalStatusView({
 }) {
   const styles = useThemedStyles(makeGoalStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const canPause = goal.status === 'active';
   const canResume = goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usageLimited';
+  const turnsText = `${goal.turnsUsed}${goal.maxTurns !== null ? ` / ${goal.maxTurns}` : ''}`;
+  const tokensText = `${formatTokens(goal.tokensUsed)}${goal.budgetTokens !== null ? ` / ${formatTokens(goal.budgetTokens)}` : ''}`;
   return (
     <View testID={testID}>
       <View style={styles.statusHeader}>
@@ -248,7 +258,7 @@ function GoalStatusView({
           </Text>
         </View>
         <Text style={styles.statusMeta}>
-          {`${goal.turnsUsed}${goal.maxTurns !== null ? ` / ${goal.maxTurns}` : ''} 轮 · ${formatTokens(goal.tokensUsed)}${goal.budgetTokens !== null ? ` / ${formatTokens(goal.budgetTokens)}` : ''} token`}
+          {t('interaction.contextSheet.goalMeta', { turns: turnsText, tokens: tokensText })}
         </Text>
       </View>
       <Text style={styles.objectiveText} testID="contextSheet.goalObjectiveText">{goal.objective}</Text>
@@ -256,14 +266,14 @@ function GoalStatusView({
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <View style={styles.actionRow}>
         {canPause ? (
-          <GoalActionButton busy={busy} label="暂停" onPress={onPauseGoal} testID="contextSheet.goalPauseButton" />
+          <GoalActionButton busy={busy} label={t('interaction.contextSheet.pause')} onPress={onPauseGoal} testID="contextSheet.goalPauseButton" />
         ) : null}
         {canResume ? (
-          <GoalActionButton busy={busy} label="继续" onPress={onResumeGoal} testID="contextSheet.goalResumeButton" />
+          <GoalActionButton busy={busy} label={t('interaction.contextSheet.resume')} onPress={onResumeGoal} testID="contextSheet.goalResumeButton" />
         ) : null}
         <GoalActionButton
           busy={busy}
-          label="终止目标"
+          label={t('interaction.contextSheet.clearGoal')}
           onPress={onClearGoal}
           testID="contextSheet.goalClearButton"
           textColor={colors.statusRecording}
@@ -324,6 +334,7 @@ function LimitOptionsRow({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeGoalStyles);
+  const { t } = useTranslation();
   const options = value != null && !presets.includes(value) ? [value, ...presets] : presets;
   return (
     <View style={styles.limitOptionsRow} testID={testID}>
@@ -340,7 +351,7 @@ function LimitOptionsRow({
         ))}
         <LimitPill
           disabled={disabled}
-          label="不限"
+          label={t('interaction.contextSheet.unlimited')}
           onPress={() => onSelect(null)}
           selected={value === null}
         />

@@ -30,6 +30,9 @@ export default defineConfig({
       // TEST_COLLECT_FAILED);无空格路径下两者逐字节一致,CI 行为零变化。
       '@': fileURLToPath(new URL('./src', import.meta.url)),
       'expo-constants': fileURLToPath(new URL('./src/__tests__/expo-constants.mock.ts', import.meta.url)),
+      // expo-localization 同款处理:真模块拖 react-native(Flow 语法)依赖链;
+      // 需要控制语言的测试用 vi.mock 覆盖(优先于 alias)。
+      'expo-localization': fileURLToPath(new URL('./src/__tests__/expo-localization.mock.ts', import.meta.url)),
     },
   },
   test: {

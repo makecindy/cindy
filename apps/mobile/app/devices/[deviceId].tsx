@@ -13,6 +13,8 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { goBackGuarded } from '@/utils/backGuard';
 import { configureCollapseAnimation } from '@/utils/collapseAnimation';
@@ -80,22 +82,24 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 const LIST_LIMIT = 200;
-const STATUS_FILTERS: Array<{ value: RemoteSessionStatusFilter; label: string }> = [
-  { value: 'active', label: '活跃' },
-  { value: 'waiting', label: '待处理' },
-  { value: 'automation', label: '自动化' },
-  { value: 'archived', label: '归档' },
-  { value: 'all', label: '全部' },
+// label 走 i18n key(在使用点 t() 求值),不在模块顶层冻结语言。
+const STATUS_FILTERS: Array<{ value: RemoteSessionStatusFilter; labelKey: string }> = [
+  { value: 'active', labelKey: 'devices.detail.filter.active' },
+  { value: 'waiting', labelKey: 'devices.detail.filter.waiting' },
+  { value: 'automation', labelKey: 'devices.detail.filter.automation' },
+  { value: 'archived', labelKey: 'devices.detail.filter.archived' },
+  { value: 'all', labelKey: 'devices.detail.filter.all' },
 ];
-const GROUP_MODES: Array<{ value: RemoteSessionGroupMode; label: string }> = [
-  { value: 'project', label: '项目' },
-  { value: 'date', label: '时间' },
+const GROUP_MODES: Array<{ value: RemoteSessionGroupMode; labelKey: string }> = [
+  { value: 'project', labelKey: 'devices.detail.group.project' },
+  { value: 'date', labelKey: 'devices.detail.group.date' },
 ];
 type RemoteListStatusFilter = Extract<RemoteSessionStatusFilter, 'active' | 'archived' | 'all'>;
 
 export default function DeviceDetailScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const params = useLocalSearchParams<{
     deviceId: string;
     deviceName?: string;
@@ -437,32 +441,32 @@ export default function DeviceDetailScreen() {
           remoteSessionStore.upsertDeviceSession(rowDeviceId, shardName, session);
         }
         setSelectedSessionIds(failed.map(({ session }) => session.id));
-        setBulkNotice(`已处理 ${rows.length - failed.length} 个，${failed.length} 个失败（已还原，可重试）。`);
+        setBulkNotice(t('devices.detail.bulk.partialFailure', { done: rows.length - failed.length, failed: failed.length }));
       }
       await loadSessions();
     } finally {
       setBulkActionPending(null);
     }
-  }, [bulkActionPending, deviceId, loadSessions, maker]);
+  }, [bulkActionPending, deviceId, loadSessions, maker, t]);
 
   const requestBulkAction = useCallback((action: MobileSessionBulkAction) => {
     const summary = bulkActionSummaries[action];
     if (summary.candidates.length === 0) {
       setBulkNotice(
         action === 'archive'
-          ? '当前选择里没有可归档的活跃会话。'
+          ? t('devices.detail.bulk.noArchivable')
           : action === 'pin'
-            ? '当前选择里没有可置顶的活跃会话。'
+            ? t('devices.detail.bulk.noPinnable')
             : action === 'restore'
-              ? '当前选择里没有可恢复的归档会话。'
+              ? t('devices.detail.bulk.noRestorable')
               : action === 'unpin'
-                ? '当前选择里没有已置顶的会话。'
-                : '当前选择里没有可删除的会话。',
+                ? t('devices.detail.bulk.noUnpinnable')
+                : t('devices.detail.bulk.noDeletable'),
       );
       return;
     }
     setBulkConfirmAction(action);
-  }, [bulkActionSummaries]);
+  }, [bulkActionSummaries, t]);
 
   // 自动化任务作用域(从组行「查看全部 N 次运行」进入):干净布局 —— 头部 + 该任务全部运行的
   // 平铺列表,交互与项目作用域页同构。运行归属 = 入口 sessionId 快照 ∪ 组键匹配(scheduleIndex
@@ -491,10 +495,10 @@ export default function DeviceDetailScreen() {
       <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
         <ScreenHeader
           backTestID="deviceDetail.backButton"
-          eyebrow="自动化任务"
+          eyebrow={t('devices.detail.automationScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
           subtitle={deviceName}
-          title={automationScopeName ?? '自动化任务'}
+          title={automationScopeName ?? t('devices.detail.automationScope.title')}
           titleTestID="deviceDetail.title"
         />
         {showConnectionBanner ? (
@@ -525,14 +529,14 @@ export default function DeviceDetailScreen() {
           ListEmptyComponent={
             <MainWindowEmptyState
               centered
-              copy="任务运行后，每次运行的会话都会出现在这里。"
+              copy={t('devices.detail.automationScope.emptyCopy')}
               style={{
                 marginTop: spacing.xxl,
                 minHeight: windowLayout.emptyMinHeight,
                 padding: windowLayout.emptyPadding,
               }}
               testID="deviceDetail.automationEmpty"
-              title="这个任务还没有运行记录"
+              title={t('devices.detail.automationScope.emptyTitle')}
             />
           }
         />
@@ -549,7 +553,7 @@ export default function DeviceDetailScreen() {
       <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
         <ScreenHeader
           action={{
-            label: '新建',
+            label: t('devices.common.create'),
             // 在这个项目里建新对话:预填 workingDir。
             onPress: () => guardedPush({
               pathname: '/sessions/new',
@@ -563,7 +567,7 @@ export default function DeviceDetailScreen() {
             testID: 'deviceDetail.newSessionButton',
           }}
           backTestID="deviceDetail.backButton"
-          eyebrow="项目"
+          eyebrow={t('devices.detail.projectScope.eyebrow')}
           onBack={() => goBackGuarded(router)}
           subtitle={`${projectWorkingDir} · ${deviceName}`}
           title={projectName ?? deviceName}
@@ -607,14 +611,14 @@ export default function DeviceDetailScreen() {
           ) : (
             <MainWindowEmptyState
               centered
-              copy="在这个项目里开始一个新对话。"
+              copy={t('devices.detail.projectScope.emptyCopy')}
               style={{
                 marginTop: spacing.xxl,
                 minHeight: windowLayout.emptyMinHeight,
                 padding: windowLayout.emptyPadding,
               }}
               testID="deviceDetail.projectEmpty"
-              title="这个项目还没有对话"
+              title={t('devices.detail.projectScope.emptyTitle')}
             />
           )}
         />
@@ -626,7 +630,7 @@ export default function DeviceDetailScreen() {
     <SafeAreaView style={styles.safeArea} testID="deviceDetail.screen">
       <ScreenHeader
         action={{
-          label: '新建',
+          label: t('devices.common.create'),
           onPress: () => guardedPush({
             pathname: '/sessions/new',
             params: {
@@ -641,8 +645,8 @@ export default function DeviceDetailScreen() {
         eyebrow="Remote Device"
         onBack={() => goBackGuarded(router)}
         subtitle={projectWorkingDir
-          ? `${deviceName} · ${filterCounts.active} 个活动会话`
-          : `${filterCounts.active} 个活动会话 · ${filterCounts.projectCount} 个项目`}
+          ? t('devices.detail.subtitle.deviceActive', { deviceName, count: filterCounts.active })
+          : t('devices.detail.subtitle.activeAndProjects', { count: filterCounts.active, projects: filterCounts.projectCount })}
         title={projectName ?? deviceName}
         titleTestID="deviceDetail.title"
       />
@@ -666,8 +670,8 @@ export default function DeviceDetailScreen() {
       >
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
-            accessibilityLabel="筛选活动会话"
-            label="活动"
+            accessibilityLabel={t('devices.detail.metric.activeA11y')}
+            label={t('devices.detail.metric.active')}
             onPress={() => setStatusFilter('active')}
             selected={statusFilter === 'active'}
             style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
@@ -676,8 +680,8 @@ export default function DeviceDetailScreen() {
             value={filterCounts.active}
           />
           <MainWindowMetric
-            accessibilityLabel="筛选待处理会话"
-            label="待处理"
+            accessibilityLabel={t('devices.detail.metric.waitingA11y')}
+            label={t('devices.detail.metric.waiting')}
             onPress={() => setStatusFilter('waiting')}
             selected={statusFilter === 'waiting'}
             style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
@@ -687,8 +691,8 @@ export default function DeviceDetailScreen() {
             value={filterCounts.waiting}
           />
           <MainWindowMetric
-            accessibilityLabel="筛选自动化会话"
-            label="自动化"
+            accessibilityLabel={t('devices.detail.metric.automationA11y')}
+            label={t('devices.detail.metric.automation')}
             onPress={() => setStatusFilter('automation')}
             selected={statusFilter === 'automation'}
             style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
@@ -702,8 +706,8 @@ export default function DeviceDetailScreen() {
           >
             <MainWindowActionButton
               action={{
-                accessibilityLabel: '打开远程自动化',
-                label: `计划${runningAutomationCount > 0 ? ` · ${runningAutomationCount}` : ''}`,
+                accessibilityLabel: t('devices.detail.automationsButtonA11y'),
+                label: `${t('devices.detail.plan')}${runningAutomationCount > 0 ? ` · ${runningAutomationCount}` : ''}`,
                 onPress: () => guardedPush({
                   pathname: '/automations/[deviceId]',
                   params: { deviceId, name: deviceName },
@@ -740,9 +744,9 @@ export default function DeviceDetailScreen() {
             density="compact"
             secondaryActions={[
               {
-                accessibilityLabel: searchOpen ? '关闭搜索远程会话' : '搜索远程会话',
+                accessibilityLabel: searchOpen ? t('devices.detail.search.closeA11y') : t('devices.detail.search.openA11y'),
                 active: searchOpen || !!searchQuery.trim(),
-                label: '搜索',
+                label: t('devices.detail.search.label'),
                 onPress: () => {
                   if (searchOpen && !searchQuery.trim()) {
                     setSearchOpen(false);
@@ -753,9 +757,9 @@ export default function DeviceDetailScreen() {
                 testID: 'deviceDetail.searchToggleButton',
               },
               {
-                accessibilityLabel: filtersOpen ? '收起会话筛选' : '展开会话筛选',
+                accessibilityLabel: filtersOpen ? t('devices.detail.filters.collapseA11y') : t('devices.detail.filters.expandA11y'),
                 active: filtersOpen,
-                label: '筛选',
+                label: t('devices.detail.filters.label'),
                 onPress: () => setFiltersOpen((value) => !value),
                 testID: 'deviceDetail.filtersToggleButton',
               },
@@ -767,12 +771,12 @@ export default function DeviceDetailScreen() {
         {searchOpen || !!searchQuery.trim() ? (
           <View style={styles.searchRow}>
             <TextInput
-              accessibilityLabel="搜索远程会话"
+              accessibilityLabel={t('devices.detail.search.openA11y')}
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus={searchOpen && !searchQuery}
               onChangeText={setSearchQuery}
-              placeholder="搜索标题、项目、模型、消息"
+              placeholder={t('devices.detail.search.placeholder')}
               placeholderTextColor={colors.textTertiary}
               style={styles.searchInput}
               testID="deviceDetail.searchInput"
@@ -780,8 +784,8 @@ export default function DeviceDetailScreen() {
             />
             <MainWindowActionButton
               action={{
-                accessibilityLabel: searchQuery.trim() ? '清除搜索' : '关闭搜索',
-                label: searchQuery.trim() ? '清除' : '关闭',
+                accessibilityLabel: searchQuery.trim() ? t('devices.detail.search.clearA11y') : t('devices.detail.search.closeInputA11y'),
+                label: searchQuery.trim() ? t('devices.detail.search.clear') : t('devices.detail.search.close'),
                 onPress: () => {
                   if (searchQuery.trim()) {
                     setSearchQuery('');
@@ -805,31 +809,37 @@ export default function DeviceDetailScreen() {
               style={styles.segmentScroll}
               contentContainerStyle={styles.segmentScrollContent}
             >
-              {STATUS_FILTERS.map((item) => (
-                <MainWindowOptionButton
-                  accessibilityLabel={`筛选${item.label}会话`}
-                  key={item.value}
-                  label={remoteSessionFilterLabel(item.value, filterCounts, item.label)}
-                  onPress={() => setStatusFilter(item.value)}
-                  selected={statusFilter === item.value}
-                  testID={`deviceDetail.statusFilter.${item.value}`}
-                />
-              ))}
+              {STATUS_FILTERS.map((item) => {
+                const label = t(item.labelKey);
+                return (
+                  <MainWindowOptionButton
+                    accessibilityLabel={t('devices.detail.filter.a11y', { label })}
+                    key={item.value}
+                    label={remoteSessionFilterLabel(item.value, filterCounts, label)}
+                    onPress={() => setStatusFilter(item.value)}
+                    selected={statusFilter === item.value}
+                    testID={`deviceDetail.statusFilter.${item.value}`}
+                  />
+                );
+              })}
             </ScrollView>
             <View style={styles.groupModeRow}>
-              <Text style={styles.groupModeLabel}>分组</Text>
+              <Text style={styles.groupModeLabel}>{t('devices.detail.group.label')}</Text>
               <View style={styles.groupModeButtons}>
-                {GROUP_MODES.map((item) => (
-                  <MainWindowOptionButton
-                    accessibilityLabel={`按${item.label}分组`}
-                    key={item.value}
-                    label={item.label}
-                    onPress={() => setGroupMode(item.value)}
-                    selected={groupMode === item.value}
-                    testID={`deviceDetail.groupMode.${item.value}`}
-                    variant="segmented"
-                  />
-                ))}
+                {GROUP_MODES.map((item) => {
+                  const label = t(item.labelKey);
+                  return (
+                    <MainWindowOptionButton
+                      accessibilityLabel={t('devices.detail.group.a11y', { label })}
+                      key={item.value}
+                      label={label}
+                      onPress={() => setGroupMode(item.value)}
+                      selected={groupMode === item.value}
+                      testID={`deviceDetail.groupMode.${item.value}`}
+                      variant="segmented"
+                    />
+                  );
+                })}
               </View>
             </View>
           </>
@@ -839,21 +849,21 @@ export default function DeviceDetailScreen() {
             <View style={styles.selectionHeaderRow}>
               <View style={styles.selectionTitleBlock}>
                 <Text style={styles.selectionText} testID="deviceDetail.selectionCount">
-                  已选择 {selectedSessionIds.length} 个会话
+                  {t('devices.detail.selection.count', { count: selectedSessionIds.length })}
                 </Text>
                 <Text style={styles.selectionMeta}>
                   {bulkActionLayout.primary.length + bulkActionLayout.destructive.length > 0
-                    ? '可执行操作'
-                    : '没有可执行操作'}
+                    ? t('devices.detail.selection.canAct')
+                    : t('devices.detail.selection.cannotAct')}
                 </Text>
               </View>
               <MainWindowActionGroup
                 density="compact"
                 secondaryActions={[
                   {
-                    accessibilityLabel: '取消选择会话',
+                    accessibilityLabel: t('devices.detail.selection.clearA11y'),
                     disabled: bulkActionPending !== null,
-                    label: '取消',
+                    label: t('devices.common.cancel'),
                     onPress: clearSelection,
                     testID: 'deviceDetail.clearSelectionButton',
                   },
@@ -864,10 +874,10 @@ export default function DeviceDetailScreen() {
             {bulkActionLayout.primary.length > 0 ? (
               <MainWindowActionGroup
                 secondaryActions={bulkActionLayout.primary.map((action) => ({
-                  accessibilityLabel: bulkActionAccessibilityLabel(action),
+                  accessibilityLabel: bulkActionAccessibilityLabel(action, t),
                   disabled: bulkActionPending !== null,
                   label: bulkActionPending === action
-                    ? bulkActionPendingLabel(action)
+                    ? bulkActionPendingLabel(action, t)
                     : mobileSessionBulkActionButtonLabel(bulkActionSummaries[action]),
                   onPress: () => requestBulkAction(action),
                   testID: bulkActionTestID(action),
@@ -878,10 +888,10 @@ export default function DeviceDetailScreen() {
             {bulkActionLayout.destructive.length > 0 ? (
               <MainWindowActionGroup
                 dangerActions={bulkActionLayout.destructive.map((action) => ({
-                  accessibilityLabel: bulkActionAccessibilityLabel(action),
+                  accessibilityLabel: bulkActionAccessibilityLabel(action, t),
                   disabled: bulkActionPending !== null,
                   label: bulkActionPending === action
-                    ? bulkActionPendingLabel(action)
+                    ? bulkActionPendingLabel(action, t)
                     : mobileSessionBulkActionButtonLabel(bulkActionSummaries[action]),
                   onPress: () => requestBulkAction(action),
                   testID: bulkActionTestID(action),
@@ -897,10 +907,10 @@ export default function DeviceDetailScreen() {
                 <MainWindowActionGroup
                   primaryActions={[
                     {
-                      accessibilityLabel: bulkActionAccessibilityLabel(bulkConfirmSummary.action),
+                      accessibilityLabel: bulkActionAccessibilityLabel(bulkConfirmSummary.action, t),
                       disabled: bulkActionPending !== null || bulkConfirmSummary.candidates.length === 0,
                       label: bulkActionPending === bulkConfirmSummary.action
-                        ? bulkActionPendingLabel(bulkConfirmSummary.action)
+                        ? bulkActionPendingLabel(bulkConfirmSummary.action, t)
                         : bulkConfirmSummary.confirmText,
                       onPress: () => void executeBulkAction(bulkConfirmSummary.action, bulkConfirmSummary.candidates),
                       testID: 'deviceDetail.bulkConfirmButton',
@@ -908,9 +918,9 @@ export default function DeviceDetailScreen() {
                     },
                   ]}
                   cancelAction={{
-                    accessibilityLabel: '取消批量操作',
+                    accessibilityLabel: t('devices.detail.bulk.cancelA11y'),
                     disabled: bulkActionPending !== null,
-                    label: '取消',
+                    label: t('devices.common.cancel'),
                     onPress: () => setBulkConfirmAction(null),
                     testID: 'deviceDetail.bulkConfirmCancelButton',
                   }}
@@ -919,7 +929,7 @@ export default function DeviceDetailScreen() {
               </View>
             ) : null}
             {bulkActionLayout.primary.length === 0 && bulkActionLayout.destructive.length === 0 ? (
-              <Text style={styles.bulkNotice}>当前选择的会话都不能修改。</Text>
+              <Text style={styles.bulkNotice}>{t('devices.detail.bulk.noneModifiable')}</Text>
             ) : null}
           </View>
         ) : null}
@@ -1024,6 +1034,7 @@ function SessionRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const isAutomationGroup = !!item.automationGroup;
   // 与首页组行同语义:收起且有需关注内容(未读运行 / 待处理)时点行直开 primary 会话,
   // 展开走行尾「展开」独立热区;其余情况点行仍是展开 / 收起。
@@ -1058,7 +1069,7 @@ function SessionRow({
   const row = (
     <View>
       <MainWindowRowButton
-        accessibilityLabel={`${isAutomationGroup ? '自动化会话组' : '会话'} ${item.title}`}
+        accessibilityLabel={isAutomationGroup ? t('devices.detail.row.a11yAutomationGroup', { title: item.title }) : t('devices.detail.row.a11ySession', { title: item.title })}
         expanded={isAutomationGroup ? automationGroupExpanded : undefined}
         onLongPress={onLongPress}
         onPress={onPress}
@@ -1084,7 +1095,7 @@ function SessionRow({
             </Text>
             {item.pendingInteractionCount > 0 ? (
               <Text style={styles.waitingBadge} testID="deviceDetail.sessionWaitingBadge">
-                待处理 {item.pendingInteractionCount}
+                {t('devices.detail.badge.waiting', { count: item.pendingInteractionCount })}
               </Text>
             ) : null}
           </View>
@@ -1094,22 +1105,22 @@ function SessionRow({
           {item.scheduleInfo ? (
             <View style={styles.badgeRow}>
               <Text style={styles.scheduleBadge} numberOfLines={1} testID="deviceDetail.sessionScheduleBadge">
-                自动化 · {item.scheduleInfo.scheduleName}
-                {item.automationGroup ? ` · ${item.automationGroup.sessionCount} 个会话` : ''}
+                {t('devices.detail.badge.automationPrefix')} · {item.scheduleInfo.scheduleName}
+                {item.automationGroup ? ` · ${t('devices.detail.badge.sessionCount', { count: item.automationGroup.sessionCount })}` : ''}
               </Text>
               {item.automationGroup ? (
                 <Text style={styles.scheduleBadge} testID="deviceDetail.automationGroupBadge">
-                  聚合
+                  {t('devices.detail.badge.aggregate')}
                 </Text>
               ) : null}
               {item.scheduleInfo.running ? (
                 <Text style={styles.runningBadge} testID="deviceDetail.sessionScheduleRunning">
-                  执行中
+                  {t('devices.detail.badge.running')}
                 </Text>
               ) : null}
               {item.scheduleInfo.unreadCount > 0 ? (
                 <Text style={styles.unreadBadge} testID="deviceDetail.sessionScheduleUnread">
-                  未读 {item.scheduleInfo.unreadCount}
+                  {t('devices.detail.badge.unread', { count: item.scheduleInfo.unreadCount })}
                 </Text>
               ) : null}
             </View>
@@ -1132,7 +1143,7 @@ function SessionRow({
         </View>
         {selectionMode ? null : isAutomationGroup ? (
           <Pressable
-            accessibilityLabel={automationGroupExpanded ? `收起 ${item.title}` : `展开 ${item.title}`}
+            accessibilityLabel={automationGroupExpanded ? t('devices.detail.row.a11yCollapse', { title: item.title }) : t('devices.detail.row.a11yExpand', { title: item.title })}
             accessibilityRole="button"
             hitSlop={{ bottom: 12, left: 8, right: 12, top: 12 }}
             onPress={(event) => {
@@ -1143,7 +1154,7 @@ function SessionRow({
             }}
             testID="deviceDetail.automationGroupToggle"
           >
-            <Text style={styles.groupExpandText}>{automationGroupExpanded ? '收起' : '展开'}</Text>
+            <Text style={styles.groupExpandText}>{automationGroupExpanded ? t('devices.detail.row.collapse') : t('devices.detail.row.expand')}</Text>
           </Pressable>
         ) : (
           <ChevronRight color={colors.textTertiary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
@@ -1153,7 +1164,7 @@ function SessionRow({
         <View style={styles.automationChildren} testID="deviceDetail.automationGroupChildren">
           {visibleAutomationChildren.map(({ child, ordinal }) => (
             <MainWindowRowButton
-              accessibilityLabel={`打开自动化会话 ${child.title}`}
+              accessibilityLabel={t('devices.detail.child.openA11y', { title: child.title })}
               key={child.sessionId}
               onPress={() => onOpenSession(child.sessionId)}
               style={styles.automationChildRow}
@@ -1164,16 +1175,16 @@ function SessionRow({
                 <View style={styles.automationChildTitleRow}>
                   <Text style={styles.automationChildTitle} numberOfLines={1}>{child.title}</Text>
                   {child.running ? (
-                    <Text style={styles.runningBadge} testID="deviceDetail.automationChildRunning">执行中</Text>
+                    <Text style={styles.runningBadge} testID="deviceDetail.automationChildRunning">{t('devices.detail.badge.running')}</Text>
                   ) : null}
                   {child.unreadCount > 0 ? (
                     <Text style={styles.unreadBadge} testID="deviceDetail.automationChildUnread">
-                      未读 {child.unreadCount}
+                      {t('devices.detail.badge.unread', { count: child.unreadCount })}
                     </Text>
                   ) : null}
                   {child.pendingInteractionCount > 0 ? (
                     <Text style={styles.waitingBadge} testID="deviceDetail.automationChildWaiting">
-                      待处理 {child.pendingInteractionCount}
+                      {t('devices.detail.badge.waiting', { count: child.pendingInteractionCount })}
                     </Text>
                   ) : null}
                 </View>
@@ -1184,14 +1195,14 @@ function SessionRow({
           ))}
           {hiddenAutomationChildCount > 0 ? (
             <Pressable
-              accessibilityLabel={`查看全部 ${item.automationGroup.sessionCount} 次运行`}
+              accessibilityLabel={t('devices.detail.viewAllRuns', { count: item.automationGroup.sessionCount })}
               accessibilityRole="button"
               onPress={onOpenAutomationGroup}
               style={({ pressed }) => [styles.automationViewAllRow, pressed && styles.pressedRow]}
               testID="deviceDetail.automationViewAll"
             >
               <Text style={styles.automationViewAllText} numberOfLines={1}>
-                {`查看全部 ${item.automationGroup.sessionCount} 次运行`}
+                {t('devices.detail.viewAllRuns', { count: item.automationGroup.sessionCount })}
               </Text>
               <ChevronRight color={colors.textTertiary} size={iconSize.action} strokeWidth={iconStroke.regular} />
             </Pressable>
@@ -1218,20 +1229,20 @@ function rowStatusRailStyle(item: RemoteSessionListItem, styles: ReturnType<type
   return styles.statusRailDefault;
 }
 
-function bulkActionPendingLabel(action: MobileSessionBulkAction): string {
-  if (action === 'pin') return '置顶中';
-  if (action === 'unpin') return '取消中';
-  if (action === 'archive') return '归档中';
-  if (action === 'restore') return '恢复中';
-  return '删除中';
+function bulkActionPendingLabel(action: MobileSessionBulkAction, t: TFunction): string {
+  if (action === 'pin') return t('devices.detail.bulk.pinning');
+  if (action === 'unpin') return t('devices.detail.bulk.unpinning');
+  if (action === 'archive') return t('devices.detail.bulk.archiving');
+  if (action === 'restore') return t('devices.detail.bulk.restoring');
+  return t('devices.detail.bulk.deleting');
 }
 
-function bulkActionAccessibilityLabel(action: MobileSessionBulkAction): string {
-  if (action === 'pin') return '批量置顶选中会话';
-  if (action === 'unpin') return '批量取消置顶选中会话';
-  if (action === 'archive') return '批量归档选中会话';
-  if (action === 'restore') return '批量恢复选中会话';
-  return '批量删除选中会话';
+function bulkActionAccessibilityLabel(action: MobileSessionBulkAction, t: TFunction): string {
+  if (action === 'pin') return t('devices.detail.bulk.pinA11y');
+  if (action === 'unpin') return t('devices.detail.bulk.unpinA11y');
+  if (action === 'archive') return t('devices.detail.bulk.archiveA11y');
+  if (action === 'restore') return t('devices.detail.bulk.restoreA11y');
+  return t('devices.detail.bulk.deleteA11y');
 }
 
 function bulkActionTestID(action: MobileSessionBulkAction): string {

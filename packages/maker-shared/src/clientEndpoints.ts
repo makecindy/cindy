@@ -86,6 +86,10 @@ export const CLIENT_ENDPOINT_KEYS = [
   'modelAccessApiBaseUrl',
   // voice-server（一期开通免费语音输入的数据面）API 基址。
   'voiceApiBaseUrl',
+  // content-moderation short-lived signing services. Production and test are
+  // separate keys so a dev build can never fall through to production HMAC.
+  'moderationSignApiBaseUrl',
+  'moderationSignTestApiBaseUrl',
   // github-server(用户反馈 → 官方仓 GitHub issue 的薄代理)的 API 基址。
   'githubApiBaseUrl',
   // skillhub-server(SkillHub 技能市场/发布 → XD hub 的 S2S 代理)的 API 基址。
@@ -140,6 +144,8 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   websiteUrl: ['https:'],
   modelAccessApiBaseUrl: ['https:'],
   voiceApiBaseUrl: ['https:'],
+  moderationSignApiBaseUrl: ['https:'],
+  moderationSignTestApiBaseUrl: ['https:'],
   githubApiBaseUrl: ['https:'],
   skillhubApiBaseUrl: ['https:'],
   cdnBaseUrl: ['https:'],

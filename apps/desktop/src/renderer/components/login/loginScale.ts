@@ -56,17 +56,25 @@ export interface PanelPlacement {
  *   - 垂直锚点跟随品牌层 desktopScale 画布(组中心 y=groupY+280 映射到屏幕),
  *     再依次 clamp:① 品牌避让——面板顶 ≥ 立绘底(设计 y=1209,figma §4.11)+24;
  *     ② 功能优先——面板底 ≤ 视口底-24(压过品牌避让,小窗允许叠上立绘渐隐区,
- *     面板层 z-[9990] 本就盖品牌层 z-[9980]);③ 顶部保底 24。
+ *     面板层 z-[9990] 本就盖品牌层 z-[9980]);额外底部内容通过 bottomReserve
+ *     参与此 clamp;③ 顶部保底 24。
  *   - 水平:组中心 x=910 与画布中线 909.5 的 0.5 设计px 偏移按恒定缩放折算。
  */
-export function panelPlacement(w: number, h: number, groupY: number): PanelPlacement {
+export function panelPlacement(
+  w: number,
+  h: number,
+  groupY: number,
+  bottomReserve = 0,
+): PanelPlacement {
   const { scale: brandScale } = desktopScale(w, h);
   const panelHeight = 560 * PANEL_FIXED_SCALE; // 登录整体组高 560(figma §5.1)
   const anchorCenterY = h / 2 + (groupY + 280 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
   const brandBottomY = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
   let topY = anchorCenterY - panelHeight / 2;
   topY = Math.max(topY, brandBottomY + 24);
-  topY = Math.min(topY, h - 24 - panelHeight);
+  // 额外底部内容(例如本地模式入口)属于登录组的一部分，必须在这里预留空间；
+  // 否则视口底 clamp 会把它和 social row 压到同一条垂直区域。
+  topY = Math.min(topY, h - 24 - panelHeight - bottomReserve);
   topY = Math.max(topY, 24);
   return {
     scale: PANEL_FIXED_SCALE,
@@ -92,9 +100,9 @@ export interface BrandPlacement {
  *   ③ 极矮窗:上移仍不够 → 整块等比压缩至恰好塞进 [12, 面板顶-12]。
  * 面板锚点取 yDefault(sso 态差 2 设计px,由 12px gap 吸收)。
  */
-export function brandPlacement(w: number, h: number): BrandPlacement {
+export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPlacement {
   const { scale: base } = desktopScale(w, h);
-  const { topY: panelTop } = panelPlacement(w, h, 1229);
+  const { topY: panelTop } = panelPlacement(w, h, 1229, bottomReserve);
   const blockTop = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * base;
   const blockBottom = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * base;
   const limit = panelTop - 12;

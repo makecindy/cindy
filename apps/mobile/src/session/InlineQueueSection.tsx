@@ -17,6 +17,7 @@
  * 避免「排队气泡 + 正式消息」双显(排队气泡消失的同帧正式气泡已在流里,无跳变)。
  */
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
   Pressable,
@@ -51,6 +52,7 @@ import type { MobileOutboxDisplayItem, MobileOutboxThumb } from '@/session/sessi
 import type { InputProjection, QueuedRemoteMessage } from '@/session/types';
 import { iconSize, iconStroke, fontWeight, lineHeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
+import { i18n } from '@/i18n';
 
 /** 折叠时挂载的排队行数(与旧 QueuePanel 同档),其余收进「展开剩余 N 条」。 */
 const COLLAPSED_VISIBLE_ROWS = 3;
@@ -64,8 +66,8 @@ function queueBubbleText(item: Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
     ? stripChatQuoteMarkerLines(item.text)
     : item.text;
   const kind = syntheticTriggerKind(visibleText);
-  if (kind === 'continue') return '继续未完成的任务(系统指令)';
-  if (kind === 'generic') return '系统指令';
+  if (kind === 'continue') return i18n.t('message.queue.continueSystemInstruction');
+  if (kind === 'generic') return i18n.t('message.queue.systemInstruction');
   return visibleText;
 }
 
@@ -185,6 +187,7 @@ export function InlineQueueSection({
 }: InlineQueueSectionProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   // 本区在 FlatList 的 ListFooterComponent 里,行不参与虚拟化:默认只挂前
   // COLLAPSED_VISIBLE_ROWS 条(最先发送的在前),其余折叠为「展开剩余 N 条」,
   // 防止排队几十条时打开会话即整段挂载导致卡顿(review P2)。展开是用户显式
@@ -214,14 +217,14 @@ export function InlineQueueSection({
             <ActionPill
               busy={busy}
               disabled={controlsDisabled || !projection.errorRetryText}
-              label="重试发送"
+              label={t('message.queue.retrySend')}
               onPress={onRetryError}
               testID="queue.inline.retryButton"
             />
             <ActionPill
               busy={busy}
               disabled={controlsDisabled}
-              label="清除错误"
+              label={t('message.queue.clearError')}
               onPress={onClearError}
               testID="queue.inline.clearErrorButton"
             />
@@ -232,21 +235,21 @@ export function InlineQueueSection({
       {projection.credentialSwitchWait ? (
         <View style={styles.banner} testID="queue.inline.credentialSwitchWaitBanner">
           <ActivityIndicator color={colors.textTertiary} size="small" />
-          <Text style={styles.bannerText}>正在等待其它 Codex 任务结束，结束后自动发送</Text>
+          <Text style={styles.bannerText}>{t('message.queue.credentialSwitchWait')}</Text>
         </View>
       ) : null}
 
       {projection.queueAbortPending ? (
         <View style={styles.banner} testID="queue.inline.abortBanner">
           <ActivityIndicator color={colors.textTertiary} size="small" />
-          <Text style={styles.bannerText}>正在停止,排队消息会保留在这里</Text>
+          <Text style={styles.bannerText}>{t('message.queue.aborting')}</Text>
         </View>
       ) : projection.queuePaused ? (
         <View style={styles.banner} testID="queue.inline.pausedBanner">
           <Pause color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          <Text style={styles.bannerText}>队列已暂停,排队消息不会自动发送</Text>
+          <Text style={styles.bannerText}>{t('message.queue.paused')}</Text>
           <QueueTouchButton
-            accessibilityLabel="继续发送队列"
+            accessibilityLabel={t('message.queue.resumeSendQueue')}
             busy={busy}
             disabled={controlsDisabled}
             disabledReason={readOnlyReason}
@@ -255,7 +258,7 @@ export function InlineQueueSection({
             testID="queue.inline.resumeButton"
           >
             <Play color={colors.ctaText} fill={colors.ctaText} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-            <Text style={styles.resumePillText}>继续</Text>
+            <Text style={styles.resumePillText}>{t('message.queue.resume')}</Text>
           </QueueTouchButton>
         </View>
       ) : null}
@@ -276,7 +279,7 @@ export function InlineQueueSection({
                 {settlingThumbs.fileCount > 0 ? (
                   <View style={styles.attachmentLine}>
                     <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.attachmentLineText}>{`${settlingThumbs.fileCount} 个附件`}</Text>
+                    <Text style={styles.attachmentLineText}>{t('message.queue.attachmentCount', { n: settlingThumbs.fileCount })}</Text>
                   </View>
                 ) : null}
               </View>
@@ -313,8 +316,8 @@ export function InlineQueueSection({
               <Pressable
                 accessibilityHint={presentation.hint ?? undefined}
                 accessibilityLabel={presentation.steering
-                  ? `插话发送中:${queueBubbleText(item) || '附件消息'}`
-                  : `排队消息 ${originalIndex + 1}:${queueBubbleText(item) || '附件消息'}`}
+                  ? t('message.queue.steeringLabel', { text: queueBubbleText(item) || t('message.queue.attachmentMessage') })
+                  : t('message.queue.queuedMessageLabel', { index: originalIndex + 1, text: queueBubbleText(item) || t('message.queue.attachmentMessage') })}
                 accessibilityRole="button"
                 accessibilityState={{ expanded: selected, disabled: editing }}
                 disabled={editing}
@@ -336,12 +339,12 @@ export function InlineQueueSection({
                 {queuedThumbs.fileCount > 0 ? (
                   <View style={styles.attachmentLine}>
                     <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.attachmentLineText}>{`${queuedThumbs.fileCount} 个附件`}</Text>
+                    <Text style={styles.attachmentLineText}>{t('message.queue.attachmentCount', { n: queuedThumbs.fileCount })}</Text>
                   </View>
                 ) : null}
                 {editing ? (
                   <Text style={styles.editingHint} testID={`queue.inline.editingHint.${originalIndex + 1}`}>
-                    正在下方输入框编辑…
+                    {t('message.queue.editingInComposer')}
                   </Text>
                 ) : null}
               </Pressable>
@@ -358,7 +361,7 @@ export function InlineQueueSection({
                   disabled={presentation.actions.remove.disabled}
                   disabledReason={presentation.actions.remove.disabledReason}
                   icon={Trash2}
-                  label="取消"
+                  label={t('message.queue.cancel')}
                   onPress={() => onRemove(item.clientId)}
                   testID={`queue.inline.remove.${originalIndex + 1}`}
                 />
@@ -367,7 +370,7 @@ export function InlineQueueSection({
                   disabled={presentation.actions.edit.disabled}
                   disabledReason={presentation.actions.edit.disabledReason}
                   icon={Pencil}
-                  label="编辑"
+                  label={t('message.queue.edit')}
                   onPress={() => onBeginEdit(item)}
                   testID={`queue.inline.edit.${originalIndex + 1}`}
                 />
@@ -377,7 +380,7 @@ export function InlineQueueSection({
                   disabled={presentation.actions.steer.disabled}
                   disabledReason={presentation.actions.steer.disabledReason}
                   icon={ArrowUp}
-                  label="插话"
+                  label={t('message.queue.steer')}
                   onPress={() => onSteer(item)}
                   testID={`queue.inline.steer.${originalIndex + 1}`}
                 />
@@ -389,13 +392,13 @@ export function InlineQueueSection({
       {hiddenRowCount > 0 || (expanded && visibleQueue.length > COLLAPSED_VISIBLE_ROWS) ? (
         <View style={styles.toggleRow}>
           <QueueTouchButton
-            accessibilityLabel={expanded ? '收起排队消息' : `展开剩余 ${hiddenRowCount} 条排队消息`}
+            accessibilityLabel={expanded ? t('message.queue.collapseQueued') : t('message.queue.expandRemainingQueued', { n: hiddenRowCount })}
             onPress={() => setExpanded(!expanded)}
             style={styles.togglePill}
             testID="queue.inline.toggle"
           >
             <Text style={styles.togglePillText}>
-              {expanded ? '收起' : `展开剩余 ${hiddenRowCount} 条`}
+              {expanded ? t('message.queue.collapse') : t('message.queue.expandRemaining', { n: hiddenRowCount })}
             </Text>
           </QueueTouchButton>
         </View>
@@ -418,8 +421,8 @@ export function InlineQueueSection({
               </View>
               <Pressable
                 accessibilityLabel={item.failed
-                  ? `发送失败的消息:${visibleText || '附件消息'}`
-                  : `发送中的消息:${visibleText || '附件消息'}`}
+                  ? t('message.queue.sendFailedMessage', { text: visibleText || t('message.queue.attachmentMessage') })
+                  : t('message.queue.sendingMessage', { text: visibleText || t('message.queue.attachmentMessage') })}
                 accessibilityRole="button"
                 accessibilityState={{ expanded: selected }}
                 onPress={() => onSelect(selected ? null : item.clientId)}
@@ -439,8 +442,8 @@ export function InlineQueueSection({
                     <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
                     <Text style={styles.attachmentLineText}>
                       {uploadsPending
-                        ? `附件上传中 ${item.uploadedCount}/${item.attachmentCount}`
-                        : `${item.fileCount} 个附件`}
+                        ? t('message.queue.uploadingAttachments', { uploaded: item.uploadedCount, total: item.attachmentCount })
+                        : t('message.queue.attachmentCount', { n: item.fileCount })}
                     </Text>
                   </View>
                 ) : null}
@@ -456,7 +459,7 @@ export function InlineQueueSection({
                 <ActionPill
                   busy={busy}
                   icon={Trash2}
-                  label="删除"
+                  label={t('message.queue.delete')}
                   onPress={() => onRemoveOutboxItem?.(item.clientId)}
                   testID={`queue.inline.outboxRemove.${outboxIndex + 1}`}
                 />
@@ -465,7 +468,7 @@ export function InlineQueueSection({
                     busy={busy}
                     cta
                     icon={RotateCcw}
-                    label="重试"
+                    label={t('message.queue.retry')}
                     onPress={() => onRetryOutboxItem?.(item.clientId)}
                     testID={`queue.inline.outboxRetry.${outboxIndex + 1}`}
                   />

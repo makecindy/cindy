@@ -1,5 +1,6 @@
 
 import { sha256 } from '@noble/hashes/sha256';
+import { i18n } from '@/i18n';
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -26,12 +27,12 @@ export async function sha256MobileAttachmentFile(
   const readChunk = options.readChunk ?? readFileChunkBase64;
   const hash = sha256.create();
   for (let position = 0; position < expectedSize; position += HASH_CHUNK_BYTES) {
-    if (options.signal?.aborted) throw new Error('附件上传已取消。');
+    if (options.signal?.aborted) throw new Error(i18n.t('composer.upload.cancelled'));
     const length = Math.min(HASH_CHUNK_BYTES, expectedSize - position);
     const encoded = await readChunk(uri, position, length);
     const bytes = decodeBase64(encoded);
     if (bytes.byteLength !== length) {
-      throw new Error(`文件读取不完整:预期 ${length} 字节,实际 ${bytes.byteLength} 字节。`);
+      throw new Error(i18n.t('composer.upload.incompleteRead', { expected: length, actual: bytes.byteLength }));
     }
     hash.update(bytes);
   }
@@ -49,7 +50,7 @@ export async function sha256MobileAttachmentBody(
 
   if (body instanceof Blob) {
     for (let position = 0; position < body.size; position += HASH_CHUNK_BYTES) {
-      if (signal?.aborted) throw new Error('附件上传已取消。');
+      if (signal?.aborted) throw new Error(i18n.t('composer.upload.cancelled'));
       const bytes = new Uint8Array(
         await body.slice(position, position + HASH_CHUNK_BYTES).arrayBuffer(),
       );
@@ -69,11 +70,11 @@ export async function sha256MobileAttachmentBody(
     seen = bytes.byteLength;
     hash.update(bytes);
   } else {
-    throw new Error('当前附件上传体无法进行完整性校验。');
+    throw new Error(i18n.t('composer.upload.integrityUnavailable'));
   }
 
   if (seen !== expectedSize) {
-    throw new Error(`附件大小已变化:预期 ${expectedSize} 字节,实际 ${seen} 字节。`);
+    throw new Error(i18n.t('composer.upload.sizeChanged', { expected: expectedSize, actual: seen }));
   }
   return toHex(hash.digest());
 }
@@ -91,7 +92,7 @@ async function readFileChunkBase64(uri: string, position: number, length: number
 
 function assertExpectedSize(size: number): void {
   if (!Number.isSafeInteger(size) || size <= 0) {
-    throw new Error('附件大小无效,无法计算完整性摘要。');
+    throw new Error(i18n.t('composer.upload.invalidSize'));
   }
 }
 
@@ -133,8 +134,8 @@ function decodeBase64(input: string): Uint8Array {
 }
 
 function decodeBase64Char(char: string | undefined): number {
-  if (!char) throw new Error('附件分块不是有效的 base64。');
+  if (!char) throw new Error(i18n.t('composer.upload.invalidBase64'));
   const index = BASE64_ALPHABET.indexOf(char);
-  if (index < 0) throw new Error('附件分块不是有效的 base64。');
+  if (index < 0) throw new Error(i18n.t('composer.upload.invalidBase64'));
   return index;
 }

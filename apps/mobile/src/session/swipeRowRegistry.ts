@@ -5,6 +5,7 @@
  *    「置顶态 → 动作与文案」「选项菜单模型」「动作 → RPC 补丁」的确定性映射,
  *    补丁生成直接转发共享层 mobileSessionBulkPatch,不自己拼字段。
  */
+import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import {
   mobileSessionBulkPatch,
@@ -309,8 +310,10 @@ export async function retryPatchWhileLatest<T>(
 /** 右滑按钮:按当前置顶态给出动作与文案(置顶区行天然拿到「取消置顶」)。 */
 export function pinToggleAction(
   pinnedAt: string | null | undefined,
-): { action: 'pin' | 'unpin'; label: '置顶' | '取消置顶' } {
-  return pinnedAt ? { action: 'unpin', label: '取消置顶' } : { action: 'pin', label: '置顶' };
+): { action: 'pin' | 'unpin'; label: string } {
+  return pinnedAt
+    ? { action: 'unpin', label: i18n.t('session.menu.unpin') }
+    : { action: 'pin', label: i18n.t('session.menu.pin') };
 }
 
 export interface SessionActionMenuItem {
@@ -326,10 +329,10 @@ export function buildSessionActionMenu(
 ): SessionActionMenuItem[] {
   const pinToggle = pinToggleAction(pinnedAt);
   return [
-    { action: 'rename', label: '重命名对话' },
+    { action: 'rename', label: i18n.t('session.menu.renameAction') },
     { action: pinToggle.action, label: pinToggle.label },
-    { action: 'archive', label: '归档' },
-    { action: 'delete', label: '删除对话', destructive: true },
+    { action: 'archive', label: i18n.t('session.menu.archive') },
+    { action: 'delete', label: i18n.t('session.menu.deleteConversation'), destructive: true },
   ];
 }
 

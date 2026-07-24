@@ -2,10 +2,11 @@
  * modelPickerSheetModel 单测:back 两段式结算、二级标题派生、options 目标行现查与失效回退、
  * flat query 过滤。纯逻辑,node env。
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
+import { i18n } from '@/i18n';
 import type { ProviderModelRow } from '@/session/providerModelSections';
 import {
   filterFlatModelOptions,
@@ -13,6 +14,11 @@ import {
   modelPickerSheetTitle,
   settleModelPickerSheetBack,
 } from '@/session/modelPickerSheetModel';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 const provider = { id: 'xd', name: 'XD Gateway' } as unknown as ProviderView;
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { panelPlacement } from './loginScale';
-import { LOGIN_GROUP } from './loginDesignTokens';
+import { LOGIN_GROUP, LOGIN_LOCAL_MODE } from './loginDesignTokens';
 
 /**
  * LoginStage — 桌面登录 1819×2098 设计画布的「面板宿主」层(demo v3.1 缩放)。
@@ -34,16 +34,22 @@ export function LoginStage({
   children,
   ssoOrgGroupY = false,
   groupStyle,
+  footer,
+  bottomReserve = 0,
 }: {
   children: ReactNode;
   /** sso-org 族状态登录组 y=1227,其余 1229(figma §5.1 / demo loginY)。 */
   ssoOrgGroupY?: boolean;
   /** handoff 面板入场样式(opacity/transform/transition,LoginPage 消费 context 注入)。 */
   groupStyle?: CSSProperties;
+  /** 登录组下方的辅助操作区；相对于 stage 定位并参与视口底部避让计算。 */
+  footer?: ReactNode;
+  /** 登录组下方内容需要预留的屏幕高度，由 LoginPage 与品牌层共享同一值。 */
+  bottomReserve?: number;
 }) {
   const { width, height } = useViewportSize();
   const groupY = ssoOrgGroupY ? LOGIN_GROUP.ySsoOrg : LOGIN_GROUP.yDefault;
-  const placement = panelPlacement(width, height, groupY);
+  const placement = panelPlacement(width, height, groupY, bottomReserve);
 
   return (
     <div
@@ -73,6 +79,28 @@ export function LoginStage({
           {children}
         </div>
       </div>
+      {footer && (
+        <div
+          data-testid="login-stage-footer"
+          className="absolute z-30 flex flex-col items-center text-center"
+          style={{
+            left: placement.centerX,
+            top:
+              placement.topY +
+              LOGIN_GROUP.height * placement.scale +
+              LOGIN_LOCAL_MODE.gap,
+            width: `min(${LOGIN_GROUP.width}px, calc(100vw - 32px))`,
+            // footer 只共享面板的可见性、交互门控与过渡时长；不复用 translateY，
+            // 避免它与父级 scale 下的面板产生不同步位移。
+            opacity: groupStyle?.opacity,
+            transform: 'translateX(-50%)',
+            pointerEvents: groupStyle?.pointerEvents,
+            transition: groupStyle?.transition,
+          }}
+        >
+          {footer}
+        </div>
+      )}
     </div>
   );
 }

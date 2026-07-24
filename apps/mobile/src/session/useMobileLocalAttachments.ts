@@ -14,6 +14,7 @@
  *   - 页面卸载时 hook 自动 dispose(在途上传完成后回收 OSS 中转对象)。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -139,6 +140,7 @@ export interface UseMobileLocalAttachmentsResult {
 export function useMobileLocalAttachments(
   options: UseMobileLocalAttachmentsOptions,
 ): UseMobileLocalAttachmentsResult {
+  const { t } = useTranslation();
   const [pendingUploads, setPendingUploads] = useState<readonly PendingLocalAttachmentUpload[]>([]);
   const pickerBusyRef = useRef(false);
   /** 本 hook 拥有的 WebView 粘贴缓存；注册持久缩略图后或卸载时统一回收。 */
@@ -189,7 +191,7 @@ export function useMobileLocalAttachments(
         pastePlaceholderBatchesRef.current = [];
         setPastePlaceholderCount(0);
         flushPastePlaceholderWaiters();
-        optionsRef.current.onError('粘贴图片处理超时，请重试。');
+        optionsRef.current.onError(t('composer.upload.pasteTimeout'));
       }, PASTE_PLACEHOLDER_TIMEOUT_MS);
     } else {
       flushPastePlaceholderWaiters();
@@ -225,7 +227,7 @@ export function useMobileLocalAttachments(
   const failPastePlaceholders = () => {
     if (pastePlaceholderBatchesRef.current.length === 0) return;
     shiftPastePlaceholderBatch();
-    optionsRef.current.onError('剪贴板图片读取失败，请重新复制后再粘贴。');
+    optionsRef.current.onError(t('composer.upload.clipboardReadFailed'));
   };
 
   const controller = useMemo(() => createMobileLocalAttachmentUploadController({
@@ -299,7 +301,7 @@ export function useMobileLocalAttachments(
       - optionsRef.current.getAttachmentCount()
       - getPendingSlotCount();
     if (remainingSlots <= 0) {
-      optionsRef.current.onError(`最多添加 ${MOBILE_MAX_ATTACHMENTS} 个附件。`);
+      optionsRef.current.onError(t('composer.upload.maxAttachments', { count: MOBILE_MAX_ATTACHMENTS }));
       return null;
     }
     pickerBusyRef.current = true;
@@ -314,7 +316,7 @@ export function useMobileLocalAttachments(
       // iOS 模拟器无相机:不拦截会在原生层直接崩进程(见 isCameraUnavailableOnSimulator)。
       if (source === 'camera'
         && isCameraUnavailableOnSimulator(Platform.OS, FileSystem.documentDirectory)) {
-        optionsRef.current.onError('模拟器没有相机，请用「照片」从相册选择。');
+        optionsRef.current.onError(t('composer.upload.simulatorNoCamera'));
         return;
       }
       const permission = source === 'camera'
@@ -322,8 +324,8 @@ export function useMobileLocalAttachments(
         : await ImagePicker.requestMediaLibraryPermissionsAsync(false);
       if (!permission.granted) {
         optionsRef.current.onError(source === 'camera'
-          ? '相机权限未开启，请在系统设置里允许 Cindy 使用相机。'
-          : '照片权限未开启，请在系统设置里允许 Cindy 访问照片。');
+          ? t('composer.upload.cameraPermission')
+          : t('composer.upload.photoPermission'));
         return;
       }
 
@@ -370,13 +372,13 @@ export function useMobileLocalAttachments(
       const uri = asset?.uri?.trim();
       const name = asset?.name?.trim();
       if (!asset || !uri || !name) {
-        optionsRef.current.onError('没有读取到可上传的文件。');
+        optionsRef.current.onError(t('composer.upload.noFileRead'));
         return;
       }
       // 类型白名单同步校验:不支持的类型即时报错,不进托盘、不触发上传
       // (上传层还有同口径兜底,防 OSS 孤儿)。
       if (!categorizeMobileAttachment(name)) {
-        optionsRef.current.onError('这个本机文件类型暂不支持作为附件发送。');
+        optionsRef.current.onError(t('composer.upload.fileTypeUnsupported'));
         return;
       }
 

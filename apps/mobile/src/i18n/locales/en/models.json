@@ -1,0 +1,36 @@
+{
+  "picker": {
+    "title": "Model",
+    "permissionTitle": "Permissions",
+    "searchAccessibility": "Search models",
+    "searchPlaceholder": "Search models...",
+    "noResults": "No matching models",
+    "emptyDefault": "No models available",
+    "loadingDefault": "Loading models…",
+    "subscriptionBadge": "Subscription",
+    "backToModels": "Back to model list",
+    "agentSwitchHint": "After you pick a model, the next message switches to {{agent}}",
+    "crossAgentEmptyHint": "Connect a {{agent}} model source on the controlled computer first",
+    "permissionModeAccessibility": "Permission mode: {{mode}}",
+    "selectProviderModelAccessibility": "Select {{model}} from {{provider}}",
+    "selectModelAccessibility": "Select {{model}}",
+    "configureAccessibility": "Configure {{model}}",
+    "budgetDisabledHint": "This model needs an API key configured on the controlled computer first",
+    "priceLine": "Input {{input}} · Output {{output}} / million tokens",
+    "contextSuffix": "{{size}} context",
+    "fastTag": "Fast"
+  },
+  "options": {
+    "fastMode": "Fast Mode",
+    "fastModeAccessibility": "Fast mode {{model}}",
+    "reasoningEffort": "Reasoning Effort",
+    "reasoningEffortAccessibility": "Reasoning effort {{label}}"
+  },
+  "agentSwitch": {
+    "browseAccessibility": "Browse {{agent}} models",
+    "confirmTitle": "Switch to {{agent}}?",
+    "confirmMessage": "When you send the next message, {{appName}} hands the current session over to {{agent}}. The two agents may interpret context and tools differently, so confirm before choosing the target model.",
+    "cancel": "Cancel",
+    "confirm": "Continue"
+  }
+}

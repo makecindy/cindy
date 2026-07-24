@@ -8,6 +8,7 @@
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 
 import { lightColors } from '@/theme/tokens';
+import { i18n } from '@/i18n';
 
 export const MOBILE_MERMAID_VERSION = '11.14.0';
 
@@ -50,8 +51,11 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
     : 'width=device-width, initial-scale=1, maximum-scale=1';
   const trimmed = source.trim();
   const deferSource = !!theme.deferSource;
+  // 空图占位文案在调用点求值(HTML 生成时),注入首屏与脚本降级两处;不硬编码。
+  const emptyDiagramLabel = i18n.t('message.renderer.mermaidEmpty');
+  const serializedEmptyDiagramLabel = serializeForScript(emptyDiagramLabel);
   // deferSource:首屏留空(干净背景),源码只作降级;否则源码即首屏(弱网零白条)。
-  const firstFrameHtml = deferSource ? '' : `<pre>${escapeHtmlText(trimmed) || '空 Mermaid 图表。'}</pre>`;
+  const firstFrameHtml = deferSource ? '' : `<pre>${escapeHtmlText(trimmed) || escapeHtmlText(emptyDiagramLabel)}</pre>`;
   // deferSource 模式下,CDN 全部耗尽 / 空源码这两条「静默停留首屏」的路径必须
   // 显式降级到源码,否则页面永远空白。
   const exhaustFallback = deferSource ? 'showSource();' : '';
@@ -123,7 +127,7 @@ export function buildMermaidWebViewHtml(source: string, theme: MermaidWebViewCol
     function showSource(label) {
       root.className = 'source';
       const pre = document.createElement('pre');
-      pre.textContent = source || '空 Mermaid 图表。';
+      pre.textContent = source || ${serializedEmptyDiagramLabel};
       root.innerHTML = '';
       if (label) {
         const notice = document.createElement('div');

@@ -1,4 +1,5 @@
 // 拉 mobile-update-server 的 `/latest`(整包版本记录)。薄 IO 封装,判定逻辑在 bundleUpdate.ts。
+import { i18n } from '@/i18n';
 import { OTA_SERVER_BASE_URL } from '@/config/env';
 
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -27,7 +28,7 @@ export async function fetchLatestRelease(
       headers: { accept: 'application/json' },
     });
     if (res.status === 404) return null; // 服务端确认暂无记录 = 无更新
-    if (!res.ok) throw new Error(`latest 请求失败:HTTP ${res.status}`); // 5xx 等服务异常,不能当成"无更新"
+    if (!res.ok) throw new Error(i18n.t('update.latestRequestFailed', { status: res.status })); // 5xx 等服务异常,不能当成"无更新"
     return await res.json();
   } finally {
     clearTimeout(timer);

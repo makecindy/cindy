@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { apiFetchRaw } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { i18n } from '@/i18n';
 import { buildAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
   discardMobileUploadedAttachment,
@@ -10,6 +11,11 @@ import {
   uploadMobileAttachment,
   uploadMobileAttachmentFromFile,
 } from '@/session/mobileAttachmentUpload';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 const readFileChunk = vi.fn(async (_uri: string, _position: number, length: number) =>
   Buffer.alloc(length, 0x78).toString('base64'),

@@ -4,6 +4,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Text } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RewindPreviewState } from '@/session/rewindPreview';
@@ -26,12 +28,13 @@ export function RewindPreviewPanel({
 }: RewindPreviewPanelProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { width: screenWidth } = useWindowDimensions();
   if (state.kind === 'idle') return null;
 
   const canConfirm = state.kind === 'default' || state.kind === 'empty';
-  const title = titleForState(state);
-  const detail = detailForState(state);
+  const title = titleForState(state, t);
+  const detail = detailForState(state, t);
   const fileCount = state.kind === 'default' ? state.filesChanged.length : 0;
   const layout = buildRewindPreviewLayout({
     fileCount,
@@ -70,10 +73,10 @@ export function RewindPreviewPanel({
             </Text>
           ))}
           {state.filesChanged.length > layout.visibleFileCount ? (
-            <Text style={styles.moreFiles}>另有 {state.filesChanged.length - layout.visibleFileCount} 个文件</Text>
+            <Text style={styles.moreFiles}>{t('interaction.rewind.moreFiles', { count: state.filesChanged.length - layout.visibleFileCount })}</Text>
           ) : null}
           <Text style={styles.stats}>
-            {state.filesChanged.length} 个文件 · +{state.insertions} / -{state.deletions} 行
+            {t('interaction.rewind.stats', { count: state.filesChanged.length, insertions: state.insertions, deletions: state.deletions })}
           </Text>
         </View>
       ) : null}
@@ -89,15 +92,15 @@ export function RewindPreviewPanel({
       {state.kind !== 'loading' ? (
         <MainWindowActionGroup
           cancelAction={{
-            accessibilityLabel: state.kind === 'error' ? '知道了' : '取消回退',
-            label: state.kind === 'error' ? '知道了' : '取消',
+            accessibilityLabel: state.kind === 'error' ? t('interaction.rewind.gotIt') : t('interaction.rewind.cancelAccessibility'),
+            label: state.kind === 'error' ? t('interaction.rewind.gotIt') : t('interaction.rewind.cancel'),
             onPress: onCancel,
             testID: state.kind === 'error' ? 'rewind.dismissButton' : 'rewind.cancelButton',
           }}
           primaryActions={canConfirm ? [{
-            accessibilityLabel: '确认回退',
+            accessibilityLabel: t('interaction.rewind.confirm'),
             disabled: committing,
-            label: committing ? '回退中' : '确认回退',
+            label: committing ? t('interaction.rewind.confirming') : t('interaction.rewind.confirm'),
             onPress: onConfirm,
             testID: 'rewind.confirmButton',
             tone: 'primary',
@@ -109,18 +112,18 @@ export function RewindPreviewPanel({
   );
 }
 
-function titleForState(state: RewindPreviewState): string {
-  if (state.kind === 'loading') return '正在检查回退影响';
-  if (state.kind === 'default') return '确认回退到这条消息?';
-  if (state.kind === 'empty') return '只回退对话历史';
-  return '无法回退';
+function titleForState(state: RewindPreviewState, t: TFunction): string {
+  if (state.kind === 'loading') return t('interaction.rewind.titleLoading');
+  if (state.kind === 'default') return t('interaction.rewind.titleDefault');
+  if (state.kind === 'empty') return t('interaction.rewind.titleEmpty');
+  return t('interaction.rewind.titleError');
 }
 
-function detailForState(state: RewindPreviewState): string | null {
-  if (state.kind === 'loading') return '手机端正在向电脑端读取文件回退预览。';
-  if (state.kind === 'default') return '会回滚下面这些文件，并截断这条消息之后的对话历史。';
-  if (state.kind === 'empty') return '没有文件需要回滚，确认后只会截断这条消息之后的对话历史。';
-  return '电脑端拒绝了这次回退操作。';
+function detailForState(state: RewindPreviewState, t: TFunction): string | null {
+  if (state.kind === 'loading') return t('interaction.rewind.detailLoading');
+  if (state.kind === 'default') return t('interaction.rewind.detailDefault');
+  if (state.kind === 'empty') return t('interaction.rewind.detailEmpty');
+  return t('interaction.rewind.detailError');
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

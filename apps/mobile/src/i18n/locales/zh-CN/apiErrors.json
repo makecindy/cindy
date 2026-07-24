@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "请求超时，请稍后重试",
+  "networkUnavailable": "网络连接不可用，请检查网络后重试{{webHint}}",
+  "networkUnavailableWebHint": "。Web 预览可能被浏览器 CORS 拦截，请用 Expo Go/模拟器测试",
+  "requestFailed": "请求失败"
+}

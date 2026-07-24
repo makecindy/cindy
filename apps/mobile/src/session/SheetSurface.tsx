@@ -13,6 +13,7 @@
  * 不依赖「Modal 不可见时 children 是否卸载」的平台差异来重置。
  */
 import type { ReactNode, RefObject } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
 import { Animated, Pressable, ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Text } from '@/components/AppText';
@@ -71,6 +72,7 @@ export function SheetSurface({
 }: SheetSurfaceProps) {
   const styles = useThemedStyles(makeSheetSurfaceStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const drag = useContextSheetDrag({
     heights,
     onDismiss: onClose,
@@ -96,7 +98,7 @@ export function SheetSurface({
         <View style={styles.header}>
           {onBack ? (
             <Pressable
-              accessibilityLabel={backAccessibilityLabel ?? '返回'}
+              accessibilityLabel={backAccessibilityLabel ?? t('shared.back')}
               accessibilityRole="button"
               hitSlop={8}
               onPress={onBack}

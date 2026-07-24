@@ -136,6 +136,7 @@ export default {
     noCollectableWorkspace('project-context', 'packages/project-context'),
     requiredUnitWorkspace('@cindy/remote-file-service', 'packages/remote-file-service'),
     requiredUnitWorkspace('@cindy/voice-input-core', 'packages/voice-input-core'),
+    requiredUnitWorkspace('@cindy/content-moderation-protocol', 'cindy-protocol/packages/content-moderation-protocol'),
     noCollectableWorkspace('@cindy/device-link-protocol', 'cindy-protocol/packages/device-link-protocol'),
     requiredUnitWorkspace('@cindy/plugin-protocol', 'cindy-protocol/packages/plugin-protocol'),
     requiredUnitWorkspace('@cindy/skill-protocol', 'cindy-protocol/packages/skill-protocol'),

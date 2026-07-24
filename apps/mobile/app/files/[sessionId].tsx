@@ -10,6 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { fsWatchTopic } from '@cindy/device-link';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ArrowDownAZ,
   ArrowDownWideNarrow,
@@ -116,6 +117,7 @@ const SEARCH_FILES_CAP = 20000;
 export default function RemoteFileBrowserScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -340,13 +342,13 @@ export default function RemoteFileBrowserScreen() {
       const localUri = displayUri.startsWith('file://')
         ? displayUri
         : await downloadRemoteMediaShareTemp(displayUri, mime);
-      if (!localUri) throw new Error('无法获取本地图片文件');
+      if (!localUri) throw new Error('failed to obtain local image file');
       const sharing = await import('expo-sharing');
       await sharing.shareAsync(localUri, { mimeType: mime });
     } catch {
-      showNotice('分享失败,请重试');
+      showNotice(t('files.browser.shareFailed'));
     }
-  }, [showNotice]);
+  }, [showNotice, t]);
 
   const openItem = useCallback((item: FileBrowserGridItem) => {
     if (item.kind === 'dir') {
@@ -402,8 +404,8 @@ export default function RemoteFileBrowserScreen() {
   const copyItemPath = useCallback(async (item: FileBrowserGridItem) => {
     await Clipboard.setStringAsync(absolutePathOf(item.relPath));
     setContextItem(null);
-    showNotice('已复制路径');
-  }, [absolutePathOf, showNotice]);
+    showNotice(t('files.browser.copiedPath'));
+  }, [absolutePathOf, showNotice, t]);
 
   const sendItemToSession = useCallback((item: FileBrowserGridItem) => {
     setContextItem(null);
@@ -442,7 +444,7 @@ export default function RemoteFileBrowserScreen() {
     // 导出/分享 = 系统分享单一步到位(iOS 分享单自带「存储图像」,不再单设保存)。
     setContextItem(null);
     if (item.kind !== 'file') return;
-    showNotice('正在从电脑导出…');
+    showNotice(t('files.browser.exporting'));
     void (async () => {
       try {
         let url: string;
@@ -468,7 +470,7 @@ export default function RemoteFileBrowserScreen() {
           mime = shareMimeForFileName(item.name);
         }
         const localUri = await downloadRemoteMediaShareTemp(url, mime, item.name);
-        if (!localUri) throw new Error('下载失败');
+        if (!localUri) throw new Error(t('files.browser.downloadFailed'));
         const sharing = await import('expo-sharing');
         await sharing.shareAsync(localUri, { mimeType: mime });
         setNotice(null);
@@ -476,13 +478,13 @@ export default function RemoteFileBrowserScreen() {
         showNotice(formatRemoteError(err));
       }
     })();
-  }, [absolutePathOf, deviceId, maker, openLink, presignGet, resolveFileMedia, showNotice, workdir]);
+  }, [absolutePathOf, deviceId, maker, openLink, presignGet, resolveFileMedia, showNotice, t, workdir]);
 
   /** lightbox 底部显式操作(与预览页底栏同构):复制路径 / 发送到会话。 */
   const lightboxActions = useMemo((): readonly ImageLightboxAction[] => [
     {
       key: 'copyPath',
-      label: '复制路径',
+      label: t('files.browser.copyPath'),
       icon: Copy,
       onPress: (image) => {
         const rel = relPathFromGalleryKey(image.key);
@@ -491,7 +493,7 @@ export default function RemoteFileBrowserScreen() {
     },
     {
       key: 'sendToSession',
-      label: '发送到会话',
+      label: t('files.browser.sendToSession'),
       icon: MessageSquarePlus,
       onPress: (image) => {
         const rel = relPathFromGalleryKey(image.key);
@@ -509,7 +511,7 @@ export default function RemoteFileBrowserScreen() {
         });
       },
     },
-  ], [absolutePathOf, sendItemToSession]);
+  ], [absolutePathOf, sendItemToSession, t]);
 
   /**
    * lightbox 圈点标注(与聊天/托盘同一套画笔):提交只投递「图源 + 矢量笔迹」
@@ -517,7 +519,7 @@ export default function RemoteFileBrowserScreen() {
    * 统一执行——文件浏览器页没有附件托盘,不在本页做任何重活。
    */
   const lightboxAnnotation = useMemo((): ImageLightboxAnnotationConfig => ({
-    submitLabel: '发送到会话',
+    submitLabel: t('files.browser.sendToSession'),
     onSubmit: (_image, displayUri, strokes, context) => {
       queueComposerAnnotationSubmission(sessionId, {
         displayUri,
@@ -534,14 +536,14 @@ export default function RemoteFileBrowserScreen() {
         },
       });
     },
-  }), [deviceId, router, sessionId]);
+  }), [deviceId, router, sessionId, t]);
 
   /** 标题菜单里的当前目录操作(显式入口,不依赖长按)。 */
   const copyCurrentDirPath = useCallback(() => {
     setTitleMenuOpen(false);
     void Clipboard.setStringAsync(absolutePathOf(relPath));
-    showNotice('已复制路径');
-  }, [absolutePathOf, relPath, showNotice]);
+    showNotice(t('files.browser.copiedPath'));
+  }, [absolutePathOf, relPath, showNotice, t]);
 
   const sendCurrentDirToSession = useCallback(() => {
     setTitleMenuOpen(false);
@@ -633,7 +635,8 @@ export default function RemoteFileBrowserScreen() {
           if (seq !== contentSeqRef.current) return;
           setContentMatches(res.matches ?? []);
           setContentSummary(
-            `${res.totalMatches} 处匹配 · ${res.totalFiles} 个文件${res.truncated ? ' · 已达上限截断' : ''}`,
+            t('files.browser.contentSummary', { matches: res.totalMatches, files: res.totalFiles })
+              + (res.truncated ? t('files.browser.contentSummaryTruncated') : ''),
           );
         })
         .catch((err) => {
@@ -644,7 +647,7 @@ export default function RemoteFileBrowserScreen() {
         });
     }, 450);
     return () => clearTimeout(timer);
-  }, [deviceId, maker, openLink, query, searchMode, searchOpen, workdir]);
+  }, [deviceId, maker, openLink, query, searchMode, searchOpen, t, workdir]);
 
   // fs-watch:聚焦时订阅当前 workdir 的文件树变更,变更去抖后静默刷新;
   // 失焦/退出释放订阅(被控端 watch 引擎由订阅计数驱动启停)。
@@ -677,7 +680,7 @@ export default function RemoteFileBrowserScreen() {
     () => (workdir ? buildWorkdirPathLevels(workdir, relPath) : []),
     [relPath, workdir],
   );
-  const title = pathLevels.find((level) => level.current)?.label ?? '远程文件';
+  const title = pathLevels.find((level) => level.current)?.label ?? t('files.browser.titleFallback');
   const summary = summarizeFileBrowserGrid(items);
   const isRoot = relPath === '';
   const noWorkdir = !!session && !workdir;
@@ -726,7 +729,7 @@ export default function RemoteFileBrowserScreen() {
             testID="files.backButton"
           />
           <Pressable
-            accessibilityLabel="路径与视图菜单"
+            accessibilityLabel={t('files.browser.a11yTitleMenu')}
             onPress={() => setTitleMenuOpen(true)}
             style={styles.titleGroup}
             testID="files.titleMenuButton"
@@ -737,7 +740,7 @@ export default function RemoteFileBrowserScreen() {
             </View>
           </Pressable>
           <Pressable
-            accessibilityLabel="搜索文件名"
+            accessibilityLabel={t('files.browser.a11ySearch')}
             hitSlop={8}
             onPress={() => setSearchOpen(true)}
             style={({ pressed }) => [styles.navActionBtn, pressed && styles.pressed]}
@@ -746,7 +749,7 @@ export default function RemoteFileBrowserScreen() {
             <Search color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
           </Pressable>
           <Pressable
-            accessibilityLabel="更多"
+            accessibilityLabel={t('files.browser.a11yMore')}
             hitSlop={8}
             onPress={() => setTitleMenuOpen(true)}
             style={({ pressed }) => [styles.navActionBtn, pressed && styles.pressed]}
@@ -760,7 +763,7 @@ export default function RemoteFileBrowserScreen() {
       {!searchOpen ? (
         <View style={styles.sectionRow}>
           <Text numberOfLines={1} style={styles.sectionLabel}>
-            {deviceName}{isRoot ? ' · 工作目录' : ''}
+            {deviceName}{isRoot ? t('files.browser.workdirSuffix') : ''}
           </Text>
           {loading && !refreshing ? <ActivityIndicator color={colors.textTertiary} size="small" /> : null}
         </View>
@@ -790,10 +793,10 @@ export default function RemoteFileBrowserScreen() {
           ListEmptyComponent={
             <Text style={styles.searchHint} testID="files.contentSearchHint">
               {searchLoading
-                ? '正在搜索文件内容…'
+                ? t('files.browser.searchingContent')
                 : query.trim().length >= 2
-                  ? '没有匹配的内容。'
-                  : '输入至少 2 个字符搜索文件内容。'}
+                  ? t('files.browser.noContentMatch')
+                  : t('files.browser.contentSearchMinChars')}
             </Text>
           }
           ListFooterComponent={
@@ -818,15 +821,15 @@ export default function RemoteFileBrowserScreen() {
           ListEmptyComponent={
             <Text style={styles.searchHint} testID="files.searchHint">
               {searchLoading
-                ? '正在建立文件索引…'
+                ? t('files.browser.indexing')
                 : query.trim()
-                  ? '没有匹配的文件名。'
-                  : '输入关键字按文件名搜索。'}
+                  ? t('files.browser.noNameMatch')
+                  : t('files.browser.nameSearchPrompt')}
             </Text>
           }
           ListFooterComponent={
             searchMatches.length > 0 ? (
-              <Text style={styles.footerText}>{searchMatches.length} 个结果 · 按名称匹配</Text>
+              <Text style={styles.footerText}>{t('files.browser.nameResultSummary', { n: searchMatches.length })}</Text>
             ) : null
           }
           renderItem={({ item }) => (
@@ -836,7 +839,7 @@ export default function RemoteFileBrowserScreen() {
         />
       ) : noWorkdir ? (
         <Text style={styles.searchHint} testID="files.noWorkdir">
-          该会话没有工作目录,无法浏览文件。
+          {t('files.browser.noWorkdir')}
         </Text>
       ) : viewMode === 'grid' ? (
         <FlatList
@@ -845,7 +848,7 @@ export default function RemoteFileBrowserScreen() {
           data={items}
           key={`grid-${gridColumns}`}
           keyExtractor={(item) => item.key}
-          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>文件夹为空。</Text> : null}
+          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null}
           numColumns={gridColumns}
           refreshControl={
             <RefreshControl
@@ -863,7 +866,7 @@ export default function RemoteFileBrowserScreen() {
           ItemSeparatorComponent={ListSeparator}
           key="list"
           keyExtractor={(item) => item.key}
-          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>文件夹为空。</Text> : null}
+          ListEmptyComponent={!loading ? <Text style={styles.searchHint}>{t('files.browser.folderEmpty')}</Text> : null}
           refreshControl={
             <RefreshControl
               onRefresh={() => void loadDirectory({ refreshing: true })}
@@ -885,7 +888,7 @@ export default function RemoteFileBrowserScreen() {
         <View style={styles.footer}>
           <Text style={styles.footerStrong} testID="files.summary">{summary}</Text>
           <Text style={styles.footerText}>
-            {notice ?? (status === 'online' ? '已连接 · 实时同步' : '连接中…')}
+            {notice ?? (status === 'online' ? t('files.browser.footerOnline') : t('files.browser.footerConnecting'))}
           </Text>
         </View>
       ) : null}
@@ -953,9 +956,10 @@ const GridCell = memo(function GridCell({
   workdir: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <Pressable
-      accessibilityLabel={`${item.kind === 'dir' ? '打开文件夹' : '预览文件'} ${item.name}`}
+      accessibilityLabel={t(item.kind === 'dir' ? 'files.browser.a11yOpenFolder' : 'files.browser.a11yPreviewFile', { name: item.name })}
       onLongPress={() => onContext(item)}
       onPress={() => onOpen(item)}
       style={({ pressed }) => [styles.gridCell, { width }, pressed && styles.pressed]}
@@ -1072,10 +1076,11 @@ function ListRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const Icon = listIconFor(item);
   return (
     <Pressable
-      accessibilityLabel={`${item.kind === 'dir' ? '打开文件夹' : '预览文件'} ${item.name}`}
+      accessibilityLabel={t(item.kind === 'dir' ? 'files.browser.a11yOpenFolder' : 'files.browser.a11yPreviewFile', { name: item.name })}
       onLongPress={onLongPress}
       onPress={onPress}
       style={({ pressed }) => [styles.listRow, pressed && styles.pressed]}
@@ -1114,6 +1119,11 @@ function SearchHeader({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
+  const modes = [
+    ['name', t('files.browser.searchModeName')],
+    ['content', t('files.browser.searchModeContent')],
+  ] as const;
   return (
     <View>
       <View style={styles.searchRow}>
@@ -1124,26 +1134,26 @@ function SearchHeader({
             autoCorrect={false}
             autoFocus
             onChangeText={onChangeQuery}
-            placeholder="搜索"
+            placeholder={t('files.browser.searchPlaceholder')}
             placeholderTextColor={colors.textTertiary}
             style={styles.searchInput}
             testID="files.searchInput"
             value={query}
           />
           {query ? (
-            <Pressable accessibilityLabel="清空" hitSlop={8} onPress={() => onChangeQuery('')}>
+            <Pressable accessibilityLabel={t('files.browser.a11yClear')} hitSlop={8} onPress={() => onChangeQuery('')}>
               <X color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : null}
         </View>
-        <Pressable accessibilityLabel="取消搜索" hitSlop={8} onPress={onCancel} testID="files.searchCancel">
-          <Text style={styles.cancelText}>取消</Text>
+        <Pressable accessibilityLabel={t('files.browser.a11yCancelSearch')} hitSlop={8} onPress={onCancel} testID="files.searchCancel">
+          <Text style={styles.cancelText}>{t('files.browser.cancel')}</Text>
         </Pressable>
       </View>
       <View style={styles.searchModeRow}>
-        {([['name', '文件名'], ['content', '内容']] as const).map(([value, label]) => (
+        {modes.map(([value, label]) => (
           <Pressable
-            accessibilityLabel={`按${label}搜索`}
+            accessibilityLabel={t('files.browser.searchModeA11y', { mode: label })}
             key={value}
             onPress={() => onChangeMode(value)}
             style={[styles.searchModePill, mode === value && styles.searchModePillActive]}
@@ -1155,7 +1165,7 @@ function SearchHeader({
           </Pressable>
         ))}
         <Text style={styles.scopeHintInline}>
-          在 {workdirLabel} 内{loading ? ' · 搜索中…' : ''}
+          {t('files.browser.searchScope', { workdir: workdirLabel })}{loading ? t('files.browser.searching') : ''}
         </Text>
       </View>
     </View>
@@ -1174,13 +1184,14 @@ function ContentMatchRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const name = match.relPath.split('/').filter(Boolean).pop() ?? match.relPath;
   const dirPath = match.relPath.slice(0, Math.max(0, match.relPath.length - name.length - 1));
   const line = match.lineText.trim();
   const hit = highlightSpan(line, query);
   return (
     <Pressable
-      accessibilityLabel={`预览 ${name} 第 ${match.lineNumber} 行`}
+      accessibilityLabel={t('files.browser.a11yPreviewNameLine', { name, line: match.lineNumber })}
       onPress={onPress}
       style={({ pressed }) => [styles.contentMatchRow, pressed && styles.pressed]}
       testID={`files.contentResult.${sanitizeTestId(name)}`}
@@ -1202,7 +1213,7 @@ function ContentMatchRow({
             </>
           ) : line}
         </Text>
-        <Text numberOfLines={1} style={styles.cellMeta}>{dirPath || '(根目录)'}</Text>
+        <Text numberOfLines={1} style={styles.cellMeta}>{dirPath || t('files.browser.rootDir')}</Text>
       </View>
     </Pressable>
   );
@@ -1225,9 +1236,10 @@ function highlightSpan(line: string, query: string): { before: string; matched: 
 
 function SearchResultRow({ match, onPress }: { match: FileBrowserNameMatch; onPress(): void }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <Pressable
-      accessibilityLabel={`预览 ${match.name}`}
+      accessibilityLabel={t('files.browser.a11yPreviewName', { name: match.name })}
       onPress={onPress}
       style={({ pressed }) => [styles.resultRow, pressed && styles.pressed]}
       testID={`files.result.${sanitizeTestId(match.name)}`}
@@ -1239,7 +1251,7 @@ function SearchResultRow({ match, onPress }: { match: FileBrowserNameMatch; onPr
       </View>
       <View style={styles.listTextCol}>
         <Text numberOfLines={1} style={styles.listName}>{match.name}</Text>
-        <Text numberOfLines={1} style={styles.cellMeta}>{match.dirRelPath || '(根目录)'}</Text>
+        <Text numberOfLines={1} style={styles.cellMeta}>{match.dirRelPath || t('files.browser.rootDir')}</Text>
       </View>
     </Pressable>
   );
@@ -1270,6 +1282,7 @@ function TitleMenu({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
 
   const row = (
     key: string,
@@ -1312,27 +1325,27 @@ function TitleMenu({
             </View>
           ))}
           <View style={styles.menuGroupSep} />
-          {row('view.grid', '网格视图', viewMode === 'grid', () => onSetView('grid'),
+          {row('view.grid', t('files.browser.viewGrid'), viewMode === 'grid', () => onSetView('grid'),
             <LayoutGrid color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
           <View style={styles.menuSep} />
-          {row('view.list', '列表视图', viewMode === 'list', () => onSetView('list'),
+          {row('view.list', t('files.browser.viewList'), viewMode === 'list', () => onSetView('list'),
             <ListIcon color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
           <View style={styles.menuGroupSep} />
-          {row('sort.name', '按名称排序', sortMode === 'name', () => onSetSort('name'),
+          {row('sort.name', t('files.browser.sortName'), sortMode === 'name', () => onSetSort('name'),
             <ArrowDownAZ color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
           <View style={styles.menuSep} />
-          {row('sort.mtime', '按修改时间排序', sortMode === 'mtime', () => onSetSort('mtime'),
+          {row('sort.mtime', t('files.browser.sortMtime'), sortMode === 'mtime', () => onSetSort('mtime'),
             <History color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
           <View style={styles.menuSep} />
-          {row('sort.size', '按大小排序', sortMode === 'size', () => onSetSort('size'),
+          {row('sort.size', t('files.browser.sortSize'), sortMode === 'size', () => onSetSort('size'),
             <ArrowDownWideNarrow color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
           <View style={styles.menuGroupSep} />
           {onSendCurrentToSession
-            ? row('folder.send', '发送到会话', false, onSendCurrentToSession,
+            ? row('folder.send', t('files.browser.sendToSession'), false, onSendCurrentToSession,
               <MessageSquarePlus color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)
             : null}
           {onSendCurrentToSession ? <View style={styles.menuSep} /> : null}
-          {row('folder.copy', '复制路径', false, onCopyCurrentPath,
+          {row('folder.copy', t('files.browser.copyPath'), false, onCopyCurrentPath,
             <Copy color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />)}
         </Pressable>
       </Pressable>
@@ -1357,14 +1370,15 @@ function ContextMenu({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   if (!item) return null;
   const isFile = item.kind === 'file';
 
   const actions = [
-    ...(isFile ? [{ key: 'preview', label: '快速预览', Icon: Eye, onPress: () => onPreview(item) }] : []),
-    { key: 'send', label: '发送到会话', Icon: MessageSquarePlus, onPress: () => onSend(item) },
-    { key: 'copy', label: '复制路径', Icon: Copy, onPress: () => onCopyPath(item) },
-    ...(isFile ? [{ key: 'share', label: '导出 / 分享', Icon: ShareIcon, onPress: () => onShare(item) }] : []),
+    ...(isFile ? [{ key: 'preview', label: t('files.browser.preview'), Icon: Eye, onPress: () => onPreview(item) }] : []),
+    { key: 'send', label: t('files.browser.sendToSession'), Icon: MessageSquarePlus, onPress: () => onSend(item) },
+    { key: 'copy', label: t('files.browser.copyPath'), Icon: Copy, onPress: () => onCopyPath(item) },
+    ...(isFile ? [{ key: 'share', label: t('files.browser.exportShare'), Icon: ShareIcon, onPress: () => onShare(item) }] : []),
   ];
 
   return (

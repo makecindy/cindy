@@ -1,6 +1,7 @@
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import { classifyChatPathLinkTarget, resolveChatAbsPath } from '@/session/chatPathCandidate';
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
+import { i18n } from '@/i18n';
 
 export type MobileMarkdownInline =
   | { type: 'text'; text: string }
@@ -461,9 +462,9 @@ export function mobileMarkdownImageTitle(url: string, alt?: string): string {
   if (trimmedAlt) return trimmedAlt;
   const fileName = url.split('?')[0].split('#')[0].split('/').pop() ?? '';
   try {
-    return decodeURIComponent(fileName) || '图片';
+    return decodeURIComponent(fileName) || i18n.t('message.renderer.imageFallbackTitle');
   } catch {
-    return fileName || '图片';
+    return fileName || i18n.t('message.renderer.imageFallbackTitle');
   }
 }
 

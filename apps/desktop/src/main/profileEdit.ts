@@ -11,6 +11,7 @@
  * authManager.updateServerProfile 就地更新并广播。
  */
 
+import path from 'node:path';
 import { throwIpcError } from './utils/ipcValidate';
 
 // ── 常量 ────────────────────────────────────────────────────────────────────
@@ -51,6 +52,15 @@ export interface ProfileEditDeps {
     | { ok: true; publicUrl: string }
     | { ok: false; stage: 'presign' | 'put'; status: number; code?: string }
   >;
+  /** 昵称与新头像内容审核；头像必须在公开 OSS 上传前审核本地字节。 */
+  moderateProfile(params: {
+    displayName?: string;
+    avatar?: {
+      bytes: Uint8Array;
+      fileName: string;
+      mimeType: string;
+    };
+  }): Promise<'allow' | 'reject' | 'cancelled'>;
   /** PATCH /api/me/profile(authManager.updateServerProfile,成功后已广播)。 */
   patchProfile(patch: { displayName?: string; avatarUrl?: string | null }): Promise<
     { ok: true } | { ok: false; status: number; code?: string }
@@ -184,8 +194,13 @@ export async function updateProfile(
   const nextDisplayName =
     trimmedName !== '' && trimmedName !== profile.name ? trimmedName : undefined;
 
-  // ── 头像收敛(set 时先直传 OSS 拿公开地址) ──
+  // ── 头像收敛(set 时先保留本地字节，审核放行后才公开上传 Cindy OSS) ──
   let nextAvatarUrl: string | null | undefined;
+  let pendingAvatar: {
+    buffer: Buffer;
+    fileName: string;
+    mimeType: string;
+  } | undefined;
   if (avatarAction.type === 'set') {
     const mime = avatarMimeForPath(avatarAction.filePath);
     if (!mime) {
@@ -200,7 +215,49 @@ export async function updateProfile(
     if (buffer.byteLength === 0 || buffer.byteLength > AVATAR_MAX_BYTES) {
       throwIpcError('INVALID_PARAMS', `avatar file size out of range: ${buffer.byteLength}`);
     }
-    const uploaded = await deps.uploadAvatar({ buffer, mimeType: mime });
+    pendingAvatar = {
+      buffer,
+      fileName: path.posix.basename(avatarAction.filePath.replaceAll('\\', '/')),
+      mimeType: mime,
+    };
+  } else if (avatarAction.type === 'reset') {
+    nextAvatarUrl = null;
+  }
+
+  // ── 审核(无变化则零请求；昵称与头像在 moderateProfile 内并行) ──
+  if (
+    nextDisplayName === undefined
+    && nextAvatarUrl === undefined
+    && pendingAvatar === undefined
+  ) {
+    return { ok: true };
+  }
+  if (nextDisplayName !== undefined || pendingAvatar !== undefined) {
+    const moderation = await deps.moderateProfile({
+      ...(nextDisplayName !== undefined ? { displayName: nextDisplayName } : {}),
+      ...(pendingAvatar !== undefined
+        ? {
+            avatar: {
+              bytes: pendingAvatar.buffer,
+              fileName: pendingAvatar.fileName,
+              mimeType: pendingAvatar.mimeType,
+            },
+          }
+        : {}),
+    });
+    if (moderation === 'reject') {
+      throwIpcError('CONTENT_MODERATION_REJECTED', 'profile content rejected');
+    }
+    if (moderation === 'cancelled') {
+      throwIpcError('CONTENT_MODERATION_CANCELLED', 'profile moderation identity changed');
+    }
+  }
+
+  if (pendingAvatar) {
+    const uploaded = await deps.uploadAvatar({
+      buffer: pendingAvatar.buffer,
+      mimeType: pendingAvatar.mimeType,
+    });
     if (!uploaded.ok) {
       throwIpcError(
         'PROFILE_AVATAR_UPLOAD_FAILED',
@@ -208,14 +265,9 @@ export async function updateProfile(
       );
     }
     nextAvatarUrl = uploaded.publicUrl;
-  } else if (avatarAction.type === 'reset') {
-    nextAvatarUrl = null;
   }
 
-  // ── 提交(无变化则零请求) ──
-  if (nextDisplayName === undefined && nextAvatarUrl === undefined) {
-    return { ok: true };
-  }
+  // ── 原子提交 ──
   const patched = await deps.patchProfile({
     ...(nextDisplayName !== undefined ? { displayName: nextDisplayName } : {}),
     ...(nextAvatarUrl !== undefined ? { avatarUrl: nextAvatarUrl } : {}),

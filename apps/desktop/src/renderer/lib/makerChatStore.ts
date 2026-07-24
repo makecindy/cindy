@@ -120,6 +120,7 @@ const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:input:projection',
   'maker:interaction-request',
   'maker:interaction-dismissed',
+  'content-moderation:output-blocked',
   'local-db:messages:created',
   'usage:message-turn-cost',
   'maker:session-model-pref:changed',
@@ -166,7 +167,11 @@ import {
   parseUserContent,
   stringifyUserContent,
 } from '@/lib/imageRef';
-import { saveDraft as saveComposerDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
+import {
+  getDraft as getComposerDraft,
+  saveDraft as saveComposerDraft,
+  plainTextToTiptapDoc,
+} from '@/lib/composerDraftStore';
 import {
   canStartComposerSteer,
   canStartQueuedSteer,
@@ -3617,6 +3622,9 @@ function initGlobalListeners(): void {
         case 'maker:interaction-dismissed':
           handleInteractionDismissedRaw(push.payload);
           break;
+        case 'content-moderation:output-blocked':
+          handleContentModerationOutputBlocked(push.payload);
+          break;
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload);
@@ -3830,6 +3838,78 @@ function initGlobalListeners(): void {
       });
     },
     'ghosts-user-message-blocked',
+  );
+
+  bindIpc(
+    (cb) => window.electronAPI.contentModeration?.onInputBlocked?.(cb),
+    (raw: unknown) => {
+      const payload = raw as {
+        sessionId?: string;
+        clientId?: string;
+        text?: string;
+        files?: SerializedAttachedFile[];
+        reason?: 'rejected' | 'cancelled';
+      } | null;
+      if (!payload?.sessionId || !payload.clientId || typeof payload.text !== 'string') return;
+
+      setState(payload.sessionId, (state) => ({
+        ...state,
+        messages: state.messages.filter(
+          (message) => !(message.clientId === payload.clientId && message.isPendingPersist),
+        ),
+      }));
+
+      const existing = getComposerDraft(payload.sessionId);
+      const restoredText = plainTextToTiptapDoc(payload.text);
+      const text = existing?.text?.content?.length
+        ? {
+            type: 'doc',
+            content: [
+              ...(restoredText.content ?? []),
+              { type: 'paragraph' },
+              ...existing.text.content,
+            ],
+          }
+        : restoredText;
+
+      const restoredFiles = (payload.files ?? []) as AttachedFile[];
+      const seen = new Set<string>();
+      const attachments = [...restoredFiles, ...(existing?.attachments ?? [])].filter((file) => {
+        const key = file.id || file.url || file.path;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      saveComposerDraft(payload.sessionId, { text, attachments });
+      if (payload.reason === 'rejected') {
+        toast.error(i18n.t('contentModeration.blocked'));
+      }
+    },
+    'content-moderation-input-blocked',
+  );
+
+  const handleContentModerationOutputBlocked = (raw: unknown): void => {
+    const payload = raw as {
+      sessionId?: string;
+      kind?: string;
+      i18nKey?: string;
+    } | null;
+    if (
+      !payload?.sessionId
+      || payload.kind !== 'blocked'
+      || payload.i18nKey !== 'contentModeration.blocked'
+      || !_activeViewSessions.has(payload.sessionId)
+    ) {
+      return;
+    }
+    toast.error(i18n.t('contentModeration.blocked'));
+  };
+
+  bindIpc(
+    (cb) => window.electronAPI.contentModeration?.onOutputBlocked?.(cb),
+    handleContentModerationOutputBlocked,
+    'content-moderation-output-blocked',
   );
 
   // ── 意识改写(订阅槽①):用户消息正文被钩子优化 ──

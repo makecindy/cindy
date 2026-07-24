@@ -3,6 +3,7 @@
  * 分享/下载共用)。结果按 path+mtime 缓存到 presign 过期,同一文件重看零导出;
  * 起始与每次状态轮询都走瞬断重试;isCancelled(页面卸载)时中止轮询。
  */
+import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { getCachedExportUrl, storeCachedExportUrl } from '@/session/fileBrowserCache';
@@ -32,24 +33,24 @@ export async function exportRemoteFileToUrl(
     await deps.openLink(deps.deviceId);
     return deps.maker.fileBrowser.exportFileStart(workdir, relPath);
   });
-  if (!start.ok) throw new Error(start.message ?? '导出失败');
+  if (!start.ok) throw new Error(start.message ?? i18n.t('files.export.exportFailed'));
   const deadline = Date.now() + EXPORT_TIMEOUT_MS;
   for (;;) {
-    if (deps.isCancelled?.()) throw new Error('已离开页面,导出中止');
+    if (deps.isCancelled?.()) throw new Error(i18n.t('files.export.leftPage'));
     // 单次状态查询同样走瞬断重试:被控端导出任务仍在跑,轮询窗口内一次
     // 掉线/超时不应让整个导出失败。
     const status = await withTransientRemoteRetry(async () => {
       await deps.openLink(deps.deviceId);
       return deps.maker.fileBrowser.exportFileStatus(workdir, start.transferId);
     });
-    if (!status.ok) throw new Error(status.message ?? '导出失败');
+    if (!status.ok) throw new Error(status.message ?? i18n.t('files.export.exportFailed'));
     if (status.state === 'done' && status.key) {
       const presign = await deps.presignGet(status.key);
       storeCachedExportUrl(deps.deviceId, workdir, relPath, mtimeMs, presign.getUrl, presign.expiresAt);
       return presign.getUrl;
     }
-    if (status.state === 'error') throw new Error(status.message ?? '导出失败');
-    if (Date.now() > deadline) throw new Error('导出超时,请重试');
+    if (status.state === 'error') throw new Error(status.message ?? i18n.t('files.export.exportFailed'));
+    if (Date.now() > deadline) throw new Error(i18n.t('files.export.exportTimeout'));
     await new Promise<void>((resolve) => setTimeout(resolve, EXPORT_POLL_INTERVAL_MS));
   }
 }

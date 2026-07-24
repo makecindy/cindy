@@ -1,4 +1,7 @@
 {
+  "contentModeration": {
+    "blocked": "抱歉，当前问题暂时无法为您解答，请调整提问表述。"
+  },
   "ipcError": {
     "SESSION_RUNNING": "当前会话正在执行任务，请稍后再试。",
     "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（会话仍使用原来源）。等其他任务结束后再试。"
@@ -1556,7 +1559,8 @@
       "save": "保存",
       "overLimit": " — 已超出长度限制",
       "toast": {
-        "saved": "自定义指令已保存"
+        "saved": "自定义指令已保存",
+        "saveFailed": "自定义指令保存失败"
       }
     },
     "chipMetrics": {

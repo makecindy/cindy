@@ -2,6 +2,8 @@ import { Alert, type AlertButton, type AlertOptions } from 'react-native';
 import { getLocales } from 'expo-localization';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 
+import { getManualLocaleOverride } from '@/i18n/appLanguage';
+
 export type FullAccessConfirmationCopy = Readonly<{
   title: string;
   description: string;
@@ -36,8 +38,10 @@ const FULL_ACCESS_CONFIRMATION_COPY: Record<'en' | 'ja' | 'ko' | 'zh', FullAcces
   },
 };
 
-/** 根据系统语言选择手机端 Full access 确认文案；未覆盖的语言使用英文。 */
-export function getFullAccessConfirmationCopy(languageCode = getLocales()[0]?.languageCode): FullAccessConfirmationCopy {
+/** 生效语言(手动选择优先,否则系统语言)选择手机端 Full access 确认文案;未覆盖的语言使用英文。 */
+export function getFullAccessConfirmationCopy(
+  languageCode = getManualLocaleOverride() ?? getLocales()[0]?.languageCode,
+): FullAccessConfirmationCopy {
   const normalized = languageCode?.toLowerCase() ?? '';
   const language = normalized.startsWith('zh')
     ? 'zh'

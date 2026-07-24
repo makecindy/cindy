@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { apiFetchRaw } from '@/api/client';
 import { DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL, DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { i18n } from '@/i18n';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 const GW_PROXY = `${DEFAULT_MOBILE_VOICE_LITELLM_BASE_URL}/proxy`;
 import {
@@ -9,8 +15,8 @@ import {
   buildMobileVoiceRefinementContext,
   canCancelMobileVoiceRecording,
   makeMobileRefinerPromptCacheKey,
-  MOBILE_VOICE_MIC_PERMISSION_ERROR,
-  MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR,
+  mobileVoiceMicPermissionError,
+  mobileVoiceRealtimeAudioUnavailableError,
   MOBILE_MAX_VOICE_AUDIO_BYTES,
   isMobileVoiceMicPermissionError,
   mobileVoiceStateLabel,
@@ -92,8 +98,8 @@ describe('mobileVoiceInput', () => {
   });
 
   it('detects microphone permission errors for the settings shortcut', () => {
-    expect(isMobileVoiceMicPermissionError(MOBILE_VOICE_MIC_PERMISSION_ERROR)).toBe(true);
-    expect(MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR).toContain('原生录音模块');
+    expect(isMobileVoiceMicPermissionError(mobileVoiceMicPermissionError())).toBe(true);
+    expect(mobileVoiceRealtimeAudioUnavailableError()).toContain('原生录音模块');
     expect(isMobileVoiceMicPermissionError('麦克风权限未开启')).toBe(false);
     expect(isMobileVoiceMicPermissionError(null)).toBe(false);
   });

@@ -1,4 +1,5 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ArrowLeftRight,
   ArrowUp,
@@ -81,7 +82,7 @@ import {
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
 import {
-  SELECTION_QUOTE_MENU_LABEL,
+  selectionQuoteMenuLabel,
   SelectionQuoteContext,
   handleSelectionQuoteMenuAction,
 } from '@/session/selectionQuote';
@@ -295,6 +296,7 @@ import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { i18n } from '@/i18n';
 
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
 // LegendList 变高 item 的初始估高(仅影响首帧布局定位,LegendList 挂载后按实测尺寸修正)。
@@ -383,7 +385,7 @@ function MarkdownSelectableText({
         // menuActionLabel / onMenuAction 是 uitextview patch 的扩展 prop,不在
         // RN Text props 里,组件内部私有附加(经 {...rest} 透传到原生组件)。
         {...{
-          menuActionLabel: SELECTION_QUOTE_MENU_LABEL,
+          menuActionLabel: selectionQuoteMenuLabel(),
           onMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
             handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx);
           },
@@ -504,6 +506,7 @@ export function MessageRenderer({
   }) => void;
 } & MessageActions) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const firstUserMessageClientId = findFirstUserMessageClientId(items);
   const focusedItemKeyRef = useRef(focusedItemKey);
@@ -1170,7 +1173,7 @@ export function MessageRenderer({
       />
       {previousUserTarget && previousUserButtonTop !== null ? (
         <MessageListActionButton
-          accessibilityLabel={`跳到上一条提问：${previousUserTarget.preview || '无预览'}`}
+          accessibilityLabel={t('message.renderer.previousQuestionJump', { preview: previousUserTarget.preview || t('message.renderer.noPreview') })}
           onPress={jumpToPreviousUserMessage}
           style={[styles.previousUserButton, { top: previousUserButtonTop }]}
           testID="message.previousUserButton"
@@ -1182,7 +1185,7 @@ export function MessageRenderer({
         // 跳到底部浮标(Telegram 风):右下角半透明圆形 chevron,弱存在感;
         // 有未读新消息时不换样式,只在圆标右上角加一颗 CTA 色小圆点提示。
         <MessageListActionButton
-          accessibilityLabel={hasNewMessages ? '有新消息,跳到底部' : '跳到底部'}
+          accessibilityLabel={hasNewMessages ? t('message.renderer.newMessagesToBottom') : t('message.renderer.jumpToBottom')}
           onPress={scrollToBottom}
           style={[styles.scrollToBottomFab, { bottom: floatingBottomOffset, right: scrollToBottomFabRight }]}
           testID={hasNewMessages ? 'message.newMessageButton' : 'message.jumpToLatestButton'}
@@ -1310,18 +1313,19 @@ const RenderItemView = memo(function RenderItemView({
 
 function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.forkOriginRow} testID="message.forkOrigin">
       <View style={styles.forkOriginLine} />
       <MessageListActionButton
-        accessibilityLabel="打开分叉来源消息"
+        accessibilityLabel={t('message.renderer.openForkOrigin')}
         onPress={onOpenForkOrigin}
         style={styles.forkOriginButton}
         testID="message.forkOriginButton"
       >
         <Split color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-        <Text style={styles.forkOriginText}>查看分叉来源</Text>
+        <Text style={styles.forkOriginText}>{t('message.renderer.viewForkOrigin')}</Text>
       </MessageListActionButton>
       <View style={styles.forkOriginLine} />
     </View>
@@ -1330,9 +1334,10 @@ function ForkOriginMarker({ onOpenForkOrigin }: { onOpenForkOrigin?: () => void 
 
 function EmptyMessages({ testID }: { testID?: string }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <View style={styles.emptyCard} testID={testID ?? 'message.empty'}>
-      <Text style={styles.emptyTitle}>暂无消息</Text>
+      <Text style={styles.emptyTitle}>{t('message.renderer.emptyMessages')}</Text>
     </View>
   );
 }
@@ -1346,6 +1351,7 @@ const SYNCING_PLACEHOLDER_DELAY_MS = 200;
 function SyncingMessages() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setVisible(true), SYNCING_PLACEHOLDER_DELAY_MS);
@@ -1355,7 +1361,7 @@ function SyncingMessages() {
   return (
     <View style={styles.emptyCard} testID="message.syncing">
       <ActivityIndicator color={colors.textTertiary} size="small" />
-      <Text style={styles.syncingTitle}>正在同步</Text>
+      <Text style={styles.syncingTitle}>{t('message.renderer.syncing')}</Text>
     </View>
   );
 }
@@ -1438,6 +1444,7 @@ function MessageBubble({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   // chat-text-quote:只解析持久化 quotesEncoded 明确标记的产品引用消息，避免
@@ -1691,7 +1698,7 @@ function MessageBubble({
   // 时间只展示发送时间；消息锚点复制移入语义明确的 More 菜单。
   const timeText = relativeTime ? (
     <Text
-      accessibilityLabel={absoluteTime ? `发送时间 ${absoluteTime}` : undefined}
+      accessibilityLabel={absoluteTime ? t('message.renderer.sentTime', { time: absoluteTime }) : undefined}
       key="time"
       style={styles.messageActionMeta}
       testID="message.timeText"
@@ -1701,7 +1708,7 @@ function MessageBubble({
   ) : null;
   const costText = turnCost ? (
     <Text
-      accessibilityLabel={item.message.turnCostIsEstimate ? `本轮${turnCost}` : `本轮消耗 ${turnCost}`}
+      accessibilityLabel={item.message.turnCostIsEstimate ? t('message.renderer.turnCostEstimate', { cost: turnCost }) : t('message.renderer.turnCost', { cost: turnCost })}
       key="cost"
       style={styles.messageActionMeta}
       testID="message.turnCostText"
@@ -1711,11 +1718,11 @@ function MessageBubble({
   ) : null;
   const streamingStatus = isStreamingAssistant ? (
     <StreamingStatusText
-      accessibilityLabel="消息正在生成"
+      accessibilityLabel={t('message.renderer.messageGenerating')}
       style={styles.streamingStatus}
       testID="message.streamingStatus"
     >
-      生成中
+      {t('message.renderer.generating')}
     </StreamingStatusText>
   ) : null;
   // 附件条对齐桌面版:渲染在气泡外、文字气泡上方(用户消息右对齐);
@@ -1835,14 +1842,14 @@ function MessageBubble({
         // Pressable(参与触摸协商,干扰正文横向 ScrollView 手势,见
         // messageSelectionDesktopFirst 契约),Text onPress 只在自身文字区响应。
         <Text
-          accessibilityLabel={longMessageExpanded ? '收起消息' : '展开消息'}
+          accessibilityLabel={longMessageExpanded ? t('message.renderer.collapseMessage') : t('message.renderer.expandMessage')}
           accessibilityRole="button"
           onPress={() => setLongMessageExpanded((expanded) => !expanded)}
           style={styles.collapseToggleText}
           suppressHighlighting
           testID="message.collapseToggle"
         >
-          {longMessageExpanded ? '收起' : '展开'}
+          {longMessageExpanded ? t('message.renderer.collapse') : t('message.renderer.expand')}
         </Text>
       ) : null}
       {item.message.secondaryBody ? (
@@ -1867,8 +1874,8 @@ function MessageBubble({
           <Timer color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
           <Text numberOfLines={1} style={styles.automationOriginText}>
             {automationOrigin.scheduleName
-              ? `由自动化任务「${automationOrigin.scheduleName}」发送`
-              : '由自动化任务发送'}
+              ? t('message.renderer.automationOriginNamed', { name: automationOrigin.scheduleName })
+              : t('message.renderer.automationOrigin')}
           </Text>
         </View>
       ) : null}
@@ -1880,7 +1887,10 @@ function MessageBubble({
         <View style={styles.modelMismatchRow} testID="message.modelMismatch">
           <TriangleAlert color={colors.statusAccent} size={iconSize.xs} strokeWidth={iconStroke.thin} />
           <Text numberOfLines={2} style={styles.modelMismatchText}>
-            {`本轮由 ${formatModelShortLabel(item.message.modelMismatch.actual) || item.message.modelMismatch.actual} 响应,而非所选的 ${formatModelShortLabel(item.message.modelMismatch.selected) || item.message.modelMismatch.selected}(服务端临时降级)`}
+            {t('message.renderer.modelMismatch', {
+              actual: formatModelShortLabel(item.message.modelMismatch.actual) || item.message.modelMismatch.actual,
+              selected: formatModelShortLabel(item.message.modelMismatch.selected) || item.message.modelMismatch.selected,
+            })}
           </Text>
         </View>
       ) : null}
@@ -1935,10 +1945,10 @@ function MessageBubble({
 }
 
 function copyActionLabel(state: CopyMessageStatus | 'idle' | 'copying'): string {
-  if (state === 'copying') return '复制中';
-  if (state === 'copied') return '已复制';
-  if (state === 'failed') return '复制失败';
-  return '复制';
+  if (state === 'copying') return i18n.t('message.renderer.copyStateCopying');
+  if (state === 'copied') return i18n.t('message.renderer.copyStateCopied');
+  if (state === 'failed') return i18n.t('message.renderer.copyStateFailed');
+  return i18n.t('message.renderer.copyStateCopy');
 }
 
 /**
@@ -1988,6 +1998,7 @@ function ThinkingCard({
   screenWidth?: number;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const layout = useMemo(() => buildMessageHierarchyLayout({
     screenWidth,
     summaryCount: 0,
@@ -2000,12 +2011,12 @@ function ThinkingCard({
     && item.message.isStreaming === true;
   const elapsedMs = useLiveElapsedMs(running, item.message.createdAt);
   const title = item.redacted
-    ? '思考内容已隐藏'
+    ? t('message.renderer.thinkingHidden')
     : item.durationMs !== undefined
-      ? `思考 ${formatDuration(item.durationMs)}`
+      ? t('message.renderer.thinkingDone', { duration: formatDuration(item.durationMs) })
       : elapsedMs !== null
-        ? `思考中 ${formatDuration(elapsedMs)}`
-        : '思考过程';
+        ? t('message.renderer.thinkingActive', { elapsed: formatDuration(elapsedMs) })
+        : t('message.renderer.thinkingProcess');
   return (
     <FoldablePanel
       blockId={item.key}
@@ -2016,8 +2027,8 @@ function ThinkingCard({
       <Rail layout={layout}>
         <Text style={[styles.detailText, styles.italicText]}>
           {item.redacted
-            ? '模型没有返回可展示的思考内容。'
-            : <ThinkingInlineText content={item.message.body || '暂无思考内容'} />}
+            ? t('message.renderer.thinkingEmpty')
+            : <ThinkingInlineText content={item.message.body || t('message.renderer.thinkingNoContent')} />}
         </Text>
       </Rail>
     </FoldablePanel>
@@ -2102,6 +2113,7 @@ function ToolActionRow({
   tool: NormalizedRemoteMessage;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   // 媒体不在行内渲染:tool 产出的图/视频由紧随 tool_group 的独立 ToolMediaBlock
   // 承载(对齐桌面 AgentActionRow「媒体跳出折叠卡」的语义),行内不再重复。
@@ -2116,7 +2128,7 @@ function ToolActionRow({
   return (
     <View style={styles.toolRow} testID="message.toolRow">
       <Pressable
-        accessibilityLabel={expanded ? `收起${row.label}` : `展开${row.label}`}
+        accessibilityLabel={expanded ? t('message.renderer.collapseRow', { label: row.label }) : t('message.renderer.expandRow', { label: row.label })}
         accessibilityRole="button"
         accessibilityState={{ expanded }}
         disabled={!hasDetails}
@@ -2326,12 +2338,19 @@ function TodoStatusIcon({
   return <Circle color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />;
 }
 
-const AGENT_TASK_STATUS_LABEL: Record<AgentTaskStatus, string> = {
-  running: '运行中',
-  completed: '已完成',
-  failed: '失败',
-  stopped: '已停止',
-};
+// 在调用点求值,避免模块顶层把 i18n.t 结果冻结成常量(冻结语言)。
+function agentTaskStatusLabel(status: AgentTaskStatus): string {
+  switch (status) {
+    case 'running':
+      return i18n.t('message.renderer.statusRunning');
+    case 'completed':
+      return i18n.t('message.renderer.statusCompleted');
+    case 'failed':
+      return i18n.t('message.renderer.statusFailed');
+    case 'stopped':
+      return i18n.t('message.renderer.statusStopped');
+  }
+}
 
 const AGENT_TASK_PROVIDER_LABEL: Record<AgentTaskCardModel['provider'], string> = {
   'claude-code': 'Claude Code',
@@ -2349,9 +2368,9 @@ function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTask
 }
 
 function buildAgentTaskMeta(model: AgentTaskCardModel): string[] {
-  const parts: string[] = [AGENT_TASK_PROVIDER_LABEL[model.provider], AGENT_TASK_STATUS_LABEL[model.status]];
+  const parts: string[] = [AGENT_TASK_PROVIDER_LABEL[model.provider], agentTaskStatusLabel(model.status)];
   if (typeof model.totalTokens === 'number') parts.push(`${model.totalTokens} tokens`);
-  if (typeof model.toolUses === 'number') parts.push(`${model.toolUses} 次工具调用`);
+  if (typeof model.toolUses === 'number') parts.push(i18n.t('message.renderer.toolUseCount', { n: model.toolUses }));
   if (typeof model.durationMs === 'number') parts.push(formatDuration(model.durationMs));
   return parts;
 }
@@ -2377,6 +2396,7 @@ function AgentTaskCard({
   screenWidth?: number;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const model = useMemo(
     () => buildAgentTaskCardModel({
       toolName: item.toolCall?.label,
@@ -2388,7 +2408,7 @@ function AgentTaskCard({
     }),
     [item.toolCall, item.update],
   );
-  const title = model.title ?? '子 Agent 任务';
+  const title = model.title ?? t('message.renderer.subagentTaskTitle');
   const subtitle = buildAgentTaskMeta(model).join(' · ');
   const layout = useMemo(
     () => buildMessageHierarchyLayout({ screenWidth, summaryCount: 0 }),
@@ -2411,11 +2431,11 @@ function AgentTaskCard({
         <View style={[styles.stackSmall, { gap: layout.stackSmallGap }]}>
           {model.description ? <Text style={styles.detailText}>{model.description}</Text> : null}
           {model.summary ? <Text style={styles.detailText}>{model.summary}</Text> : null}
-          {model.lastToolName ? <Text style={styles.detailText}>{`最近工具：${model.lastToolName}`}</Text> : null}
-          {model.outputFile ? <Text style={styles.detailText}>{`输出：${model.outputFile}`}</Text> : null}
+          {model.lastToolName ? <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text> : null}
+          {model.outputFile ? <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text> : null}
         </View>
       ) : (
-        <Text style={styles.detailText}>暂无更多详情</Text>
+        <Text style={styles.detailText}>{t('message.renderer.noMoreDetail')}</Text>
       )}
     </FoldablePanel>
   );
@@ -2429,6 +2449,7 @@ function WorkGroupCard({
   actions: MessageActions & { firstUserMessageClientId?: string };
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const presentation = summarizeWorkGroupPresentation(item);
   const header = presentation.header;
@@ -2459,13 +2480,13 @@ function WorkGroupCard({
   const explorationSummary = activityProjection?.isPureExploration
     ? [
         activityProjection.explorationCounts.read > 0
-          ? `读取 ${activityProjection.explorationCounts.read} 个文件`
+          ? t('message.renderer.filesRead', { n: activityProjection.explorationCounts.read })
           : null,
         activityProjection.explorationCounts.search > 0
-          ? `搜索 ${activityProjection.explorationCounts.search} 次`
+          ? t('message.renderer.searchCount', { n: activityProjection.explorationCounts.search })
           : null,
         activityProjection.explorationCounts.list > 0
-          ? `列出 ${activityProjection.explorationCounts.list} 次`
+          ? t('message.renderer.listCount', { n: activityProjection.explorationCounts.list })
           : null,
       ].filter((value): value is string => value !== null).join(' · ')
     : '';
@@ -2593,6 +2614,7 @@ function ExpandedWorkThinkingRow({
   item: MobileThinkingItem;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`work-${item.key}`, false);
   const [measuredLineCount, setMeasuredLineCount] = useState(1);
@@ -2600,7 +2622,7 @@ function ExpandedWorkThinkingRow({
   const canExpand = rawContent.includes('\n') || measuredLineCount > 1;
   return (
     <Pressable
-      accessibilityLabel={expanded ? '收起思考内容' : '展开思考内容'}
+      accessibilityLabel={expanded ? t('message.renderer.collapseThinking') : t('message.renderer.expandThinking')}
       accessibilityRole="button"
       accessibilityState={{ expanded: canExpand ? expanded : undefined }}
       disabled={!canExpand}
@@ -2620,7 +2642,7 @@ function ExpandedWorkThinkingRow({
           numberOfLines={expanded ? undefined : 1}
           style={[styles.workActivityText, styles.italicText]}
         >
-          <ThinkingInlineText content={rawContent || '暂无思考内容'} />
+          <ThinkingInlineText content={rawContent || t('message.renderer.thinkingNoContent')} />
         </Text>
         {!expanded ? (
           <View
@@ -2635,7 +2657,7 @@ function ExpandedWorkThinkingRow({
               onTextLayout={(event) => setMeasuredLineCount(event.nativeEvent.lines.length)}
               style={[styles.workActivityText, styles.italicText]}
             >
-              <ThinkingInlineText content={rawContent || '暂无思考内容'} />
+              <ThinkingInlineText content={rawContent || t('message.renderer.thinkingNoContent')} />
             </Text>
           </View>
         ) : null}
@@ -2660,13 +2682,16 @@ function SubagentCard({
   actions: MessageActions & { firstUserMessageClientId?: string };
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const title = item.header.subagentType ? `子 agent · ${item.header.subagentType}` : '子 agent';
+  const title = item.header.subagentType
+    ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
+    : t('message.renderer.subagent');
   const statusText = item.status === 'running'
-    ? '运行中'
+    ? t('message.renderer.statusRunning')
     : item.durationMs !== undefined
-      ? `已工作 ${formatDuration(item.durationMs)}`
-      : '已完成';
+      ? t('message.renderer.workedDuration', { duration: formatDuration(item.durationMs) })
+      : t('message.renderer.statusCompleted');
   const subtitle = [item.header.description, statusText].filter(Boolean).join(' · ');
   return (
     <CollabCardShell
@@ -2685,7 +2710,7 @@ function SubagentCard({
           ))}
           {item.summary ? (
             <View style={styles.stackSmall}>
-              <Text style={styles.foldSubtitle}>子 agent 小结</Text>
+              <Text style={styles.foldSubtitle}>{t('message.renderer.subagentSummary')}</Text>
               <Text selectable style={styles.detailText} testID="message.subagentSummary">
                 {item.summary}
               </Text>
@@ -2741,6 +2766,7 @@ function FoldablePanel({
   chevronPosition?: 'leading' | 'trailing';
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const [rememberedExpanded, toggleRememberedExpanded] = useFoldableExpandedState(blockId, defaultExpanded);
   const expanded = controlledExpanded ?? rememberedExpanded;
@@ -2761,7 +2787,7 @@ function FoldablePanel({
   return (
     <View style={variant === 'card' ? styles.foldCard : styles.foldPlain}>
       <FoldableHeaderButton
-        accessibilityLabel={expanded ? `收起${title}` : `展开${title}`}
+        accessibilityLabel={expanded ? t('message.renderer.collapseRow', { label: title }) : t('message.renderer.expandRow', { label: title })}
         expanded={expanded}
         hitSlop={variant === 'plain' ? FOLDABLE_HEADER_HIT_SLOP : undefined}
         onPress={toggleExpanded}
@@ -2912,13 +2938,14 @@ const agentSwitchEngineLabel = (kind: unknown): string => (kind === 'codex' ? 'C
 function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const from = agentSwitchEngineLabel(data?.fromAgentKind);
   const to = agentSwitchEngineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
   const resumed = data?.resumed === true;
-  const label = `已从 ${from} 切换到 ${to}`;
+  const label = t('message.renderer.agentSwitchLabel', { from, to });
 
   return (
     <View style={styles.agentSwitchWrap} testID="message.systemCard.agent-switch">
@@ -2928,7 +2955,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           onPress={handoff ? () => setExpanded((v) => !v) : undefined}
           disabled={!handoff}
           accessibilityRole={handoff ? 'button' : undefined}
-          accessibilityLabel={handoff ? `${label},查看交接内容` : label}
+          accessibilityLabel={handoff ? t('message.renderer.agentSwitchViewHandoff', { label }) : label}
           style={styles.agentSwitchPill}
         >
           <ArrowLeftRight color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
@@ -2942,7 +2969,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           {resumed ? (
             <>
               <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchPillText} numberOfLines={1}>已续接原会话</Text>
+              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t('message.renderer.sessionResumedPill')}</Text>
             </>
           ) : null}
           {handoff ? (
@@ -2956,7 +2983,7 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
       {expanded && handoff ? (
         <View style={styles.agentSwitchHandoffPanel}>
           <Text style={styles.agentSwitchHandoffTitle}>
-            交接内容——切换时发送给新引擎的上下文摘要(不会出现在你的消息里)
+            {t('message.renderer.handoffContentDesc')}
           </Text>
           {/* 交接全文内联展开:卡片本身在消息列表(LegendList)内,不再套内层 ScrollView——
               Android 上嵌套竖向滚动会被父列表截获手势导致内层滚不动(Fabric 更甚)。
@@ -3138,6 +3165,7 @@ function MarkdownBody({
   text: string;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const chatFilePathContext = useContext(ChatFilePathContext);
   const blocks = useMemo(() => parseMobileMarkdown(text), [text]);
@@ -3285,7 +3313,7 @@ function MarkdownBody({
               <MermaidDiagramWebView source={block.text} testID="message.mermaidDiagram" />
               {onOpenPayload ? (
                 <Pressable
-                  accessibilityLabel="打开图表详情"
+                  accessibilityLabel={t('message.renderer.openDiagramDetail')}
                   accessibilityRole="button"
                   onPress={() => onOpenPayload(buildMermaidPayload(block.text))}
                   style={StyleSheet.absoluteFill}
@@ -3743,7 +3771,7 @@ function renderInline(
             style={[ctx.baseStyle, styles.markdownLink]}
             testID="message.markdownInlineImageChip"
           >
-            {inline.alt || '图片'}
+            {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
           </SpanText>
         );
       }
@@ -3759,7 +3787,7 @@ function renderInline(
         >
           <View style={size}>
             <Image
-              accessibilityLabel={inline.alt || '图片'}
+              accessibilityLabel={inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
               resizeMode="cover"
               source={{ uri: inline.url }}
               style={[styles.markdownInlineImage, size]}
@@ -3803,7 +3831,7 @@ function MarkdownSessionLinkSpan({
     ? compactSessionMessageLabel(messageLabel ?? shortSessionId(session.messageClientId))
     : explicit
       ?? sessionLinkTitles?.[session.sessionId]
-      ?? `会话 ${shortSessionId(session.sessionId)}`;
+      ?? i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
   const detail = sessionReferenceDetails?.[
     mobileSessionReferenceMetadataKey(session.sessionId, session.messageClientId)
   ];
@@ -4211,6 +4239,7 @@ function DiffPreview({
   onOpen?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const first = diff.segments[0];
   const payload = buildDiffPayload(diff);
   const preview = summarizeMessagePayloadPreview(payload);
@@ -4244,7 +4273,7 @@ function DiffPreview({
         </View>
       ) : null}
       {diff.segments.length > 1 ? (
-        <Text style={styles.diffMore}>{diff.segments.length} 处编辑</Text>
+        <Text style={styles.diffMore}>{t('message.renderer.diffEditCount', { n: diff.segments.length })}</Text>
       ) : null}
     </MessageContentOpenButton>
   );
@@ -4340,6 +4369,7 @@ function MessagePayloadModal({
   onShareImage?: ComponentProps<typeof ImageLightbox>['onShareImage'];
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const [payloadCopyState, setPayloadCopyState] = useState<PayloadHeaderCopyState>('idle');
   const payloadCopySeqRef = useRef(0);
@@ -4440,11 +4470,11 @@ function MessagePayloadModal({
       const sharing = await import('expo-sharing');
       await sharing.shareAsync(uri, { mimeType: 'image/png' });
     } catch {
-      Alert.alert('导出失败', '图表尚未渲染完成或导出出错,请稍后重试。');
+      Alert.alert(t('message.renderer.mermaidExportFailedTitle'), t('message.renderer.mermaidRenderIncompleteBody'));
     } finally {
       setMermaidExporting(false);
     }
-  }, [mermaidExporting]);
+  }, [mermaidExporting, t]);
 
   // 标注 / 发送到对话:导出 PNG 后打开嵌套标注 lightbox(见 annotatePayload
   // 注释),标注圆钮、直发进 composer 托盘等能力全部复用图片消息的既有链路。
@@ -4457,15 +4487,15 @@ function MessagePayloadModal({
       const uri = await writeMermaidExportPngTemp(base64);
       if (!uri) throw new Error('write temp failed');
       setAnnotatePayload(buildMediaPayload(
-        { kind: 'image', url: uri, previewable: true, title: 'Mermaid 图表' },
-        'Mermaid 图表',
+        { kind: 'image', url: uri, previewable: true, title: t('message.renderer.mermaidDiagramTitle') },
+        t('message.renderer.mermaidDiagramTitle'),
       ));
     } catch {
-      Alert.alert('标注失败', '图表尚未渲染完成或导出出错,请稍后重试。');
+      Alert.alert(t('message.renderer.mermaidAnnotateFailedTitle'), t('message.renderer.mermaidRenderIncompleteBody'));
     } finally {
       setMermaidExporting(false);
     }
-  }, [mermaidExporting, imageAnnotation]);
+  }, [mermaidExporting, imageAnnotation, t]);
 
   // mermaid 走沉浸式全屏查看器:图表铺满整个 Modal(标题与源码区都不渲染,
   // 图表最大化优先),仅右上角浮动「复制源码 / 关闭」;源码用复制按钮获取。
@@ -4493,7 +4523,7 @@ function MessagePayloadModal({
           <View style={[styles.payloadFloatingActions, { top: modalSafeArea.paddingTop }]}>
             {imageAnnotation ? (
               <PayloadHeaderActionButton
-                accessibilityLabel="标注并发送到对话"
+                accessibilityLabel={t('message.renderer.annotateSendToChat')}
                 disabled={mermaidExporting}
                 onPress={() => { void annotateMermaid(); }}
                 style={[styles.payloadHeaderButton, styles.payloadFloatingButton]}
@@ -4503,7 +4533,7 @@ function MessagePayloadModal({
               </PayloadHeaderActionButton>
             ) : null}
             <PayloadHeaderActionButton
-              accessibilityLabel="导出图表为图片"
+              accessibilityLabel={t('message.renderer.exportDiagramImage')}
               disabled={mermaidExporting}
               onPress={() => { void exportMermaidPng(); }}
               style={[styles.payloadHeaderButton, styles.payloadFloatingButton]}
@@ -4516,7 +4546,7 @@ function MessagePayloadModal({
               )}
             </PayloadHeaderActionButton>
             <PayloadHeaderActionButton
-              accessibilityLabel="关闭详情"
+              accessibilityLabel={t('message.renderer.closeDetail')}
               onPress={onClose}
               style={[styles.payloadCloseButton, styles.payloadFloatingButton]}
               testID="message.payloadCloseButton"
@@ -4590,7 +4620,7 @@ function MessagePayloadModal({
             >
               {canCopyPayload ? (
                 <PayloadHeaderActionButton
-                  accessibilityLabel="复制详情内容"
+                  accessibilityLabel={t('message.renderer.copyDetailContent')}
                   disabled={payloadCopyState === 'copying'}
                   onPress={copyPayload}
                   style={[
@@ -4610,7 +4640,7 @@ function MessagePayloadModal({
               ) : null}
               {canOpenPayloadUrl ? (
                 <PayloadHeaderActionButton
-                  accessibilityLabel="打开详情链接"
+                  accessibilityLabel={t('message.renderer.openDetailLink')}
                   onPress={openPayloadUrl}
                   style={[
                     styles.payloadHeaderButton,
@@ -4624,11 +4654,11 @@ function MessagePayloadModal({
             </View>
             {payloadCopyState === 'copied' || payloadCopyState === 'failed' ? (
               <Text style={styles.payloadHeaderStatus} testID="message.payloadCopyStatus">
-                {payloadCopyState === 'copied' ? '已复制' : '复制失败'}
+                {payloadCopyState === 'copied' ? t('message.renderer.copyStateCopied') : t('message.renderer.copyStateFailed')}
               </Text>
             ) : null}
             <PayloadHeaderActionButton
-              accessibilityLabel="关闭详情"
+              accessibilityLabel={t('message.renderer.closeDetail')}
               onPress={onClose}
               style={[
                 styles.payloadCloseButton,
@@ -4721,6 +4751,7 @@ function MessagePayloadBody({
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { width: screenWidth } = useWindowDimensions();
   const [remoteState, setRemoteState] = useState<RemoteMediaState>({ status: 'idle' });
@@ -4819,12 +4850,12 @@ function MessagePayloadBody({
             <Text style={styles.payloadMediaHint}>
               {remoteMedia
                 ? remoteMediaStatusText(remoteState, bodyPresentation.media?.remoteIdleText)
-                : bodyPresentation.media?.unsupportedText ?? '当前媒体暂不能直接预览。'}
+                : bodyPresentation.media?.unsupportedText ?? t('message.renderer.mediaNotPreviewable')}
             </Text>
             {remoteState.status === 'error' && remoteMedia && onResolveRemoteMedia ? (
               <PayloadActionButton
-                accessibilityLabel="重试远程媒体取件"
-                label="重试取件"
+                accessibilityLabel={t('message.renderer.retryRemoteMediaFetch')}
+                label={t('message.renderer.retryFetch')}
                 // 不能直接 onPress={resolve}:Pressable 会把事件对象塞进 forceRefresh 参数
                 onPress={() => {
                   resolve(true);
@@ -4835,8 +4866,8 @@ function MessagePayloadBody({
             ) : null}
             {canOpenUrl ? (
               <PayloadActionButton
-                accessibilityLabel="打开媒体"
-                label="打开媒体"
+                accessibilityLabel={t('message.renderer.openMedia')}
+                label={t('message.renderer.openMedia')}
                 onPress={() => {
                   void Linking.openURL(displayUrl).catch(() => undefined);
                 }}
@@ -4900,6 +4931,7 @@ function DiffPayloadBody({
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const view = useMemo(() => formatDiffPayloadView(diff), [diff]);
   const [filePreviewVisible, setFilePreviewVisible] = useState(false);
@@ -4919,13 +4951,13 @@ function DiffPayloadBody({
         <PayloadPathActions layout={layout} path={view.filePath}>
           {canPreview ? (
             <PayloadActionButton
-              accessibilityLabel="读取当前远程文件"
+              accessibilityLabel={t('message.renderer.readCurrentRemoteFile')}
               disabled={previewState.status === 'loading'}
               label={previewState.status === 'loading'
-                ? '读取中'
+                ? t('message.renderer.reading')
                 : previewState.status === 'unavailable'
-                  ? '重试文件预览'
-                  : '读取当前文件'}
+                  ? t('message.renderer.retryFilePreview')
+                  : t('message.renderer.readCurrentFile')}
               layout={layout}
               onPress={openFilePreview}
               testID="message.diffFilePreviewLoadButton"
@@ -4944,7 +4976,7 @@ function DiffPayloadBody({
           ]}
           testID="message.diffFilePreviewBlock"
         >
-          <Text style={styles.payloadDiffSectionTitle}>当前文件预览</Text>
+          <Text style={styles.payloadDiffSectionTitle}>{t('message.renderer.currentFilePreview')}</Text>
           {previewState.status === 'loading' ? <ActivityIndicator color={colors.textSecondary} /> : null}
           <Text
             style={styles.payloadMediaHint}
@@ -4991,21 +5023,21 @@ function DiffPayloadBody({
                 },
               ]}>
                 <DiffPayloadPane
-                  emptyText="没有旧内容"
+                  emptyText={t('message.renderer.diffNoOldContent')}
                   layout={layout}
                   lines={section.oldLines}
                   prefix="-"
                   testID="message.diffCompareOldPane"
-                  title="旧内容"
+                  title={t('message.renderer.diffOldTitle')}
                   variant="old"
                 />
                 <DiffPayloadPane
-                  emptyText="没有新增内容"
+                  emptyText={t('message.renderer.diffNoNewContent')}
                   layout={layout}
                   lines={section.newLines}
                   prefix="+"
                   testID="message.diffCompareNewPane"
-                  title="新内容"
+                  title={t('message.renderer.diffNewTitle')}
                   variant="new"
                 />
               </View>
@@ -5084,6 +5116,7 @@ function FilePayloadBody({
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const sourcePath = payload.sourcePath ?? '';
   const bodyPresentation = useMemo(() => summarizeMessagePayloadBody(payload), [payload]);
@@ -5098,7 +5131,7 @@ function FilePayloadBody({
           padding: layout.bodyPadding,
         },
       ]}>
-        <Text style={styles.payloadMediaKind}>文件</Text>
+        <Text style={styles.payloadMediaKind}>{t('message.renderer.fileKind')}</Text>
         <Text selectable style={styles.payloadText}>
           {bodyPresentation.file?.displayPath ?? bodyPresentation.emptyText}
         </Text>
@@ -5109,9 +5142,9 @@ function FilePayloadBody({
         <PayloadPathActions layout={layout} path={sourcePath}>
           {canPreview && previewState.status !== 'ready' ? (
             <PayloadActionButton
-              accessibilityLabel="加载远程文本预览"
+              accessibilityLabel={t('message.renderer.loadRemoteTextPreview')}
               disabled={previewState.status === 'loading'}
-              label={previewState.status === 'loading' ? '加载中' : previewState.status === 'unavailable' ? '重试预览' : '加载预览'}
+              label={previewState.status === 'loading' ? t('message.renderer.loading') : previewState.status === 'unavailable' ? t('message.renderer.retryPreview') : t('message.renderer.loadPreview')}
               layout={layout}
               onPress={loadPreview}
               testID="message.filePreviewLoadButton"
@@ -5193,6 +5226,7 @@ function PayloadPathActions({
   path: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const [copyState, setCopyState] = useState<PayloadPathCopyState>('idle');
   const copySeqRef = useRef(0);
   const canCopy = path.trim().length > 0;
@@ -5228,9 +5262,9 @@ function PayloadPathActions({
       <View style={[styles.payloadActionRow, { gap: layout.actionGap }]} testID="message.payloadPathActions">
         {canCopy ? (
           <PayloadActionButton
-            accessibilityLabel="复制远程文件路径"
+            accessibilityLabel={t('message.renderer.copyRemoteFilePath')}
             disabled={copyState === 'copying'}
-            label={copyState === 'copying' ? '复制中' : '复制路径'}
+            label={copyState === 'copying' ? t('message.renderer.copyStateCopying') : t('message.renderer.copyPath')}
             layout={layout}
             onPress={copyPath}
             testID="message.copyFilePathButton"
@@ -5240,7 +5274,7 @@ function PayloadPathActions({
       </View>
       {copyState === 'copied' || copyState === 'failed' ? (
         <Text style={styles.payloadPathCopyStatus} testID="message.copyFilePathStatus">
-          {copyState === 'copied' ? '已复制路径' : '复制路径失败'}
+          {copyState === 'copied' ? t('message.renderer.copiedPath') : t('message.renderer.copyPathFailed')}
         </Text>
       ) : null}
     </View>
@@ -5286,13 +5320,13 @@ function PayloadActionButton({
   );
 }
 
-function remoteMediaStatusText(state: RemoteMediaState, idleText = '正在准备远程媒体取件'): string {
-  if (state.status === 'loading') return '正在从远程电脑取件';
+function remoteMediaStatusText(state: RemoteMediaState, idleText = i18n.t('message.renderer.remoteMediaIdle')): string {
+  if (state.status === 'loading') return i18n.t('message.renderer.remoteMediaLoading');
   if (state.status === 'ready') {
     const size = formatRemoteMediaSize(state.media.size);
-    return ['已取回远程媒体', state.media.mimeType, size].filter(Boolean).join(' · ');
+    return [i18n.t('message.renderer.remoteMediaReady'), state.media.mimeType, size].filter(Boolean).join(' · ');
   }
-  if (state.status === 'error') return `取件失败：${state.message}`;
+  if (state.status === 'error') return i18n.t('message.renderer.remoteMediaFetchFailed', { message: state.message });
   return idleText;
 }
 
@@ -5301,21 +5335,21 @@ function formatMediaPlayerStatus(
   kind: MobileMediaPlayerKind,
 ): string {
   const label = payloadMediaKindLabel(kind);
-  if (!status) return `${label} 待播放`;
+  if (!status) return i18n.t('message.renderer.mediaPending', { label });
   const progress = formatMediaPlayerProgress(status);
   switch (status.state) {
     case 'ready':
-      return `${label} 已加载${progress}`;
+      return i18n.t('message.renderer.mediaLoaded', { label, progress });
     case 'playing':
-      return `${label} 播放中${progress}`;
+      return i18n.t('message.renderer.mediaPlaying', { label, progress });
     case 'paused':
-      return `${label} 已暂停${progress}`;
+      return i18n.t('message.renderer.mediaPaused', { label, progress });
     case 'waiting':
-      return `${label} 缓冲中${progress}`;
+      return i18n.t('message.renderer.mediaBuffering', { label, progress });
     case 'ended':
-      return `${label} 已结束${progress}`;
+      return i18n.t('message.renderer.mediaEnded', { label, progress });
     case 'error':
-      return `${label} 播放出错${status.error ? `: ${status.error}` : ''}`;
+      return i18n.t('message.renderer.mediaError', { label, error: status.error ? `: ${status.error}` : '' });
   }
 }
 
@@ -5343,20 +5377,20 @@ function formatMediaPayloadBody(
   bodyText: string,
 ): string {
   const lines = [
-    bodyText.trim() || `原始地址: ${payload.media.url}`,
+    bodyText.trim() || i18n.t('message.renderer.mediaSourceUrl', { url: payload.media.url }),
   ];
   if (resolved) {
     const size = formatRemoteMediaSize(resolved.size);
     lines.push(
-      `下载地址: ${resolved.url}`,
+      i18n.t('message.renderer.mediaDownloadUrl', { url: resolved.url }),
       `MIME: ${resolved.mimeType}`,
-      size ? `大小: ${size}` : '',
-      `过期时间: ${resolved.expiresAt}`,
+      size ? i18n.t('message.renderer.mediaSize', { size }) : '',
+      i18n.t('message.renderer.mediaExpiresAt', { time: resolved.expiresAt }),
     );
   } else if (state.status === 'error') {
-    lines.push(`错误: ${state.message}`);
+    lines.push(i18n.t('message.renderer.mediaErrorLine', { message: state.message }));
   } else if (!payload.media.previewable && !bodyText.trim()) {
-    lines.push('移动端会通过 device-link 请求远程电脑上传媒体后再打开。');
+    lines.push(i18n.t('message.renderer.mediaDeviceLinkHint'));
   }
   return lines.filter(Boolean).join('\n');
 }
@@ -5442,9 +5476,9 @@ function messageControlActionLabel(
   copyState: CopyMessageStatus | 'idle' | 'copying',
 ): string {
   if (id === 'copy') return copyActionLabel(copyState);
-  if (id === 'delete') return '删除消息';
-  if (id === 'rewind') return '回退到这里';
-  return '分叉对话';
+  if (id === 'delete') return i18n.t('message.renderer.controlDelete');
+  if (id === 'rewind') return i18n.t('message.renderer.controlRewind');
+  return i18n.t('message.renderer.controlFork');
 }
 
 function messageControlActionTestID(id: MobileMessageControlActionId): string {

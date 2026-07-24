@@ -10,6 +10,7 @@ import { buildAttachmentPayload, buildMediaPayload } from '@/session/messagePayl
 import type { MobileMessageRenderItem, MobileWorkChildItem } from '@/session/messageRenderModel';
 import { logUnhandledRenderItem } from '@/session/assertNever';
 import { applySentAttachmentThumbOverlay } from '@/session/sentAttachmentThumbStore';
+import { i18n } from '@/i18n';
 
 export interface MobileMessageGalleryImage {
   key: string;
@@ -91,7 +92,7 @@ export function collectMobileMessageGalleryImages(
 
   const pushMedia = (media: NormalizedToolMedia, key: string) => {
     if (media.kind !== 'image') return;
-    const title = media.title || media.url.split('/').pop() || '图片';
+    const title = media.title || media.url.split('/').pop() || i18n.t('message.renderer.imageFallbackTitle');
     const payload = buildMediaPayload(media, title);
     if (payload.kind === 'media') push(key, title, payload);
   };

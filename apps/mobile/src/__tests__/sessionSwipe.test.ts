@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   buildSessionActionMenu,
   createLatestWriteGuard,
@@ -11,6 +12,11 @@ import {
   swipeActionPatch,
   writeGuardFields,
 } from '@/session/swipeRowRegistry';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('createSwipeRowRegistry', () => {
   it('打开新行时自动关掉上一行', () => {

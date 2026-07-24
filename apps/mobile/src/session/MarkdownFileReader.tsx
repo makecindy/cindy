@@ -14,16 +14,15 @@
  * 浮动按钮——真机实测浮层与系统选择菜单撞位。
  */
 import { useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Linking, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
 import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
-import { SELECTION_QUOTE_MENU_LABEL } from '@/session/selectionQuote';
+import { selectionQuoteMenuLabel } from '@/session/selectionQuote';
 import { lineHeight, useTheme } from '@/theme';
 import { typeScale } from '@/theme/tokens';
-
-const QUOTE_MENU_ITEMS = [{ key: 'xdtQuote', label: SELECTION_QUOTE_MENU_LABEL }];
 
 export function MarkdownFileReader({
   markdown,
@@ -38,8 +37,14 @@ export function MarkdownFileReader({
   targetLine?: number | null;
   testID?: string;
 }) {
+  const { t } = useTranslation();
   const { colors } = useTheme();
   const quoteEnabled = !!onQuoteSelection;
+  // 菜单项在渲染时构造(而非模块常量):label 走 i18n;依赖 t 使语言切换后随重渲更新。
+  const quoteMenuItems = useMemo(
+    () => [{ key: 'xdtQuote', label: selectionQuoteMenuLabel() }],
+    [t],
+  );
   const html = useMemo(() => buildSelectableMarkdownHtml(markdown, {
     borderColor: colors.border,
     chipColor: colors.surfaceChip,
@@ -65,7 +70,7 @@ export function MarkdownFileReader({
   return (
     <View style={styles.fill} testID={testID}>
       <WebView
-        menuItems={quoteEnabled ? QUOTE_MENU_ITEMS : undefined}
+        menuItems={quoteEnabled ? quoteMenuItems : undefined}
         onCustomMenuSelection={quoteEnabled ? handleCustomMenuSelection : undefined}
         onShouldStartLoadWithRequest={interceptNavigation}
         originWhitelist={['about:blank']}

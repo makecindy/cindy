@@ -1,6 +1,9 @@
 import type { AgentEvent, InteractionRequest } from '@cindy/maker-core';
+import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
+
+import { formatIslandToolDetail } from './toolDetail.js';
 
 import {
   createDefaultAgentIslandDisplayConfig,
@@ -171,6 +174,8 @@ export interface AgentIslandState {
   compactCurrentSessionId: string | null;
   compactCurrentUntil: number | null;
   strings: AgentIslandStrings;
+  /** 工具状态文案的措辞实现:默认共享包中文表,service 注入本地化版(lazy t())。 */
+  toolWording: ToolRowWording;
 }
 
 export function createAgentIslandState(): AgentIslandState {
@@ -202,6 +207,7 @@ export function createAgentIslandState(): AgentIslandState {
     compactCurrentSessionId: null,
     compactCurrentUntil: null,
     strings: { ...DEFAULT_AGENT_ISLAND_STRINGS },
+    toolWording: DEFAULT_TOOL_ROW_WORDING,
   };
 }
 
@@ -234,10 +240,15 @@ export function resetAgentIslandState(state: AgentIslandState): void {
   state.compactCurrentSessionId = fresh.compactCurrentSessionId;
   state.compactCurrentUntil = fresh.compactCurrentUntil;
   state.strings = fresh.strings;
+  // toolWording 是注入的配置(非会话状态),reset 时保留,避免退回默认中文表。
 }
 
 export function setAgentIslandStrings(state: AgentIslandState, strings: AgentIslandStrings): void {
   state.strings = { ...strings };
+}
+
+export function setAgentIslandToolWording(state: AgentIslandState, wording: ToolRowWording): void {
+  state.toolWording = wording;
 }
 
 export function setAgentIslandAppFocused(state: AgentIslandState, focused: boolean, now = Date.now()): boolean {
@@ -516,7 +527,7 @@ export function applyAgentIslandEvent(
     const toolUseId = toolUseIdsFromEvent(event)[0] ?? null;
     const toolInput = data?.input;
     const toolDescription = toolName
-      ? formatToolDetail(toolName, toolInput, state.strings, data ?? undefined)
+      ? formatIslandToolDetail(toolName, toolInput, { wording: state.toolWording }, data ?? undefined)
       : firstNonEmptyString(data?.description, data?.toolDescription);
     markSessionRunning(state, session);
     if (toolUseId) {
@@ -617,7 +628,7 @@ export function applyAgentIslandInteractionRequest(
   applyMeta(session, meta);
   session.pendingInteractionIds.add(request.requestId);
   session.pendingInteractionKinds.set(request.requestId, request.kind);
-  session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.strings));
+  session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.toolWording));
   session.running = true;
   session.completionAllowedAfterTerminalError = false;
   const activateRequest = request.kind !== 'permission' || session.permissionRequestId === null;
@@ -2103,9 +2114,10 @@ function priorityRank(state: AgentIslandState, session: AgentIslandSessionState,
   return 0;
 }
 
-function detailForInteraction(request: InteractionRequest, strings: AgentIslandStrings): string {
+function detailForInteraction(request: InteractionRequest, wording: ToolRowWording): string {
   if (request.kind === 'permission') {
-    return formatToolDetail(request.toolName, request.input, strings, {
+    // 权限确认:requireCommandVisible 保证用户批准的真实命令始终可见。
+    return formatIslandToolDetail(request.toolName, request.input, { wording, requireCommandVisible: true }, {
       description: request.description,
       displayName: request.displayName,
     }) || request.displayName || request.toolName || '';
@@ -2125,123 +2137,6 @@ function toolUseIdsFromEvent(event: AgentEvent): string[] {
   return typeof data.id === 'string' && data.id.length > 0 ? [data.id] : [];
 }
 
-function formatToolDetail(
-  toolName: string,
-  input: unknown,
-  strings: AgentIslandStrings,
-  fallback?: Record<string, unknown>,
-): string | null {
-  const toolInput = asRecord(input);
-  const normalizedToolName = normalizeToolName(toolName);
-  if (toolInput) {
-    switch (normalizedToolName) {
-      case 'bash':
-      case 'exec':
-      case 'execute_command':
-        return formatCommandDetail(toolInput);
-      case 'read':
-      case 'read_file':
-        return formatFileDetail(toolInput, true);
-      case 'edit':
-      case 'apply_diff':
-      case 'write':
-      case 'write_to_file':
-        return formatFileDetail(toolInput, false);
-      case 'grep':
-      case 'search_files': {
-        const pattern = firstNonEmptyString(toolInput.pattern, toolInput.query);
-        const searchPath = firstNonEmptyString(toolInput.path, toolInput.cwd);
-        if (pattern && searchPath) return `${pattern} in ${lastPathSegment(searchPath)}`;
-        if (pattern) return pattern;
-        break;
-      }
-      case 'glob':
-        return firstNonEmptyString(toolInput.pattern);
-      case 'websearch':
-      case 'web_search':
-        return firstNonEmptyString(toolInput.query);
-      case 'webfetch':
-      case 'web_fetch': {
-        const url = firstNonEmptyString(toolInput.url);
-        if (!url) break;
-        return hostFromUrl(url) ?? url.slice(0, 60);
-      }
-      case 'task':
-      case 'agent':
-        return firstNonEmptyString(toolInput.description, toolInput.prompt)?.slice(0, 80) ?? null;
-      case 'todowrite':
-      case 'update_plan':
-        return strings.updatingTasks;
-      default:
-        break;
-    }
-
-    const question = permissionQuestionDetail(toolInput);
-    if (question) return question;
-
-    const fileValue = firstNonEmptyString(toolInput.file_path, toolInput.path);
-    if (fileValue) return lastPathSegment(fileValue);
-
-    return firstNonEmptyString(
-      toolInput.message,
-      toolInput.toolTitle,
-      toolInput.toolDescription,
-      toolInput.pattern,
-      toolInput.query,
-      toolInput.displayCommand,
-      toolInput.command,
-      toolInput.description,
-      toolInput.prompt,
-    )?.slice(0, 80) ?? null;
-  }
-
-  return firstNonEmptyString(fallback?.description, fallback?.toolDescription, fallback?.displayName);
-}
-
-function permissionQuestionDetail(input: Record<string, unknown>): string | null {
-  const questions = input.questions;
-  if (!Array.isArray(questions)) return null;
-  const firstQuestion = questions.find((question): question is Record<string, unknown> => (
-    Boolean(question) && typeof question === 'object' && !Array.isArray(question)
-  ));
-  if (!firstQuestion) return null;
-  const text = firstNonEmptyString(firstQuestion.question, firstQuestion.header);
-  if (!text) return null;
-  const extraCount = questions.length - 1;
-  return extraCount > 0 ? `${text} (+${extraCount})` : text;
-}
-
-function formatCommandDetail(input: Record<string, unknown>): string | null {
-  const command = firstNonEmptyString(input.displayCommand, input.command, input.cmd);
-  const description = firstNonEmptyString(input.description);
-  if (description && command) {
-    if (description === command || description.includes(command)) return description;
-    return `${description} · $ ${command}`;
-  }
-  if (command) return `$ ${command}`;
-  return description;
-}
-
-function formatFileDetail(input: Record<string, unknown>, includeOffset: boolean): string | null {
-  const filePath = firstNonEmptyString(input.file_path, input.path);
-  if (!filePath) return null;
-  const fileName = lastPathSegment(filePath);
-  if (!includeOffset) return fileName;
-  const offset = typeof input.offset === 'number' ? input.offset : null;
-  return offset === null ? fileName : `${fileName}:${offset}`;
-}
-
-function normalizeToolName(toolName: string): string {
-  const direct = toolName.trim().toLowerCase();
-  if (direct.startsWith('mcp__')) {
-    return direct.split('__').filter(Boolean).at(-1) ?? direct;
-  }
-  if (direct.startsWith('mcp:')) {
-    return direct.split(':').filter(Boolean).at(-1) ?? direct;
-  }
-  return direct;
-}
-
 function firstNonEmptyString(...values: unknown[]): string | null {
   for (const value of values) {
     if (typeof value !== 'string') continue;
@@ -2249,14 +2144,6 @@ function firstNonEmptyString(...values: unknown[]): string | null {
     if (trimmed) return trimmed;
   }
   return null;
-}
-
-function hostFromUrl(rawUrl: string): string | null {
-  try {
-    return new URL(rawUrl).host || null;
-  } catch {
-    return null;
-  }
 }
 
 function lastPathSegment(value: string): string {

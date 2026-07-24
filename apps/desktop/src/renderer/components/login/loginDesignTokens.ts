@@ -37,6 +37,19 @@ export const LOGIN_GROUP = {
   height: 560,
 } as const;
 
+/**
+ * 登录面板下方的本地模式操作区。
+ *
+ * 这块区域不再脱离登录 stage 固定在窗口底部：stage 会为它预留空间，避免小窗口
+ * 中与第三方登录圆钮重叠。reservedHeight 包含 stage 与操作区间距、两行文案的
+ * 最大高度，以及窗口底部安全边距。
+ */
+export const LOGIN_LOCAL_MODE = {
+  gap: 16,
+  reservedHeight: 124,
+  descriptionLineHeight: 18,
+} as const;
+
 /** 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。 */
 export const PANEL = { width: 680, height: 440, radius: 36 } as const;
 export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;

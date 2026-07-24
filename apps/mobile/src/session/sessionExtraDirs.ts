@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n';
 import { normalizeExtraDirs, parseExtraDirsInput } from '@/session/newSession';
 
 export function formatExtraDirsText(extraDirs: readonly string[] | null | undefined): string {
@@ -22,7 +23,9 @@ export function hasExtraDirsDraftChanged(
 
 export function summarizeExtraDirs(extraDirs: readonly string[] | null | undefined): string {
   const count = normalizeExtraDirs(extraDirs ?? undefined).length;
-  return count > 0 ? `当前 ${count} 个附加目录` : '当前没有附加目录';
+  return count > 0
+    ? i18n.t('session.row.extraDirsSummary', { num: count })
+    : i18n.t('session.row.noExtraDirsSummary');
 }
 
 function sameStringList(a: readonly string[], b: readonly string[]): boolean {

@@ -27,6 +27,7 @@ import {
   sortMessagesByCreatedAt,
 } from '@cindy/maker-shared/message-normalize';
 import { describeAgentAuthError } from '@cindy/maker-shared/device-link-contract';
+import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 
 export interface SessionTailErrorBanner {
@@ -127,10 +128,10 @@ function describeNonRetryableTailError(text: string): string | null {
   const authGuidance = describeAgentAuthError(text);
   if (authGuidance) return authGuidance;
   if (/thread not found/i.test(text)) {
-    return 'Codex 鉴权模式已切换，当前会话无法继续 —— 请新建会话后生效。';
+    return i18n.t('session.tail.codexThreadLost');
   }
   if (/invalid_encrypted_content/i.test(text)) {
-    return '由于更换供应商导致加密不可用，本会话只能在原供应商下使用；请回到电脑端处理（可 Fork 丢弃协议加密内容后在新会话继续）。';
+    return i18n.t('session.tail.encryptedContentInvalid');
   }
   return null;
 }

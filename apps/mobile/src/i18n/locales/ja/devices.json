@@ -1,0 +1,328 @@
+{
+  "common": {
+    "cancel": "キャンセル",
+    "save": "保存",
+    "saving": "保存中",
+    "delete": "削除",
+    "deleting": "削除中",
+    "create": "新規"
+  },
+  "list": {
+    "thisComputer": "このパソコン",
+    "allConversations": "すべての会話",
+    "syncFailed": "同期に失敗しました",
+    "requestFailed": "リクエストに失敗しました",
+    "loading": "操作可能なパソコンを読み込み中",
+    "untitled": "無題の会話",
+    "connection": {
+      "connecting": "接続中",
+      "disconnected": "切断されました"
+    },
+    "error": {
+      "sessionDeviceNotFound": "この会話が属するパソコンが見つかりません。再同期してからもう一度お試しください。",
+      "taskDeviceNotFound": "このタスクが属するパソコンが見つかりません。再同期してからもう一度お試しください。",
+      "noDevice": "利用できるパソコンがありません。デスクトップでリモート操作をオンにしてから、再同期してください。"
+    },
+    "alert": {
+      "actionFailed": "操作に失敗しました",
+      "renameFailed": "名前の変更に失敗しました",
+      "deleteTitle": "会話を削除しますか？",
+      "deleteMessage": "「{{title}}」を削除します。削除すると元に戻せません。"
+    },
+    "a11y": {
+      "selectScope": "会話の範囲を選択",
+      "openSettings": "設定を開く",
+      "syncing": "再同期中",
+      "sync": "再同期",
+      "pinnedConversations": "ピン留めした会話 {{count}} 件",
+      "newRemoteConversation": "新しいリモート会話",
+      "renameDevice": "{{label}} の名前を変更",
+      "project": "プロジェクト {{title}}",
+      "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
+      "automationTask": "自動化タスク {{title}}",
+      "openConversation": "会話 {{title}} を開く",
+      "collapse": "{{title}} を折りたたむ",
+      "expand": "{{title}} を展開",
+      "taskError": "タスクでエラー",
+      "awaitingYou": "対応待ち",
+      "doneUnread": "完了・未読",
+      "running": "実行中",
+      "close": "閉じる",
+      "cancelRename": "名前の変更をキャンセル"
+    },
+    "menu": {
+      "groupByProject": "プロジェクトごとにグループ化"
+    },
+    "renameDevice": {
+      "title": "デバイス名を変更",
+      "placeholder": "デバイス名",
+      "savingA11y": "デバイス名を保存中",
+      "saveA11y": "デバイス名を保存"
+    },
+    "renameSession": {
+      "title": "会話の名前を変更",
+      "placeholder": "会話のタイトル",
+      "savingA11y": "会話のタイトルを保存中",
+      "saveA11y": "会話のタイトルを保存"
+    },
+    "revoked": {
+      "title": "アクセス権が取り消されました",
+      "body": "「{{deviceName}}」がこの端末のリモートアクセスを取り消しました。そのパソコンの {{appName}} 設定でこの端末を再度承認し、「再試行」をタップしてください。",
+      "retry": "再試行"
+    },
+    "viewAllConversations": "すべての会話 {{count}} 件を表示",
+    "viewAllRuns": "すべての実行 {{count}} 回を表示",
+    "preview": {
+      "needAttention": "要対応 {{count}} 件",
+      "waiting": "対応待ち {{count}} 件",
+      "automationRunning": "自動化を実行中",
+      "totalRuns": "全 {{count}} 回の実行"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "アクティブ",
+      "waiting": "対応待ち",
+      "automation": "自動化",
+      "archived": "アーカイブ",
+      "all": "すべて",
+      "a11y": "{{label}} の会話で絞り込み"
+    },
+    "group": {
+      "project": "プロジェクト",
+      "date": "日付",
+      "label": "グループ",
+      "a11y": "{{label}} でグループ化"
+    },
+    "metric": {
+      "active": "アクティブ",
+      "waiting": "対応待ち",
+      "automation": "自動化",
+      "activeA11y": "アクティブな会話で絞り込み",
+      "waitingA11y": "対応待ちの会話で絞り込み",
+      "automationA11y": "自動化の会話で絞り込み"
+    },
+    "plan": "スケジュール",
+    "automationsButtonA11y": "リモート自動化を開く",
+    "search": {
+      "openA11y": "リモート会話を検索",
+      "closeA11y": "リモート会話の検索を閉じる",
+      "label": "検索",
+      "placeholder": "タイトル、プロジェクト、モデル、メッセージを検索",
+      "clearA11y": "検索をクリア",
+      "closeInputA11y": "検索を閉じる",
+      "clear": "クリア",
+      "close": "閉じる"
+    },
+    "filters": {
+      "collapseA11y": "会話の絞り込みを折りたたむ",
+      "expandA11y": "会話の絞り込みを展開",
+      "label": "絞り込み"
+    },
+    "selection": {
+      "count": "{{count}} 件の会話を選択中",
+      "canAct": "実行できる操作あり",
+      "cannotAct": "実行できる操作なし",
+      "clearA11y": "会話の選択を解除"
+    },
+    "bulk": {
+      "pinning": "ピン留め中",
+      "unpinning": "解除中",
+      "archiving": "アーカイブ中",
+      "restoring": "復元中",
+      "deleting": "削除中",
+      "pinA11y": "選択した会話を一括でピン留め",
+      "unpinA11y": "選択した会話のピン留めを一括で解除",
+      "archiveA11y": "選択した会話を一括でアーカイブ",
+      "restoreA11y": "選択した会話を一括で復元",
+      "deleteA11y": "選択した会話を一括で削除",
+      "cancelA11y": "一括操作をキャンセル",
+      "partialFailure": "{{done}} 件を処理し、{{failed}} 件が失敗しました（復元済みで再試行できます）。",
+      "noArchivable": "選択の中にアーカイブできるアクティブな会話がありません。",
+      "noPinnable": "選択の中にピン留めできるアクティブな会話がありません。",
+      "noRestorable": "選択の中に復元できるアーカイブ済み会話がありません。",
+      "noUnpinnable": "選択の中にピン留め済みの会話がありません。",
+      "noDeletable": "選択の中に削除できる会話がありません。",
+      "noneModifiable": "選択した会話はいずれも変更できません。"
+    },
+    "automationScope": {
+      "eyebrow": "自動化タスク",
+      "title": "自動化タスク",
+      "emptyCopy": "タスクを実行すると、各実行のセッションがここに表示されます。",
+      "emptyTitle": "このタスクにはまだ実行履歴がありません"
+    },
+    "projectScope": {
+      "eyebrow": "プロジェクト",
+      "emptyCopy": "このプロジェクトで新しい会話を始めましょう。",
+      "emptyTitle": "このプロジェクトにはまだ会話がありません"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · アクティブな会話 {{count}} 件",
+      "activeAndProjects": "アクティブな会話 {{count}} 件 · プロジェクト {{projects}} 件"
+    },
+    "row": {
+      "a11yAutomationGroup": "自動化会話グループ {{title}}",
+      "a11ySession": "会話 {{title}}",
+      "a11yCollapse": "{{title}} を折りたたむ",
+      "a11yExpand": "{{title}} を展開",
+      "collapse": "折りたたむ",
+      "expand": "展開"
+    },
+    "badge": {
+      "waiting": "対応待ち {{count}}",
+      "automationPrefix": "自動化",
+      "sessionCount": "{{count}} 件の会話",
+      "aggregate": "集約",
+      "running": "実行中",
+      "unread": "未読 {{count}}"
+    },
+    "child": {
+      "openA11y": "自動化会話 {{title}} を開く"
+    },
+    "viewAllRuns": "すべての実行 {{count}} 回を表示"
+  },
+  "automations": {
+    "error": {
+      "projectMissingConfig": "プロジェクト自動化に projectConfigId がありません。デスクトップで削除してください。",
+      "deletePartial": "自動化を削除しましたが、{{count}} 件の生成された会話の状態を更新できませんでした。デスクトップでこれらの会話を確認してください。"
+    },
+    "subtitle": "実行中 {{active}} 件 · タスク {{total}} 件",
+    "metric": {
+      "running": "実行中",
+      "unreadResults": "未読の結果",
+      "executing": "処理中"
+    },
+    "summary": {
+      "paused": "{{count}} 件のタスクが一時停止中です。タスクを選ぶと実行・一時停止・編集や最近のセッションを開けます。",
+      "default": "タスクを選ぶと実行・一時停止・編集や最近のセッションを開けます。"
+    },
+    "empty": {
+      "copy": "最初の自動化タスクをスマホから直接作成するか、デスクトップで作成してここに同期できます。",
+      "title": "このパソコンには自動化がありません"
+    },
+    "createAutomation": "自動化を新規作成",
+    "recentRuns": "最近の実行",
+    "runs": {
+      "emptyCopy": "Run now をタップすると、新しい実行がここに表示されます。",
+      "emptyTitle": "まだ実行記録がありません"
+    },
+    "form": {
+      "title": {
+        "create": "自動化を新規作成",
+        "edit": "自動化を編集"
+      },
+      "sessionMode": {
+        "bound": "既存のセッションにひも付けると、ディレクトリ、worktree、Agent、Fast モードがそのセッションに従います。",
+        "persistent": "最初のトリガーで継続セッションを作成し、以降のトリガーは同じセッションに続けます。",
+        "fresh": "トリガーごとに新しいセッションを作成します。"
+      },
+      "field": {
+        "name": "名前",
+        "prompt": "プロンプト",
+        "trigger": "トリガー方式",
+        "runSession": "実行セッション",
+        "boundSession": "ひも付けセッション",
+        "intervalMinutes": "間隔（分）",
+        "workspace": "ワークスペース",
+        "projectDir": "プロジェクトディレクトリ",
+        "model": "モデル",
+        "effort": "推論の強度",
+        "timezone": "タイムゾーン"
+      },
+      "namePlaceholder": "例：毎日のプロジェクト点検",
+      "scriptHint": "これはスクリプトのみのタスクです。スクリプト設定はデスクトップでのみ編集できます。ここでは名前、トリガー方式、通知などのその他の項目を変更できます。",
+      "promptPlaceholder": "毎回の自動実行で {{appName}} に何をさせたいかを明確に書いてください",
+      "trigger": {
+        "recurring": "定期",
+        "manual": "手動"
+      },
+      "session": {
+        "fresh": "新しいセッション",
+        "persistent": "継続",
+        "bound": "ひも付け"
+      },
+      "boundSessionA11y": "セッション {{name}} をひも付け",
+      "intervalPlaceholder": "空欄の場合は cron を使用",
+      "workspace": {
+        "project": "プロジェクト",
+        "dialogue": "会話"
+      },
+      "useWorktree": "worktree を使用",
+      "modelPlaceholderBound": "セッションに従う",
+      "fastMode": "Fast モード",
+      "notifyDesktop": "デスクトップ通知",
+      "notifyFeishu": "Feishu 通知",
+      "savingA11y": "自動化を保存中",
+      "saveA11y": "自動化を保存",
+      "cancelA11y": "自動化の編集をキャンセル"
+    },
+    "delete": {
+      "counting": "この自動化が生成した会話を集計中...",
+      "confirmDeleteBoth": "タスクと会話を削除",
+      "confirmArchive": "タスクを削除して会話をアーカイブ",
+      "confirmTaskOnly": "タスクのみ削除",
+      "title": "{{name}} を削除",
+      "copy": "自動化タスクを削除しても、すでに開始された実行は中断されません。生成された会話は下のオプションに従って処理され、デスクトップと同じ挙動になります。",
+      "optionsA11y": "生成された会話の処理方法を選択",
+      "keepDesc": "この自動化タスクだけを削除し、過去の会話は元のリストに残します。",
+      "keepLabel": "生成された会話を残す",
+      "archiveDesc": "タスクを削除した後、生成された会話をアーカイブに移動します。後で検索できます。",
+      "archiveLabel": "生成された会話をアーカイブ",
+      "deleteDesc": "タスクを削除した後、生成された会話も削除済みとして扱います。この操作はスマホからは元に戻せません。",
+      "deleteLabel": "生成された会話を削除",
+      "cancelA11y": "自動化の削除をキャンセル",
+      "confirmA11y": "自動化の削除を確定"
+    },
+    "pause": {
+      "title": "{{name}} を一時停止",
+      "detailFallback": "一時停止すると、この自動化のトリガーが止まります。",
+      "previewFallback": "実行中の run はありません",
+      "confirmA11y": "自動化の一時停止を確定",
+      "pausing": "一時停止中",
+      "confirm": "一時停止を確定",
+      "cancelA11y": "自動化の一時停止をキャンセル"
+    },
+    "runDelete": {
+      "title": "この実行記録を削除",
+      "copy": "この自動化の実行記録のみを削除します。開いた会話は削除されず、以降の自動トリガーにも影響しません。",
+      "confirmA11y": "実行記録の削除を確定",
+      "confirm": "記録を削除",
+      "cancelA11y": "実行記録の削除をキャンセル"
+    },
+    "template": {
+      "label": "テンプレート",
+      "loadingA11y": "テンプレートを読み込み中",
+      "refreshA11y": "自動化テンプレートを更新",
+      "loading": "読み込み中",
+      "refresh": "更新",
+      "cardA11y": "自動化テンプレート {{name}}",
+      "manualConfig": "手動設定"
+    },
+    "scheduleRowA11y": "自動化タスク {{title}}",
+    "detail": {
+      "promptScriptFallback": "スクリプトのみのタスク。設定はデスクトップでのみ編集できます",
+      "promptEmpty": "タスクのプロンプトが保存されていません",
+      "deleteA11y": "自動化を削除",
+      "runNowA11y": "自動化を今すぐ実行",
+      "running": "実行中",
+      "resumeA11y": "自動化を再開",
+      "pauseA11y": "自動化を一時停止",
+      "resume": "再開",
+      "pause": "一時停止",
+      "editA11y": "自動化を編集",
+      "edit": "編集"
+    },
+    "run": {
+      "openSessionA11y": "自動化セッションを開く",
+      "opening": "開いています",
+      "session": "セッション",
+      "restartA11y": "自動化を再実行",
+      "restarting": "再実行中",
+      "restart": "再実行",
+      "markReadA11y": "実行記録を既読にする",
+      "marking": "マーク中",
+      "markRead": "既読",
+      "deleteA11y": "実行記録を削除"
+    }
+  }
+}

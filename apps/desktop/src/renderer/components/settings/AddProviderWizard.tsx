@@ -25,7 +25,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
-import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
+import { useCodexAuth } from '@/hooks/useCodexAuth';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
 import { sortPresetsForLocale } from '@cindy/model-providers';
@@ -321,21 +321,6 @@ export function AddProviderWizard({
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
-
-  // OpenAI 走 useCodexAuth:hook 状态翻 connected 时视为完成(triggerLogin 也会返回,
-  // oneshot ref 保证只收口一次)。
-  const openaiDoneRef = useRef(false);
-  useEffect(() => {
-    if (openaiDoneRef.current) return;
-    if (
-      sel?.kind === 'oauth' &&
-      sel.provider.id === 'openai' &&
-      isChatGptConnectionConnected(codexAuth.state, false)
-    ) {
-      openaiDoneRef.current = true;
-      onDone('openai');
-    }
-  }, [codexAuth.state, sel, onDone]);
 
   // ── 预设:进入 Step 3 时自动拉取模型 ─────────────────────────────────────
   const startFetch = useCallback(async () => {

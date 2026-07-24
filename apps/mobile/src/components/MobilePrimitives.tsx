@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronLeft } from 'lucide-react-native';
 import {
   ActivityIndicator,
@@ -388,10 +389,11 @@ export function ScreenBackButton({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const interactionDisabled = !onPress;
   return (
     <Pressable
-      accessibilityLabel="返回"
+      accessibilityLabel={t('shared.back')}
       accessibilityRole="button"
       accessibilityState={{ disabled: interactionDisabled }}
       disabled={interactionDisabled}
@@ -558,6 +560,7 @@ const REMOTE_LIST_SYNCING_DELAY_MS = 800;
 export function RemoteListSyncingPlaceholder({ testID }: { testID?: string }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setVisible(true), REMOTE_LIST_SYNCING_DELAY_MS);
@@ -567,7 +570,7 @@ export function RemoteListSyncingPlaceholder({ testID }: { testID?: string }) {
   return (
     <View style={styles.remoteSyncingPlaceholder} testID={testID}>
       <ActivityIndicator color={colors.textTertiary} size="small" />
-      <Text style={styles.remoteSyncingText}>正在同步</Text>
+      <Text style={styles.remoteSyncingText}>{t('shared.syncing')}</Text>
     </View>
   );
 }

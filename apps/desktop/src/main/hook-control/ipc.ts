@@ -62,6 +62,7 @@ import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolB
 import { createHookBindingStore } from './bindings.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
+import { cancelReleasedOutput } from '../content-moderation/outputHub.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
@@ -294,6 +295,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       // task.cancel 的中断出口: 与用户手动 Stop 同一条 session.abort() 路径
       abortSession: async (sessionId) => {
+        cancelReleasedOutput(sessionId);
         await getMaker().getSession(sessionId)?.abort();
       },
       // session.archive 的归档出口: 与 device-link 远程归档同一条

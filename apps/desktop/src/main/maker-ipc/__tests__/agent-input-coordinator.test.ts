@@ -216,8 +216,8 @@ function createHarness() {
     noteSessionClearBoundary,
     resolveSessionReferences,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
-    screenUserMessage: (sessionId, item) =>
-      screenUserMessage ? screenUserMessage(sessionId, item) : Promise.resolve({ action: 'allow' }),
+    screenUserMessage: (sessionId, text, item) =>
+      screenUserMessage ? screenUserMessage(sessionId, text, item) : Promise.resolve({ action: 'allow' }),
     onUserMessageBlocked,
     onUserMessageRewritten,
     emitProjection,

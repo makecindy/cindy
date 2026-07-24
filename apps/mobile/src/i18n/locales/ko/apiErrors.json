@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "요청 시간이 초과되었습니다. 나중에 다시 시도하세요.",
+  "networkUnavailable": "네트워크에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도하세요.{{webHint}}",
+  "networkUnavailableWebHint": " 웹 미리보기는 브라우저의 CORS 정책에 의해 차단될 수 있습니다. Expo Go 또는 시뮬레이터에서 테스트하세요.",
+  "requestFailed": "요청 실패"
+}

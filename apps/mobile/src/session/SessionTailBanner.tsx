@@ -10,6 +10,7 @@
  *  - 「忽略」→ error-tail 持久化 dismiss / interrupted 写 ack,不再提示。
  */
 import { Pressable, StyleSheet } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { View } from 'react-native';
 import type { SessionTailBannerState } from '@/session/sessionTailBannerModel';
@@ -29,14 +30,13 @@ export interface SessionTailBannerProps {
   onDismiss(): void;
 }
 
-const INTERRUPTED_TEXT = '任务执行到一半时应用退出，已被中断。';
-
 export function SessionTailBanner({ state, busy, readOnly, onContinue, onDismiss }: SessionTailBannerProps) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const isInterrupted = state.kind === 'interrupted' || state.continueKind === 'interrupted';
   const text = state.kind === 'error-tail' && state.continueKind === 'error'
     ? state.text
-    : INTERRUPTED_TEXT;
+    : t('session.tail.interrupted');
   const showContinue = state.kind === 'interrupted' || state.retryable;
   return (
     <View style={styles.box} testID="session.tailBanner">
@@ -52,14 +52,14 @@ export function SessionTailBanner({ state, busy, readOnly, onContinue, onDismiss
             <TailPill
               busy={busy}
               cta
-              label={isInterrupted ? '继续任务' : '重试'}
+              label={isInterrupted ? t('session.tail.continueTask') : t('session.tail.retry')}
               onPress={onContinue}
               testID="session.tailBanner.continue"
             />
           ) : null}
           <TailPill
             busy={busy}
-            label="忽略"
+            label={t('session.tail.ignore')}
             onPress={onDismiss}
             testID="session.tailBanner.dismiss"
           />

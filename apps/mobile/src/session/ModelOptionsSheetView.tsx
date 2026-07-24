@@ -8,6 +8,7 @@
  * effort 点击后停留(可连续调 Fast),返回/把手下拉由浮窗层负责。
  */
 import { Pressable, StyleSheet, Switch, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Check } from 'lucide-react-native';
 
@@ -127,6 +128,7 @@ export function ModelOptionsSheetView({
 }: ModelOptionsSheetViewProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   // 非选中行的写入落在记忆 store(不回流 props)—— 订阅版本号即时刷新当前值显示。
   const storeVersion = useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
   void storeVersion;
@@ -176,9 +178,9 @@ export function ModelOptionsSheetView({
       {metaLine ? <Text style={styles.metaLine} testID={`${testID}.meta`}>{metaLine}</Text> : null}
       {fastEditable ? (
         <View style={styles.fastRow}>
-          <Text style={styles.fastRowLabel}>快速模式</Text>
+          <Text style={styles.fastRowLabel}>{t('models.options.fastMode')}</Text>
           <Switch
-            accessibilityLabel={`快速模式 ${displayName}`}
+            accessibilityLabel={t('models.options.fastModeAccessibility', { model: displayName })}
             disabled={disabled}
             onValueChange={setFast}
             testID={`${testID}.fastToggle`}
@@ -190,13 +192,13 @@ export function ModelOptionsSheetView({
       {fastEditable && hasEfforts ? <View style={styles.divider} /> : null}
       {hasEfforts ? (
         <>
-          <Text style={styles.sectionLabel}>推理强度</Text>
+          <Text style={styles.sectionLabel}>{t('models.options.reasoningEffort')}</Text>
           {model.efforts.map((effortId) => {
             const effortSelected = effortId === currentEffort;
             const label = effortLabelFor(model, effortId, capabilities);
             return (
               <Pressable
-                accessibilityLabel={`推理强度 ${label}`}
+                accessibilityLabel={t('models.options.reasoningEffortAccessibility', { label })}
                 accessibilityRole="button"
                 accessibilityState={{ selected: effortSelected, disabled }}
                 disabled={disabled}

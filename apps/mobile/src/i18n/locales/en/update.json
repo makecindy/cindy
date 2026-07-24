@@ -1,0 +1,17 @@
+{
+  "installHintTitle": "Installing Update",
+  "installHintBody": "After tapping Install in the system dialog, return to the home screen to watch the download progress. The system replaces the current version automatically once the download finishes.",
+  "openInstallFailedTitle": "Couldn't Open the Install Link",
+  "openInstallFailedBody": "Copy the install address manually and open it in Safari.",
+  "bundleAvailableBody": "A new version is available. Download and install the full app package to update.",
+  "releaseNotes": "\nWhat's new:\n{{notes}}",
+  "forcedTitle": "Update Required",
+  "goUpdate": "Update",
+  "newVersionTitle": "New Version Available",
+  "later": "Later",
+  "upToDateTitle": "You're Up to Date",
+  "upToDateBody": "You already have the latest app package.",
+  "checkFailedTitle": "Check Failed",
+  "checkFailedBody": "Couldn't reach the update server. Try again later.",
+  "latestRequestFailed": "latest request failed: HTTP {{status}}"
+}

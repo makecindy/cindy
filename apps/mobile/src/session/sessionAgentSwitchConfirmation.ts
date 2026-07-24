@@ -1,6 +1,8 @@
 /** 手机端首次进入另一 Agent 浏览态时的原生确认门。 */
 import { Alert, type AlertButton, type AlertOptions } from 'react-native';
 
+import { i18n } from '@/i18n';
+
 import { mobileAgentLabel, type MobileSessionAgentKind } from './sessionAgentSwitch';
 
 type ShowAlert = (
@@ -29,11 +31,11 @@ export function confirmMobileSessionAgentSwitch(
       resolve(confirmed);
     };
     showAlert(
-      `切换到 ${target}？`,
-      `下一条消息发送时，Cindy 会把当前会话交接给 ${target}。两个 Agent 对上下文和工具的理解可能不同，请确认后再选择目标模型。`,
+      i18n.t('models.agentSwitch.confirmTitle', { agent: target }),
+      i18n.t('models.agentSwitch.confirmMessage', { agent: target }),
       [
-        { text: '取消', style: 'cancel', onPress: () => finish(false) },
-        { text: '继续选择', onPress: () => finish(true) },
+        { text: i18n.t('models.agentSwitch.cancel'), style: 'cancel', onPress: () => finish(false) },
+        { text: i18n.t('models.agentSwitch.confirm'), onPress: () => finish(true) },
       ],
       { cancelable: true, onDismiss: () => finish(false) },
     );

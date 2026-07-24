@@ -1208,6 +1208,27 @@ interface ElectronAPI {
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
   };
 
+  contentModeration: {
+    reviewUserPrompt: (text: string) => Promise<'allow' | 'reject' | 'cancelled'>;
+    onInputBlocked: (
+      callback: (payload: {
+        sessionId: string;
+        clientId: string;
+        text: string;
+        files: import('../shared/agentInputQueue').AgentInputSerializedFile[];
+        reason: 'rejected' | 'cancelled';
+      }) => void,
+    ) => () => void;
+    onOutputBlocked: (
+      callback: (payload: {
+        sessionId: string;
+        turnId: string;
+        kind: 'blocked';
+        i18nKey: 'contentModeration.blocked';
+      }) => void,
+    ) => () => void;
+  };
+
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<{ ok: true; path: string; wav: ArrayBuffer } | { ok: false }>;

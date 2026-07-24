@@ -5,6 +5,7 @@
  * 置顶 / 归档 / 删除)+「会话信息」二级入口;二级 = 用量 / 工作目录 / 附加引用目录 / 标识。
  * 全部为纯函数,不碰 IO;交互副作用(clipboard / Alert / 远端写)由组件层承担。
  */
+import { i18n } from '@/i18n';
 import { sessionCollaborationLabel } from '@/session/collaboration';
 import { normalizeExtraDirs } from '@/session/newSession';
 import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
@@ -43,14 +44,14 @@ export function buildSessionMenuHeader(
   input: { readOnlyReason?: string | null },
 ): SessionMenuHeaderModel {
   const chips: SessionMenuChip[] = [];
-  if (session.pinnedAt) chips.push({ id: 'pinned', label: '已置顶' });
-  if (session.status === 'archived') chips.push({ id: 'archived', label: '已归档' });
-  if (input.readOnlyReason) chips.push({ id: 'readonly', label: '只读' });
+  if (session.pinnedAt) chips.push({ id: 'pinned', label: i18n.t('session.menu.chipPinned') });
+  if (session.status === 'archived') chips.push({ id: 'archived', label: i18n.t('session.menu.chipArchived') });
+  if (input.readOnlyReason) chips.push({ id: 'readonly', label: i18n.t('session.menu.chipReadOnly') });
   const collabLabel = sessionCollaborationLabel(session);
   if (collabLabel) chips.push({ id: 'collab', label: collabLabel });
 
   return {
-    title: session.title || workspaceName(session) || '远程会话',
+    title: session.title || workspaceName(session) || i18n.t('session.menu.titleFallback'),
     chips,
     metaLine: buildSessionMenuMetaLine(session),
     usageSummary: buildSessionMenuUsageSummary(session),
@@ -66,35 +67,35 @@ export function buildSessionMenuActions(input: {
   return [
     {
       id: 'rename',
-      label: '重命名对话',
+      label: i18n.t('session.menu.renameAction'),
       tone: 'default',
       disabled: input.writeDisabled,
       testID: 'session.renameAction',
     },
     {
       id: 'copyLink',
-      label: '复制对话链接',
+      label: i18n.t('session.menu.copyLinkAction'),
       tone: 'default',
       disabled: input.busy,
       testID: 'session.copyLinkAction',
     },
     {
       id: 'pin',
-      label: input.pinned ? '取消置顶' : '置顶',
+      label: input.pinned ? i18n.t('session.menu.unpin') : i18n.t('session.menu.pin'),
       tone: 'default',
       disabled: input.writeDisabled,
       testID: 'session.pinButton',
     },
     {
       id: 'archive',
-      label: input.archived ? '恢复' : '归档',
+      label: input.archived ? i18n.t('session.menu.restore') : i18n.t('session.menu.archive'),
       tone: 'default',
       disabled: input.writeDisabled,
       testID: input.archived ? 'session.restoreButton' : 'session.archiveButton',
     },
     {
       id: 'delete',
-      label: '删除会话',
+      label: i18n.t('session.menu.deleteAction'),
       tone: 'danger',
       disabled: input.writeDisabled,
       testID: 'session.deleteButton',
@@ -116,7 +117,7 @@ export function buildSessionInfoWorkspace(
   if (worktree) return { label: 'Worktree', name: worktree.name, path: worktree.path };
   const workingDir = session.workingDir?.trim();
   if (!workingDir) return null;
-  return { label: '工作目录', name: lastPathPart(workingDir), path: workingDir };
+  return { label: i18n.t('session.menu.workingDir'), name: lastPathPart(workingDir), path: workingDir };
 }
 
 /** 附加引用目录入口条件(与旧设置面板一致):cc + project 会话且有工作目录。 */
@@ -175,12 +176,12 @@ const AI_RENAME_OFFLINE_ERROR_CODES = [
 export function aiRenameFailureText(error: unknown): string {
   const text = error instanceof Error ? `${readErrorCode(error)} ${error.message}` : String(error);
   if (text.includes('CHANNEL_NOT_ALLOWED') || text.includes('VERSION_MISMATCH')) {
-    return '被控电脑版本过旧，暂不支持自动起名。';
+    return i18n.t('session.menu.aiRenameUnsupported');
   }
   if (AI_RENAME_OFFLINE_ERROR_CODES.some((code) => text.includes(code))) {
-    return '被控电脑不在线，稍后再试。';
+    return i18n.t('session.menu.aiRenameOffline');
   }
-  return '自动起名失败，请重试。';
+  return i18n.t('session.menu.aiRenameFailed');
 }
 
 function readErrorCode(error: Error): string {
@@ -209,7 +210,7 @@ function buildSessionMenuUsageSummary(session: RemoteSession): string | null {
   const contextWindow = readPositiveNumber(session.contextWindow);
   if (contextTokens !== null && contextWindow !== null) {
     const percent = Math.min(100, Math.max(0, (contextTokens / contextWindow) * 100));
-    parts.push(`上下文 ${Math.round(percent)}%`);
+    parts.push(i18n.t('session.menu.contextUsageSummary', { percent: Math.round(percent) }));
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }

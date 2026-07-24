@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "The request timed out. Try again later.",
+  "networkUnavailable": "Network connection unavailable. Check your connection and try again.{{webHint}}",
+  "networkUnavailableWebHint": " The web preview may be blocked by the browser's CORS policy; test with Expo Go or a simulator.",
+  "requestFailed": "Request failed"
+}
