@@ -89,6 +89,9 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('kAXChildrenAttribute');
     expect(source).toContain('kAXSheetRole');
     expect(source).toContain('kAXModalAttribute');
+    expect(source).toContain('AXIsProcessTrusted()');
+    expect(source).toContain('systemSettingsHasModalFallback');
+    expect(source).toContain('intersectionArea >= area * 0.8');
     expect(source).not.toContain('layerZeroCount');
   });
 
@@ -109,6 +112,18 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('NSColor.separatorColor.cgColor');
     expect(source).toContain('viewDidChangeEffectiveAppearance()');
     expect(source).not.toContain('layer?.backgroundColor = NSColor.white.cgColor');
+  });
+
+  it('quotes bundle paths passed from find to both macOS signing flows', () => {
+    const source = fs.readFileSync(
+      new URL('../../../../scripts/ci/lib.mjs', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain('${signBase} "{}" \\\\;');
+    expect(source).toContain('"${helperEntitlementsPath}" "{}" \\\\;');
+    expect(source).not.toContain('${signBase} {} \\\\;');
+    expect(source).not.toContain('"${helperEntitlementsPath}" {} \\\\;');
   });
 
   it('starts the packaged helper and sends permission state after ready', async () => {
