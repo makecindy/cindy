@@ -310,12 +310,16 @@ describe('runLocalOwnerDataAdoption marker 终态', () => {
 });
 
 describe('runLocalOwnerDataAdoption 独占推迟(不取消,下次登录重来)', () => {
-  it('passive shared userData 实例推迟', async () => {
+  it('passive shared userData 实例推迟,但仍登记 pending(否则占位库永久堵死重试)', async () => {
     const { mem, deps, phases } = createHarness({ passive: true });
     mem.addFile(LOCAL_DB);
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result).toEqual({ status: 'deferred', reason: 'passive-shared-user-data' });
     expect(phases).toEqual([]);
+    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
+      pendingOwnerKeys?: string[];
+    };
+    expect(marker.pendingOwnerKeys).toEqual([USER_KEY]);
   });
 
   it('存在并发活实例时推迟', async () => {

@@ -219,8 +219,11 @@ async function writeAdoptionMarker(
 
 /**
  * 推迟/失败退出前登记 pending(best-effort,失败只 warn):没有它,本次退出后
- * 登录自动创建的空账号库会把下次重试挡在「账号库已存在」外面。passive 实例
- * 保持只读,不写(dev 场景,推迟由下次独占启动自然解除)。
+ * 登录自动创建的空账号库会把下次重试挡在「账号库已存在」外面。passive 推迟
+ * 同样要记——passive 实例的登录也会创建占位库,不记就永久堵死(Greptile
+ * review);marker 是认领自己的簿记(tmp+原子改名的小 JSON,不搬任何数据),
+ * 不在 passive「不得搬动共享数据」的禁区内,并发覆写最坏丢一条记录,由
+ * 使用面探测与前置检查兜底,方向安全。
  */
 async function recordPendingAdoption(
   deps: LocalOwnerAdoptionDeps,
@@ -291,6 +294,7 @@ export async function runLocalOwnerDataAdoption(
     // 2. 独占确认:passive 只读实例与并发活实例都只推迟,不取消(下次登录重来)。
     if (deps.passiveSharedUserData()) {
       deps.log.info('local owner adoption deferred: passive shared-userData instance');
+      await recordPendingAdoption(deps, markerPath, marker, ownerKey);
       return { status: 'deferred', reason: 'passive-shared-user-data' };
     }
     if (deps.hasConcurrentLiveInstances()) {
