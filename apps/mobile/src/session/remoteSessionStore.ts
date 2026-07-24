@@ -1633,6 +1633,26 @@ export const remoteSessionStore = {
       }
       return;
     }
+    if (channel === 'usage:session-spend-changed' && isRecord(payload)) {
+      // session 终身累计 cost 镜像:被控端 sessionSpendBroadcaster 走裸 UPDATE、不发
+      // sessions:patched,这条(sessions topic,列表订阅常开)是唯一更新通道;不处理则
+      // 会话菜单用量摘要停在旧值直到 reseed。readNumber 已挡 NaN,负数不入镜像。
+      const sessionId = readString(payload, 'sessionId');
+      const totalCostUsd = readNumber(payload, 'totalCostUsd');
+      if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
+        this.applySessionPatch(deviceId, sessionId, { totalCostUsd });
+      }
+      return;
+    }
+    if (channel === 'usage:session-tokens-changed' && isRecord(payload)) {
+      // 同上:session 终身累计 token 镜像。
+      const sessionId = readString(payload, 'sessionId');
+      const totalTokens = readNumber(payload, 'totalTokens');
+      if (sessionId && totalTokens !== null && totalTokens >= 0) {
+        this.applySessionPatch(deviceId, sessionId, { totalTokenUsage: totalTokens });
+      }
+      return;
+    }
     if (channel === 'usage:message-model-mismatch' && isRecord(payload)) {
       // 本轮模型降级标记(桌面被控端 turn 结束检测命中时推送):patch 进
       // agent_meta,messageNormalize 的 readModelMismatch 据此渲染降级提示行。
