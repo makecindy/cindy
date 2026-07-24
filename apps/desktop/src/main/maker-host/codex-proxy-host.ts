@@ -176,16 +176,8 @@ function writeTransformedBodyDump(ctx: RequestTransformCtx, body: unknown): void
   }
 }
 
-function shouldSkipNativeCodexTransforms(ctx: RequestTransformCtx): boolean {
-  const sessionId = sessionIdFromTransformCtx(ctx);
-  if (!sessionId) return false;
-  const protocol = getSessionRoutingDescriptor(sessionId, 'codex')?.wireProtocol ?? 'openai-responses';
-  return protocol === 'openai-chat';
-}
-
 function createCodexTransform(): RequestTransform {
-  const inject = createInstructionsInjectionTransform({ registry, logger: log });
-  return (body, ctx) => shouldSkipNativeCodexTransforms(ctx) ? null : inject(body, ctx);
+  return createInstructionsInjectionTransform({ registry, logger: log });
 }
 
 function sessionIdFromTransformCtx(ctx: RequestTransformCtx): string | undefined {
