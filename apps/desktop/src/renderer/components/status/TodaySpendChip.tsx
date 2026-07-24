@@ -1002,9 +1002,15 @@ export function TodaySpendChip({
   // 配额与之无关。
   const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;
   // 订阅直连 bridge 轮真实计费恒 0(不写 sessions.total_cost_usd),spend hook 无意义 → 关。
+  // device-link 远程会话形态未知 → 无条件启用(与 tokens / 估算价值同口径),否则被控端
+  // 若是本机判不出的形态(如 codex+xai)累计 cost 镜像永远不展示。
   const sessionCostUsd = useSessionSpend(
-    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionId : undefined,
-    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionInitialCostUsd : null,
+    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
+      ? sessionId
+      : undefined,
+    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
+      ? sessionInitialCostUsd
+      : null,
   );
   const sessionTokens = useSessionTokens(
     isCodexApi || isCodexSubscription || isSubscriptionBridge || isDeviceLinkRemote

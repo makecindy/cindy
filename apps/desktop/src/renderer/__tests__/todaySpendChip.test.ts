@@ -114,8 +114,13 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` })");
     expect(source).toContain("tooltipLabel: t('todaySpend.tooltip.sessionUsed'");
     expect(source).toContain("session: { label: t('todaySpend.sessionCostLabel', { cost: '$—' })");
-    expect(source).toContain("(vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionId : undefined");
-    expect(source).toContain("(vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi ? sessionInitialCostUsd : null");
+    // spend hook 对 device-link 远程会话无条件启用(形态未知,累计 cost 镜像不可丢)
+    expect(source).toMatch(
+      /\(vendorKey === 'cc' && !isSubscriptionBridge\) \|\| isCodexApi \|\| isDeviceLinkRemote\s*\?\s*sessionId\s*:\s*undefined/,
+    );
+    expect(source).toMatch(
+      /\(vendorKey === 'cc' && !isSubscriptionBridge\) \|\| isCodexApi \|\| isDeviceLinkRemote\s*\?\s*sessionInitialCostUsd\s*:\s*null/,
+    );
     // 订阅"本会话价值"估算: Codex OAuth / Claude 订阅 / bridge 订阅共用同一管道;
     // device-link 远程会话形态未知(被控端账号事实拿不到)→ 无条件启用
     expect(source).toMatch(
