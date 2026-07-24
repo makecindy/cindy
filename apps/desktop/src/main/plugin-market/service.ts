@@ -267,7 +267,8 @@ export class PluginMarketService {
     ) {
       throw new Error('下载凭证与当前 Release 不一致');
     }
-    if (Date.parse(download.expiresAt) <= Date.now()) {
+    const expiresAt = Date.parse(download.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
       throw new Error('Plugin 下载凭证已过期');
     }
 

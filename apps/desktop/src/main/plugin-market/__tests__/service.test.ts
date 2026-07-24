@@ -342,6 +342,20 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects a download credential with an invalid expiry timestamp', async () => {
+    const item = summary();
+    const h = harness([item]);
+    h.api.download.mockResolvedValue({
+      url: 'https://downloads.test.invalid/plugin.cindy',
+      expiresAt: 'not-a-timestamp',
+      sha256: item.currentRelease.sha256,
+      sizeBytes: item.currentRelease.sizeBytes,
+    });
+
+    await expect(h.service.install(item.id)).rejects.toThrow('下载凭证已过期');
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('cancels an install if the active data owner changes during the request', async () => {
     const item = summary();
     const h = harness([item]);
