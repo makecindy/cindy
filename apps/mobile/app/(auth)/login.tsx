@@ -424,7 +424,7 @@ export default function LoginScreen() {
             <LoginSocialButton
               key="apple"
               label={loginText('apple')}
-              busy={disabled}
+              busy={auth.isBusy}
               variant="apple"
               onPress={() => {
                 // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
@@ -443,7 +443,7 @@ export default function LoginScreen() {
             <LoginSocialButton
               key={provider}
               label={socialLabel(provider)}
-              busy={disabled}
+              busy={auth.isBusy}
               onPress={() => {
                 // SC-SOC-7: in-flight(disabled)期间 no-op 防重复发起;行为层 guard,
                 // 零视觉变化(圆钮已无 disabled 态 per §10 拍板,不回填 disabled 视觉)。
@@ -462,7 +462,7 @@ export default function LoginScreen() {
           {/* 企业 SSO 入口:输入组织标识 发起单点登录(国内版隐藏邮箱后企业用户的登录路径) */}
           <LoginSocialButton
             label={loginText('ssoEntry')}
-            busy={disabled}
+            busy={auth.isBusy}
             onPress={() => {
               // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
               if (disabled) return;

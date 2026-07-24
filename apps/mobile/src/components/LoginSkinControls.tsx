@@ -773,9 +773,9 @@ export function LoginTextLinkSlot({
 /* ── 图标(矢量源 = figma 现导 SVG path 内联,登记见 asset-manifest.md;
       Google/WeChat fill 为厂商固定品牌色,跨模式不变;SSO 为单色图标,
       随圆钮底反相(亮色深圆上白/浅图标,暗色白圆上 #2A2828 深图标——figma
-      white SSO 489:710 核验)——与桌面 assets/login/icons 同源)。Apple 登录走官方
-      AppleAuthenticationButton(非皮肤化、logo 必须用 Apple 官方组件,不得自绘),
-      不在本图标集,见 login.tsx 与 App Store Guideline 4.8 说明。 ── */
+      white SSO 489:710 核验)——与桌面 assets/login/icons 同源)。Apple logo 不在
+      本图标集:由 AppleLogoGlyph 承载(ADR 官方 Logo-only path 逐字节原样,
+      App Store Guideline 4;见该组件注释)。 ── */
 
 /** Google(247:1714,material-icon-theme:google 四色品牌 mark)。 */
 function GoogleIcon() {
