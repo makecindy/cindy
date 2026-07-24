@@ -167,6 +167,9 @@ export class PluginMarketService {
   ) {}
 
   async snapshot(): Promise<PluginMarketSnapshot> {
+    if (!getClientEndpoint('pluginApiBaseUrl')) {
+      return { items: [], unavailableReason: 'not-configured' };
+    }
     let owner: ActiveAppSession;
     try {
       owner = captureMarketOwner();
@@ -177,9 +180,6 @@ export class PluginMarketService {
           ? 'session-switching'
           : 'authentication-required',
       };
-    }
-    if (!getClientEndpoint('pluginApiBaseUrl')) {
-      return { items: [], unavailableReason: 'not-configured' };
     }
     let plugins: VisiblePluginSummary[];
     try {

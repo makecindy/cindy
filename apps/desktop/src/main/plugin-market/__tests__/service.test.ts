@@ -15,6 +15,7 @@ const runtime = vi.hoisted(() => ({
   builtinRemoved: new Set<string>(),
   accountGhostAvailable: true,
   boundaryPending: false,
+  pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
   session: {
     mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
     dataOwnerId: 'user-1' as string | null,
@@ -38,7 +39,7 @@ vi.mock('../../appSessionState.js', () => ({
   ),
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
-  getClientEndpoint: vi.fn(() => 'https://plugin.test.invalid'),
+  getClientEndpoint: vi.fn(() => runtime.pluginApiBaseUrl),
 }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -70,6 +71,7 @@ afterEach(() => {
   runtime.builtinRemoved.clear();
   runtime.accountGhostAvailable = true;
   runtime.boundaryPending = false;
+  runtime.pluginApiBaseUrl = 'https://plugin.test.invalid';
   runtime.session = {
     mode: 'cloud',
     dataOwnerId: 'user-1',
@@ -223,6 +225,22 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'authentication-required',
+    });
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  it('reports missing market configuration before requiring authentication', async () => {
+    runtime.pluginApiBaseUrl = null;
+    runtime.session = {
+      mode: 'signed-out',
+      dataOwnerId: null,
+      generation: 2,
+    };
+    const h = harness([summary()]);
+
+    await expect(h.service.snapshot()).resolves.toEqual({
+      items: [],
+      unavailableReason: 'not-configured',
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
