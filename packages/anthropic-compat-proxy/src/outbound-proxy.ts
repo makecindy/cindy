@@ -43,11 +43,20 @@ export type OutboundProxyResolver = (
 ) => string | null | undefined | Promise<string | null | undefined>;
 
 /**
+ * 去掉 IPv6 字面量的方括号。WHATWG URL 的 `hostname` 对 IPv6 返回**带方括号**的
+ * 形式(`new URL('https://[::1]').hostname === '[::1]'`),而比较 / 重组 authority
+ * 都需要裸地址;所有消费 hostname 的入口先过这里归一化。
+ */
+function stripIpv6Brackets(hostname: string): string {
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+}
+
+/**
  * loopback 上游永不走代理:本机 bridge / gateway 与代理软件无关,而且系统代理的
  * bypass 规则(localhost 默认直连)在 env 层不可见,这里必须自兜。
  */
 export function isLoopbackHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase();
+  const h = stripIpv6Brackets(hostname.toLowerCase());
   return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || h.startsWith('127.');
 }
 
@@ -56,7 +65,19 @@ export function isLoopbackHostname(hostname: string): boolean {
  * CONNECT 目标、绝对形式 URL 与 Host 头共用,裸拼 `v6:port` 会被代理当成非法目标。
  */
 export function formatAuthority(hostname: string, port: number): string {
-  return hostname.includes(':') ? `[${hostname}]:${port}` : `${hostname}:${port}`;
+  const bare = stripIpv6Brackets(hostname);
+  return bare.includes(':') ? `[${bare}]:${port}` : `${bare}:${port}`;
+}
+
+/**
+ * 按 RFC 9110 语义拼 Host 头:默认端口省略,非默认端口带上;IPv6 字面量加方括号。
+ * 经代理的绝对形式请求用 —— 该分支 socket 连的是代理,Host 头只能靠显式设置。
+ */
+export function formatHostHeader(hostname: string, port: number, protocol: 'http:' | 'https:'): string {
+  const defaultPort = protocol === 'https:' ? 443 : 80;
+  const bare = stripIpv6Brackets(hostname);
+  const bracketed = bare.includes(':') ? `[${bare}]` : bare;
+  return port === defaultPort ? bracketed : `${bracketed}:${port}`;
 }
 
 /**
@@ -132,22 +153,38 @@ export function hasProxyEnvConfig(env: NodeJS.ProcessEnv = process.env): boolean
  * NO_PROXY 匹配(逗号分隔)。支持惯例语义:
  *   - `*` 全部直连
  *   - `example.com` / `.example.com` 匹配该域及其子域
- *   - `host:port` 额外要求端口一致
+ *   - `host:port` 额外要求端口一致(仅在恰好一个冒号时按 host:port 拆,
+ *     裸 IPv6 字面量如 `::1` / `2001:db8::1` 整体当 host,不误拆末段为端口)
+ *   - `[v6]` / `[v6]:port` 的无歧义 IPv6 带端口形式
  * IP 段(CIDR)不支持 —— 与多数实现一致,按普通字面 host 处理。
  */
 function noProxyMatches(noProxy: string, hostname: string, port: number): boolean {
-  const host = hostname.toLowerCase();
+  // URL.hostname 的 IPv6 带方括号,先归一成裸地址再与条目比较。
+  const host = stripIpv6Brackets(hostname.toLowerCase());
   for (const rawEntry of noProxy.split(',')) {
     const entry = rawEntry.trim().toLowerCase();
     if (!entry) continue;
     if (entry === '*') return true;
     let entryHost = entry;
     let entryPort: number | null = null;
-    const colon = entry.lastIndexOf(':');
-    // IPv6 字面量里也有冒号;只有「冒号后是纯数字」才当端口拆。
-    if (colon > 0 && /^\d+$/.test(entry.slice(colon + 1))) {
-      entryHost = entry.slice(0, colon);
-      entryPort = Number(entry.slice(colon + 1));
+    if (entry.startsWith('[')) {
+      // [v6] / [v6]:port —— 唯一无歧义的 IPv6 带端口写法。
+      const close = entry.indexOf(']');
+      if (close === -1) continue;  // 括号没闭合,条目非法,跳过
+      entryHost = entry.slice(1, close);
+      const rest = entry.slice(close + 1);
+      if (rest.startsWith(':') && /^\d+$/.test(rest.slice(1))) {
+        entryPort = Number(rest.slice(1));
+      } else if (rest) {
+        continue;  // `]` 后跟了端口以外的东西,条目非法,跳过
+      }
+    } else {
+      const first = entry.indexOf(':');
+      // 恰好一个冒号且后缀纯数字才按 host:port 拆;多个冒号 = 裸 IPv6 字面量整体当 host。
+      if (first !== -1 && first === entry.lastIndexOf(':') && /^\d+$/.test(entry.slice(first + 1))) {
+        entryHost = entry.slice(0, first);
+        entryPort = Number(entry.slice(first + 1));
+      }
     }
     if (entryPort !== null && entryPort !== port) continue;
     const bare = entryHost.startsWith('.') ? entryHost.slice(1) : entryHost;

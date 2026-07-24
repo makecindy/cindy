@@ -7,6 +7,7 @@ import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import {
   createEnvOutboundProxyResolver,
   formatAuthority,
+  formatHostHeader,
   hasProxyEnvConfig,
   isLoopbackHostname,
   parseOutboundProxyUrl,
@@ -109,6 +110,18 @@ describe('formatAuthority', () => {
     expect(formatAuthority('2001:db8::1', 443)).toBe('[2001:db8::1]:443');
     expect(formatAuthority('example.com', 8080)).toBe('example.com:8080');
     expect(formatAuthority('10.0.0.1', 80)).toBe('10.0.0.1:80');
+    // URL.hostname 已带方括号的形态不能二次包裹。
+    expect(formatAuthority('[2001:db8::1]', 443)).toBe('[2001:db8::1]:443');
+  });
+});
+
+describe('formatHostHeader', () => {
+  it('omits default ports, keeps non-default ports, brackets IPv6', () => {
+    expect(formatHostHeader('example.com', 80, 'http:')).toBe('example.com');
+    expect(formatHostHeader('example.com', 443, 'https:')).toBe('example.com');
+    expect(formatHostHeader('example.com', 8080, 'http:')).toBe('example.com:8080');
+    expect(formatHostHeader('2001:db8::1', 80, 'http:')).toBe('[2001:db8::1]');
+    expect(formatHostHeader('2001:db8::1', 8080, 'http:')).toBe('[2001:db8::1]:8080');
   });
 });
 
@@ -126,6 +139,8 @@ describe('isLoopbackHostname', () => {
     expect(isLoopbackHostname('localhost')).toBe(true);
     expect(isLoopbackHostname('sub.localhost')).toBe(true);
     expect(isLoopbackHostname('::1')).toBe(true);
+    // WHATWG URL.hostname 的 IPv6 形态带方括号,同样要识别。
+    expect(isLoopbackHostname('[::1]')).toBe(true);
     expect(isLoopbackHostname('api.anthropic.com')).toBe(false);
     expect(isLoopbackHostname('10.0.0.1')).toBe(false);
   });
@@ -158,6 +173,19 @@ describe('createEnvOutboundProxyResolver', () => {
     expect(r('example.com:8443', 'https://example.com:8443')).toBeNull();
     expect(r('example.com:8443', 'https://example.com')).toBe('http://127.0.0.1:1');
     expect(r('*', 'https://anything.test')).toBeNull();
+  });
+
+  it('matches bare IPv6 literals in NO_PROXY without misparsing the tail as a port', () => {
+    const env = { HTTPS_PROXY: 'http://127.0.0.1:1' };
+    const r = (noProxy: string, url: string) =>
+      createEnvOutboundProxyResolver({ ...env, NO_PROXY: noProxy })(url);
+    // 裸 IPv6:末段纯数字也不能被拆成端口(回归:`2001:db8::1` 曾被拆成 host `2001:db8::` + port 1)。
+    expect(r('2001:db8::1', 'https://[2001:db8::1]')).toBeNull();
+    expect(r('2001:db8::1', 'https://[2001:db8::99]')).toBe('http://127.0.0.1:1');
+    // [v6]:port 无歧义带端口形式:端口一致命中,不一致不命中。
+    expect(r('[2001:db8::1]:8443', 'https://[2001:db8::1]:8443')).toBeNull();
+    expect(r('[2001:db8::1]:8443', 'https://[2001:db8::1]')).toBe('http://127.0.0.1:1');
+    expect(r('[2001:db8::1]', 'https://[2001:db8::1]')).toBeNull();
   });
 
   it('never proxies loopback targets and tolerates bad urls', () => {

@@ -22,6 +22,7 @@ import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'n
 import { DEFAULT_THREAD_ID_HEADERS, selectedHeaderValue } from './headers.js';
 import {
   formatAuthority,
+  formatHostHeader,
   isLoopbackHostname,
   OutboundProxyAgentPool,
   parseOutboundProxyUrl,
@@ -644,10 +645,13 @@ function forward(
       // https 上游:经 CONNECT 隧道 agent 转发(TLS 端到端,代理只见密文)。
       upstreamOptions.agent = outboundProxy.agent;
     } else {
-      // http 上游:按 HTTP 代理惯例改发绝对形式请求给代理;Host 头保持指向真实上游。
+      // http 上游:按 HTTP 代理惯例改发绝对形式请求给代理;Host 头指向真实上游。
+      // socket 连的是代理,Host 头只能显式设置 —— 按 RFC 9110 带非默认端口 / IPv6 方括号。
       upstreamOptions.hostname = outboundProxy.target.hostname;
       upstreamOptions.port = outboundProxy.target.port;
       upstreamOptions.path = `http://${formatAuthority(actualTarget.hostname, actualTarget.port)}${upstreamPath}`;
+      (upstreamOptions.headers as Record<string, string>).host =
+        formatHostHeader(actualTarget.hostname, actualTarget.port, actualTarget.protocol);
       if (outboundProxy.target.authHeader) {
         (upstreamOptions.headers as Record<string, string>)['proxy-authorization'] = outboundProxy.target.authHeader;
       }

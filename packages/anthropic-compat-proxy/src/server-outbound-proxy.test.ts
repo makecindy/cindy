@@ -49,9 +49,9 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
     expect(await res.json()).toEqual({ via: 'outbound-proxy' });
 
     expect(seen).toHaveLength(1);
-    // 绝对形式 URL 指向真实上游;Host 头保持上游;凭证进 Proxy-Authorization。
+    // 绝对形式 URL 指向真实上游;Host 头按 RFC 9110 带非默认端口;凭证进 Proxy-Authorization。
     expect(seen[0].url).toBe('http://upstream.invalid:8080/v1/messages');
-    expect(seen[0].host).toBe('upstream.invalid');
+    expect(seen[0].host).toBe('upstream.invalid:8080');
     expect(seen[0].proxyAuth).toBe(`Basic ${Buffer.from('user:secret').toString('base64')}`);
   });
 
