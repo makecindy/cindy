@@ -2204,14 +2204,11 @@ export function NewMakerDraftRoute() {
                     }
                   />
                 </div>
-                {/* 输入框跟随 inputWidth 变宽后,快捷入口只有 4 项,若也铺满全宽
-                    会被撑成又宽又空的短卡。这里把卡片区封顶在 800px、左对齐(与输入框
-                    左缘齐),保持每张卡当前的紧凑比例;输入框仍独立用满可用宽度。 */}
-                <div
-                  data-testid="create-agent-quick-starts"
-                  className="mt-[42px] w-full"
-                  style={{ maxWidth: 800 }}
-                >
+                {/* 快捷入口随内容列同宽(用户拍板 2026-07-24,推翻旧「封顶 800 左对齐」
+                    口径):卡片区吃满父列宽 = 输入框宽(inputWidth,封顶 1220),
+                    grid-cols-4 均分,与输入框左右缘对齐——大屏下不再出现"输入框宽、
+                    卡片区短一截"的错位观感。 */}
+                <div data-testid="create-agent-quick-starts" className="mt-[42px] w-full">
                   {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
                       (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
                   <div className="mb-2.5 px-0.5">

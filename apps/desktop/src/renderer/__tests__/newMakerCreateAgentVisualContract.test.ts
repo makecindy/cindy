@@ -62,8 +62,10 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('style={{ maxWidth: inputWidth || 800 }}');
     expect(source).not.toContain('max-w-[800px]');
     expect(source).toContain('absolute right-0 top-[22px]');
-    // 快捷入口只有 4 项,不随内容列铺满全宽——封顶 800px 左对齐,保持卡片紧凑比例。
-    expect(source).toMatch(/data-testid="create-agent-quick-starts"[\s\S]*?style=\{\{ maxWidth: 800 \}\}/);
+    // 快捷入口随内容列同宽(用户拍板 2026-07-24,推翻旧「封顶 800 左对齐」):
+    // 容器 w-full 吃满父列(= inputWidth),禁止再套独立 maxWidth。
+    expect(source).toMatch(/data-testid="create-agent-quick-starts" className="mt-\[42px\] w-full"/);
+    expect(source).not.toMatch(/data-testid="create-agent-quick-starts"[\s\S]{0,120}?maxWidth: 800/);
   });
 
   it('preserves New Maker behavior-critical props on ChatInput', () => {
