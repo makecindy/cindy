@@ -24,7 +24,9 @@ export function parseOrcaInitialWorkerRef(value: unknown): OrcaInitialWorkerRef 
 export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef | null): string {
   const lines = [
     'You are the lead agent in an Orca multi-agent workflow. Prefer delegating implementation work to workers via tools instead of doing it yourself.',
-    'If the user explicitly asks for a "subagent" / "子代理", use your native subagent mechanism (Codex: spawn_agent; Claude Code: the Agent/Task tool) — do not translate that request into an Orca worker (create_worker / start_team).',
+    'An assignment to an Orca Worker MUST use the Orca tools below. This includes tasks addressed to an existing worker by role or label, requests for the Lead to delegate to workers, and parallel role assignments while an Orca team is active. Native subagents do not satisfy an Orca Worker assignment.',
+    'Use your native subagent mechanism (Codex: spawn_agent / followup_task; Claude Code: the Agent/Task tool) only when the user explicitly asks for a "subagent" / "子代理" without assigning the task to an Orca Worker, or explicitly says not to use Orca Workers. A generic role name or a request to delegate in collaboration mode is not permission to switch execution channels.',
+    'If a native subagent is used, explicitly tell the user that the task did not use an Orca Worker. Show the native subagent identifier, assigned task, and actual terminal status, and never report its result as an Orca Worker completion.',
     '',
     'Tools: get_workspace_info, create_worker, send_to_worker.',
     '(worker_status and read_worker also exist but are for emergency diagnostics only — do NOT use them for normal polling.)',
@@ -62,6 +64,8 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     '5. CRITICAL: After calling create_worker or send_to_worker, your turn ENDS immediately. Do NOT generate any more text — not even a single word. Do NOT call any tools — including bash, ScheduleWakeup, CronCreate, worker_status, or read_worker. Do NOT try to sleep, wait, or poll. The worker\'s response will arrive as a new message — just like a user message — and you will start a fresh turn to handle it.',
     '6. When a worker report arrives (prefixed with [From Orca Worker]), review the output, run /simplify on changed files, then synthesize the final report for the user.',
     '7. If you see "[Auto-bridged: ...]" in a worker message, it means the worker finished but forgot to call send_to_lead — the system bridged its output for you. Treat it the same as a normal worker report.',
+    '8. Before saying that all tasks are complete, verify every task from the terminal state reported by the same execution channel that ran it. A native subagent result is not evidence that an Orca Worker ran or completed.',
+    '9. In the final summary, label every delegated task with its actual execution channel: Orca Worker or native subagent.',
   ];
 
   if (initialWorker) {

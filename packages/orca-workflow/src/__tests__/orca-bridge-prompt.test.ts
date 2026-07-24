@@ -3,19 +3,38 @@ import { describe, expect, it } from 'vitest';
 import { renderOrcaLeadSystemPrompt, renderOrcaWorkerSystemPrompt } from '../orca-bridge-prompt.js';
 
 describe('renderOrcaLeadSystemPrompt', () => {
-  const subagentHint =
-    'If the user explicitly asks for a "subagent" / "子代理", use your native subagent mechanism (Codex: spawn_agent; Claude Code: the Agent/Task tool) — do not translate that request into an Orca worker (create_worker / start_team).';
+  const workerRoutingRule =
+    'An assignment to an Orca Worker MUST use the Orca tools below.';
+  const nativeSubagentBoundary =
+    'only when the user explicitly asks for a "subagent" / "子代理" without assigning the task to an Orca Worker';
+  const channelDisclosureRule =
+    'label every delegated task with its actual execution channel: Orca Worker or native subagent.';
 
-  it('adds the subagent routing hint for leads', () => {
+  it('routes explicit Worker assignments through Orca before considering native subagents', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
-    expect(prompt).toContain(subagentHint);
+    expect(prompt).toContain(workerRoutingRule);
+    expect(prompt).toContain(nativeSubagentBoundary);
+    expect(prompt.indexOf(workerRoutingRule)).toBeLessThan(prompt.indexOf(nativeSubagentBoundary));
   });
 
-  it('keeps the subagent routing hint when an initial worker exists', () => {
+  it('requires execution-channel disclosure and terminal-state verification', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'Show the native subagent identifier, assigned task, and actual terminal status',
+    );
+    expect(prompt).toContain(
+      'A native subagent result is not evidence that an Orca Worker ran or completed.',
+    );
+    expect(prompt).toContain(channelDisclosureRule);
+  });
+
+  it('keeps Worker routing and disclosure rules when an initial worker exists', () => {
     const prompt = renderOrcaLeadSystemPrompt({ workerId: 'worker-1', sessionId: 'session-1' });
 
-    expect(prompt).toContain(subagentHint);
+    expect(prompt).toContain(workerRoutingRule);
+    expect(prompt).toContain(channelDisclosureRule);
   });
 });
 

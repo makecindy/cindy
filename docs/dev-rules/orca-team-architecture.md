@@ -159,6 +159,25 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 
 本节记录当前系统必须持续满足的运行时不变量。它们不是远期规划，而是 Lead / Worker 协同时已经依赖的行为契约。
 
+#### Lead 派单与执行通道
+
+1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
+   用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
+   内按多个角色并行派单时，Lead 必须先读 workspace，再通过
+   `send_to_worker`／`create_workers` 进入 Orca 状态机；Codex
+   `spawn_agent`／`followup_task` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
+   Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
+   Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
+
+2. **实际执行通道必须披露并按同一通道验收（状态：不变量）**<br>
+   Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明
+   `Orca Worker` 或 `native subagent`。原生 subagent 由 Codex
+   `collabAgentToolCall`／Claude Agent/Task 任务卡展示标识、任务和终态，但不得写入 Orca
+   Worker 状态，也不得触发 Orca Worker 完成提醒。实现指针：
+   `packages/orca-workflow/src/orca-bridge-prompt.ts` 的
+   `renderOrcaLeadSystemPrompt`，以及 `packages/maker-core/src/agents/codex/translator.ts`
+   的 `handleCollabAgentToolCall`。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>
