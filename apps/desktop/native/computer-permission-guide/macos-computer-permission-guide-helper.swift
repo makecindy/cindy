@@ -178,7 +178,7 @@ private final class DraggableApplicationView: NSView, NSDraggingSource {
         updateLayerColors()
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Computer Use")
+        setAccessibilityLabel("CuaDriver")
     }
 
     required init?(coder: NSCoder) { nil }
