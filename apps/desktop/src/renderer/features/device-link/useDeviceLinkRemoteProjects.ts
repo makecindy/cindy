@@ -264,7 +264,9 @@ export function useDeviceLinkRemoteProjects(): void {
         deviceId,
         setTimeout(() => {
           reseedTimers.delete(deviceId);
-          if (!disposed && eligible.has(deviceId)) void refreshRemoteDeviceSessions(deviceId, name);
+          if (!disposed && eligible.has(deviceId)) {
+            void refreshRemoteDeviceSessions(deviceId, name, { snapshotMode: 'merge' });
+          }
         }, RESEED_DEBOUNCE_MS),
       );
     });
@@ -273,7 +275,10 @@ export function useDeviceLinkRemoteProjects(): void {
       async (deviceId, name) => {
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
-        const result = await refreshRemoteDeviceSessions(deviceId, name, { snapshotMode: 'merge' });
+        const result = await refreshRemoteDeviceSessions(deviceId, name, {
+          snapshotMode: 'merge',
+          coalescingMode: 'weak',
+        });
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
       },
     );

@@ -19,6 +19,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectsStore } from './remoteProjectsStore';
+import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
 
 const log = createLogger('device-link-refresh');
 
@@ -74,8 +75,10 @@ export interface RefreshOptions {
   sleep?: (ms: number) => Promise<void>;
   /** 最大尝试次数(含首次),默认 DEFAULT_MAX_ATTEMPTS。 */
   maxAttempts?: number;
-  /** replace 用于 bootstrap/reseed；merge 用于周期有界快照，保留响应窗口外会话。 */
+  /** sessions:list 始终有界，默认 merge；仅已知完整的调用方才可显式 replace。 */
   snapshotMode?: 'replace' | 'merge';
+  /** 周期 tick 可弱合并到任意在途 refresh；事件型 refresh 默认强语义补跑。 */
+  coalescingMode?: 'strong' | 'weak';
 }
 
 /**
@@ -102,21 +105,20 @@ export async function refreshRemoteDeviceSessions(
 ): Promise<RefreshResult> {
   const existing = refreshTasks.get(deviceId);
   if (existing) {
-    const requestedSnapshotMode = opts.snapshotMode ?? 'replace';
-    // periodic merge 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
-    // 都 bump epoch 让慢请求自取消。bootstrap/reseed 的 replace 仍走下方强语义补跑。
-    if (requestedSnapshotMode === 'merge') return existing.promise;
+    const requestedSnapshotMode = opts.snapshotMode ?? 'merge';
+    // periodic tick 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
+    // 都 bump epoch 让慢请求自取消。bootstrap/reseed 等事件型 refresh 仍走强语义补跑。
+    if (opts.coalescingMode === 'weak') return existing.promise;
 
     existing.rerun = true;
     existing.name = name ?? existing.name;
     existing.opts = {
       ...existing.opts,
       ...opts,
-      // 同一 single-flight 批次里 replace 是更强语义：bootstrap/reseed 不能被期间到达的
-      // periodic merge 降级；反向排队时，普通 refresh 也必须从 merge 恢复 replace。
+      // 显式 replace 是更强的 snapshot 覆盖要求，不能被后续 merge 降级；默认的事件型
+      // refresh 则保持安全的有界 merge，并通过上面的强 coalescing 语义确保补跑。
       snapshotMode:
-        (existing.opts.snapshotMode ?? 'replace') === 'replace' ||
-        requestedSnapshotMode === 'replace'
+        (existing.opts.snapshotMode ?? 'merge') === 'replace' || requestedSnapshotMode === 'replace'
           ? 'replace'
           : 'merge',
     };
@@ -182,19 +184,23 @@ async function probeMissingSessionStatuses(
   for (const result of results) {
     if (result.errorCode === 'NOT_FOUND') {
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
+      removeRemoteSessionActivityEntry(result.sessionId);
       continue;
     }
     if (!result.value || typeof result.value !== 'object') continue;
     const session = result.value as Partial<Session>;
-    if (
-      session.id === result.sessionId &&
-      (session.status === 'archived' || session.status === 'deleted')
-    ) {
+    if (session.id !== result.sessionId) continue;
+    if (session.status === 'archived' || session.status === 'deleted') {
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, {
         status: session.status,
         updatedAt: session.updatedAt,
       });
+      removeRemoteSessionActivityEntry(result.sessionId);
+      continue;
     }
+    // sessions:get 返回窗口外 active 行时同样是权威快照，回填 title / pinnedAt / model 等
+    // 元数据；否则丢失 patched push 后会永久保留旧字段。
+    remoteProjectsStore.applyPatch(deviceId, result.sessionId, { ...session });
   }
 }
 
@@ -220,18 +226,21 @@ async function runRefreshRemoteDeviceSessions(
       // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'gave-up';
       if (Array.isArray(list)) {
-        if (opts.snapshotMode === 'merge') {
+        if ((opts.snapshotMode ?? 'merge') === 'merge') {
           const sessions = list as Session[];
+          const incomingIds = new Set(sessions.map((session) => session.id));
+          const missingSessionIds = remoteProjectsStore
+            .getDeviceSessions(deviceId)
+            .filter((session) => !incomingIds.has(session.id))
+            .map((session) => session.id);
           // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace 并清掉缺席的归档/删除行。
           // 满窗口时先 merge，再用既有只读 sessions:get 有界轮询窗口外缓存 id 的终态。
           if (sessions.length < LIST_LIMIT) {
             remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
+            for (const sessionId of missingSessionIds) {
+              removeRemoteSessionActivityEntry(sessionId);
+            }
           } else {
-            const incomingIds = new Set(sessions.map((session) => session.id));
-            const missingSessionIds = remoteProjectsStore
-              .getDeviceSessions(deviceId)
-              .filter((session) => !incomingIds.has(session.id))
-              .map((session) => session.id);
             remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions);
             await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
           }

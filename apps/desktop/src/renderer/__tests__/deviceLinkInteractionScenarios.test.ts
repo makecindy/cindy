@@ -1054,6 +1054,7 @@ describe('远程交互接线不变式', () => {
   it('F7: 周期 sessions:list 是有界窗口，只能 merge，不能截断远程分片', () => {
     const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
     expect(src).toContain("snapshotMode: 'merge'");
+    expect(src).toContain("coalescingMode: 'weak'");
   });
 
   it('F8: 周期对账从实际 link status 启动，且状态 push 不被迟到快照覆盖', () => {

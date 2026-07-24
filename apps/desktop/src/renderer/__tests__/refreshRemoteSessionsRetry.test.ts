@@ -21,6 +21,11 @@ import {
   isTransientRemoteError,
 } from '@/features/device-link/refreshRemoteSessions';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+  getRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
 
 const invoke = vi.fn();
 let n = 0;
@@ -34,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   remoteProjectsStore.clear();
+  clearRemoteSessionActivity();
   vi.unstubAllGlobals();
 });
 
@@ -172,12 +178,33 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(invoke).toHaveBeenNthCalledWith(2, d, 'local-db:sessions:get', ['outside-window']);
   });
 
+  it('默认事件重拉也按有界快照 merge，保留 200 条窗口外的有效会话', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
+    invoke
+      .mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce(session('outside-window', { status: 'active' }));
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
+
+    expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(201);
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toContain(
+      'outside-window',
+    );
+  });
+
   it('周期快照未满 200 条时视为完整 active 集合并清理缺席行', async () => {
     const d = did();
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [
       session('fresh'),
       session('stale-archived'),
     ]);
+    applyRemoteSessionActivity(d, {
+      sessionId: 'stale-archived',
+      phase: 'running',
+      compactDetail: 'still running',
+    });
     invoke.mockResolvedValueOnce([session('fresh')]);
 
     await refreshRemoteDeviceSessions(d, 'Mac B', {
@@ -186,6 +213,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     });
 
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
+    expect(getRemoteSessionActivity('stale-archived')).toBeUndefined();
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
@@ -193,6 +221,11 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const d = did();
     const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('stale-archived')]);
+    applyRemoteSessionActivity(d, {
+      sessionId: 'stale-archived',
+      phase: 'running',
+      compactDetail: 'still running',
+    });
     invoke
       .mockResolvedValueOnce(recent)
       .mockResolvedValueOnce(session('stale-archived', { status: 'archived' }));
@@ -205,6 +238,29 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(200);
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).not.toContain(
       'stale-archived',
+    );
+    expect(getRemoteSessionActivity('stale-archived')).toBeUndefined();
+  });
+
+  it('周期满窗口补查 active 行时回填窗口外会话的权威元数据', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [
+      session('outside-window', { title: 'old', pinnedAt: '2026-01-01T00:00:00.000Z' }),
+    ]);
+    invoke
+      .mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce(
+        session('outside-window', { status: 'active', title: 'new', pinnedAt: null }),
+      );
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    expect(remoteProjectsStore.getDeviceSessions(d).find((s) => s.id === 'outside-window')).toEqual(
+      expect.objectContaining({ title: 'new', pinnedAt: null }),
     );
   });
 
@@ -281,10 +337,12 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const first = refreshRemoteDeviceSessions(d, 'Mac B', {
       sleep: noSleep,
       snapshotMode: 'merge',
+      coalescingMode: 'weak',
     });
     const second = refreshRemoteDeviceSessions(d, 'Mac B', {
       sleep: noSleep,
       snapshotMode: 'merge',
+      coalescingMode: 'weak',
     });
 
     snapshot.resolve([session('slow-but-valid')]);
@@ -317,7 +375,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
   });
 
-  it('正常 refresh 排在周期 merge 后时恢复 replace 语义', async () => {
+  it('事件型 refresh 排在弱周期 merge 后时保持强语义补跑', async () => {
     const d = did();
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
     const periodicSnapshot = deferred<Session[]>();
@@ -331,6 +389,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const periodic = refreshRemoteDeviceSessions(d, 'Mac B', {
       sleep: noSleep,
       snapshotMode: 'merge',
+      coalescingMode: 'weak',
     });
     const bootstrap = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
 
@@ -342,7 +401,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
   });
 
-  it('正常 refresh 在途时周期 merge 直接复用，不补跑也不降级 replace 语义', async () => {
+  it('事件型 refresh 在途时弱周期 tick 直接复用，不补跑也不取消当前请求', async () => {
     const d = did();
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
     const bootstrapSnapshot = deferred<Session[]>();
@@ -352,6 +411,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const periodic = refreshRemoteDeviceSessions(d, 'Mac B', {
       sleep: noSleep,
       snapshotMode: 'merge',
+      coalescingMode: 'weak',
     });
 
     bootstrapSnapshot.resolve([session('fresh')]);
