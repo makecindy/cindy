@@ -167,6 +167,15 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.getByTestId('login-social-row')).toBeTruthy();
   });
 
+  it('本地模式入口挂在登录 stage footer，不再脱离内容固定到底部', async () => {
+    mount(await identifierState('providers:both'));
+    const footer = screen.getByTestId('login-stage-footer');
+    expect(footer.contains(screen.getByTestId('login-local-mode'))).toBe(true);
+    const description = screen.getByText('login.localModeDescription');
+    expect(footer.contains(description)).toBe(true);
+    expect(description.className).toContain('line-clamp-2');
+  });
+
   it('providers:phone-only → 无 tabs,placeholder 为手机号', async () => {
     mount(await identifierState('providers:phone-only'));
     expect(screen.queryByTestId('login-id-tabs')).toBeNull();

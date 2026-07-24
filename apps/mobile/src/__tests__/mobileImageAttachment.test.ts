@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import { MOBILE_MAX_ATTACHMENT_BYTES } from '@/session/attachments';
 import {
   assertMobileImageSize,
   buildMobileImageAttachmentCandidate,
 } from '@/session/mobileImageAttachment';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('mobileImageAttachment', () => {
   it('uses the picker filename, mime type, and size when available', () => {

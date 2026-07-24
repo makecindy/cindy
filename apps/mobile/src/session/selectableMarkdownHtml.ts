@@ -7,6 +7,7 @@ import {
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
 import { lightColors, typeScale } from '@/theme/tokens';
+import { i18n } from '@/i18n';
 
 /**
  * 全屏 markdown 文档 HTML 构建器 —— 当前唯一消费方是文件预览的 MarkdownFileReader
@@ -66,7 +67,7 @@ export function buildSelectableMarkdownHtml(
     `<style>${css}</style>`,
     '</head>',
     '<body>',
-    '<main id="xdt-content" role="article" aria-label="消息正文">',
+    `<main id="xdt-content" role="article" aria-label="${escapeAttribute(i18n.t('message.renderer.markdownDocAriaLabel'))}">`,
     renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles }),
     '</main>',
     hasMath ? buildMathRuntimeScript() : '',
@@ -386,7 +387,7 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
         const title =
           explicit ??
           ctx.sessionLinkTitles?.[session.sessionId] ??
-          `会话 ${shortSessionId(session.sessionId)}`;
+          i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
         return `<a class="xdt-session-chip" href="${escapeAttribute(inline.url)}">›&nbsp;${escapeHtml(title)}</a>`;
       }
       return `<a href="${escapeAttribute(inline.url)}">${escapeHtml(inline.text)}</a>`;
@@ -407,7 +408,7 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       // xdt 系非直连图:WebView 无法解析 xdt-image:// 等内部 scheme,渲染占位 chip,
       // 点击经 data-xdt-src 上报后由 ImageLightbox 走 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
-        return `<span class="xdt-image-chip" data-xdt-src="${escapeAttribute(inline.url)}" data-xdt-alt="${escapeAttribute(inline.alt)}">${escapeHtml(inline.alt || '图片')}</span>`;
+        return `<span class="xdt-image-chip" data-xdt-src="${escapeAttribute(inline.url)}" data-xdt-alt="${escapeAttribute(inline.alt)}">${escapeHtml(inline.alt || i18n.t('message.renderer.imageFallbackTitle'))}</span>`;
       }
       // width/height 是解析层过滤过的纯数字提示;CSS 的 max-width:100% + height:auto 保证不撑破气泡。
       // 双属性齐全时浏览器会按声明 aspect-ratio 在加载前预留高度,height=9999 这类极端比例

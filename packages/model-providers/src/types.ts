@@ -24,6 +24,12 @@ export type AgentKind = 'claude-code' | 'codex';
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
+/** Provider runtime 上游实际接受的推理 wire protocol。 */
+export type ProviderWireProtocol =
+  | 'anthropic-messages'
+  | 'openai-responses'
+  | 'openai-chat';
+
 /** 供应商来源：内置 vs 用户自定义（自定义本轮不实现，类型先留位）。 */
 export type ProviderSource = 'builtin' | 'user';
 
@@ -102,6 +108,11 @@ export interface OAuthProviderDescriptor {
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /**
+   * 上游 wire protocol。缺省按 agent 保持历史语义：Claude Code = anthropic-messages，
+   * Codex = openai-responses。只有显式 openai-chat 才进入本地 Responses→Chat bridge。
+   */
+  wireProtocol?: ProviderWireProtocol;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
   upstream: string;
   /** 鉴权策略（见 AuthStrategy）。 */
@@ -315,6 +326,8 @@ export interface ProviderRuntimeModelConfig {
  * 形状对齐 `CustomProviderRuntimeConfig`：选中预设 = 把这段数据灌进创建表单，用户只补 API key。
  */
 export interface ProviderPresetRuntime {
+  /** 上游 wire protocol；缺省由 runtime agent 推导（Codex=Responses，Claude=Messages）。 */
+  wireProtocol?: ProviderWireProtocol;
   /** 该 runtime 的兼容端点 base URL（cc=Anthropic 兼容 / codex=OpenAI Responses 兼容）。 */
   baseUrl: string;
   /** 推荐模型清单（预填进表单，用户可增删改）。 */
@@ -387,6 +400,8 @@ export interface Catalog {
  * 两种端点，则两个 runtime 各有独立的 baseURL / 模型 / headers（见 CustomProviderConfig.runtimes）。
  */
 export interface CustomProviderRuntimeConfig {
+  /** 上游 wire protocol；缺省由 runtime agent 推导（Codex=Responses，Claude=Messages）。 */
+  wireProtocol?: ProviderWireProtocol;
   /** 该 runtime 的兼容上游 base URL（cc=Anthropic 端点 / codex=OpenAI 端点）。 */
   baseUrl: string;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */

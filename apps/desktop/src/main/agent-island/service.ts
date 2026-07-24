@@ -80,9 +80,11 @@ import {
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
   setAgentIslandStrings,
+  setAgentIslandToolWording,
   setAgentIslandVisibleSession,
   type AgentIslandUserPromptRollbackToken,
 } from './state.js';
+import { createLocalizedToolRowWording } from './toolWording.js';
 import {
   type AgentIslandLayoutPreference,
   computeAgentIslandCarrierSize,
@@ -247,6 +249,8 @@ export class AgentIslandService {
   private streamingPreviewPublishTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: AgentIslandServiceDeps) {
+    // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
+    setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
     this.nativeHost = deps.nativeHost ?? new MacAgentIslandNativeHost({
       onPointerZones: (zones) => this.handleNativePointerZones(zones),

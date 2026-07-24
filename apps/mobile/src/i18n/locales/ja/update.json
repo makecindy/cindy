@@ -1,0 +1,17 @@
+{
+  "installHintTitle": "インストール案内",
+  "installHintBody": "システムのダイアログで「インストール」をタップしたら、ホーム画面に戻ってインストールの進行状況を確認してください。ダウンロードが完了すると、現在のバージョンが自動的に置き換わります。",
+  "openInstallFailedTitle": "インストールリンクを開けません",
+  "openInstallFailedBody": "インストール先のアドレスを手動でコピーし、Safari で開いてください。",
+  "bundleAvailableBody": "新しいバージョンがあります。フルパッケージをダウンロードしてインストールし、更新してください。",
+  "releaseNotes": "\n更新内容:\n{{notes}}",
+  "forcedTitle": "更新が必要です",
+  "goUpdate": "更新する",
+  "newVersionTitle": "新しいバージョン",
+  "later": "後で",
+  "upToDateTitle": "最新の状態です",
+  "upToDateBody": "すでに最新のパッケージです。",
+  "checkFailedTitle": "確認に失敗しました",
+  "checkFailedBody": "更新サーバーに接続できません。しばらくしてからもう一度お試しください。",
+  "latestRequestFailed": "latest リクエスト失敗: HTTP {{status}}"
+}

@@ -17,7 +17,14 @@ import sloganDarkPng from '@/assets/login/slogan-dark.png';
 import sloganDarkPng2x from '@/assets/login/slogan-dark@2x.png';
 
 import { brandPlacement, sloganShiftX } from './loginScale';
-import { HERO, LOGIN_COLORS, SLOGAN, STAGE, WORDMARK } from './loginDesignTokens';
+import {
+  HERO,
+  LOGIN_COLORS,
+  LOGIN_LOCAL_MODE,
+  SLOGAN,
+  STAGE,
+  WORDMARK,
+} from './loginDesignTokens';
 import { useViewportSize } from './LoginStage';
 
 /**
@@ -45,8 +52,10 @@ import { useViewportSize } from './LoginStage';
 export function LoginBrandStage() {
   const handoff = useLoginHandoff();
   const { width, height } = useViewportSize();
+  const panelBottomReserve =
+    handoff.panelBottomReserve ?? LOGIN_LOCAL_MODE.reservedHeight;
   // 品牌块整体让位(scale+translateY,构图冻结;用户拍板 2026-07-23,design.md §11)
-  const { scale, translateY } = brandPlacement(width, height);
+  const { scale, translateY } = brandPlacement(width, height, panelBottomReserve);
   const sloganShift = sloganShiftX(width, scale);
   // 暗色画布用白字版字标/SLOGAN(figma 532:585 CINDY_Standard_White / SLOGAN #FBFBFB;
   // 深浅判定同 useBrandLogo:跟随 theme-service 挂的 dark class)。立绘两模式同资产。

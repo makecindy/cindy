@@ -1,5 +1,6 @@
 import { apiFetchRaw } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { i18n } from '@/i18n';
 import {
   DictationRefiner,
   extractJsonStringFieldSnapshot,
@@ -14,9 +15,17 @@ import {
 } from '@cindy/maker-shared/session-operation';
 
 export const MOBILE_MAX_VOICE_AUDIO_BYTES = 64 * 1024 * 1024;
-export const MOBILE_VOICE_EMPTY_TRANSCRIPT_ERROR = '检测到语音但未识别出文本，请重试。';
-export const MOBILE_VOICE_MIC_PERMISSION_ERROR = '麦克风权限未开启，请在系统设置里允许 Cindy 使用麦克风。';
-export const MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR = '当前安装包不支持实时语音输入，请安装包含原生录音模块的测试版。';
+
+// 语音错误文案:函数而非模块常量,调用时按当前语言取值(常量会把语言冻结在加载时)。
+export function mobileVoiceEmptyTranscriptError(): string {
+  return i18n.t('composer.voice.emptyTranscript');
+}
+export function mobileVoiceMicPermissionError(): string {
+  return i18n.t('composer.voice.micPermission');
+}
+export function mobileVoiceRealtimeAudioUnavailableError(): string {
+  return i18n.t('composer.voice.realtimeAudioUnavailable');
+}
 
 export type MobileVoiceState = ComposerVoiceState;
 
@@ -116,7 +125,7 @@ export function canCancelMobileVoiceRecording(state: MobileVoiceState): boolean 
 }
 
 export function isMobileVoiceMicPermissionError(message: string | null | undefined): boolean {
-  return message === MOBILE_VOICE_MIC_PERMISSION_ERROR;
+  return message === mobileVoiceMicPermissionError();
 }
 
 export function normalizeMobileVoiceTranscriptResult(value: unknown): { text: string; provider?: string; model?: string } {
@@ -151,10 +160,10 @@ export async function presignMobileVoiceUpload(
   options: { token: string | null; deps?: UploadDeps },
 ): Promise<VoicePresignResult> {
   if (!Number.isFinite(recording.size) || recording.size <= 0) {
-    throw new Error('录音为空，不能转写。');
+    throw new Error(i18n.t('composer.voice.recordingEmpty'));
   }
   if (recording.size > MOBILE_MAX_VOICE_AUDIO_BYTES) {
-    throw new Error(`录音超过上限 ${Math.round(MOBILE_MAX_VOICE_AUDIO_BYTES / 1024 / 1024)}MB。`);
+    throw new Error(i18n.t('composer.voice.recordingTooLarge', { size: Math.round(MOBILE_MAX_VOICE_AUDIO_BYTES / 1024 / 1024) }));
   }
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const meta = resolveVoiceRecordingMeta(recording);
@@ -169,7 +178,7 @@ export async function presignMobileVoiceUpload(
     },
   });
   if (!result || typeof result.putUrl !== 'string' || typeof result.key !== 'string') {
-    throw new Error('服务端没有返回有效的语音上传地址。');
+    throw new Error(i18n.t('composer.voice.invalidUploadUrl'));
   }
   return result;
 }
@@ -190,7 +199,7 @@ export async function putMobileVoiceUpload(
     body,
   });
   if (!response.ok) {
-    throw new Error(`语音上传失败: HTTP ${response.status} ${response.statusText}`);
+    throw new Error(i18n.t('composer.voice.uploadFailed', { status: response.status, statusText: response.statusText }));
   }
 }
 
@@ -309,7 +318,7 @@ export class MobileLiteLlmTextModelClient implements TextModelClient {
       response = await request(true);
     }
     if (!response.ok) {
-      throw new Error(await cloudVoiceHttpErrorMessage('语音润色失败', response, ''));
+      throw new Error(await cloudVoiceHttpErrorMessage(i18n.t('composer.voice.refineFailed'), response, ''));
     }
     if (hasReadableStreamBody(response.body)) {
       const content = await readStreamingChatCompletion(response.body, input.onTextSnapshot);
@@ -318,7 +327,7 @@ export class MobileLiteLlmTextModelClient implements TextModelClient {
     const buffered = await readBufferedResponseText(response);
     if (buffered.trim()) {
       if (buffered.length > MAX_REFINER_RESPONSE_CHARS) {
-        throw new Error(`语音润色返回内容超过上限 ${MAX_REFINER_RESPONSE_CHARS} 字符。`);
+        throw new Error(i18n.t('composer.voice.refineResponseTooLarge', { max: MAX_REFINER_RESPONSE_CHARS }));
       }
       const streamedContent = readBufferedChatCompletion(buffered, input.onTextSnapshot);
       if (streamedContent) return parseJsonObject(streamedContent) as T;
@@ -391,7 +400,7 @@ async function readStreamingChatCompletion(
       const chunk = decoder.decode(value, { stream: true });
       rawChars += chunk.length;
       if (rawChars > MAX_REFINER_RESPONSE_CHARS) {
-        throw new Error(`语音润色返回内容超过上限 ${MAX_REFINER_RESPONSE_CHARS} 字符。`);
+        throw new Error(i18n.t('composer.voice.refineResponseTooLarge', { max: MAX_REFINER_RESPONSE_CHARS }));
       }
       buffer += normalizeSseLineEndings(chunk);
       let splitAt = buffer.indexOf('\n\n');
@@ -403,7 +412,7 @@ async function readStreamingChatCompletion(
           if (isRecord(event.data) && isRecord(event.data.error)) {
             streamError = typeof event.data.error.message === 'string'
               ? event.data.error.message
-              : '语音润色流式返回失败。';
+              : i18n.t('composer.voice.refineStreamFailed');
           }
           const delta = extractDeltaContent(event.data);
           if (delta) {
@@ -528,7 +537,7 @@ function applyChatCompletionEvent(
   if (isRecord(event.data) && isRecord(event.data.error)) {
     state.streamError = typeof event.data.error.message === 'string'
       ? event.data.error.message
-      : '语音润色流式返回失败。';
+      : i18n.t('composer.voice.refineStreamFailed');
   }
   const delta = extractDeltaContent(event.data);
   if (!delta) return;
@@ -587,22 +596,22 @@ function extractDeltaContent(chunk: unknown): string {
 }
 
 function extractChatCompletionContent(value: unknown): string {
-  if (!value || typeof value !== 'object') throw new Error('语音润色没有返回有效内容。');
+  if (!value || typeof value !== 'object') throw new Error(i18n.t('composer.voice.refineNoContent'));
   const choice = (value as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0];
   const content = choice?.message?.content;
   if (typeof content === 'string' && content.trim()) return content;
   if (content && typeof content === 'object') return JSON.stringify(content);
-  throw new Error('语音润色没有返回有效内容。');
+  throw new Error(i18n.t('composer.voice.refineNoContent'));
 }
 
 function parseJsonObject(text: string): unknown {
   const trimmed = text.trim();
-  if (!trimmed) throw new Error('语音润色没有返回有效内容。');
+  if (!trimmed) throw new Error(i18n.t('composer.voice.refineNoContent'));
   try {
     return JSON.parse(trimmed);
   } catch {
     const match = trimmed.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error(`语音润色返回了无效 JSON: ${trimmed.slice(0, 80)}`);
+    if (!match) throw new Error(i18n.t('composer.voice.refineInvalidJson', { snippet: trimmed.slice(0, 80) }));
     return JSON.parse(match[0]);
   }
 }

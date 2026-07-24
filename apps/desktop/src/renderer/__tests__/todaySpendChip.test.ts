@@ -82,7 +82,10 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain(
       'const shouldReadLocalCodexAccountUsage = usesCodexQuotaForm && !isAnyRemoteSession;',
     );
-    expect(source).toContain("useAccountUsage(sessionId, shouldReadLocalCodexAccountUsage ? 'codex' : undefined)");
+    // 按会话形态选配额槽: bridge → WHAM(openai-web)槽, CLI → app-server 槽,
+    // 不跨槽回退(账号多限额桶互相污染, 2026-07-24 实报 bug)
+    expect(source).toContain("shouldReadLocalCodexAccountUsage ? 'codex' : undefined,");
+    expect(source).toContain("isChatgptBridge ? 'openai-web' : 'app-server',");
   });
 
   it('keeps Codex OAuth subscription details in the chip and tooltip', () => {
@@ -248,14 +251,13 @@ describe('TodaySpendChip dashboard routing', () => {
     // motion-safe = 尊重 prefers-reduced-motion (review P1, PR #546)
     expect(source).toContain('<span className="motion-safe:animate-pulse">…</span>');
     expect(source).not.toContain('"animate-pulse"');
-    // 悬念期主动催余量刷新, Claude / Codex 两侧都要 (main 侧 cached-first + 节流,
-    // 重复调用安全; Codex 缺催刷会在空闲期卡悬念态, review P1)。分支优先级必须
-    // 与 chipWindows 形态选择一致 —— Codex 形态优先: cc + chatgpt/ bridge 会话里
-    // usesCodexQuotaForm 与 isClaudeSubscription 可同时为真 (review P1 第二轮)
+    // 悬念期催刷通道必须与 chip 显示的配额槽一致: bridge 形态催 WHAM; Codex CLI
+    // 形态显示 app-server 槽, WHAM 刷新帮不上它(靠 turn 事件 / 悬念超时兜底),
+    // 不得催 —— WHAM 桶与 CLI 配额可能不同(账号多限额桶, 2026-07-24 实报 bug)
     expect(source).toContain(
-      'if (usesCodexQuotaForm) {\n'
+      'if (isChatgptBridge) {\n'
       + '      requestCodexAccountRefresh();\n'
-      + '    } else if (isClaudeSubscription) {\n'
+      + '    } else if (isClaudeSubscription && !usesCodexQuotaForm) {\n'
       + '      requestClaudeSubscriptionRefresh();\n'
       + '    }',
     );

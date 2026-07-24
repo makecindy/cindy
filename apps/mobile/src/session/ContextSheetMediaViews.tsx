@@ -6,6 +6,7 @@
  * 选中态由页面传入 selectedAssetIds(assetId ↔ 附件映射的真相在页面)。
  */
 import { Check } from 'lucide-react-native';
+import { useTranslation } from 'react-i18next';
 // RN 的 Image 在新架构下不支持 ph:// 相册 URI(facebook/react-native#36136),
 // 缩略图走 expo-image:原生支持 ph://,且按视图尺寸解码,不会整张原图进内存。
 import { Image } from 'expo-image';
@@ -99,6 +100,7 @@ export function ScreenshotsGrid({
   testID,
 }: ContextSheetMediaCallbacks & { enabled: boolean; contentWidth: number; testID?: string }) {
   const styles = useThemedStyles(makeMediaStyles);
+  const { t } = useTranslation();
   const media = useContextSheetMediaAssets({ enabled, kind: 'screenshots' });
   const thumbSize = Math.floor((contentWidth - spacing.sm * (GRID_COLUMNS - 1)) / GRID_COLUMNS);
 
@@ -111,7 +113,7 @@ export function ScreenshotsGrid({
     );
   }
   if (media.status === 'unavailable' || (media.status === 'ready' && media.assets.length === 0)) {
-    return <Text style={styles.emptyText}>没有找到截图。</Text>;
+    return <Text style={styles.emptyText}>{t('interaction.contextSheet.noScreenshots')}</Text>;
   }
   const rows: ContextSheetMediaAsset[][] = [];
   for (let i = 0; i < media.assets.length; i += GRID_COLUMNS) {
@@ -159,11 +161,12 @@ function MediaThumb({
 }) {
   const styles = useThemedStyles(makeMediaStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const accessibilityLabel = selected
-    ? `移除照片附件 ${asset.filename}`
+    ? t('interaction.contextSheet.mediaRemove', { name: asset.filename })
     : pendingIndex
-      ? `取消选择照片 ${asset.filename}`
-      : `选择照片 ${asset.filename}`;
+      ? t('interaction.contextSheet.mediaDeselect', { name: asset.filename })
+      : t('interaction.contextSheet.mediaSelect', { name: asset.filename });
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
@@ -199,16 +202,17 @@ function MediaThumb({
 
 function PermissionHint({ onRequest, testID }: { onRequest: () => void; testID?: string }) {
   const styles = useThemedStyles(makeMediaStyles);
+  const { t } = useTranslation();
   return (
     <View style={styles.permissionHint} testID={testID}>
-      <Text style={styles.permissionText}>照片权限未开启，开启后可快速添加最近照片。</Text>
+      <Text style={styles.permissionText}>{t('interaction.contextSheet.photoPermissionHint')}</Text>
       <Pressable
-        accessibilityLabel="开启照片权限"
+        accessibilityLabel={t('interaction.contextSheet.enablePhotoPermission')}
         accessibilityRole="button"
         onPress={onRequest}
         style={({ pressed }) => [styles.permissionButton, pressed && styles.thumbPressed]}
       >
-        <Text style={styles.permissionButtonText}>去开启</Text>
+        <Text style={styles.permissionButtonText}>{t('interaction.contextSheet.enable')}</Text>
       </Pressable>
     </View>
   );

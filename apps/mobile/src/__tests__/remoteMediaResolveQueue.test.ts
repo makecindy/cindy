@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { i18n } from '@/i18n';
 import { createRemoteMediaResolveQueue, type RemoteMediaRequest } from '@/session/remoteMediaResolveQueue';
 import type { MobileResolvedRemoteMedia } from '@/session/remoteMedia';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function resolvedMedia(url: string, overrides: Partial<MobileResolvedRemoteMedia> = {}): MobileResolvedRemoteMedia {
   return {

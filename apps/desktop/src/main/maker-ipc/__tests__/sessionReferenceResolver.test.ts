@@ -3,7 +3,10 @@ import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import { serializeSessionReferencePayload } from '../../../shared/agentInputQueue.js';
 
 const remoteInvoke = vi.hoisted(() => vi.fn());
-vi.mock('../../device-link/index.js', () => ({ remoteInvoke }));
+vi.mock('../../device-link/index.js', () => ({
+  remoteInvoke,
+  getSelfDeviceId: () => 'self-device',
+}));
 
 import {
   estimateReferenceTokens,

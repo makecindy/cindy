@@ -11,6 +11,8 @@
  * 共享层 `isOrcaCommunicationTool` 的归一化约定(`mcp__X__Y` → `mcp:X:Y`),兼容裸名与 MCP 前缀名。
  */
 
+import { i18n } from '@/i18n';
+
 export interface OrcaCollabCard {
   /** dispatch = Lead 派活;report = worker 回报。用于卡片视觉/标题区分。 */
   variant: 'dispatch' | 'report';
@@ -45,12 +47,14 @@ export function buildOrcaDispatchCard(toolName: string, input: unknown): OrcaCol
       const worker = readRecord(value);
       const label = readString(worker?.label) ?? readString(worker?.role) ?? `worker ${index + 1}`;
       const task = readString(worker?.initial_task);
-      return task ? `${label}：${task}` : label;
+      return task ? i18n.t('interaction.collab.dispatchSummaryItem', { label, task }) : label;
     });
     return {
       variant: 'dispatch',
-      title: workers.length > 0 ? `批量派活给 ${workers.length} 个 worker` : '批量派活给多个 worker',
-      body: summaries.length > 0 ? summaries.join('\n') : '批量创建 worker',
+      title: workers.length > 0
+        ? i18n.t('interaction.collab.batchTitle', { count: workers.length })
+        : i18n.t('interaction.collab.batchTitleGeneric'),
+      body: summaries.length > 0 ? summaries.join('\n') : i18n.t('interaction.collab.batchBodyFallback'),
     };
   }
 
@@ -63,8 +67,8 @@ export function buildOrcaDispatchCard(toolName: string, input: unknown): OrcaCol
     const meta = [role, agent].filter(Boolean).join(' · ');
     return {
       variant: 'dispatch',
-      title: `派活给 worker ${who}`,
-      body: task ?? (meta ? `角色 ${meta}` : '创建 worker'),
+      title: i18n.t('interaction.collab.dispatchTitle', { who }),
+      body: task ?? (meta ? i18n.t('interaction.collab.dispatchRole', { meta }) : i18n.t('interaction.collab.dispatchBodyFallback')),
     };
   }
 
@@ -73,8 +77,8 @@ export function buildOrcaDispatchCard(toolName: string, input: unknown): OrcaCol
   const target = readString(record?.target_session_id);
   return {
     variant: 'dispatch',
-    title: '发消息给 worker',
-    body: message ?? (target ? `→ ${target}` : '发送消息'),
+    title: i18n.t('interaction.collab.sendTitle'),
+    body: message ?? (target ? `→ ${target}` : i18n.t('interaction.collab.sendBodyFallback')),
   };
 }
 
@@ -89,8 +93,8 @@ export function parseOrcaWorkerReport(content: unknown): OrcaCollabCard | null {
   const body = readString(record.content);
   return {
     variant: 'report',
-    title: 'worker 回报',
-    body: body ?? '(空回报)',
+    title: i18n.t('interaction.collab.reportTitle'),
+    body: body ?? i18n.t('interaction.collab.reportBodyFallback'),
   };
 }
 

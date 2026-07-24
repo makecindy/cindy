@@ -1,14 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   APP_EXIT_INTERRUPTED_REASON,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '@cindy/maker-shared/synthetic-trigger';
+import { i18n } from '@/i18n';
 import {
   isContinuationQueueItem,
   resolveSessionTailBanner,
   type ResolveSessionTailBannerInput,
 } from '@/session/sessionTailBannerModel';
 import type { RemoteMessage } from '@/session/types';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'role' | 'content' | 'createdAt'>): RemoteMessage {
   return {

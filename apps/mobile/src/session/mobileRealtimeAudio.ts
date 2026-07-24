@@ -57,6 +57,19 @@ export function isMobileRealtimeAudioAvailable(): boolean {
   return getNativeBinding() !== null;
 }
 
+/**
+ * Keeps unfinished platform implementations out of the product surface. This
+ * is intentionally a UI-only gate; the native permission and runtime fallback
+ * stay unchanged so Android can be re-enabled without a native configuration
+ * migration.
+ */
+export function shouldShowMobileVoiceUi(
+  platform: string,
+): boolean {
+  if (isE2eMockRealtimeAudioEnabled()) return true;
+  return platform !== 'android';
+}
+
 export async function startMobileRealtimeAudio(
   options: {
     onChunk: (chunk: MobileRealtimeAudioChunk) => void;

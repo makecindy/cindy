@@ -16,6 +16,7 @@
  * (纯逻辑可单测),本组件只做渲染。
  */
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Check, SlidersHorizontal, Zap } from 'lucide-react-native';
 
@@ -27,7 +28,7 @@ import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import { useDraftModelMemoryVersion } from '@/session/draftModelMemory';
 import { useSessionModelMirrorVersion } from '@/session/sessionModelMirror';
 import {
-  BUDGET_DISABLED_HINT,
+  budgetDisabledHint,
   budgetRowDisabled,
   effortLabelFor,
   rowEffortOf,
@@ -159,8 +160,8 @@ export function MobileModelPickerList({
   activeSourceId,
   loading = false,
   disabled = false,
-  emptyHint = '暂无可用模型',
-  loadingHint = '正在加载模型…',
+  emptyHint,
+  loadingHint,
   onSelectProviderRow,
   onSelectFlatModel,
   rowStyle,
@@ -176,6 +177,9 @@ export function MobileModelPickerList({
 }: MobileModelPickerListProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
+  const resolvedEmptyHint = emptyHint ?? t('models.picker.emptyDefault');
+  const resolvedLoadingHint = loadingHint ?? t('models.picker.loadingDefault');
   // 非选中行的记忆写入(二级浮窗里改)不经 props 回流 —— 订阅两个记忆 store 的版本号,
   // 任一变化即重渲染行 effort/Fast 标签(对齐桌面 ModelSelector 的 storeVersion)。
   const storeVersion = useDraftModelMemoryVersion() + useSessionModelMirrorVersion();
@@ -232,7 +236,10 @@ export function MobileModelPickerList({
             (selected || !!modelMemory);
           return (
             <Pressable
-              accessibilityLabel={`选择来源 ${row.provider.name} 的模型 ${row.model.displayName}`}
+              accessibilityLabel={t('models.picker.selectProviderModelAccessibility', {
+                provider: row.provider.name,
+                model: row.model.displayName,
+              })}
               accessibilityRole="button"
               accessibilityState={{ selected, disabled: disabled || rowDisabled }}
               disabled={disabled || rowDisabled}
@@ -264,7 +271,7 @@ export function MobileModelPickerList({
                   <Text numberOfLines={1} style={styles.optionText}>{row.model.displayName}</Text>
                   {isSubscription ? (
                     <View style={styles.budgetBadge}>
-                      <Text style={styles.budgetBadgeText}>订阅</Text>
+                      <Text style={styles.budgetBadgeText}>{t('models.picker.subscriptionBadge')}</Text>
                     </View>
                   ) : null}
                   {isBudget ? (
@@ -282,13 +289,13 @@ export function MobileModelPickerList({
                   ) : null}
                 </View>
                 {rowDisabled ? (
-                  <Text numberOfLines={1} style={styles.disabledHint}>{BUDGET_DISABLED_HINT}</Text>
+                  <Text numberOfLines={1} style={styles.disabledHint}>{budgetDisabledHint()}</Text>
                 ) : null}
               </View>
               {selected ? <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} /> : null}
               {hasOptions ? (
                 <Pressable
-                  accessibilityLabel={`配置 ${row.model.displayName}`}
+                  accessibilityLabel={t('models.picker.configureAccessibility', { model: row.model.displayName })}
                   accessibilityRole="button"
                   disabled={disabled}
                   hitSlop={6}
@@ -331,7 +338,7 @@ export function MobileModelPickerList({
             : null;
           return (
             <Pressable
-              accessibilityLabel={`选择模型 ${option.label}`}
+              accessibilityLabel={t('models.picker.selectModelAccessibility', { model: option.label })}
               accessibilityRole="button"
               accessibilityState={{ selected, disabled }}
               disabled={disabled}
@@ -366,7 +373,7 @@ export function MobileModelPickerList({
               {selected ? <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} /> : null}
               {hasOptions ? (
                 <Pressable
-                  accessibilityLabel={`配置 ${option.label}`}
+                  accessibilityLabel={t('models.picker.configureAccessibility', { model: option.label })}
                   accessibilityRole="button"
                   disabled={disabled}
                   hitSlop={6}
@@ -384,5 +391,5 @@ export function MobileModelPickerList({
     );
   }
 
-  return <Text style={styles.empty}>{loading ? loadingHint : emptyHint}</Text>;
+  return <Text style={styles.empty}>{loading ? resolvedLoadingHint : resolvedEmptyHint}</Text>;
 }

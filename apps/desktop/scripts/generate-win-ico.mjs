@@ -3,8 +3,9 @@
  * generate-win-ico.mjs — 从 1024x1024 母版生成带圆角的 Windows icon.ico。
  *
  * Windows 的 BrowserWindow / 任务栏不会替 PNG/ICO 自动套圆角，圆角必须画进
- * 资源本身。这里复用 macOS Big Sur+ 的图标网格：内容缩放到 824x824，居中
- * 放入 1024x1024 透明画布，并套 185.4px 圆角遮罩。
+ * 资源本身；但 Windows 任务栏已经提供固定图标槽，不应再复用 macOS Big Sur+
+ * 的 100px 安全区。这里让内容占满 1024x1024 画布，只在四角套圆角遮罩，避免
+ * 24px 任务栏档位里的主体被二次缩小。
  *
  * 条目结构与现行 icon.ico 逐项对齐，**不要改动尺寸档位或顺序**：
  *   16 / 24 / 32 / 48 / 64 / 128 / 256，全部 32bpp 未压缩 BMP(XOR 位图 + AND 掩码)。
@@ -35,9 +36,8 @@ const masterPath = process.argv[2] ?? path.join(resourcesDir, 'icon-master-1024.
 const outPath = process.argv[3] ?? defaultOutPath;
 
 const CANVAS = 1024;
-const CONTENT = 824;
-const RADIUS = 185.4;
-const MARGIN = (CANVAS - CONTENT) / 2;
+// 保留 macOS 模板的圆角比例（185.4 / 824），但不保留 macOS 外边距。
+const RADIUS = 230.4;
 
 // 与现行 icon.ico 一致的尺寸档位（小 → 大）。
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
@@ -86,26 +86,15 @@ function encodeBmpEntry(rgba, size) {
   return Buffer.concat([header, xor, and]);
 }
 
-/** 把满幅母版处理成与 macOS 一致的透明圆角图标画布。 */
+/** 把满幅母版处理成 Windows 专用的满画布透明圆角图标。 */
 async function createRoundedMaster() {
   const roundedMask = Buffer.from(
-    `<svg width="${CONTENT}" height="${CONTENT}"><rect width="${CONTENT}" height="${CONTENT}" rx="${RADIUS}" ry="${RADIUS}" fill="#fff"/></svg>`,
+    `<svg width="${CANVAS}" height="${CANVAS}"><rect width="${CANVAS}" height="${CANVAS}" rx="${RADIUS}" ry="${RADIUS}" fill="#fff"/></svg>`,
   );
-  const content = await sharp(masterPath)
-    .resize(CONTENT, CONTENT, { fit: 'cover' })
+  return sharp(masterPath)
+    .resize(CANVAS, CANVAS, { fit: 'cover' })
     .ensureAlpha()
     .composite([{ input: roundedMask, blend: 'dest-in' }])
-    .png()
-    .toBuffer();
-
-  return sharp(content)
-    .extend({
-      top: MARGIN,
-      bottom: MARGIN,
-      left: MARGIN,
-      right: MARGIN,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    })
     .png()
     .toBuffer();
 }

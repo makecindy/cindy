@@ -56,6 +56,41 @@ function isCountTokensUrl(url: string): boolean {
   return url.split('?', 1)[0].endsWith('/count_tokens');
 }
 
+// 桥接 localHandler 路径的节流表：Responses→Chat bridge 不经 proxy responseObserver,
+// 需要一条独立入口把上游错误分类后广播给 renderer(与 observer 同一 broadcaster、同一节流窗口)。
+const bridgeLastEmit = new Map<string, number>();
+
+/**
+ * 直接上报一次自定义供应商上游错误（供 localHandler 桥接路径调用；observer 走
+ * createProviderUpstreamErrorObserver）。分类 + 同 (providerId, code) 30s 节流后广播。
+ * 只应对「会话路由到自定义(user)供应商」的失败调用——与 observer 的 user-only 语义一致。
+ */
+export function reportProviderUpstreamError(params: {
+  agent: AgentKind;
+  providerId: string;
+  providerName?: string;
+  status: number;
+  bodyText: string;
+  now?: () => number;
+}): void {
+  const now = params.now ?? Date.now;
+  const cls = classifyProviderError({ status: params.status, bodyText: params.bodyText });
+  const key = `${params.agent}:${params.providerId}:${cls.code}`;
+  const t = now();
+  const prev = bridgeLastEmit.get(key);
+  if (prev !== undefined && t - prev < THROTTLE_MS) return;
+  bridgeLastEmit.set(key, t);
+  _broadcast({
+    agent: params.agent,
+    providerId: params.providerId,
+    providerName: params.providerName ?? params.providerId,
+    code: cls.code,
+    retryable: cls.retryable,
+    status: params.status,
+    detail: cls.detail,
+  });
+}
+
 /** 按 content-encoding 解压错误体（与 proxy 包 debug dump 的解压语义一致；失败回退原文）。 */
 function decodeBody(buf: Buffer, encoding: string | undefined): string {
   try {

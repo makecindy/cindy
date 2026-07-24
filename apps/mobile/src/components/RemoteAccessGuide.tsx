@@ -1,4 +1,5 @@
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Cloud, Lock } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton, StatusDot } from '@/components/MobilePrimitives';
@@ -30,24 +31,6 @@ import {
  * eyebrow、步骤、卡片与云端预告属于引导态自身的展示细节,收在本组件内。
  */
 
-/** 连接步骤文案。桌面端开关名称必须与 apps/desktop 设置页 devices.allowControl 保持一致。 */
-const CONNECT_STEPS = [
-  '在电脑上安装并打开 Cindy',
-  '用与手机相同的账号登录',
-  '在「设置 → 远程连接」中开启「允许同账号设备控制本机」',
-] as const;
-
-const BRAND_EYEBROW = 'CINDY 手机版';
-const CLOUD_TEASER_TITLE = '云端 Cindy 筹备中';
-const CLOUD_TEASER_COPY = '上线后无需电脑，手机版即可直接使用。';
-
-const SECTION_LABELS: Record<MobileHomeNoDeviceContext['reason'], string | null> = {
-  firstRun: '开始使用',
-  offline: '连接过的电脑',
-  remoteDisabled: '在电脑上操作',
-  accessRevoked: '需要重新允许',
-};
-
 export function RemoteAccessGuide({
   context,
   copy,
@@ -73,12 +56,25 @@ export function RemoteAccessGuide({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { reason } = context;
-  const sectionLabel = SECTION_LABELS[reason];
+  // 连接步骤文案。桌面端开关名称必须与 apps/desktop 设置页 devices.allowControl 保持一致。
+  const connectSteps = [
+    t('deviceLink.connectStep1'),
+    t('deviceLink.connectStep2'),
+    t('deviceLink.connectStep3'),
+  ];
+  const sectionLabels: Record<MobileHomeNoDeviceContext['reason'], string | null> = {
+    firstRun: t('deviceLink.sectionFirstRun'),
+    offline: t('deviceLink.sectionOffline'),
+    remoteDisabled: t('deviceLink.sectionRemoteDisabled'),
+    accessRevoked: t('deviceLink.sectionAccessRevoked'),
+  };
+  const sectionLabel = sectionLabels[reason];
   return (
     <View style={[styles.root, style]} testID={testID}>
       <View style={styles.heroBlock}>
-        <Text style={styles.eyebrow}>{BRAND_EYEBROW}</Text>
+        <Text style={styles.eyebrow}>{t('deviceLink.brandEyebrow')}</Text>
         <Text style={styles.heroTitle}>{title}</Text>
         <Text style={styles.lede}>{copy}</Text>
       </View>
@@ -88,7 +84,7 @@ export function RemoteAccessGuide({
 
         {reason === 'firstRun' ? (
           <View style={styles.card}>
-            {CONNECT_STEPS.map((step, index) => (
+            {connectSteps.map((step, index) => (
               <View key={step} style={styles.stepRow}>
                 <View style={styles.stepBadge}>
                   <Text style={styles.stepBadgeText}>{index + 1}</Text>
@@ -120,7 +116,7 @@ export function RemoteAccessGuide({
 
         {reason === 'remoteDisabled' ? (
           <View style={styles.card}>
-            <Text style={styles.instructionText}>{CONNECT_STEPS[2]}</Text>
+            <Text style={styles.instructionText}>{connectSteps[2]}</Text>
           </View>
         ) : null}
 
@@ -128,7 +124,7 @@ export function RemoteAccessGuide({
           <MainWindowActionButton
             action={{
               busy: retrying,
-              label: '重试访问',
+              label: t('deviceLink.retryAccess'),
               onPress: onRetryAccess,
               testID: 'home.remoteGuide.retryAccess',
               tone: 'primary',
@@ -141,7 +137,7 @@ export function RemoteAccessGuide({
           <MainWindowActionButton
             action={{
               busy: rechecking,
-              label: '重新检查',
+              label: t('deviceLink.recheck'),
               onPress: onRecheck,
               testID: 'home.remoteGuide.recheck',
             }}
@@ -153,8 +149,8 @@ export function RemoteAccessGuide({
       <View style={styles.teaserCard}>
         <Cloud color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
         <View style={styles.teaserBody}>
-          <Text style={styles.teaserTitle}>{CLOUD_TEASER_TITLE}</Text>
-          <Text style={styles.teaserCopy}>{CLOUD_TEASER_COPY}</Text>
+          <Text style={styles.teaserTitle}>{t('deviceLink.cloudTeaserTitle')}</Text>
+          <Text style={styles.teaserCopy}>{t('deviceLink.cloudTeaserCopy')}</Text>
         </View>
       </View>
     </View>

@@ -2,6 +2,7 @@ import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core'
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { gzip, ungzip } from 'pako';
+import { i18n } from '@/i18n';
 
 type MobileRealtimeProtocolProfile =
   | 'openai-transcription-manual'
@@ -119,7 +120,7 @@ function createSingleMobileAsrProvider(
   if (credential.asr.mode === 'provider-native-websocket' && credential.asr.protocolProfile === 'volcengine-sauc-duration') {
     return new MobileVolcengineSaucAsrProvider({ ...options, credential });
   }
-  throw new Error(`手机版实时语音暂不支持 ${credential.asr.mode} / ${credential.asr.protocolProfile ?? 'unknown'} ASR。`);
+  throw new Error(i18n.t('composer.voice.realtimeUnsupported', { detail: `${credential.asr.mode} / ${credential.asr.protocolProfile ?? 'unknown'}` }));
 }
 
 type MobileAsrCandidate = {
@@ -266,10 +267,10 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
 
   async start(): Promise<void> {
     if (this.credential.asr.mode !== 'realtime-websocket') {
-      throw new Error(`手机版实时语音暂不支持 ${this.credential.asr.mode} ASR。`);
+      throw new Error(i18n.t('composer.voice.realtimeUnsupported', { detail: this.credential.asr.mode }));
     }
     if (this.credential.asr.auth !== 'api-key') {
-      throw new Error(`手机版实时语音暂不支持 ${this.credential.asr.auth} ASR 鉴权。`);
+      throw new Error(i18n.t('composer.voice.realtimeAuthUnsupported', { auth: this.credential.asr.auth }));
     }
     this.resetTranscriptState();
     this.stopped = false;
@@ -280,7 +281,7 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
   private async connect(): Promise<void> {
     // 托管 ticket 是唯一建连方式:BYOK/穿透 key 直拨上游的路径已删除。
     if (!this.connectionProvider) {
-      throw new Error('手机语音输入需要 Cindy 语音会话票据(缺少 connectionProvider)。');
+      throw new Error(i18n.t('composer.voice.missingConnectionProvider'));
     }
     const dynamicConnection = await this.connectionProvider(this.credential.asr.provider);
     if (this.stopped) throw new Error('Realtime ASR connection stopped.');
@@ -488,11 +489,11 @@ export class MobileRealtimeAsrProvider implements AsrProvider {
         this.handleCompleted(event);
         break;
       case 'conversation.item.input_audio_transcription.failed':
-        this.callback({ type: 'error', message: this.redactError(realtimeErrorMessage(event, '实时语音识别失败。')), at: Date.now() });
+        this.callback({ type: 'error', message: this.redactError(realtimeErrorMessage(event, i18n.t('composer.voice.realtimeAsrFailed'))), at: Date.now() });
         this.resolveFlushWaiters();
         break;
       case 'error': {
-        const message = this.redactError(realtimeErrorMessage(event, '实时语音识别失败。'));
+        const message = this.redactError(realtimeErrorMessage(event, i18n.t('composer.voice.realtimeAsrFailed')));
         if (this.isNonFatalServerVadFinishError(message)) {
           this.resolveFlushWaiters();
           break;
@@ -819,9 +820,9 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
 
   async start(): Promise<void> {
     if (this.credential.asr.auth !== 'api-key') {
-      throw new Error(`手机版 Volcengine 语音暂不支持 ${this.credential.asr.auth} 鉴权。`);
+      throw new Error(i18n.t('composer.voice.volcengineAuthUnsupported', { auth: this.credential.asr.auth }));
     }
-    if (!this.credential.asr.resourceId) throw new Error('Volcengine ASR 配置缺少 resourceId。');
+    if (!this.credential.asr.resourceId) throw new Error(i18n.t('composer.voice.volcengineMissingResourceId'));
     const resourceId = this.credential.asr.resourceId;
     this.resetState();
 
@@ -831,7 +832,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
   private async openSocket(resourceId: string): Promise<void> {
     // 托管 ticket 是唯一建连方式:BYOK/穿透 key 直拨上游的路径已删除。
     if (!this.connectionProvider) {
-      throw new Error('手机语音输入需要 Cindy 语音会话票据(缺少 connectionProvider)。');
+      throw new Error(i18n.t('composer.voice.missingConnectionProvider'));
     }
     const dynamicConnection = await this.connectionProvider(this.credential.asr.provider);
     if (this.stopped) throw new Error('Volcengine SAUC ASR connection stopped.');
@@ -1117,7 +1118,7 @@ export class MobileVolcengineSaucAsrProvider implements AsrProvider {
 
   private async performRecover(): Promise<void> {
     const resourceId = this.credential.asr.resourceId;
-    if (!resourceId) throw new Error('Volcengine ASR 配置缺少 resourceId。');
+    if (!resourceId) throw new Error(i18n.t('composer.voice.volcengineMissingResourceId'));
 
     const prefix = this.finalizedTranscript;
     this.sessionTranscriptPrefix = prefix;
@@ -1255,7 +1256,7 @@ function readRealtimeProtocolProfile(credential: StoredMobileVoiceCredential): M
   ) {
     return credential.asr.protocolProfile;
   }
-  throw new Error(`手机版实时语音暂不支持 ${credential.asr.protocolProfile ?? credential.asr.mode} ASR 协议。`);
+  throw new Error(i18n.t('composer.voice.realtimeProtocolUnsupported', { detail: credential.asr.protocolProfile ?? credential.asr.mode }));
 }
 
 function openAiLanguageCode(sourceLanguage: string): string | undefined {
@@ -1606,7 +1607,7 @@ function webSocketCloseBeforeReadyMessage(
 ): string {
   const closeStatus = webSocketAuthStatus(event);
   if (closeStatus) {
-    return `Cindy 语音会话已失效或没有权限（WebSocket ${closeStatus}）。请确认登录状态后重试。`;
+    return i18n.t('composer.voice.sessionExpiredOrForbidden', { status: closeStatus });
   }
   if (event.reason?.trim()) return `${fallbackMessage} (${event.reason.trim()})`;
   return pendingMessage ?? fallbackMessage;

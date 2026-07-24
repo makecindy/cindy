@@ -1,0 +1,18 @@
+{
+  "syncFailed": "同期に失敗しました",
+  "resync": "再同期",
+  "resyncing": "再同期しています",
+  "syncShort": "同期",
+  "connectStep1": "パソコンに {{appName}} をインストールして起動する",
+  "connectStep2": "スマートフォンと同じアカウントでログインする",
+  "connectStep3": "「設定 → リモート接続」で「同じアカウントのデバイスにこのパソコンの操作を許可」をオンにする",
+  "brandEyebrow": "Cindy モバイル",
+  "cloudTeaserTitle": "クラウド版 {{appName}} を準備中",
+  "cloudTeaserCopy": "公開後はパソコンがなくても、モバイルアプリだけで利用できます。",
+  "sectionFirstRun": "はじめに",
+  "sectionOffline": "接続したパソコン",
+  "sectionRemoteDisabled": "パソコンで操作",
+  "sectionAccessRevoked": "再度の許可が必要",
+  "retryAccess": "アクセスを再試行",
+  "recheck": "再確認"
+}

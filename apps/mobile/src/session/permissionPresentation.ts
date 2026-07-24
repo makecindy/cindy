@@ -7,6 +7,7 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from 'lucide-react-native';
+import { i18n } from '@/i18n';
 import type { ThemeColors } from '@/theme';
 
 /**
@@ -25,18 +26,28 @@ export interface PermissionPresentation {
   accent: PermissionAccent;
 }
 
-const PRESENTATION: Record<string, PermissionPresentation> = {
-  default: { Icon: Hand, label: '默认权限', accent: 'neutral' },
-  ask: { Icon: Hand, label: '默认权限', accent: 'neutral' },
-  acceptEdits: { Icon: CodeXml, label: '允许编辑', accent: 'neutral' },
-  plan: { Icon: ClipboardList, label: '计划模式', accent: 'neutral' },
-  auto: { Icon: Sparkles, label: '自动审批', accent: 'auto' },
-  bypassPermissions: { Icon: TriangleAlert, label: '完全访问', accent: 'bypass' },
+// 图标 / 着色语义与语言无关,留在模块顶层;label 只存 catalog key,
+// 由 permissionPresentation() 在调用点用 i18n.t 求值(不冻结语言)。
+interface PermissionPresentationMeta {
+  Icon: LucideIcon;
+  labelKey: string;
+  accent: PermissionAccent;
+}
+
+const PRESENTATION_META: Record<string, PermissionPresentationMeta> = {
+  default: { Icon: Hand, labelKey: 'interaction.permission.mode.default', accent: 'neutral' },
+  ask: { Icon: Hand, labelKey: 'interaction.permission.mode.default', accent: 'neutral' },
+  acceptEdits: { Icon: CodeXml, labelKey: 'interaction.permission.mode.acceptEdits', accent: 'neutral' },
+  plan: { Icon: ClipboardList, labelKey: 'interaction.permission.mode.plan', accent: 'neutral' },
+  auto: { Icon: Sparkles, labelKey: 'interaction.permission.mode.auto', accent: 'auto' },
+  bypassPermissions: { Icon: TriangleAlert, labelKey: 'interaction.permission.mode.bypass', accent: 'bypass' },
 };
 
 /** 取某权限模式的图标 / 标签 / 着色语义;未知 id 回退到中性盾牌 + 传入标签。 */
 export function permissionPresentation(id: string, fallbackLabel?: string): PermissionPresentation {
-  return PRESENTATION[id] ?? { Icon: Shield, label: fallbackLabel || id, accent: 'neutral' };
+  const meta = PRESENTATION_META[id];
+  if (!meta) return { Icon: Shield, label: fallbackLabel || id, accent: 'neutral' };
+  return { Icon: meta.Icon, label: i18n.t(meta.labelKey), accent: meta.accent };
 }
 
 /** 把 accent 语义解析成当前主题的具体色值。 */

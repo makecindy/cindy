@@ -2,6 +2,7 @@ import {
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   createSessionLinkPattern,
@@ -115,14 +116,16 @@ export function mobileSessionReferenceMetadataKey(
   return `${sessionId}\u0000${messageClientId ?? ''}`;
 }
 
-/** 移动端当前会话界面统一使用中文文案；这里只格式化展示安全的范围摘要。 */
+/** 格式化展示安全的范围摘要（文案经 i18n 本地化）。 */
 export function formatMobileSessionReferenceMetadata(
   metadata: MobilePersistedSessionReferenceMetadata,
 ): string {
   return [
-    metadata.range === 'around-anchor' ? '链接附近' : '最近消息',
-    `${metadata.messageCount} 条`,
-    ...(metadata.truncated ? ['已截断'] : []),
+    metadata.range === 'around-anchor'
+      ? i18n.t('session.row.referenceAroundAnchor')
+      : i18n.t('session.row.referenceRecent'),
+    i18n.t('session.row.referenceCount', { num: metadata.messageCount }),
+    ...(metadata.truncated ? [i18n.t('session.row.referenceTruncated')] : []),
   ].join(' · ');
 }
 
@@ -154,7 +157,11 @@ export function extractMobileSessionReferences(
     const key = mobileSessionReferenceMetadataKey(target.sessionId, target.messageClientId);
     if (seen.has(key)) continue;
     seen.add(key);
-    const deviceId = deviceIdForSession(target.sessionId)
+    // 深链里冻结的 `?device=`(生成时刻的会话归属)优先——与桌面端
+    // reconcileSessionRefsForText 同口径;会话归属不会迁移,冻结值不受
+    // 发送时刻 store 状态(设备离线 / 列表未同步)影响。
+    const deviceId = target.deviceId
+      ?? deviceIdForSession(target.sessionId)
       ?? previousDeviceIds.get(key)
       ?? previousDeviceIdsBySession.get(target.sessionId);
     refs.push({

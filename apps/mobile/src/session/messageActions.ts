@@ -1,5 +1,6 @@
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { i18n } from '@/i18n';
 
 export type CopyMessageStatus = 'copied' | 'empty' | 'failed';
 
@@ -26,7 +27,7 @@ export function buildMobileMessageCopyText(message: NormalizedRemoteMessage): st
   if (message.secondaryBody) parts.push(message.secondaryBody);
   const attachments = message.attachments?.map((item) => item.name).filter(Boolean) ?? [];
   if (attachments.length > 0) {
-    parts.push(`附件：${attachments.join(', ')}`);
+    parts.push(i18n.t('message.actions.attachmentsPrefix', { names: attachments.join(', ') }));
   }
   return parts.filter((part) => part.trim().length > 0).join('\n\n');
 }
@@ -84,9 +85,9 @@ export function formatMessageRelativeTime(createdAt: string, now = Date.now()): 
   const hour = 60 * minute;
   const day = 24 * hour;
 
-  if (diffMs < minute) return '刚刚';
-  if (diffMs < hour) return `${Math.floor(diffMs / minute)} 分钟前`;
-  if (diffMs < day) return `${Math.floor(diffMs / hour)} 小时前`;
+  if (diffMs < minute) return i18n.t('message.actions.justNow');
+  if (diffMs < hour) return i18n.t('message.actions.minutesAgo', { n: Math.floor(diffMs / minute) });
+  if (diffMs < day) return i18n.t('message.actions.hoursAgo', { n: Math.floor(diffMs / hour) });
 
   const date = new Date(timestamp);
   const current = new Date(now);
@@ -109,7 +110,7 @@ export function formatMessageAbsoluteTime(createdAt: string): string {
 export function formatMessageTurnCostUsd(costUsd: number, isEstimate = false): string {
   if (!Number.isFinite(costUsd) || costUsd <= 0) return '';
   const value = formatTurnCostUsd(costUsd);
-  return isEstimate ? `价值 ${value}` : value;
+  return isEstimate ? i18n.t('message.actions.turnCostValue', { value }) : value;
 }
 
 /**

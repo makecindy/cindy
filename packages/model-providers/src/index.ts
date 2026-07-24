@@ -9,6 +9,7 @@
 
 export type {
   AgentKind,
+  ProviderWireProtocol,
   Effort,
   ProviderSource,
   AuthMethod,

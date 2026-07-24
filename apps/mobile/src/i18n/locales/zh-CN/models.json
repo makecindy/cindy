@@ -1,0 +1,36 @@
+{
+  "picker": {
+    "title": "模型",
+    "permissionTitle": "权限",
+    "searchAccessibility": "搜索模型",
+    "searchPlaceholder": "搜索模型...",
+    "noResults": "没有匹配的模型",
+    "emptyDefault": "暂无可用模型",
+    "loadingDefault": "正在加载模型…",
+    "subscriptionBadge": "订阅",
+    "backToModels": "返回模型列表",
+    "agentSwitchHint": "选择模型后，下一条消息将切换到 {{agent}}",
+    "crossAgentEmptyHint": "请先在被控电脑连接 {{agent}} 的模型来源",
+    "permissionModeAccessibility": "权限模式:{{mode}}",
+    "selectProviderModelAccessibility": "选择来源 {{provider}} 的模型 {{model}}",
+    "selectModelAccessibility": "选择模型 {{model}}",
+    "configureAccessibility": "配置 {{model}}",
+    "budgetDisabledHint": "该模型需先在被控电脑配置 API key 才能使用",
+    "priceLine": "输入 {{input}} · 输出 {{output}} / 百万 token",
+    "contextSuffix": "{{size}} 上下文",
+    "fastTag": "快速"
+  },
+  "options": {
+    "fastMode": "快速模式",
+    "fastModeAccessibility": "快速模式 {{model}}",
+    "reasoningEffort": "推理强度",
+    "reasoningEffortAccessibility": "推理强度 {{label}}"
+  },
+  "agentSwitch": {
+    "browseAccessibility": "浏览 {{agent}} 模型",
+    "confirmTitle": "切换到 {{agent}}？",
+    "confirmMessage": "下一条消息发送时，{{appName}} 会把当前会话交接给 {{agent}}。两个 Agent 对上下文和工具的理解可能不同，请确认后再选择目标模型。",
+    "cancel": "取消",
+    "confirm": "继续选择"
+  }
+}

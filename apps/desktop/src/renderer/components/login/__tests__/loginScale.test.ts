@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { brandPlacement, desktopScale, panelPlacement, PANEL_FIXED_SCALE, sloganShiftX } from '../loginScale';
+import {
+  brandPlacement,
+  desktopScale,
+  panelPlacement,
+  PANEL_FIXED_SCALE,
+  sloganShiftX,
+} from '../loginScale';
 
 /**
  * 缩放公式行为单测(implementation-plan Step 2 WHAT1 锚点数值,demo v3.1 拍板)。
@@ -61,6 +67,12 @@ describe('panelPlacement(面板恒定 1x,用户拍板 2026-07-23,design.md §11)
     expect(panelPlacement(800, 600, 1229).topY).toBe(296);
   });
 
+  it('底部有本地模式操作区时，视口 clamp 为 footer 预留安全空间', () => {
+    const placement = panelPlacement(800, 600, 1229, 124);
+    expect(placement.topY).toBe(172);
+    expect(placement.topY + 560 * placement.scale + 124).toBe(576);
+  });
+
   it('高窗时锚点主导(不触发任何 clamp):(1300, 1400) top = 锚点中心-140', () => {
     const s14 = 1400 / 2098;
     const anchorTop = 700 + (1229 + 280 - 1049) * s14 - 140;
@@ -99,5 +111,12 @@ describe('brandPlacement(品牌块整体让位,用户拍板 2026-07-23 第二轮
     const r = brandPlacement(800, 600);
     const blockBottomAfter = 300 + 160 * s6 + r.translateY;
     expect(blockBottomAfter).toBeCloseTo(296 - 12, 2);
+  });
+
+  it('品牌让位与登录 footer 使用同一 bottom reserve，避免面板上移后再次遮挡品牌', () => {
+    const panelTop = panelPlacement(800, 600, 1229, 124).topY;
+    const r = brandPlacement(800, 600, 124);
+    const blockBottomAfter = 300 + 160 * r.scale + r.translateY;
+    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop - 12);
   });
 });

@@ -28,6 +28,9 @@ import {
 import { DeviceLinkProvider } from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
+// import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
+import '@/i18n';
+import { LocaleProvider } from '@/i18n/useLocale';
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 import { createNavigationTheme } from '@/theme/navigationTheme';
 import { MobileLoginHandoffStage } from '@/components/MobileLoginHandoffStage';
@@ -235,14 +238,17 @@ function RootLayout() {
     <GestureHandlerRootView style={styles.gestureRoot}>
       <SafeAreaProvider>
         <ThemeProvider>
-          {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
-          <MobileLoginHandoffProvider>
-            <EndpointHandoffBridge status={endpointGate.status} />
-            {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
-            <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
-              {body}
-            </StartupSplashOverlay>
-          </MobileLoginHandoffProvider>
+          {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
+          <LocaleProvider>
+            {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
+            <MobileLoginHandoffProvider>
+              <EndpointHandoffBridge status={endpointGate.status} />
+              {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
+              <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
+                {body}
+              </StartupSplashOverlay>
+            </MobileLoginHandoffProvider>
+          </LocaleProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

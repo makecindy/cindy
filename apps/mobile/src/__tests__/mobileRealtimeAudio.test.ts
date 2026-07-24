@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('expo-modules-core', () => ({
   EventEmitter: class {
@@ -18,6 +18,10 @@ vi.mock('expo-modules-core', () => ({
     throw new Error('native module not linked');
   }),
 }));
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('mobileRealtimeAudio', () => {
   it('decodes native PCM base64 payloads into ArrayBuffer chunks', async () => {
@@ -40,6 +44,21 @@ describe('mobileRealtimeAudio', () => {
     expect(isMobileRealtimeAudioAvailable()).toBe(false);
     await expect(startMobileRealtimeAudio({ onChunk: vi.fn() }))
       .rejects.toThrow('realtime microphone PCM capture');
+  });
+
+  it('hides voice UI on Android without changing existing non-Android surfaces', async () => {
+    const { shouldShowMobileVoiceUi } = await import('@/session/mobileRealtimeAudio');
+
+    expect(shouldShowMobileVoiceUi('android')).toBe(false);
+    expect(shouldShowMobileVoiceUi('ios')).toBe(true);
+    expect(shouldShowMobileVoiceUi('web')).toBe(true);
+  });
+
+  it('keeps the Android voice entry available to explicit E2E mock runs', async () => {
+    vi.stubEnv('EXPO_PUBLIC_XDT_MOBILE_E2E_MOCK_AUDIO', '1');
+    const { shouldShowMobileVoiceUi } = await import('@/session/mobileRealtimeAudio');
+
+    expect(shouldShowMobileVoiceUi('android')).toBe(true);
   });
 
   it('keeps the iOS native realtime recorder wired for interruption cleanup', () => {

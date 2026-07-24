@@ -86,6 +86,7 @@ import { findLinkifyMatches } from './userMessageLinkify';
 import { SessionLinkChip } from './SessionLinkChip';
 import { ProjectLinkChip } from './ProjectLinkChip';
 import { buildSessionMessageDeepLink, parseSessionDeepLinkHref } from '@/lib/deepLink';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { parseGhostCommandWord, splitGhostDirective } from '@/cindy-brain/ghostCommand';
@@ -847,9 +848,13 @@ export function UserMessage({
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
+  // 远程会话的消息深链把归属设备冻进 `?device=`(粘滞解析,relay 重连窗口不丢),
+  // 复制/「加入对话」产出的链接在任何时刻发送都能路由回来源设备。
   const messageDeepLink =
     sessionId && messageClientId
-      ? buildSessionMessageDeepLink(sessionId, messageClientId)
+      ? buildSessionMessageDeepLink(sessionId, messageClientId, {
+          deviceId: getStickySessionDeviceId(sessionId),
+        })
       : undefined;
   const handleAddToChat = useCallback(() => {
     if (!sessionId || !messageDeepLink) return;

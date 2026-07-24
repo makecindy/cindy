@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
   collectMobileMarkdownImages,
@@ -10,6 +11,11 @@ import {
   parseMobileMarkdownInlines,
   groupMobileMarkdownSelectableBlocks,
 } from '@/session/messageMarkdown';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('messageMarkdown', () => {
   it('parses the reported PR-watch long message without creating an oversized inline image', () => {

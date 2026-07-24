@@ -4,6 +4,7 @@
  * 本 chip 表达;点 × 退出并恢复进入前的权限档。中性 chip token(与 GoalIndicator 同精神)。
  */
 import { ListTodo, X } from 'lucide-react-native';
+import { useTranslation } from 'react-i18next';
 import { Pressable, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -17,12 +18,13 @@ export interface PlanModeChipProps {
 export function PlanModeChip({ onExit, disabled, testID }: PlanModeChipProps) {
   const styles = useThemedStyles(makeChipStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   return (
     <View style={styles.chip} testID={testID}>
       <ListTodo color={colors.textPrimary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      <Text style={styles.label}>计划模式</Text>
+      <Text style={styles.label}>{t('interaction.planMode.label')}</Text>
       <Pressable
-        accessibilityLabel="退出计划模式"
+        accessibilityLabel={t('interaction.planMode.exit')}
         accessibilityRole="button"
         accessibilityState={{ disabled }}
         disabled={disabled}

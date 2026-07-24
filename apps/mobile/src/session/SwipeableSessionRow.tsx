@@ -37,6 +37,7 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import { Archive, Ellipsis, Pin, PinOff } from 'lucide-react-native';
+import { useTranslation } from 'react-i18next';
 import { pinToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -283,6 +284,7 @@ function RightActionsPanel({
   translation: SharedValue<number>;
 }) {
   const { colors } = useTheme();
+  const { t } = useTranslation();
   // armed = 位移越过全滑阈值。独立 SharedValue 只在跨越阈值时写入,避免
   // useDerivedValue 里对逐帧变化的 translation 直接 withTiming(目标每帧重设,动画走不完)。
   const armed = useSharedValue(false);
@@ -323,7 +325,7 @@ function RightActionsPanel({
     <View style={styles.rightShell}>
       <Animated.View style={[styles.optionsButton, optionsStyle]}>
         <Pressable
-          accessibilityLabel="更多选项"
+          accessibilityLabel={t('session.row.moreOptions')}
           accessibilityRole="button"
           onPress={onOptions}
           style={styles.actionPressable}
@@ -336,7 +338,7 @@ function RightActionsPanel({
       </Animated.View>
       <Animated.View style={[styles.archiveButton, archiveStyle]}>
         <Pressable
-          accessibilityLabel="归档对话"
+          accessibilityLabel={t('session.row.archiveConversation')}
           accessibilityRole="button"
           onPress={onArchive}
           style={styles.actionPressable}

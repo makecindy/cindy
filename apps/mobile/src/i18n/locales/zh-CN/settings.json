@@ -1,0 +1,113 @@
+{
+  "title": "设置",
+  "language": {
+    "title": "语言",
+    "hint": "仅影响应用界面。Agent 回复语言由 Agent 自身决定。",
+    "options": {
+      "system": "跟随系统",
+      "zh-CN": "简体中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어"
+    }
+  },
+  "version": {
+    "sectionTitle": "版本",
+    "currentLabel": "当前版本",
+    "bundleVersion": "整包版本 {{version}}",
+    "otaVersion": "热更版本 {{version}}",
+    "desktopVersion": "桌面版 {{version}}",
+    "devNoOta": "开发版，热更不可用",
+    "checkAction": "检查更新",
+    "checking": "检查中",
+    "updating": "更新中",
+    "checkingAccessibility": "正在检查更新",
+    "bundleUpdateFound": "发现整包更新",
+    "upToDate": "已是最新版本",
+    "bundleUpToDateNoOta": "整包已是最新，当前版本不支持热更新",
+    "downloadedRestarting": "更新已下载，正在重启",
+    "bundleCheckFailed": "无法检查整包更新，请稍后重试",
+    "checkFailedDetail": "检查更新失败：{{detail}}",
+    "checkFailed": "检查更新失败，请稍后重试"
+  },
+  "notifications": {
+    "sectionTitle": "通知",
+    "taskDone": "任务完成通知",
+    "taskDoneHint": "电脑上的任务完成、出错或需要你回复时,推送到这台手机;完成或需要回复时附带最新回复内容。",
+    "permissionDenied": "系统通知权限未开启。请到 iOS「设置 → 通知 → {{appName}}」允许通知后重试。",
+    "unregisterQueued": "已关闭。当前网络下注销未完成,将在下次联网时自动补上。"
+  },
+  "about": {
+    "sectionTitle": "关于这台手机",
+    "deviceName": "设备名称",
+    "deviceNameDetail": "电脑端授权列表会显示这个名称。",
+    "platform": "平台",
+    "remoteControl": "被控权限",
+    "remoteControlValue": "电脑端管理",
+    "remoteControlDetail": "手机只作为控制端。允许被控、撤销和恢复权限仍在电脑端设置里完成。",
+    "editAccessibility": "修改{{label}}"
+  },
+  "relay": {
+    "online": "Relay 已连接",
+    "connecting": "正在连接 Relay",
+    "stopped": "Relay 未连接",
+    "lastSynced": "上次同步 {{time}}",
+    "canSync": "可以同步远程会话。",
+    "reconnectHint": "网络恢复后会自动重新订阅远程会话。",
+    "resumeHint": "回到前台或重新登录后会恢复连接。"
+  },
+  "header": {
+    "notSignedIn": "未登录",
+    "thisPhone": "当前手机"
+  },
+  "debug": {
+    "sectionTitle": "调试 / 开发者",
+    "userId": "用户 ID",
+    "notSynced": "未同步",
+    "deviceId": "设备 ID",
+    "initializing": "初始化中",
+    "authServer": "Auth Server",
+    "authRegion": "登录区域"
+  },
+  "updateInfo": {
+    "embedded": "随整包",
+    "unknown": "未知",
+    "source": "运行来源",
+    "sourceEmbedded": "内置版本(随包)",
+    "sourceOta": "OTA 热更新",
+    "updateId": "更新 ID",
+    "updatedAt": "更新时间",
+    "channel": "Channel",
+    "runtime": "Runtime",
+    "otaMarker": "热更标记"
+  },
+  "legal": {
+    "sectionTitle": "备案信息",
+    "privacyPolicy": "隐私政策",
+    "view": "查看",
+    "openPrivacyPolicy": "打开隐私政策",
+    "appFilingNumber": "App 备案号"
+  },
+  "account": {
+    "logoutHint": "退出只会清除这台手机上的登录态和本地远程镜像，不会影响电脑端会话。",
+    "logout": "退出登录",
+    "loggingOut": "退出中",
+    "loggingOutAccessibility": "正在退出登录"
+  },
+  "copyRow": {
+    "action": "复制",
+    "done": "已复制",
+    "accessibility": "复制{{label}}"
+  },
+  "deviceNameEditor": {
+    "screenTitle": "设备名称",
+    "placeholder": "本机名称",
+    "resetAccessibility": "恢复默认本机名称",
+    "emptyError": "设备名称不能为空。",
+    "deviceInitializing": "设备还在初始化，请稍后再试。",
+    "saving": "保存中…",
+    "saved": "已保存。",
+    "restoringDefault": "正在恢复默认名称…",
+    "restoredDefault": "已恢复默认名称。"
+  }
+}

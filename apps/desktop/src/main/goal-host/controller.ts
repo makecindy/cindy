@@ -20,6 +20,10 @@ import type { AgentEvent } from '@cindy/maker-core';
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
+import {
+  cancelReleasedOutput,
+  onReleasedAgentEvent,
+} from '../content-moderation/outputHub.js';
 import { classifyTurnUsageLimit } from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
 import {
@@ -349,6 +353,7 @@ export class GoalController {
         // 终止事件可能在 detach 前被 onEvent 消费 → 并发 finalizeTurn 把下面刚写的 active 覆盖成
         // paused(用户编辑目标后 chip 误显"暂停")。detach 在前,abort 的终止事件就不再触达裁决。
         this.stopSession(sessionId);
+        cancelReleasedOutput(sessionId);
         await session.abort();
       } else {
         this.stopSession(sessionId);
@@ -709,7 +714,7 @@ export class GoalController {
       // session 被 agent switch 换掉了 → 迁移 listener 到新对象。
       try { this.unsubscribers.get(sessionId)?.(); } catch { /* ignore */ }
     }
-    const off = session.onEvent((event) => {
+    const off = onReleasedAgentEvent(session, (event) => {
       try {
         this.onEvent(sessionId, event);
       } catch (e) {

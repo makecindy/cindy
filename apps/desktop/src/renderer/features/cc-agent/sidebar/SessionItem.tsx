@@ -524,8 +524,9 @@ export const SessionItem = memo(function SessionItem({
 
   // 复制 cindy://session/<id> 深度链接到剪贴板。三个变体(标准/Pinned/Archived/Draft)
   // 共用此 handler — sessionId 始终存在(draft 也是 DB-backed 的 Session row)。
+  // 远程会话把归属设备冻进 `?device=`:发送时的引用解析不再依赖被控端此刻在线。
   const handleCopyDeepLinkSelect = useCallback(async () => {
-    const link = buildSessionDeepLink(session.id);
+    const link = buildSessionDeepLink(session.id, { deviceId: session.deviceLinkDeviceId });
     try {
       await navigator.clipboard.writeText(link);
       toast.success(t('ccAgent.sidebar.deepLink.copied'));
@@ -533,7 +534,7 @@ export const SessionItem = memo(function SessionItem({
       log.warn('clipboard write failed', err);
       toast.warning(t('ccAgent.sidebar.deepLink.copyFailed'));
     }
-  }, [session.id, t]);
+  }, [session.deviceLinkDeviceId, session.id, t]);
 
   // 单项「复制对话链接」:直接复制 cindy://session/<id> 深链(可粘贴到聊天里
   // 渲染成会话 chip)。原「复制会话 ID」二级菜单(深度链接 / 仅 ID / Agent)已按

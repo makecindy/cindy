@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -74,6 +75,9 @@ import { fontWeight, lineHeight, loginPalettes, loginSizes, radius, spacing, typ
  * (x=35,loginY,680×560,figma §5.1 移动帧;键盘位移归 PR4b)。
  */
 export default function LoginScreen() {
+  // 订阅语言变化:本屏文案走 loginText()(非响应式),useTranslation 保证
+  // 手动语言 override 恢复/切换时本屏跟着重渲(P2-a:不依赖 auth 重渲兜底)。
+  useTranslation();
   const auth = useAuth();
   const { markInteractive } = useObserve();
   const stage = useLoginSurface();

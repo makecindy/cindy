@@ -22,6 +22,7 @@ import {
   StyleSheet,
   useWindowDimensions,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import { useThemedStyles, type ThemeColors } from '@/theme';
@@ -53,6 +54,7 @@ export function SheetModal({
   children,
 }: SheetModalProps) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   // 背板淡入 + 面板滑入共用一条 progress;关闭淡出/滑出播完后再卸载 Modal。
   const { mounted, progress, onShowStartIn } = useModalFadeLifecycle(visible, {
@@ -118,7 +120,7 @@ export function SheetModal({
       <Animated.View style={backdropStyle}>
         <BlurBackdrop />
         <Pressable
-          accessibilityLabel="关闭面板"
+          accessibilityLabel={t('shared.closePanel')}
           accessibilityRole="button"
           onPress={onBackdropPress}
           style={styles.backdropPressable}

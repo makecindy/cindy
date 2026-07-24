@@ -93,7 +93,7 @@ export interface RemoteMessage {
   systemCardType?: 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'auto-resume' | 'learn' | 'agent-switch';
 }
 
-export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office';
+export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
 export interface RemoteFileRef {
   name: string;

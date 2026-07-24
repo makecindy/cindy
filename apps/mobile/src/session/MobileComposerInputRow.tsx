@@ -15,6 +15,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -324,6 +325,7 @@ export interface ComposerResizeGrabberProps {
  * 行两端保持穿透，不与左右按钮抢触摸。
  */
 export function ComposerResizeGrabber({ onAdjust, panHandlers, visible, testID }: ComposerResizeGrabberProps) {
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
 
@@ -345,11 +347,11 @@ export function ComposerResizeGrabber({ onAdjust, panHandlers, visible, testID }
     >
       <View
         accessibilityActions={[
-          { label: '增大输入框高度', name: 'increment' },
-          { label: '减小输入框高度', name: 'decrement' },
+          { label: t('composer.input.resize.increaseHeight'), name: 'increment' },
+          { label: t('composer.input.resize.decreaseHeight'), name: 'decrement' },
         ]}
-        accessibilityHint="上下拖动调整输入框高度"
-        accessibilityLabel="输入框高度调节"
+        accessibilityHint={t('composer.input.resize.hint')}
+        accessibilityLabel={t('composer.input.resize.label')}
         accessibilityRole="adjustable"
         onAccessibilityAction={(event) => {
           onAdjust?.(event.nativeEvent.actionName === 'increment' ? 1 : -1);

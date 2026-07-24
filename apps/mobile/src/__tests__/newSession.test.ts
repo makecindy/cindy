@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   DEFAULT_NEW_SESSION_DRAFT,
   buildNewSessionCreatePreview,
@@ -24,6 +25,11 @@ import {
 } from '@/session/newSession';
 import type { ProviderModelRow } from '@/session/providerModelSections';
 import type { RemoteSession } from '@/session/types';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function modelRow(
   id: string,
@@ -796,7 +802,7 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('cardActive={composerCardActive}');
     expect(newComposerSource).toContain('toolbar={renderComposerToolbar()}');
     expect(newComposerSource).toContain('voicePlacement={composerVoicePlacement}');
-    expect(newComposerSource).toContain('floatingVoiceButton={renderComposerVoiceButton}');
+    expect(newComposerSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(newComposerSource).toContain('cursorColor={colors.inputCaret}');
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
@@ -933,9 +939,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(newSource).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(newSource).toContain('voiceContext.warmRefiner(input),');
-    expect(newSource).toContain('const composerVoicePlacement = resolveMobileComposerVoiceButtonPlacement({');
+    expect(newSource).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
+    expect(newSource).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(newSource).toContain('hasTrailingAction: composerShowCreateButton');
-    expect(newSource).toContain('const voiceStatusVisible = Boolean(voiceError);');
+    expect(newSource).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
+    expect(newSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(sessionSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_CONTROL_SIZE = 34;');

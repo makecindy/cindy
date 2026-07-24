@@ -291,16 +291,20 @@ import {
   subscribeAgentCapabilities,
 } from '@/session/agentCapabilitiesCache';
 import {
-  MOBILE_VOICE_MIC_PERMISSION_ERROR,
-  MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR,
   isMobileVoiceMicPermissionError,
+  mobileVoiceMicPermissionError,
+  mobileVoiceRealtimeAudioUnavailableError,
   type MobileVoiceState,
 } from '@/session/mobileVoiceInput';
 import {
   resolveComposerVoiceHoldActive,
   shouldArmComposerVoiceHold,
 } from '@/session/composerVoiceHold';
-import { isMobileRealtimeAudioAvailable, prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import {
+  isMobileRealtimeAudioAvailable,
+  prewarmMobileRealtimeAudio,
+  shouldShowMobileVoiceUi,
+} from '@/session/mobileRealtimeAudio';
 import {
   discardPendingPrewarm,
   prewarmMobileVoiceStart,
@@ -374,6 +378,7 @@ import {
   sessionMetaWriteGuard,
   sessionMetaWriteQueue,
   sessionPendingWrites,
+  useContentModerationNotice,
   useRemoteSessions,
   useSessionGoalStatus,
   useSessionInputProjection,
@@ -453,6 +458,8 @@ import type {
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import { useTranslation } from 'react-i18next';
+import { i18n } from '@/i18n';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -594,6 +601,7 @@ function restoreOutboxItemsToDraft(items: readonly MobileOutboxItem[]): void {
 export default function SessionScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -640,6 +648,11 @@ export default function SessionScreen() {
   const revokedDevices = useRevokedDevices();
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
+  const contentModerationNotice = useContentModerationNotice(sessionId);
+  useEffect(() => {
+    remoteSessionStore.setViewedSessionId(sessionId);
+    return () => remoteSessionStore.setViewedSessionId(null);
+  }, [sessionId]);
   const messages = useSessionMessages(sessionId, deviceId);
   const pending = useSessionPendingInteractions(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
@@ -685,6 +698,32 @@ export default function SessionScreen() {
   const [pendingMediaAssets, setPendingMediaAssets] = useState<ContextSheetMediaAsset[]>([]);
   // 本机图片附件的本地预览 uri(attachmentId → file://),composer 托盘缩略图 / 全图查看用。
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!contentModerationNotice) return;
+    if (contentModerationNotice.kind === 'input') {
+      const restoredDraft = readComposerDraftSync(sessionId);
+      if (restoredDraft !== null) setDraft(restoredDraft);
+      const restoredAttachments = drainComposerAttachments(sessionId);
+      if (restoredAttachments.length > 0) {
+        setAttachments((current) => {
+          const merged = [...restoredAttachments];
+          for (const attachment of current) {
+            if (merged.length >= MOBILE_MAX_ATTACHMENTS) break;
+            if (merged.some((item) => item.id === attachment.id)) continue;
+            merged.push(attachment);
+          }
+          return merged.slice(0, MOBILE_MAX_ATTACHMENTS);
+        });
+      }
+    }
+    if (
+      contentModerationNotice.kind === 'output'
+      || contentModerationNotice.reason === 'rejected'
+    ) {
+      Alert.alert('提示', '抱歉，当前问题暂时无法为您解答，请调整提问表述。');
+    }
+    remoteSessionStore.consumeContentModerationNotice(contentModerationNotice.revision);
+  }, [contentModerationNotice, sessionId]);
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [goalBusy, setGoalBusy] = useState(false);
@@ -1264,12 +1303,12 @@ export default function SessionScreen() {
   // fresh 元数据(getSession→upsertDeviceSession)到达前禁发,输入框仍可编辑存草稿
   // (复用降级 composer 既有语义;codex review R15)。
   const cacheSeededReason = currentSession?.cacheSeeded
-    ? '正在同步会话数据，同步完成后即可发送。'
+    ? t('session.screen.composerSyncing')
     : null;
   // 新建会话乐观管线在途:合成行(pendingLocalCreation)在被控端确认前禁发,
   // 输入框仍可编辑存草稿(与 cacheSeeded 同一降级通道);权威 upsert 后自净解禁。
   const pendingCreationReason = currentSession?.pendingLocalCreation
-    ? '会话创建中，首条消息发出后即可继续发送。'
+    ? t('session.screen.composerCreating')
     : null;
   const sessionOperationLayout = useMemo(
     () => buildSessionOperationLayout({
@@ -1340,6 +1379,7 @@ export default function SessionScreen() {
       : [],
     [atResources, canUseComposer, composerTrigger],
   );
+  const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
@@ -1527,7 +1567,7 @@ export default function SessionScreen() {
       });
   const composerRuntimeLabel = composerRuntimeSummary
     ? agentSwitchIntent
-      ? `下条切到 ${mobileAgentLabel(agentSwitchIntent.targetAgentKind)} · ${composerRuntimeSummary.modelSummary}`
+      ? t('session.screen.nextAgentSwitch', { agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind), model: composerRuntimeSummary.modelSummary })
       : composerRuntimeSummary.modelSummary
     : '';
   const composerSendUnavailableReason = canUseComposer ? null : sessionOperationLayout.composerDisabledReason;
@@ -1570,15 +1610,17 @@ export default function SessionScreen() {
   const composerFloatingVoiceButtonStyle = composerShowInlineStop && composerShowSendButton
     ? styles.composerFloatingVoiceButtonWithInlineStop
     : undefined;
-  const composerVoicePlacement = resolveMobileComposerVoiceButtonPlacement({
-    // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
-    hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
-  });
+  const composerVoicePlacement = voiceUiAvailable
+    ? resolveMobileComposerVoiceButtonPlacement({
+      // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
+      hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
+    })
+    : undefined;
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
-  const voiceStatusVisible = Boolean(voiceError);
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
   const nativeShellLayout = useMemo(() => buildSessionNativeShellLayout({
     attachmentPickerOpen: false,
     keyboardHeight: keyboardState.height,
@@ -1774,7 +1816,7 @@ export default function SessionScreen() {
         />
       ) : null}
       <ComposerToolbarSpacer />
-      {composerVoicePlacement.inline || composerVoicePlacement.floating
+      {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot />
         : null}
       {renderComposerTrailingActions()}
@@ -2375,7 +2417,7 @@ export default function SessionScreen() {
         } else {
           if (!isAgentCapabilitiesGenerationCurrent(deviceId, generation)) return;
           if (!cachedCapabilities) setCapabilities(null);
-          setCapabilitiesError('远程能力返回格式不支持');
+          setCapabilitiesError(t('session.common.capabilitiesUnsupported'));
         }
       })
       .catch((err) => {
@@ -2455,7 +2497,7 @@ export default function SessionScreen() {
         } else {
           if (!isAgentCapabilitiesGenerationCurrent(deviceId, generation)) return;
           if (!cached) setAlternateCapabilities(null);
-          setAlternateCapabilitiesError('远程能力返回格式不支持');
+          setAlternateCapabilitiesError(t('session.common.capabilitiesUnsupported'));
         }
       })
       .catch((err) => {
@@ -2641,11 +2683,11 @@ export default function SessionScreen() {
       return;
     }
     if (status === 'create-failed') {
-      const message = creationTask?.error ?? '会话创建失败。';
-      setError(`会话创建失败：${message}`);
-      Alert.alert('会话创建失败', message, [
+      const message = creationTask?.error ?? t('session.screen.createFailedDefault');
+      setError(t('session.screen.createFailedNotice', { message }));
+      Alert.alert(t('session.screen.createFailedTitle'), message, [
         {
-          text: '返回编辑',
+          text: t('session.screen.backToEdit'),
           style: 'cancel',
           onPress: () => {
             if (!creationTask) return;
@@ -2655,7 +2697,7 @@ export default function SessionScreen() {
           },
         },
         {
-          text: '重试',
+          text: t('session.screen.retry'),
           onPress: () => {
             setError(null);
             retryNewSessionCreation(sessionId);
@@ -2691,7 +2733,7 @@ export default function SessionScreen() {
           });
         }
       }
-      setError(creationTask?.error ?? '首条消息没有发出，内容已还原到输入框。');
+      setError(creationTask?.error ?? t('session.screen.firstMessageNotSent'));
       dismissNewSessionCreation(sessionId);
       void load();
     }
@@ -3094,7 +3136,7 @@ export default function SessionScreen() {
         if (cancelled) return;
         remoteSessionStore.mergeMessages(sessionId, Array.isArray(list) ? list : []);
         if (!Array.isArray(list) || list.length === 0) {
-          setError('未找到要定位的消息。');
+          setError(t('session.screen.locateMessageNotFound'));
           return;
         }
         appliedRouteFocusKeyRef.current = routeFocusKey;
@@ -3202,15 +3244,15 @@ export default function SessionScreen() {
           }
         }
       }
-      if (!localUri) throw new Error('无法获取本地图片文件');
+      if (!localUri) throw new Error(t('session.screen.shareNoLocalImage'));
       // 动态 import:expo-sharing 在模块顶层 requireNativeModule('ExpoSharing'),
       // 旧构建(未含该原生模块)静态 import 会直接崩屏;延迟到点击时加载,缺模块走兜底提示。
       const sharing = await import('expo-sharing');
       await sharing.shareAsync(localUri, effectiveMime ? { mimeType: effectiveMime } : undefined);
     } catch {
-      Alert.alert('分享失败', '当前客户端暂不支持分享,更新到最新版本后重试。');
+      Alert.alert(t('session.screen.shareFailedTitle'), t('session.screen.shareUnsupported'));
     }
-  }, [diskCacheSourceOf]);
+  }, [diskCacheSourceOf, t]);
 
   // 换会话与退屏共用一套清理:本屏切 sessionId 不重挂载,若只在 unmount 清理,
   // 连续浏览多个多图会话会让上一会话的 OSS 对象一路累积。cleanup 在 sessionId
@@ -3309,12 +3351,12 @@ export default function SessionScreen() {
     try {
       if (!deviceId) {
         setVoiceState('error');
-        setVoiceError('缺少远程设备，不能开始语音输入。');
+        setVoiceError(t('session.screen.voiceNoRemoteDevice'));
         return;
       }
       if (!isMobileRealtimeAudioAvailable()) {
         setVoiceState('error');
-        setVoiceError(MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR);
+        setVoiceError(mobileVoiceRealtimeAudioUnavailableError());
         return;
       }
       startupSeq = voiceStartupSeqRef.current + 1;
@@ -3332,7 +3374,7 @@ export default function SessionScreen() {
         voiceRecordingActiveRef.current = false;
         voiceStopAfterStartRef.current = false;
         setVoiceState('error');
-        setVoiceError(MOBILE_VOICE_MIC_PERMISSION_ERROR);
+        setVoiceError(mobileVoiceMicPermissionError());
         return;
       }
       await setAudioModeAsync({
@@ -3474,7 +3516,7 @@ export default function SessionScreen() {
       setVoiceError(formatRemoteError(err));
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [deviceId, draft, openLink, renderItems, voiceIsProcessing, voiceState]);
+  }, [deviceId, draft, openLink, renderItems, t, voiceIsProcessing, voiceState]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
@@ -3573,7 +3615,7 @@ export default function SessionScreen() {
         : documentBeforeStop;
       if (options.sendAfterTranscribe && (composerDocumentHasContent(latestDocument) || attachments.length > 0)) {
         const sendLatest = sendLatestRef.current;
-        if (!sendLatest) throw new Error('消息发送器未初始化。');
+        if (!sendLatest) throw new Error(t('session.screen.voiceSenderNotReady'));
         await sendLatest({ documentOverride: latestDocument });
       }
     } catch (err) {
@@ -3585,7 +3627,7 @@ export default function SessionScreen() {
     } finally {
       voiceStopInFlightRef.current = false;
     }
-  }, [attachments.length, moveComposerCaretToEnd, voiceState]);
+  }, [attachments.length, moveComposerCaretToEnd, t, voiceState]);
 
   const openVoiceSettings = useCallback(() => {
     void Linking.openSettings().catch((err) => {
@@ -3630,7 +3672,7 @@ export default function SessionScreen() {
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
     <RouteActionButton
-      accessibilityLabel={voiceIsListening ? '停止录音' : '开始语音输入'}
+      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
       accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
       active={composerLayout.voice.active}
       busy={voiceIsProcessing}
@@ -3809,11 +3851,11 @@ export default function SessionScreen() {
     };
     const sessionNow = remoteSessionStore.getSessions().find((entry) => entry.id === item.sessionId);
     if (!sessionNow) {
-      failItem('未找到当前远程会话，请重新同步后再发送。');
+      failItem(t('session.screen.sessionNotFoundResync'));
       return;
     }
     if (!sessionNow.workingDir) {
-      failItem('当前会话缺少工作目录，不能发送消息。');
+      failItem(t('session.screen.missingWorkingDir'));
       return;
     }
     const sessionAtSend = { ...sessionNow, permissionMode: item.permissionModeAtSend };
@@ -3993,7 +4035,7 @@ export default function SessionScreen() {
       return;
     }
     if (!currentSession) {
-      setError('未找到当前远程会话，请重新同步后再发送。');
+      setError(t('session.screen.sessionNotFoundResync'));
       if (options.documentOverride) applyComposerDocument(options.documentOverride);
       return;
     }
@@ -4076,7 +4118,7 @@ export default function SessionScreen() {
       && (uploadsInFlight > 0 || outboxRef.current.length > 0 || outboxPumpBusyRef.current)) {
       try {
         if (!currentSession.workingDir) {
-          setError('当前会话缺少工作目录，不能发送消息。');
+          setError(t('session.screen.missingWorkingDir'));
           restoreDraftAfterFailure();
           return;
         }
@@ -4169,7 +4211,7 @@ export default function SessionScreen() {
           .find((entry) => entry.clientId === editingQueueItem.clientId);
         if (!original) {
           // 条目已被远端发出/删除(vanish effect 与本次点击竞态):原文不可改,放弃保存。
-          setError('这条排队消息已不在队列里,修改未保存。');
+          setError(t('session.screen.queueMessageGone'));
           cancelQueueEdit();
           return;
         }
@@ -4250,7 +4292,7 @@ export default function SessionScreen() {
                   throw fallbackErr;
                 }
               } else if (isChannelNotAllowedError(err)) {
-                setError('电脑端版本过旧,还不支持安全修改排队引用、附件或清空文本。请升级电脑端,或仅修改普通文字。');
+                setError(t('session.screen.editQueueUnsupported'));
                 restoreQueueEditDraftAfterFailure();
                 return false;
               } else {
@@ -4318,7 +4360,7 @@ export default function SessionScreen() {
       // 点选意图明确,不应被白名单覆盖。点选后再次打开 palette 或发送后 ref 清零。
       const desktopCommand = hasAttachments ? null : earlyDesktopCommand;
       if (!sessionAtSend.workingDir && !localSystemCommand && !desktopCommand) {
-        setError('当前会话缺少工作目录，不能发送消息。');
+        setError(t('session.screen.missingWorkingDir'));
         restoreDraftAfterFailure();
         return;
       }
@@ -4583,7 +4625,7 @@ export default function SessionScreen() {
 
   const renderComposerAttachmentButton = () => (
     <RouteActionButton
-      accessibilityLabel={composerLayout.attachment.active ? composerLayout.attachment.label : '打开上下文面板'}
+      accessibilityLabel={composerLayout.attachment.active ? composerLayout.attachment.label : t('session.common.openContextPanel')}
       accessibilityHint={composerLayout.attachment.disabledReason ?? composerSendUnavailableReason ?? undefined}
       active={composerLayout.attachment.active}
       disabled={composerLayout.attachment.disabled || (!canUseComposer && !composerLayout.attachment.active)}
@@ -4640,7 +4682,7 @@ export default function SessionScreen() {
     <>
       {composerShowInlineStop ? (
         <RouteActionButton
-          accessibilityLabel="停止远程会话"
+          accessibilityLabel={t('session.screen.stopSession')}
           accessibilityHint={composerLayout.stop.disabledReason ?? undefined}
           disabled={composerLayout.stop.disabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
@@ -4668,7 +4710,7 @@ export default function SessionScreen() {
       ) : null}
       {composerSendSlotIsStop ? (
         <RouteActionButton
-          accessibilityLabel="停止远程会话"
+          accessibilityLabel={t('session.screen.stopSession')}
           accessibilityHint={composerLayout.stop.disabledReason ?? undefined}
           disabled={composerLayout.stop.disabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
@@ -4696,7 +4738,7 @@ export default function SessionScreen() {
       ) : composerShowSendButton ? (
         <RouteActionButton
           ref={sendButtonRef}
-          accessibilityLabel={voiceIsListening ? '结束语音输入并发送' : '发送远程消息'}
+          accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
@@ -4837,14 +4879,14 @@ export default function SessionScreen() {
     // OSS 引用在物化完成前被删(review P2)。编辑生命周期的全部入口/出口由此都被
     // in-flight promise 串行化。
     if (queueEditSaveInFlightRef.current) {
-      setError('正在保存上一条排队消息的修改,完成后再编辑。');
+      setError(t('session.screen.savingPreviousQueueEdit'));
       return;
     }
     // 托盘里还有在途上传时不进入编辑:上传完成回调会把文件追加进当前托盘,编辑中
     // 落定会把用户的草稿附件误挂到队列条目上、取消时又会被当作编辑期新增而回收
     // (review P1)。等待落定后再编辑,错误文案给出下一步。
     if (pendingUploads.length > 0) {
-      setError('还有附件正在上传,等上传完成后再编辑排队消息。');
+      setError(t('session.screen.attachmentsUploadingBeforeEdit'));
       return;
     }
     const previous = queueEditingRef.current;
@@ -5019,7 +5061,7 @@ export default function SessionScreen() {
     const sessionAtSend = currentSession;
     if (!state || tailBannerBusy || !sessionId) return;
     if (!sessionAtSend || sessionAtSend.cacheSeeded) {
-      setError('会话尚未同步完成，请稍后再试。');
+      setError(t('session.screen.sessionNotSyncedRetry'));
       return;
     }
     const interrupted = state.kind === 'interrupted' || state.continueKind === 'interrupted';
@@ -5048,7 +5090,7 @@ export default function SessionScreen() {
     } finally {
       setTailBannerBusy(false);
     }
-  }, [currentSession, maker, sessionId, tailBannerBusy, tailBannerState]);
+  }, [currentSession, maker, sessionId, t, tailBannerBusy, tailBannerState]);
 
   //「忽略」:error-tail 持久化 dismiss(被控端 merge dismissed:true,重拉不复活),
   // 本地 dismissed 集合乐观熄灭 banner,同时错误卡回流消息流(errorTailClientId 排除
@@ -5262,12 +5304,12 @@ export default function SessionScreen() {
     // 窗口(原生还在读剪贴板)任务未入队也未进 pendingUploads state,不计入的话
     // 这里会放行超额选图,占位兑现时轮到粘贴图自己撞上限被丢(review P2)。
     if (attachments.length + pendingMediaAssets.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
-      setAttachmentError(`最多添加 ${MOBILE_MAX_ATTACHMENTS} 个附件。`);
+      setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
     setAttachmentError(null);
     setPendingMediaAssets([...pendingMediaAssets, asset]);
-  }, [attachments.length, getPendingUploadCount, mediaAssetAttachments, pendingMediaAssets, removeRemoteFileAttachment, uploadingMediaAssetIds]);
+  }, [attachments.length, getPendingUploadCount, mediaAssetAttachments, pendingMediaAssets, removeRemoteFileAttachment, t, uploadingMediaAssetIds]);
   // 底部「加入对话」:点击当帧把待选照片同步入队(缩略图立即进托盘)并关面板;token 传
   // Promise 由任务自行等待(codex review R8:先 await token 再 enqueue 的等待窗里,面板可被
   // 背板关掉、send() 的 waitForPendingUploads 看不到任务,文字消息会丢下刚选的图先发出去)。
@@ -5420,7 +5462,7 @@ export default function SessionScreen() {
           const current = await maker.goal.getStatus(sessionId);
           remoteSessionStore.setGoalStatus(sessionId, current ?? null);
           if (current) {
-            setGoalError('该会话已有进行中的目标,请先在此处理它。');
+            setGoalError(t('session.screen.goalAlreadyActive'));
             return;
           }
         }
@@ -5437,7 +5479,7 @@ export default function SessionScreen() {
         setGoalBusy(false);
       }
     })();
-  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, sessionId, setComposerDraft]);
+  }, [goalBusy, goalStatus, maker, requestMessageListFollowLatest, sessionId, setComposerDraft, t]);
   const handlePauseGoal = useCallback(() => {
     void runGoalAction(
       () => maker.goal.pause(sessionId),
@@ -5635,7 +5677,7 @@ export default function SessionScreen() {
       setCodexResetRetryKey(null);
       await refreshAccountUsage();
       if (contextUsageSessionRef.current !== sessionId) return;
-      Alert.alert('请重新确认', '重置凭证已过期，请确认刷新后的额度信息。');
+      Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'));
       return;
     }
     setCodexResetRetryKey(idempotencyKey);
@@ -5652,12 +5694,12 @@ export default function SessionScreen() {
         if (contextUsageSessionRef.current !== sessionId) return;
       }
       const message = {
-        reset: 'Codex 用量窗口已重置。',
-        nothingToReset: '当前没有需要重置的用量窗口。',
-        noCredit: '当前没有可用的重置次数。',
-        alreadyRedeemed: '这次重置请求已经处理过，用量已刷新。',
+        reset: t('session.screen.resetOutcomeReset'),
+        nothingToReset: t('session.screen.resetOutcomeNothing'),
+        noCredit: t('session.screen.resetOutcomeNoCredit'),
+        alreadyRedeemed: t('session.screen.resetOutcomeAlready'),
       }[result.outcome];
-      Alert.alert(result.outcome === 'reset' ? '重置完成' : '重置结果', message);
+      Alert.alert(result.outcome === 'reset' ? t('session.screen.resetDoneTitle') : t('session.screen.resetResultTitle'), message);
     } catch (err) {
       if (contextUsageSessionRef.current === sessionId) {
         if (isPreconditionFailedRemoteError(err)) {
@@ -5665,10 +5707,10 @@ export default function SessionScreen() {
           setCodexRateLimits((current) => current ? { ...current, resetOffer: null } : null);
           await refreshAccountUsage();
           if (contextUsageSessionRef.current === sessionId) {
-            Alert.alert('请重新确认', humanizeRemoteError(err));
+            Alert.alert(t('session.screen.resetReconfirmTitle'), humanizeRemoteError(err));
           }
         } else {
-          Alert.alert('重置失败', humanizeRemoteError(err));
+          Alert.alert(t('session.screen.resetFailedTitle'), humanizeRemoteError(err));
         }
       }
     } finally {
@@ -5837,13 +5879,13 @@ export default function SessionScreen() {
       }
       const mime = shareMimeForFileName(name);
       const localUri = await downloadRemoteMediaShareTemp(url, mime, name);
-      if (!localUri) throw new Error('下载失败');
+      if (!localUri) throw new Error(t('session.screen.downloadFailed'));
       const sharing = await import('expo-sharing');
       await sharing.shareAsync(localUri, { mimeType: mime });
       // 只关本次分享对应的菜单:分享期间用户可能已关闭并长按另一 chip 打开新菜单
       setChipMenuTarget((prev) => (prev?.absPath === target.absPath ? null : prev));
     } catch (err) {
-      Alert.alert('分享失败', formatRemoteError(err));
+      Alert.alert(t('session.screen.shareFailedTitle'), formatRemoteError(err));
     } finally {
       setChipShareBusy(false);
     }
@@ -5978,7 +6020,7 @@ export default function SessionScreen() {
         // 污染的快照值(与首页失败分支同口径);离线时 reseed 失败无害。
         remoteSessionStore.requestReseed(deviceId);
         // 与首页同款人话文案(review P2):不把 [NOT_CONNECTED] 原始错误码怼给用户。
-        Alert.alert('操作失败', humanizeRemoteError(err));
+        Alert.alert(t('session.screen.operationFailed'), humanizeRemoteError(err));
       } finally {
         releasePending();
       }
@@ -6109,7 +6151,7 @@ export default function SessionScreen() {
       ?? targetSession?.deviceLinkDeviceId
       ?? remoteSessionStore.getSessionDeviceId(target.sessionId);
     if (!targetDeviceId) {
-      setError('未找到这个会话所属的电脑,请确认对应设备已连接后重试。');
+      setError(t('session.screen.sessionDeviceNotFound'));
       return;
     }
     router.push({
@@ -6210,13 +6252,10 @@ export default function SessionScreen() {
 
   const deleteMessage = useCallback((clientId: string) => {
     if (!deviceId || messageActionBusy) return;
-    Alert.alert('删除本条对话？', [
-      '用户消息只删除本条；AI 消息会删除上一次用户输入之后产生的整轮输出。',
-      '之后的对话继续保留。下次发送时，AI 上下文会从剩余记录重建。',
-    ].join(''), [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(t('session.screen.deleteMessageTitle'), t('session.screen.deleteMessageBody'), [
+      { text: t('session.common.cancel'), style: 'cancel' },
       {
-        text: '删除本条对话',
+        text: t('session.screen.deleteMessageAction'),
         style: 'destructive',
         onPress: () => {
           void (async () => {
@@ -6336,9 +6375,9 @@ export default function SessionScreen() {
               remoteUnavailableReason={remoteUnavailableReason}
               searchOpen={searchOpen}
               title={isDeviceAccessRevoked
-                ? '访问已撤销'
+                ? t('session.screen.accessRevokedShort')
                 : currentSession?.title || currentSession?.workingDir
-                  || (connectionError ? '会话未同步' : (deviceName || '对话'))}
+                  || (connectionError ? t('session.screen.sessionNotSynced') : (deviceName || t('session.screen.conversationFallback')))}
             />
 
             {showConnectionBanner ? (
@@ -6424,7 +6463,7 @@ export default function SessionScreen() {
           footer={contextSheetView !== 'goal' && pendingMediaAssets.length > 0 ? (
             <ContextSheetFooterButton
               disabled={!canUseComposer}
-              label={`加入对话（${pendingMediaAssets.length} 张）`}
+              label={t('session.common.joinConversation', { num: pendingMediaAssets.length })}
               onPress={() => void commitPendingMediaAssets()}
               testID="session.contextSheetCommitMedia"
             />
@@ -6433,7 +6472,7 @@ export default function SessionScreen() {
           onBack={contextSheetView !== 'main' ? () => setContextSheetView('main') : undefined}
           onClose={() => setContextSheetOpen(false)}
           testID="session.contextSheet"
-          title={contextSheetView === 'screenshots' ? '截图' : contextSheetView === 'goal' ? '目标模式' : '上下文'}
+          title={contextSheetView === 'screenshots' ? t('session.common.screenshot') : contextSheetView === 'goal' ? t('session.common.goalMode') : t('session.common.context')}
           visible={contextSheetOpen}
         >
           {contextSheetView === 'main' ? (
@@ -6447,14 +6486,14 @@ export default function SessionScreen() {
                 selectedAssetIds={selectedMediaAssetIds}
                 testID="session.contextSheetPhotos"
               />
-              <ContextSheetGroup label="模式">
+              <ContextSheetGroup label={t('session.common.groupMode')}>
                 {planModeSupported ? (
                   // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
                   <ContextSheetRow
                     accessibilityHint={composerSendUnavailableReason ?? undefined}
                     disabled={!canUseComposer || controlBusy}
                     icon={<ListTodo color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                    label="计划模式"
+                    label={t('session.common.planMode')}
                     onPress={() => {
                       togglePlanMode(!planModeOn);
                       setContextSheetOpen(false);
@@ -6465,7 +6504,7 @@ export default function SessionScreen() {
                 ) : null}
                 <ContextSheetRow
                   icon={<Target color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label="目标模式"
+                  label={t('session.common.goalMode')}
                   onPress={() => setContextSheetView('goal')}
                   testID="session.contextSheetGoalRow"
                   trailing={goalStatus ? (
@@ -6478,19 +6517,19 @@ export default function SessionScreen() {
                   ) : 'chevron'}
                 />
               </ContextSheetGroup>
-              <ContextSheetGroup label="添加">
+              <ContextSheetGroup label={t('session.common.groupAdd')}>
                 <ContextSheetRow
                   accessibilityHint={composerSendUnavailableReason ?? undefined}
                   disabled={!canUseComposer}
                   icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label="照片"
+                  label={t('session.common.photo')}
                   onPress={() => void addLocalImageAttachments('library')}
                   testID="session.contextSheetPhotoRow"
                 />
                 <ContextSheetRow
                   disabled={!canUseComposer}
                   icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label="截图"
+                  label={t('session.common.screenshot')}
                   onPress={() => setContextSheetView('screenshots')}
                   testID="session.contextSheetScreenshotsRow"
                   trailing="chevron"
@@ -6499,7 +6538,7 @@ export default function SessionScreen() {
                   accessibilityHint={composerSendUnavailableReason ?? undefined}
                   disabled={!canUseComposer}
                   icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label="拍照"
+                  label={t('session.common.takePhoto')}
                   onPress={() => void addLocalImageAttachments('camera')}
                   testID="session.contextSheetCameraRow"
                 />
@@ -6507,7 +6546,7 @@ export default function SessionScreen() {
                   accessibilityHint={composerSendUnavailableReason ?? undefined}
                   disabled={!canUseComposer}
                   icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label="文件"
+                  label={t('session.common.file')}
                   onPress={() => void addLocalFileAttachment()}
                   testID="session.contextSheetFileRow"
                 />
@@ -6563,7 +6602,7 @@ export default function SessionScreen() {
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             loading={composerDeviceProviders.loading || modelSheetCapabilitiesLoading}
             loadingHint={modelSheetCapabilitiesLoading
-              ? `正在读取 ${mobileAgentLabel(modelSheetAgentKind)} 运行能力…`
+              ? t('session.screen.readingCapabilities', { agent: mobileAgentLabel(modelSheetAgentKind) })
               : undefined}
             modelMemory={sessionMirrorAccessors}
             onChangeSelectedEffort={changeComposerSelectedEffort}
@@ -6739,7 +6778,7 @@ export default function SessionScreen() {
           >
           {canUseComposer && composerTrigger.kind === 'slash' ? (
             <ComposerPaletteFrame
-              emptyText="没有匹配的命令"
+              emptyText={t('session.common.noMatchingCommands')}
               errorText={slashPaletteError}
               loading={slashPaletteLoading}
               maxHeight={nativeShellLayout.paletteMaxHeight}
@@ -6747,7 +6786,7 @@ export default function SessionScreen() {
             >
               {visibleSlashCommands.map((command) => (
                 <ComposerPaletteRow
-                  accessibilityLabel={`插入命令 ${command.name}`}
+                  accessibilityLabel={t('session.common.insertCommand', { name: command.name })}
                   key={`${command.kind}:${command.name}`}
                   onPress={() => selectSlashCommand(command)}
                   primary={`/${command.name}`}
@@ -6766,7 +6805,7 @@ export default function SessionScreen() {
 
           {canUseComposer && composerTrigger.kind === 'at' ? (
             <ComposerPaletteFrame
-              emptyText={atResourcesTruncated ? '继续输入以缩小结果' : '没有匹配的资源'}
+              emptyText={atResourcesTruncated ? t('session.common.keepTypingToNarrow') : t('session.common.noMatchingResources')}
               errorText={atPaletteError}
               loading={atPaletteLoading}
               maxHeight={nativeShellLayout.paletteMaxHeight}
@@ -6774,7 +6813,7 @@ export default function SessionScreen() {
             >
               {visibleAtResources.map((item) => (
                 <ComposerPaletteRow
-                  accessibilityLabel={`插入资源 ${item.name}`}
+                  accessibilityLabel={t('session.common.insertResource', { name: item.name })}
                   key={`${item.type}:${item.relPath}`}
                   onPress={() => selectAtResource(item)}
                   primary={item.type === 'dir' ? `${item.name}/` : item.name}
@@ -6843,7 +6882,7 @@ export default function SessionScreen() {
             </View>
           ) : sessionOperationLayout.composerSlot === 'read-only' ? (
             <View style={styles.readOnlyComposer} testID="session.collaborationReadOnlyComposer">
-              <Text style={styles.collaborationTitle}>只读模式</Text>
+              <Text style={styles.collaborationTitle}>{t('session.screen.readOnlyMode')}</Text>
               <Text style={styles.collaborationText}>
                 {sessionOperationLayout.composerDisabledReason}
               </Text>
@@ -6878,12 +6917,12 @@ export default function SessionScreen() {
                     {(() => {
                       const index = inputProjection.pendingQueue
                         .findIndex((item) => item.clientId === queueEditing.clientId);
-                      return index >= 0 ? `正在编辑第 ${index + 1} 条排队消息` : '正在编辑排队消息';
+                      return index >= 0 ? t('session.screen.editingQueueMessageNumbered', { index: index + 1 }) : t('session.screen.editingQueueMessage');
                     })()}
                   </Text>
                   <RouteActionButton
-                    accessibilityLabel="放弃编辑排队消息"
-                    accessibilityHint={sending ? '正在保存修改,完成后再操作。' : undefined}
+                    accessibilityLabel={t('session.screen.discardQueueEdit')}
+                    accessibilityHint={sending ? t('session.screen.savingHint') : undefined}
                     // 保存(updateContent RPC)在途时禁用:此刻放弃会在编辑已派发的
                     // 同时恢复 stash + 解锁,桌面端仍会应用修改,状态与 UI 脱节(review P2)。
                     disabled={sending}
@@ -6928,7 +6967,7 @@ export default function SessionScreen() {
                     </Text>
                     {canOpenVoiceSettings ? (
                       <RouteActionButton
-                        accessibilityLabel="打开麦克风权限设置"
+                        accessibilityLabel={t('session.common.openMicPermission')}
                         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
                         onPress={openVoiceSettings}
                         style={styles.voiceCancelButton}
@@ -6960,7 +6999,7 @@ export default function SessionScreen() {
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
                 ]}>
                   <MobileComposerInputRow
-                    accessibilityLabel="输入远程消息"
+                    accessibilityLabel={t('session.screen.composerPlaceholder')}
                     accessibilityHint={composerLayout.input.disabledReason ?? undefined}
                     accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                     autoFocus={visualFocusComposer}
@@ -6968,7 +7007,7 @@ export default function SessionScreen() {
                     caretHidden={voiceIsListening}
                     compact={compactComposer && !composerCardActive}
                     editable={!composerLayout.input.disabled}
-                    floatingVoiceButton={renderComposerVoiceButton}
+                    floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
                     floatingVoiceButtonStyle={composerFloatingVoiceButtonStyle}
                     cursorColor={colors.inputCaret}
                     inputFrameHeight={composerResize.frameHeight}
@@ -7100,6 +7139,7 @@ function SessionHeaderBar({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const overview = currentSession
     ? summarizeSessionOverview({
         diffCount,
@@ -7177,7 +7217,7 @@ function SessionHeaderBar({
           />
         ))}
         <SessionHeaderIconButton
-          accessibilityLabel="打开会话菜单"
+          accessibilityLabel={t('session.screen.openSessionMenu')}
           active={false}
           disabled={!currentSession}
           icon={Ellipsis}
@@ -7255,17 +7295,17 @@ function compactSessionHeaderNotice({
   readOnlyReason?: string | null;
   session: RemoteSession | null;
 }): string | null {
-  if (isDeviceAccessRevoked) return '访问权限已被被控电脑撤销';
-  if (!session) return syncing ? '正在同步会话' : null;
-  if (syncing) return '正在同步';
-  if (pendingCount > 0) return `待处理 ${pendingCount}`;
+  if (isDeviceAccessRevoked) return i18n.t('session.screen.accessRevoked');
+  if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;
+  if (syncing) return i18n.t('session.screen.syncing');
+  if (pendingCount > 0) return i18n.t('session.screen.pendingCount', { num: pendingCount });
   // readOnlyReason 现在传入的是 composer 只读 reason:worker(只读)→「只读模式」;Lead(可聊天)→ 不显示。
-  if (readOnlyReason) return '只读模式';
+  if (readOnlyReason) return i18n.t('session.screen.readOnlyMode');
   // 协作角色会话(Lead 等可聊天的角色)显示协作标签而非「只读模式」,标明其协作身份。
   const collaborationLabel = sessionCollaborationLabel(session);
   if (collaborationLabel) return collaborationLabel;
-  if (session.status === 'archived') return '已归档';
-  if (queuePaused) return '队列已暂停';
+  if (session.status === 'archived') return i18n.t('session.screen.archived');
+  if (queuePaused) return i18n.t('session.screen.queuePausedNotice');
   return null;
 }
 
@@ -7300,6 +7340,7 @@ function SessionSearchSheet({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const normalizedQuery = query.trim();
   const hasHits = hitCount > 0;
   const loadEarlierAction = buildSearchLoadEarlierAction({
@@ -7326,17 +7367,17 @@ function SessionSearchSheet({
         <SheetGrabber style={styles.adhocSheetGrabber} />
         <View style={styles.adhocSheetHeader}>
           <View style={styles.adhocSheetHeaderText}>
-            <Text style={styles.adhocSheetTitle}>搜索当前会话</Text>
+            <Text style={styles.adhocSheetTitle}>{t('session.screen.searchTitle')}</Text>
           </View>
         </View>
         <View style={styles.searchPanel} testID="session.searchPanel">
           <TextInput
-            accessibilityLabel="搜索当前会话消息"
+            accessibilityLabel={t('session.screen.searchPlaceholder')}
             autoCapitalize="none"
             autoCorrect={false}
             autoFocus={MOBILE_VISUAL_MOCK_ENABLED && visible}
             onChangeText={onChangeQuery}
-            placeholder="搜索当前会话消息"
+            placeholder={t('session.screen.searchPlaceholder')}
             placeholderTextColor={colors.textTertiary}
             style={styles.searchInput}
             testID="session.searchInput"
@@ -7346,11 +7387,11 @@ function SessionSearchSheet({
             <Text style={styles.searchCounter} testID="session.searchCounter">
               {normalizedQuery
                 ? hasHits ? `${activeIndex + 1}/${hitCount}` : '0/0'
-                : '输入关键词'}
+                : t('session.screen.searchEnterKeyword')}
             </Text>
             <View style={styles.searchButtons}>
               <RouteActionButton
-                accessibilityLabel="上一条搜索结果"
+                accessibilityLabel={t('session.screen.searchPrevious')}
                 disabled={!hasHits}
                 onPress={() => onMove('previous')}
                 style={styles.searchNavButton}
@@ -7359,7 +7400,7 @@ function SessionSearchSheet({
                 <ChevronUp color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
               </RouteActionButton>
               <RouteActionButton
-                accessibilityLabel="下一条搜索结果"
+                accessibilityLabel={t('session.screen.searchNext')}
                 disabled={!hasHits}
                 onPress={() => onMove('next')}
                 style={styles.searchNavButton}
@@ -7374,7 +7415,7 @@ function SessionSearchSheet({
               {activeHit.label}: {activeHit.preview}
             </Text>
           ) : normalizedQuery ? (
-            <Text style={styles.searchPreview} testID="session.searchPreview">没有匹配的消息</Text>
+            <Text style={styles.searchPreview} testID="session.searchPreview">{t('session.screen.searchNoMatch')}</Text>
           ) : null}
           {loadEarlierAction.visible ? (
             <RouteActionButton
@@ -7402,12 +7443,13 @@ function SessionSyncPlaceholder({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   return (
       <View style={styles.sessionSyncPlaceholder} testID="session.unsyncedState">
       <View style={styles.sessionSyncRow}>
-        <Text style={styles.sessionSyncTitle}>{loading ? '正在同步会话' : '等待会话同步'}</Text>
+        <Text style={styles.sessionSyncTitle}>{loading ? t('session.screen.syncingSession') : t('session.screen.awaitingSync')}</Text>
         <RouteActionButton
-          accessibilityLabel="重新同步远程会话"
+          accessibilityLabel={t('session.screen.resync')}
           disabled={loading}
           onPress={onSync}
           style={styles.sessionSyncButton}
@@ -7432,14 +7474,15 @@ function MessageHistoryToggle({
   onToggle(): void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <RouteActionButton
-      accessibilityLabel={expanded ? '收起历史消息' : '查看历史消息'}
+      accessibilityLabel={expanded ? t('session.screen.collapseHistory') : t('session.screen.expandHistory')}
       onPress={onToggle}
       style={styles.historyToggle}
       testID="session.pendingHistoryToggle"
     >
-      <Text style={styles.historyToggleTitle}>{expanded ? '收起历史消息' : '查看历史消息'}</Text>
+      <Text style={styles.historyToggleTitle}>{expanded ? t('session.screen.collapseHistory') : t('session.screen.expandHistory')}</Text>
     </RouteActionButton>
   );
 }
@@ -7751,13 +7794,14 @@ function ComposerPaletteFrame({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const hasRows = Array.isArray(children) ? children.length > 0 : !!children;
   return (
     <View style={[styles.palettePanel, { maxHeight }]} testID={testID}>
       {loading ? (
         <View style={styles.paletteStatusRow}>
           <ActivityIndicator color={colors.textSecondary} />
-          <Text style={styles.paletteStatusText}>读取中</Text>
+          <Text style={styles.paletteStatusText}>{t('session.common.paletteLoading')}</Text>
         </View>
       ) : errorText ? (
         <Text style={styles.paletteStatusText}>{errorText}</Text>

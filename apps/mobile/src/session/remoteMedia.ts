@@ -3,6 +3,7 @@ import {
   isPayloadDesktopLocalMediaUrl,
   isPayloadDirectPreviewableUrl,
 } from '@cindy/maker-shared/payload-summary';
+import { i18n } from '@/i18n';
 
 const EXPIRY_SAFETY_WINDOW_MS = 60 * 1000;
 
@@ -90,7 +91,7 @@ export async function resolveMobileRemoteMedia(
   opts?: MobileRemoteMediaResolveOptions,
 ): Promise<MobileResolvedRemoteMedia> {
   if (!isDesktopLocalMediaUrl(media.url)) {
-    throw new Error('不是可取件的桌面端媒体');
+    throw new Error(i18n.t('composer.attachments.notFetchableMedia'));
   }
   const fetchOpts = {
     ...(opts?.skipCache ? { skipCache: true } : {}),
@@ -114,11 +115,11 @@ export async function resolveMobileRemoteMedia(
     };
   }
   if (!isValidFetchResult(fetched)) {
-    throw new Error('远程媒体取件结果无效');
+    throw new Error(i18n.t('composer.attachments.mediaResultInvalid'));
   }
   const signed = await deps.presignGet(fetched.ossKey);
   if (!isValidPresignResult(signed)) {
-    throw new Error('远程媒体下载地址无效');
+    throw new Error(i18n.t('composer.attachments.mediaUrlInvalid'));
   }
   return {
     url: signed.getUrl,

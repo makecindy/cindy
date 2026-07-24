@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 import * as mobileInteractionModel from '@/session/interactionModel';
 import {
   buildAskQuestionProgressSummary,
@@ -32,6 +33,12 @@ import {
   sortPendingInteractions,
 } from '@/session/interactionModel';
 import type { PendingInteraction } from '@/session/types';
+
+// buildMobilePermissionCardState 已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦
+// (全局 mock 默认 en-US)。共享层(@cindy/maker-shared/interaction)的中文直出不受影响。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('interactionModel', () => {
   it('projects resolve button state for mobile pending interaction actions', () => {
@@ -193,7 +200,7 @@ describe('interactionModel', () => {
     expect('buildIssueConfirmDecision' in mobileInteractionModel).toBe(false);
     expect('normalizeIssueConfirm' in mobileInteractionModel).toBe(false);
     expect(interactionPanelSource).toContain("if (kind === 'issue_confirm')");
-    expect(interactionPanelSource).toContain('Issue 提交确认只在电脑端处理。请回到桌面端确认或取消提交。');
+    expect(interactionPanelSource).toContain("t('interaction.panel.issueConfirmUnsupported')");
     expect(interactionPanelSource).not.toContain('buildIssueConfirmReviewPresentation');
   });
 
@@ -203,7 +210,7 @@ describe('interactionModel', () => {
     const readOnlyEnd = interactionPanelSource.indexOf('return (', interactionPanelSource.indexOf('}', readOnlyStart));
     const readOnlySource = interactionPanelSource.slice(readOnlyStart, readOnlyEnd);
 
-    expect(readOnlySource).toContain('电脑端正在等待确认');
+    expect(readOnlySource).toContain("t('interaction.panel.readOnlyTitle')");
     expect(readOnlySource).toContain('{readOnlyReason}');
     expect(readOnlySource).not.toContain('当前请求类型');
     expect(readOnlySource).not.toContain('不会回传协作编排决定');

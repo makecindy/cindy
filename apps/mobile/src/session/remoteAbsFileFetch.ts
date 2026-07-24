@@ -18,6 +18,7 @@
  * rememberUpload 的写法),长会话不累积。
  */
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
+import { i18n } from '@/i18n';
 import type {
   FileBrowserReadFileResult,
   MobileMakerTransport,
@@ -117,9 +118,9 @@ export function adaptTextFilePreviewResult(
     };
   }
   const message = res.reason === 'not_found'
-    ? '文件不存在'
+    ? i18n.t('composer.attachments.fileNotFound')
     : res.reason === 'forbidden'
-      ? '该路径不允许读取'
-      : res.error ?? '读取失败';
+      ? i18n.t('composer.attachments.pathNotReadable')
+      : res.error ?? i18n.t('composer.attachments.readFailed');
   return { ok: false, code: 'READ_FAILED', message };
 }

@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from './mobileHome';
 import type { RemoteSessionListItem } from './sessionList';
 
@@ -28,7 +29,7 @@ export function buildHomeSections(
         ? []
         : home.pinned.map((item) => ({ item, key: `pinned:${item.session.id}`, kind: 'session', source: 'pinned' })),
       key: 'pinned',
-      title: '置顶',
+      title: i18n.t('session.row.pinnedSection'),
     });
   }
 

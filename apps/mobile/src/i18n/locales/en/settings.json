@@ -1,0 +1,113 @@
+{
+  "title": "Settings",
+  "language": {
+    "title": "Language",
+    "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
+    "options": {
+      "system": "Auto (follow system)",
+      "zh-CN": "简体中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어"
+    }
+  },
+  "version": {
+    "sectionTitle": "Version",
+    "currentLabel": "Current Version",
+    "bundleVersion": "App package {{version}}",
+    "otaVersion": "OTA version {{version}}",
+    "desktopVersion": "Desktop {{version}}",
+    "devNoOta": "Development build; OTA updates unavailable",
+    "checkAction": "Check for Updates",
+    "checking": "Checking",
+    "updating": "Updating",
+    "checkingAccessibility": "Checking for updates",
+    "bundleUpdateFound": "App package update available",
+    "upToDate": "Already up to date",
+    "bundleUpToDateNoOta": "App package is up to date; this version does not support OTA updates",
+    "downloadedRestarting": "Update downloaded, restarting",
+    "bundleCheckFailed": "Could not check for app package updates. Try again later.",
+    "checkFailedDetail": "Update check failed: {{detail}}",
+    "checkFailed": "Update check failed. Try again later."
+  },
+  "notifications": {
+    "sectionTitle": "Notifications",
+    "taskDone": "Task Completion Notifications",
+    "taskDoneHint": "Get a push on this phone when a task on your computer finishes, fails, or needs your reply. Completion and reply alerts include the latest response.",
+    "permissionDenied": "Notifications are turned off in system settings. Allow notifications in iOS Settings → Notifications → {{appName}}, then try again.",
+    "unregisterQueued": "Turned off. Could not unregister on the current network; it will finish automatically next time you're online."
+  },
+  "about": {
+    "sectionTitle": "About This Phone",
+    "deviceName": "Device Name",
+    "deviceNameDetail": "This name appears in the authorization list on your computer.",
+    "platform": "Platform",
+    "remoteControl": "Remote Control",
+    "remoteControlValue": "Managed on desktop",
+    "remoteControlDetail": "This phone acts only as a controller. Granting, revoking, and restoring control permissions is done in desktop settings.",
+    "editAccessibility": "Edit {{label}}"
+  },
+  "relay": {
+    "online": "Relay connected",
+    "connecting": "Connecting to Relay",
+    "stopped": "Relay not connected",
+    "lastSynced": "Last synced {{time}}",
+    "canSync": "Remote sessions can sync.",
+    "reconnectHint": "Remote sessions will resubscribe automatically when the network recovers.",
+    "resumeHint": "The connection resumes when you return to the app or sign in again."
+  },
+  "header": {
+    "notSignedIn": "Not signed in",
+    "thisPhone": "This phone"
+  },
+  "debug": {
+    "sectionTitle": "Debug / Developer",
+    "userId": "User ID",
+    "notSynced": "Not synced",
+    "deviceId": "Device ID",
+    "initializing": "Initializing",
+    "authServer": "Auth Server",
+    "authRegion": "Sign-in Region"
+  },
+  "updateInfo": {
+    "embedded": "With app package",
+    "unknown": "Unknown",
+    "source": "Running Source",
+    "sourceEmbedded": "Embedded (with app package)",
+    "sourceOta": "OTA update",
+    "updateId": "Update ID",
+    "updatedAt": "Updated At",
+    "channel": "Channel",
+    "runtime": "Runtime",
+    "otaMarker": "OTA Marker"
+  },
+  "legal": {
+    "sectionTitle": "Legal",
+    "privacyPolicy": "Privacy Policy",
+    "view": "View",
+    "openPrivacyPolicy": "Open the privacy policy",
+    "appFilingNumber": "App Filing Number"
+  },
+  "account": {
+    "logoutHint": "Signing out only clears the sign-in state and local remote mirror on this phone. Sessions on your computer are not affected.",
+    "logout": "Sign Out",
+    "loggingOut": "Signing out",
+    "loggingOutAccessibility": "Signing out"
+  },
+  "copyRow": {
+    "action": "Copy",
+    "done": "Copied",
+    "accessibility": "Copy {{label}}"
+  },
+  "deviceNameEditor": {
+    "screenTitle": "Device Name",
+    "placeholder": "Phone name",
+    "resetAccessibility": "Restore the default phone name",
+    "emptyError": "Device name cannot be empty.",
+    "deviceInitializing": "The device is still initializing. Try again later.",
+    "saving": "Saving…",
+    "saved": "Saved.",
+    "restoringDefault": "Restoring the default name…",
+    "restoredDefault": "Restored the default name."
+  }
+}

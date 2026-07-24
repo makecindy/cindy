@@ -261,11 +261,28 @@ export async function readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTo
   return { day: localDayKey() };
 }
 
-// ── Codex account usage (persisted latest snapshot) ─────────────────────────
+// ── Codex account usage (persisted latest snapshot, 按来源分槽) ──────────────
+//
+// 账号可能同时存在多个限额桶(主 codex 配额 + 模型专属促销桶, 如
+// GPT-5.3-Codex-Spark / codex_bengalfox), 且两个数据源报告的桶可能不同:
+//   - codex-app-server: 每 turn account_usage 事件 / rateLimits 读 —— CLI 会话
+//     实际消耗的配额, Codex 会话 chip 的权威来源;
+//   - openai-web (WHAM): chatgpt.com/backend-api/wham/usage —— 为 cc + chatgpt/
+//     bridge 会话引入(bridge 轮不产生 app-server 事件), 报告的桶与 CLI 可能不同。
+// 单槽存储会让两个来源互相覆盖(2026-07-24 用户实报: Codex chip 突然跳成
+// 「8天 剩余 100%」—— WHAM 的 Spark 桶窗口顶掉了 app-server 的主配额窗口)。
+// 分槽后各源只更新自己的槽, 消费方按会话形态选槽(CLI → 顶层, bridge →
+// webSnapshot), payload 形状对旧消费者(mobile 防御解析)加性兼容。
+
+/** 组合 payload: 顶层 = codex-app-server 槽(CLI 权威), webSnapshot = WHAM 槽。 */
+export interface CodexAccountUsagePayload extends RateLimitSnapshot {
+  webSnapshot?: RateLimitSnapshot | null;
+}
 
 let codexAccountUsageOwner: string | null = null;
 let codexAccountUsageLoaded = false;
-let codexAccountUsageSnapshot: RateLimitSnapshot | null = null;
+let codexAppServerUsageSnapshot: RateLimitSnapshot | null = null;
+let codexWebAccountUsageSnapshot: RateLimitSnapshot | null = null;
 
 function currentAccountUsageOwner(): string | null {
   try {
@@ -280,7 +297,61 @@ function resetCodexAccountUsageCacheIfOwnerChanged(): void {
   if (owner === codexAccountUsageOwner) return;
   codexAccountUsageOwner = owner;
   codexAccountUsageLoaded = false;
-  codexAccountUsageSnapshot = null;
+  codexAppServerUsageSnapshot = null;
+  codexWebAccountUsageSnapshot = null;
+}
+
+/** 顶层槽是否有可展示内容(区分「空 app 槽 + 仅 web 槽」的 payload)。 */
+function hasCodexSnapshotContent(snapshot: RateLimitSnapshot | null | undefined): boolean {
+  if (!snapshot) return false;
+  return Boolean(
+    snapshot.primary
+    || snapshot.secondary
+    || snapshot.limitId
+    || snapshot.planType
+    || snapshot.credits
+    || snapshot.rateLimitReachedType,
+  );
+}
+
+/** 两槽 → 组合 payload;两槽全空 → null。 */
+function buildCodexAccountUsagePayload(): CodexAccountUsagePayload | null {
+  const app = codexAppServerUsageSnapshot;
+  const web = codexWebAccountUsageSnapshot;
+  if (!app && !web) return null;
+  if (!app && web) {
+    // web-only: 顶层无 CLI 数据, 但归属字段必须上浮 —— WHAM reader 用顶层
+    // accountId 判断缓存归属(codexAccountUsageRefresh), 缺失会被当成账号失配,
+    // 每次读都清缓存 + 强刷(bridge-only 用户 warm-start 永远拿 null)。
+    // accountId / updatedAt 不算「内容」(hasCodexSnapshotContent), 归槽水合
+    // 不会据此伪造出 app 槽。
+    return { accountId: web.accountId, updatedAt: web.updatedAt, webSnapshot: web };
+  }
+  return { ...(app as RateLimitSnapshot), webSnapshot: web ?? null };
+}
+
+/**
+ * 持久化行 → 两槽。新格式带 webSnapshot 键;旧格式是单快照 —— 按其 source
+ * 归入对应槽(旧行可能是被 WHAM 污染过的单槽杂交体, 归 web 槽即自然隔离)。
+ */
+export function splitPersistedCodexAccountUsage(parsed: Record<string, unknown>): {
+  appServer: RateLimitSnapshot | null;
+  web: RateLimitSnapshot | null;
+} {
+  if ('webSnapshot' in parsed) {
+    const { webSnapshot, ...rest } = parsed as CodexAccountUsagePayload;
+    return {
+      appServer: hasCodexSnapshotContent(rest) ? rest : null,
+      // 拒绝数组等畸形持久化值(与 renderer 的 isRateLimitSnapshot 守卫同口径),
+      // 否则损坏行会被当有效快照再次广播 + 回写。
+      web: webSnapshot && typeof webSnapshot === 'object' && !Array.isArray(webSnapshot)
+        ? webSnapshot
+        : null,
+    };
+  }
+  const legacy = parsed as RateLimitSnapshot;
+  if (legacy.source === 'openai-web') return { appServer: null, web: legacy };
+  return { appServer: hasCodexSnapshotContent(legacy) ? legacy : null, web: null };
 }
 
 function mergeCodexAccountUsageSnapshot(
@@ -363,7 +434,9 @@ async function ensureCodexAccountUsageLoaded(): Promise<void> {
     if (!row?.snapshot) return;
     const parsed = JSON.parse(row.snapshot);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      codexAccountUsageSnapshot = parsed as RateLimitSnapshot;
+      const slots = splitPersistedCodexAccountUsage(parsed as Record<string, unknown>);
+      codexAppServerUsageSnapshot = slots.appServer;
+      codexWebAccountUsageSnapshot = slots.web;
     }
   } catch (err) {
     log.warn(
@@ -377,12 +450,22 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
 
   await ensureCodexAccountUsageLoaded();
-  const next = mergeCodexAccountUsageSnapshot(
-    codexAccountUsageSnapshot,
-    snapshot as RateLimitSnapshot,
-  );
-  codexAccountUsageSnapshot = next;
-  broadcastCodexAccountUsage(next);
+  // 按来源路由到自己的槽 —— 槽内 merge 保留原有的 windowless / 部分字段兜底
+  // 语义, 但两个来源不再互相覆盖窗口(见本节头注释)。
+  const incoming = snapshot as RateLimitSnapshot;
+  if (incoming.source === 'openai-web') {
+    codexWebAccountUsageSnapshot = mergeCodexAccountUsageSnapshot(
+      codexWebAccountUsageSnapshot,
+      incoming,
+    );
+  } else {
+    codexAppServerUsageSnapshot = mergeCodexAccountUsageSnapshot(
+      codexAppServerUsageSnapshot,
+      incoming,
+    );
+  }
+  const payload = buildCodexAccountUsagePayload();
+  broadcastCodexAccountUsage(payload);
 
   try {
     await getDbClient().exec(
@@ -391,7 +474,7 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
        ON CONFLICT(agent_kind) DO UPDATE SET
          snapshot = excluded.snapshot,
          updated_at = excluded.updated_at`,
-      ['codex', JSON.stringify(next), Date.now()],
+      ['codex', JSON.stringify(payload), Date.now()],
     );
   } catch (err) {
     log.warn(
@@ -404,7 +487,8 @@ export async function recordCodexAccountUsageSnapshot(snapshot: unknown): Promis
 export async function clearCodexAccountUsageSnapshot(): Promise<void> {
   resetCodexAccountUsageCacheIfOwnerChanged();
   codexAccountUsageLoaded = true;
-  codexAccountUsageSnapshot = null;
+  codexAppServerUsageSnapshot = null;
+  codexWebAccountUsageSnapshot = null;
   broadcastCodexAccountUsage(null);
 
   try {
@@ -420,9 +504,9 @@ export async function clearCodexAccountUsageSnapshot(): Promise<void> {
   }
 }
 
-export async function readCodexAccountUsageSnapshot(): Promise<RateLimitSnapshot | null> {
+export async function readCodexAccountUsageSnapshot(): Promise<CodexAccountUsagePayload | null> {
   await ensureCodexAccountUsageLoaded();
-  return codexAccountUsageSnapshot;
+  return buildCodexAccountUsagePayload();
 }
 
 // ── xAI(SuperGrok bridge)限流快照 ─────────────────────────────────────────

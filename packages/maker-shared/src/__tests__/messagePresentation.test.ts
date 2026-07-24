@@ -10,6 +10,7 @@ import {
   summarizeToolRowPresentation,
   summarizeWorkGroupPresentation,
   todoStatusPresentation,
+  type ToolRowWording,
 } from '../messagePresentation';
 import type {
   MessageRenderNormalizedMessage,
@@ -343,6 +344,46 @@ describe('messagePresentation', () => {
         },
       },
     }))).toMatchObject({ label: '更新 2 个文件' });
+  });
+
+  it('routes all wording channels through an injected ToolRowWording (island i18n)', () => {
+    // 假英文表:三个通道(verb / intentVerb / updateFilesLabel)各自可被注入方接管。
+    const wording: ToolRowWording = {
+      verb: (key) => `verb:${key}`,
+      intentVerb: (action) => `intent:${action}`,
+      updateFilesLabel: (count) => `updated ${count} files`,
+    };
+
+    // verb 通道:file 描述符。
+    expect(summarizeToolUseText('Read', { file_path: '/repo/src/app.ts' }, { wording })).toEqual({
+      label: 'verb:read app.ts',
+      detail: '/repo/src/app.ts',
+    });
+
+    // intentVerb 通道:命令意图。
+    expect(summarizeToolUseText('exec', { command: 'git status' }, { wording })).toEqual({
+      label: 'intent:gitStatus',
+      detail: 'git status',
+    });
+
+    // verb 通道:无法分类命令回退 runCommand。
+    expect(summarizeToolUseText('Bash', {
+      command: 'docker run --rm -v /repo:/w node:22 bash -lc "true"',
+    }, { wording }).label).toBe('verb:runCommand');
+
+    // updateFilesLabel 通道:fileChange 多文件。
+    expect(summarizeToolUseText('file_change', {
+      changes: [
+        { path: '/repo/a.ts', kind: { type: 'update' }, diff: '-a\n+b' },
+        { path: '/repo/b.ts', kind: { type: 'add' }, diff: '+b' },
+      ],
+    }, { wording }).label).toBe('updated 2 files');
+
+    // verb 通道:todo 槽(灵动岛绑 agentIsland.native.updatingTasks 的注入点)。
+    expect(summarizeToolUseText('TodoWrite', { todos: [] }, { wording }).label).toBe('verb:updateTodos');
+
+    // 不注入时默认中文表(mobile / IM 零变化,与上方既有用例同一事实)。
+    expect(summarizeToolUseText('TodoWrite', { todos: [] }).label).toBe('更新待办');
   });
 
   it('marks unsettled tool rows running only while the session is streaming', () => {

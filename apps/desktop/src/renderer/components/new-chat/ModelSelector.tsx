@@ -26,6 +26,7 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
+  filterChatBridgedCodexProviders,
   providerMonogram,
   resolveVisibleModelAgentKind,
   selectVisibleModels,
@@ -266,6 +267,12 @@ interface ModelSelectorProps {
    */
   excludeSubscriptionDirect?: boolean;
   /**
+   * SSH 远程会话(remoteHostId)传 true:隐藏 `wireProtocol: 'openai-chat'` 的 Codex 供应商
+   * (DeepSeek / Kimi / GLM 等)——Responses→Chat 桥只挂在本地 codex-proxy,远程不经它
+   * (见 selectVisibleModels 同名参数)。
+   */
+  excludeChatBridgedCodex?: boolean;
+  /**
    * device-link 远程切换 in-flight:trigger 置灰 + 禁用点击,直到被控端 echo 回流。
    * 配合 ChatInput 的乐观显示(chip 已显示目标值)给一个「正在生效」的视觉提示,避免回落默认态的跳变。
    * 仅远程会话会为 true;本地会话恒 false。
@@ -323,6 +330,8 @@ interface ModelSelectorContentProps {
   deviceId?: string;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
   excludeSubscriptionDirect?: boolean;
+  /** SSH 远程会话隐藏 Chat 桥接的 Codex 供应商模型(语义同 ModelSelectorProps 同名字段)。 */
+  excludeChatBridgedCodex?: boolean;
   /** 选中后是否自动关闭。Popover 场景传入,内嵌场景不传。 */
   onDismiss?: () => void;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
@@ -372,6 +381,7 @@ export function ModelSelectorContent({
   vendorKey,
   deviceId,
   excludeSubscriptionDirect,
+  excludeChatBridgedCodex,
   onDismiss,
   overlayContentClassName,
   currentProviderId,
@@ -523,6 +533,7 @@ export function ModelSelectorContent({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
+        excludeChatBridgedCodex,
       }),
     [
       agentKind,
@@ -531,6 +542,7 @@ export function ModelSelectorContent({
       cc.capabilities,
       codex.capabilities,
       excludeSubscriptionDirect,
+      excludeChatBridgedCodex,
     ],
   );
 
@@ -579,13 +591,15 @@ export function ModelSelectorContent({
   // 列出来,切过去后来源解析不到(trigger 无 icon、发送必失败)。行点击语义由
   // handleRowSelect 的 browsing 分支先行接管(连来源一起交给切换事务)。
   const sourcesEnabled = !!onProviderChange;
-  const connected = useMemo(
-    () =>
-      sourcesEnabled && currentAgentKind
-        ? connectedProvidersForAgent(providers, currentAgentKind)
-        : [],
-    [sourcesEnabled, providers, currentAgentKind],
-  );
+  const connected = useMemo(() => {
+    if (!sourcesEnabled || !currentAgentKind) return [];
+    const candidates = connectedProvidersForAgent(providers, currentAgentKind);
+    return filterChatBridgedCodexProviders(
+      candidates,
+      currentAgentKind,
+      excludeChatBridgedCodex === true,
+    );
+  }, [sourcesEnabled, providers, currentAgentKind, excludeChatBridgedCodex]);
   // 生效来源必须按当前模型收窄。只按 agent 从 connected 里兜底，会在 XD key 缺失但
   // OpenAI 已连接时拼出「OpenAI 图标 + Opus」这种不存在的路由。
   const activeSourceId = useMemo(
@@ -1301,6 +1315,7 @@ export function ModelSelector({
   vendorKey,
   deviceId,
   excludeSubscriptionDirect,
+  excludeChatBridgedCodex,
   switching = false,
   disabled = false,
   dense = false,
@@ -1359,6 +1374,7 @@ export function ModelSelector({
         deviceCcModels: cc.capabilities?.availableModels ?? [],
         deviceCodexModels: codex.capabilities?.availableModels ?? [],
         excludeSubscriptionDirect,
+        excludeChatBridgedCodex,
       }),
     [
       agentKind,
@@ -1367,6 +1383,7 @@ export function ModelSelector({
       cc.capabilities,
       codex.capabilities,
       excludeSubscriptionDirect,
+      excludeChatBridgedCodex,
     ],
   );
 
@@ -1703,6 +1720,7 @@ export function ModelSelector({
       vendorKey={vendorKey}
       deviceId={deviceId}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
+      excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpen(false)}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}

@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DeviceLinkError,
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   estimateMobileReferenceTokens,
@@ -19,6 +20,11 @@ import {
   type MobileSessionReference,
   type MobileSessionReferenceContext,
 } from '@/session/sessionReferences';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function message(
   sessionId: string,
@@ -102,6 +108,19 @@ describe('mobile session-reference links', () => {
       () => undefined,
       [{ sessionId: 'source', messageClientId: 'anchor', deviceId: 'source-device' }],
     )).toEqual([{ sessionId: 'source', deviceId: 'source-device' }]);
+  });
+
+  it('prefers the device frozen into the link over store lookup and hints', () => {
+    // 桌面端深链冻结的 `?device=` 优先;store 查不到时也不丢远程判定。
+    expect(extractMobileSessionReferences(
+      'cindy://session/source?device=dev-frozen',
+      () => 'dev-live',
+      [{ sessionId: 'source', deviceId: 'dev-hint' }],
+    )).toEqual([{ sessionId: 'source', deviceId: 'dev-frozen' }]);
+    expect(extractMobileSessionReferences(
+      'cindy://session/source?message=anchor&device=dev-frozen',
+      () => undefined,
+    )).toEqual([{ sessionId: 'source', messageClientId: 'anchor', deviceId: 'dev-frozen' }]);
   });
 
   it('clears stale refs and trusted snapshots when an edit removes the link', async () => {

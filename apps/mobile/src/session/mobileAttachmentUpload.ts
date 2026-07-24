@@ -1,5 +1,6 @@
 import { apiFetchRaw } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
@@ -120,11 +121,11 @@ export async function putMobileAttachmentUpload(
     }
     if (!response.ok) {
       const code = extractOssErrorCode(await readResponseTextSafe(response));
-      throw new Error(`附件上传失败: HTTP ${response.status}${code ? ` (${code})` : ''}`);
+      throw new Error(i18n.t('composer.upload.failedHttp', { status: response.status, code: code ? ` (${code})` : '' }));
     }
     return;
   }
-  throw new Error(`附件上传失败:网络传输异常,请检查网络后重试。(${summarizeTransportError(transportError)})`);
+  throw new Error(i18n.t('composer.upload.failedNetwork', { detail: summarizeTransportError(transportError) }));
 }
 
 function buildMobileAttachmentUploadHeaders(mimeType: string | undefined): Record<string, string> {
@@ -171,7 +172,7 @@ async function uploadFileNative(
   opts: { signal?: AbortSignal } = {},
 ): Promise<{ status: number; body?: string }> {
   const FileSystem = await import('expo-file-system/legacy');
-  if (opts.signal?.aborted) throw new Error(UPLOAD_ABORTED_MESSAGE);
+  if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
   const task = FileSystem.createUploadTask(putUrl, fileUri, {
     headers,
     httpMethod: 'PUT',
@@ -185,7 +186,7 @@ async function uploadFileNative(
   try {
     const result = await task.uploadAsync();
     // 取消后 uploadAsync resolve undefined/null(而非 reject),归一化成异常让上层分诊。
-    if (!result) throw new Error(UPLOAD_ABORTED_MESSAGE);
+    if (!result) throw new Error(uploadAbortedMessage());
     return { status: result.status, body: result.body };
   } finally {
     opts.signal?.removeEventListener('abort', onAbort);
@@ -203,8 +204,10 @@ const UPLOAD_TRANSPORT_ATTEMPTS = 2;
  */
 const PUT_FILE_TIMEOUT_MS = 120_000;
 
-const UPLOAD_ABORTED_MESSAGE = '附件上传已取消。';
-const UPLOAD_TIMEOUT_MESSAGE = '附件上传超时,请检查网络后重试。';
+// i18n 文案取值放函数里(而非模块顶层常量):模块顶层求值会把语言冻结在加载时刻,
+// LocaleProvider 挂载后的语言切换就读不到,故在抛错点当场求值。
+const uploadAbortedMessage = () => i18n.t('composer.upload.cancelled');
+const uploadTimeoutMessage = () => i18n.t('composer.upload.timeout');
 
 export async function putMobileAttachmentUploadFromFile(
   putUrl: string,
@@ -219,7 +222,7 @@ export async function putMobileAttachmentUploadFromFile(
   // 拿到 HTTP 状态码的失败(403 签名/权限类)重试无意义,直接抛。
   let transportError: unknown;
   for (let attempt = 0; attempt < UPLOAD_TRANSPORT_ATTEMPTS; attempt += 1) {
-    if (opts.signal?.aborted) throw new Error(UPLOAD_ABORTED_MESSAGE);
+    if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
     // 每次尝试独立的超时窗;外部取消(用户 X 掉 / 页面退出)与超时共用一个
     // 传给传输层的 signal,层内只管断传输,这里负责把两种中止分诊成不同结局。
     const timeout = new AbortController();
@@ -234,9 +237,9 @@ export async function putMobileAttachmentUploadFromFile(
       }));
     } catch (err) {
       // 外部取消:立刻收手,不重试(调用方自己发起的中止,静默语义由上层决定)。
-      if (opts.signal?.aborted) throw new Error(UPLOAD_ABORTED_MESSAGE);
+      if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
       // 超时:不进第二轮(再等 120s 只会让用户在失败卡出现前多干等一轮),直接报错。
-      if (timeout.signal.aborted) throw new Error(UPLOAD_TIMEOUT_MESSAGE);
+      if (timeout.signal.aborted) throw new Error(uploadTimeoutMessage());
       transportError = err;
       continue;
     } finally {
@@ -247,11 +250,11 @@ export async function putMobileAttachmentUploadFromFile(
       // 拿到 HTTP 状态码的失败重试无意义,直接抛;带上 OSS 错误 Code
       // (SignatureDoesNotMatch / AccessDenied / …),否则裸 403 无法定位。
       const code = extractOssErrorCode(body);
-      throw new Error(`附件上传失败: HTTP ${status}${code ? ` (${code})` : ''}`);
+      throw new Error(i18n.t('composer.upload.failedHttp', { status, code: code ? ` (${code})` : '' }));
     }
     return;
   }
-  throw new Error(`附件上传失败:网络传输异常,请检查网络后重试。(${summarizeTransportError(transportError)})`);
+  throw new Error(i18n.t('composer.upload.failedNetwork', { detail: summarizeTransportError(transportError) }));
 }
 
 /** 原生 NSError 描述冗长(整条预签名 URL 都在里面),截前段给用户当排查线索即可。 */
@@ -278,7 +281,7 @@ export async function uploadMobileAttachment(
   // 也没有 delete 回收的孤儿对象(泄漏用户数据 + 占用存储)。类型判定复用
   // categorizeMobileAttachment 这一唯一真源,保证与下面最终校验同口径。
   if (!categorizeMobileAttachment(candidate.name)) {
-    throw new Error('这个本机文件类型暂不支持作为附件发送。');
+    throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
   }
   assertMobileDocumentSize(candidate.size);
   const sha256 = await sha256MobileAttachmentBody(body, candidate.size);
@@ -293,7 +296,7 @@ export async function uploadMobileAttachment(
     mimeType: candidate.mimeType,
   });
   if (!attachment) {
-    throw new Error('这个本机文件类型暂不支持作为附件发送。');
+    throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
   }
   return attachment;
 }
@@ -311,7 +314,7 @@ export async function uploadMobileAttachmentFromFile(
 ): Promise<RemoteSerializedAttachment> {
   // 同 uploadMobileAttachment:presign 前先拦不支持的类型,避免 OSS 孤儿对象。
   if (!categorizeMobileAttachment(candidate.name)) {
-    throw new Error('这个本机文件类型暂不支持作为附件发送。');
+    throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
   }
   assertMobileDocumentSize(candidate.size);
   const snapshot = options.deps?.snapshotFile
@@ -349,7 +352,7 @@ export async function uploadMobileAttachmentFromFile(
       mimeType: candidate.mimeType,
     });
     if (!attachment) {
-      throw new Error('这个本机文件类型暂不支持作为附件发送。');
+      throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
     }
     return attachment;
   } finally {
@@ -364,13 +367,13 @@ async function snapshotMobileAttachmentFile(uri: string): Promise<{
 }> {
   const FileSystem = await import('expo-file-system/legacy');
   const dir = FileSystem.cacheDirectory;
-  if (!dir) throw new Error('无法创建附件快照：缓存目录不可用');
+  if (!dir) throw new Error(i18n.t('composer.upload.snapshotFailedNoCacheDir'));
   const snapshotUri = `${dir}device-link-upload-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await FileSystem.copyAsync({ from: uri, to: snapshotUri });
   const info = await FileSystem.getInfoAsync(snapshotUri);
   if (!info.exists || typeof info.size !== 'number') {
     await FileSystem.deleteAsync(snapshotUri, { idempotent: true }).catch(() => undefined);
-    throw new Error('无法创建附件快照');
+    throw new Error(i18n.t('composer.upload.snapshotFailed'));
   }
   return {
     uri: snapshotUri,
@@ -427,7 +430,7 @@ function uploadExtForName(name: string): string {
 
 function normalizePresignResult(value: MobileAttachmentPresignResult): MobileAttachmentPresignResult {
   if (!value || typeof value.putUrl !== 'string' || typeof value.key !== 'string') {
-    throw new Error('服务端没有返回有效的附件上传地址。');
+    throw new Error(i18n.t('composer.upload.invalidUploadUrl'));
   }
   return {
     putUrl: value.putUrl,

@@ -236,6 +236,9 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
 
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: (name: string) => name.slice(0, 1).toUpperCase(),
+  // #245 新增:ModelSelector 渲染路径直接调用;fixture providers 无 routing,按不过滤透传。
+  isChatBridgedCodexProvider: () => false,
+  filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({
     agentKind,
   }: {

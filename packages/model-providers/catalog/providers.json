@@ -230,6 +230,21 @@
             }
           ],
           "modelsUrl": "https://api.deepseek.com/models"
+        },
+        "codex": {
+          "baseUrl": "https://api.deepseek.com",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro"
+            }
+          ],
+          "modelsUrl": "https://api.deepseek.com/models"
         }
       }
     },
@@ -251,6 +266,20 @@
               "name": "GLM-5.1"
             }
           ]
+        },
+        "codex": {
+          "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            }
+          ]
         }
       }
     },
@@ -262,6 +291,20 @@
       "runtimes": {
         "claude-code": {
           "baseUrl": "https://api.z.ai/api/anthropic",
+          "models": [
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://api.z.ai/api/paas/v4",
+          "wireProtocol": "openai-chat",
           "models": [
             {
               "id": "glm-5.2",
@@ -301,6 +344,25 @@
             }
           ],
           "modelsUrl": "https://api.moonshot.cn/v1/models"
+        },
+        "codex": {
+          "baseUrl": "https://api.moonshot.cn/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "kimi-k3",
+              "name": "Kimi K3"
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code"
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6"
+            }
+          ],
+          "modelsUrl": "https://api.moonshot.cn/v1/models"
         }
       }
     },
@@ -330,6 +392,25 @@
             }
           ],
           "modelsUrl": "https://api.moonshot.ai/v1/models"
+        },
+        "codex": {
+          "baseUrl": "https://api.moonshot.ai/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "kimi-k3",
+              "name": "Kimi K3"
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code"
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6"
+            }
+          ],
+          "modelsUrl": "https://api.moonshot.ai/v1/models"
         }
       }
     },
@@ -350,6 +431,28 @@
               "id": "kimi-for-coding-highspeed",
               "name": "Kimi for Coding 高速版",
               "contextWindow": 262144
+            },
+            {
+              "id": "k3",
+              "name": "Kimi K3"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://api.kimi.com/coding/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "kimi-for-coding",
+              "name": "Kimi for Coding"
+            },
+            {
+              "id": "kimi-for-coding-highspeed",
+              "name": "Kimi for Coding 高速版"
+            },
+            {
+              "id": "k3",
+              "name": "Kimi K3"
             }
           ]
         }
@@ -433,6 +536,25 @@
       "runtimes": {
         "claude-code": {
           "baseUrl": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+          "modelsUrl": "https://coding.dashscope.aliyuncs.com/v1/models",
+          "models": [
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen3.7 Plus"
+            },
+            {
+              "id": "qwen3-coder-next",
+              "name": "Qwen3 Coder Next"
+            },
+            {
+              "id": "qwen3-coder-plus",
+              "name": "Qwen3 Coder Plus"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
+          "wireProtocol": "openai-chat",
           "models": [
             {
               "id": "qwen3.7-plus",

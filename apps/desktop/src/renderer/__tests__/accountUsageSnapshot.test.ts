@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { mergeCodexAccountUsageSnapshot } from '@/hooks/useAccountUsage';
+import {
+  mergeCodexAccountUsageSnapshot,
+  splitCodexAccountUsagePayload,
+} from '@/hooks/useAccountUsage';
 
 describe('mergeCodexAccountUsageSnapshot', () => {
   it('preserves the last known credit balance when a later snapshot omits credits', () => {
@@ -196,7 +199,7 @@ describe('mergeCodexAccountUsageSnapshot', () => {
     const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
 
     expect(mainSource).toContain("USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed'");
-    expect(mainSource).toContain('broadcastCodexAccountUsage(next);');
+    expect(mainSource).toContain('broadcastCodexAccountUsage(payload);');
     expect(mainSource).toContain('isCodexZeroWindowFallback(incoming)');
     expect(mainSource).toContain('isCodexWindowlessFallback(incoming)');
     expect(mainSource).toContain('broadcastCodexAccountUsage(null);');
@@ -204,6 +207,118 @@ describe('mergeCodexAccountUsageSnapshot', () => {
     expect(preloadSource).toContain('onCodexAccountChanged: fanOutMakerUsageCodexAccount');
     expect(hookSource).toContain('api.onCodexAccountChanged');
     expect(hookSource).toContain('options: { clearOnNull?: boolean } = {}');
-    expect(hookSource).toContain("applyCodexAccountUsageSnapshot(persisted, setSnapshot, { clearOnNull: false })");
+    expect(hookSource).toContain('() => setSnapshot(selectCodexSlot(quotaSource))');
+    // 按来源分槽: 两个数据源不得互相覆盖(main / renderer 双份实现同口径)
+    expect(mainSource).toContain('function splitPersistedCodexAccountUsage(');
+    expect(mainSource).toContain("incoming.source === 'openai-web'");
+    expect(hookSource).toContain('function splitCodexAccountUsagePayload(');
+    // CLI turn 事件后不再拉 getAccount 触发 WHAM 刷新 (CLI chip 不显示 web 槽,
+    // 白耗后台请求; review 反馈) —— bridge 槽保鲜走 main 的 bridge turn-done
+    // 触发 + mount 读 + 悬念期催刷
+    expect(hookSource).not.toContain('refreshWebUsage');
+    // module 常驻订阅的安装行为由下方 'module subscription install' 行为测试
+    // 覆盖 (renderToString 挂真 hook), 不再用脆弱的源码字符串断言 (review 反馈)。
+    expect(hookSource).toContain('function ensureModuleSubscription(');
+    // web-only 组合 payload 上浮归属字段, WHAM reader 的 accountId 归属判断不失配
+    expect(mainSource).toContain('accountId: web.accountId');
+  });
+});
+
+describe('splitCodexAccountUsagePayload', () => {
+  it('routes combined payloads into per-source slots', () => {
+    const parts = splitCodexAccountUsagePayload({
+      limitId: 'codex',
+      primary: { usedPercent: 82 },
+      source: 'codex-app-server',
+      webSnapshot: { primary: { usedPercent: 0 }, source: 'openai-web' },
+    } as never);
+    expect(parts.appServer?.primary?.usedPercent).toBe(82);
+    expect((parts.appServer as { webSnapshot?: unknown } | undefined)?.webSnapshot)
+      .toBeUndefined();
+    expect(parts.web?.primary?.usedPercent).toBe(0);
+  });
+
+  it('routes bare snapshots by their source field (per-turn events vs WHAM)', () => {
+    expect(splitCodexAccountUsagePayload({
+      primary: { usedPercent: 40 },
+      source: 'codex-app-server',
+    }).appServer?.primary?.usedPercent).toBe(40);
+    expect(splitCodexAccountUsagePayload({
+      primary: { usedPercent: 5 },
+      source: 'openai-web',
+    }).web?.primary?.usedPercent).toBe(5);
+  });
+
+  it('treats combined payloads as authoritative: empty slots clear explicitly', () => {
+    // web-only 组合 payload: app 槽显式清空(null), 不是「未携带」—— 否则换号 /
+    // 切形态后旧 app 槽数据一直挂着 (review 反馈)
+    const webOnly = splitCodexAccountUsagePayload({
+      accountId: 'acc-2',
+      webSnapshot: { primary: { usedPercent: 5 }, source: 'openai-web' },
+    } as never);
+    expect(webOnly.appServer).toBeNull();
+    expect(webOnly.web?.primary?.usedPercent).toBe(5);
+    // app-only 组合 payload (webSnapshot: null): web 槽显式清空
+    const appOnly = splitCodexAccountUsagePayload({
+      primary: { usedPercent: 82 },
+      source: 'codex-app-server',
+      webSnapshot: null,
+    } as never);
+    expect(appOnly.appServer?.primary?.usedPercent).toBe(82);
+    expect(appOnly.web).toBeNull();
+    // 裸快照是增量: 只携带自己的槽, 另一个槽键缺失(保留现值)
+    const bare = splitCodexAccountUsagePayload({
+      primary: { usedPercent: 40 },
+      source: 'codex-app-server',
+    });
+    expect('web' in bare).toBe(false);
+  });
+});
+
+describe('module subscription install (behavior)', () => {
+  // 真行为测试 (review 反馈: 源码字符串断言验不出等价重构 / 回归):
+  // ensureModuleSubscription 在 hook render 阶段安装, renderToString 即可驱动
+  // (不需要 effects / jsdom)。stub window.electronAPI 统计注册次数。
+  it('installs the codex usage listener once, and only for codex sessions', async () => {
+    const listeners: unknown[] = [];
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      electronAPI: {
+        maker: {
+          usage: {
+            onCodexAccountChanged: (cb: unknown) => {
+              listeners.push(cb);
+              return () => {};
+            },
+          },
+        },
+      },
+    };
+    try {
+      const { resetModules } = await import('vitest').then((m) => ({ resetModules: m.vi.resetModules }));
+      resetModules();
+      const [{ useAccountUsage: freshUseAccountUsage }, { renderToString }, React] =
+        await Promise.all([
+          import('@/hooks/useAccountUsage'),
+          import('react-dom/server'),
+          import('react'),
+        ]);
+      function Probe({ vendor }: { vendor?: 'cc' | 'codex' }) {
+        freshUseAccountUsage(undefined, vendor);
+        return null;
+      }
+      // 非 codex 会话: 不注册
+      renderToString(React.createElement(Probe, { vendor: 'cc' }));
+      renderToString(React.createElement(Probe, {}));
+      expect(listeners.length).toBe(0);
+      // 首个 codex 会话: 注册一次
+      renderToString(React.createElement(Probe, { vendor: 'codex' }));
+      expect(listeners.length).toBe(1);
+      // 幂等: 再挂 codex 实例不重复注册
+      renderToString(React.createElement(Probe, { vendor: 'codex' }));
+      expect(listeners.length).toBe(1);
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
   });
 });

@@ -148,6 +148,8 @@ import {
   type NewSessionStoredPreferences,
 } from '@/session/newSession';
 import { newSessionText } from '@/session/newSessionMessages';
+import { i18n } from '@/i18n';
+import { useTranslation } from 'react-i18next';
 import {
   createNewSessionId,
   drainStashedNewSessionDraft,
@@ -183,16 +185,20 @@ import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useComposerResize } from '@/session/useComposerResize';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import {
-  MOBILE_VOICE_MIC_PERMISSION_ERROR,
-  MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR,
   isMobileVoiceMicPermissionError,
+  mobileVoiceMicPermissionError,
+  mobileVoiceRealtimeAudioUnavailableError,
   type MobileVoiceState,
 } from '@/session/mobileVoiceInput';
 import {
   resolveComposerVoiceHoldActive,
   shouldArmComposerVoiceHold,
 } from '@/session/composerVoiceHold';
-import { isMobileRealtimeAudioAvailable, prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import {
+  isMobileRealtimeAudioAvailable,
+  prewarmMobileRealtimeAudio,
+  shouldShowMobileVoiceUi,
+} from '@/session/mobileRealtimeAudio';
 import {
   discardPendingPrewarm,
   prewarmMobileVoiceStart,
@@ -251,6 +257,7 @@ const NEW_SESSION_SCREEN_TOP_PADDING = Platform.OS === 'android' ? 0 : spacing.x
 export default function NewRemoteSessionScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   // Dev-only:把构建信息从全局浮层挪到这里的顶部展示(试 Fast Refresh)。
   const buildLabel = __DEV__
     ? formatMobileBuildLabel(normalizeBuildInfo({
@@ -309,7 +316,7 @@ export default function NewRemoteSessionScreen() {
     () => deviceOptions.find((option) => option.deviceId === selectedDeviceId) ?? routeDeviceFallback,
     [deviceOptions, routeDeviceFallback, selectedDeviceId],
   );
-  const selectedDeviceLabel = selectedDeviceOption?.name || selectedDeviceName || selectedDeviceId || '选择电脑';
+  const selectedDeviceLabel = selectedDeviceOption?.name || selectedDeviceName || selectedDeviceId || t('session.new.selectDevice');
   const maker = useMobileMakerTransport(selectedDeviceId);
   const sessions = useRemoteSessions();
   const recentWorkspaces = useMemo(
@@ -717,11 +724,11 @@ export default function NewRemoteSessionScreen() {
   // project 模式但没目录→「选择项目」(而非泛化的「选择工作区」)。
   const workspaceLabel = useMemo(
     () => draft.workspaceKind === 'dialogue'
-      ? '对话'
+      ? t('session.new.workspaceDialogue')
       : draft.workingDir.trim()
         ? formatWorkingDirLabel(draft.workingDir)
-        : '选择项目',
-    [draft.workspaceKind, draft.workingDir],
+        : t('session.new.selectProject'),
+    [draft.workspaceKind, draft.workingDir, t],
   );
   const WorkspaceIcon = draft.workspaceKind === 'dialogue' ? MessageCircle : Folder;
   const agentLabel = draft.agentKind === 'codex' ? 'Codex' : 'Claude';
@@ -731,6 +738,7 @@ export default function NewRemoteSessionScreen() {
   );
   const composerHasMessage = draft.firstMessage.trim().length > 0;
   const composerShowCreateButton = composerHasMessage || attachments.length > 0 || pendingUploads.length > 0;
+  const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   // 只有一台可选设备时无可切换项:禁用下拉、隐藏 ⇕(用户反馈:单选项不要出选框)。
@@ -744,11 +752,13 @@ export default function NewRemoteSessionScreen() {
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
-  const voiceStatusVisible = Boolean(voiceError);
-  const composerVoicePlacement = resolveMobileComposerVoiceButtonPlacement({
-    // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
-    hasTrailingAction: composerShowCreateButton,
-  });
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
+  const composerVoicePlacement = voiceUiAvailable
+    ? resolveMobileComposerVoiceButtonPlacement({
+      // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
+      hasTrailingAction: composerShowCreateButton,
+    })
+    : undefined;
   const composerInputContentHeight = firstMessageInputContentHeight;
   const keyboardState = useMobileKeyboardState();
   const windowDimensions = useWindowDimensions();
@@ -799,7 +809,7 @@ export default function NewRemoteSessionScreen() {
   const composerInputScrollEnabled = composerResize.scrollEnabled;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.firstMessage.length === 0;
   // 对齐桌面新建会话输入框默认占位(newChat.chatInput.defaultPlaceholder 的 zh-CN 值)。
-  const composerPlaceholder = '今天我们做点什么呢~';
+  const composerPlaceholder = t('session.new.composerPlaceholder');
   const composerListeningPlaceholder = buildSessionComposerLayout({
     attachmentBusy: false,
     attachmentCount: attachments.length + pendingUploads.length,
@@ -1010,11 +1020,11 @@ export default function NewRemoteSessionScreen() {
         if (!isAgentCapabilitiesGenerationCurrent(selectedDeviceId, generation)) return;
         if (!normalized && cachedCapabilities) {
           // 缓存已画时保留旧能力表,只报错。
-          setCapabilitiesError('远程能力返回格式不支持');
+          setCapabilitiesError(t('session.common.capabilitiesUnsupported'));
           return;
         }
         setCapabilities(normalized);
-        setCapabilitiesError(normalized ? null : '远程能力返回格式不支持');
+        setCapabilitiesError(normalized ? null : t('session.common.capabilitiesUnsupported'));
       })
       .catch((err) => {
         if (capabilitiesSeqRef.current !== seq) return;
@@ -1362,12 +1372,12 @@ export default function NewRemoteSessionScreen() {
     try {
       if (!selectedDeviceId) {
         setVoiceState('error');
-        setVoiceError('请选择电脑后再使用语音输入。');
+        setVoiceError(t('session.new.voiceSelectDeviceFirst'));
         return;
       }
       if (!isMobileRealtimeAudioAvailable()) {
         setVoiceState('error');
-        setVoiceError(MOBILE_VOICE_REALTIME_AUDIO_UNAVAILABLE_ERROR);
+        setVoiceError(mobileVoiceRealtimeAudioUnavailableError());
         return;
       }
       startupSeq = voiceStartupSeqRef.current + 1;
@@ -1380,7 +1390,7 @@ export default function NewRemoteSessionScreen() {
         voiceStopInFlightRef.current = false;
         voiceRecordingActiveRef.current = false;
         setVoiceState('error');
-        setVoiceError(MOBILE_VOICE_MIC_PERMISSION_ERROR);
+        setVoiceError(mobileVoiceMicPermissionError());
         return;
       }
       await setAudioModeAsync({
@@ -1602,7 +1612,7 @@ export default function NewRemoteSessionScreen() {
   );
   const renderAttachmentToggleButton = () => (
     <Pressable
-      accessibilityLabel="打开上下文面板"
+      accessibilityLabel={t('session.common.openContextPanel')}
       accessibilityRole="button"
       disabled={creating}
       hitSlop={10}
@@ -1628,7 +1638,7 @@ export default function NewRemoteSessionScreen() {
   );
   const renderCreateButton = () => (
     <Pressable
-      accessibilityLabel={creating ? '正在创建会话' : '创建会话并发送首条消息'}
+      accessibilityLabel={creating ? t('session.new.creatingSession') : t('session.new.createAndSend')}
       accessibilityHint={createValidation ?? undefined}
       accessibilityRole="button"
       accessibilityState={{ busy: creating || voiceIsProcessing || undefined, disabled: !canCreate || undefined }}
@@ -1665,7 +1675,7 @@ export default function NewRemoteSessionScreen() {
         />
       ) : null}
       <Pressable
-        accessibilityLabel={`模型:${runtimeSummary.modelSummary}`}
+        accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
         accessibilityRole="button"
         accessibilityState={{ expanded: modelSheetOpen || undefined }}
         hitSlop={10}
@@ -1689,7 +1699,7 @@ export default function NewRemoteSessionScreen() {
         <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       </Pressable>
       <ComposerToolbarSpacer />
-      {composerVoicePlacement.inline || composerVoicePlacement.floating
+      {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot />
         : null}
       {composerShowCreateButton ? renderCreateButton() : null}
@@ -1746,7 +1756,7 @@ export default function NewRemoteSessionScreen() {
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
     <Pressable
-      accessibilityLabel={voiceIsListening ? '停止录音' : '语音输入'}
+      accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
       accessibilityRole="button"
       accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
       disabled={creating || voiceIsProcessing}
@@ -1916,7 +1926,7 @@ export default function NewRemoteSessionScreen() {
     // 窗口(原生还在读剪贴板)任务未入队也未进 pendingUploads state,不计入的话
     // 这里会放行超额选图,占位兑现时轮到粘贴图自己撞上限被丢(review P2)。
     if (attachments.length + pendingMediaAssets.length + getPendingUploadCount() >= MOBILE_MAX_ATTACHMENTS) {
-      setAttachmentError(`最多添加 ${MOBILE_MAX_ATTACHMENTS} 个附件。`);
+      setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
       return;
     }
     setAttachmentError(null);
@@ -2064,7 +2074,7 @@ export default function NewRemoteSessionScreen() {
       || voiceIsProcessing
     ) return;
     if (!selectedDeviceId) {
-      setError('请选择电脑。');
+      setError(t('session.new.selectDeviceError'));
       return;
     }
     creatingRef.current = true;
@@ -2205,15 +2215,15 @@ export default function NewRemoteSessionScreen() {
   const createGoalSession = useCallback(async (input: { objective: string; limits?: MobileGoalLimitsInput }) => {
     if (creatingRef.current || goalBusy) return;
     if (!selectedDeviceId) {
-      setGoalError('请选择电脑。');
+      setGoalError(t('session.new.selectDeviceError'));
       return;
     }
     if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) {
-      setGoalError('请输入电脑端项目路径。');
+      setGoalError(t('session.new.enterProjectPath'));
       return;
     }
     if (!draft.model.trim()) {
-      setGoalError('请输入模型。');
+      setGoalError(t('session.new.enterModel'));
       return;
     }
     creatingRef.current = true;
@@ -2254,7 +2264,7 @@ export default function NewRemoteSessionScreen() {
       const created = await maker.createSession(createOpts);
       const result = normalizeCreateSessionResult(created);
       if (!result) {
-        throw new Error('被控端没有返回新会话 id。');
+        throw new Error(t('session.new.noSessionIdReturned'));
       }
       await subscribe(`session:${result.sessionId}`, selectedDeviceId, ['sessions', `session:${result.sessionId}`]).catch(() => undefined);
       let session: RemoteSession;
@@ -2289,7 +2299,7 @@ export default function NewRemoteSessionScreen() {
       setCreating(false);
       setGoalBusy(false);
     }
-  }, [agentAuthVerdict, auth, confirmAgentUnauthenticated, draft, goalBusy, maker, openLink, patchDraft, router, selectedDeviceId, selectedDeviceName, subscribe, waitForPendingUploads]);
+  }, [agentAuthVerdict, auth, confirmAgentUnauthenticated, draft, goalBusy, maker, openLink, patchDraft, router, selectedDeviceId, selectedDeviceName, subscribe, t, waitForPendingUploads]);
 
   return (
     <SafeAreaView style={styles.safeArea} testID="newSession.screen">
@@ -2317,7 +2327,7 @@ export default function NewRemoteSessionScreen() {
             <View style={styles.selectorStack}>
               <View style={styles.deviceSelectorWrap}>
               <Pressable
-                accessibilityLabel="选择被控电脑"
+                accessibilityLabel={t('session.new.selectControlledDevice')}
                 accessibilityRole="button"
                 accessibilityState={{
                   disabled: deviceSelectorDisabled || undefined,
@@ -2345,7 +2355,7 @@ export default function NewRemoteSessionScreen() {
                     const selected = option.deviceId === selectedDeviceId;
                     return (
                       <Pressable
-                        accessibilityLabel={`选择电脑 ${option.name || option.deviceId}`}
+                        accessibilityLabel={t('session.new.selectDeviceNamed', { name: option.name || option.deviceId })}
                         accessibilityRole="button"
                         key={option.deviceId}
                         onPress={() => selectDevice(option)}
@@ -2371,7 +2381,7 @@ export default function NewRemoteSessionScreen() {
               </View>
               <View style={styles.agentSelectorWrap}>
                 <Pressable
-                  accessibilityLabel="选择 Agent"
+                  accessibilityLabel={t('session.new.selectAgent')}
                   accessibilityRole="button"
                   accessibilityState={{ expanded: agentPickerOpen || undefined }}
                   disabled={creating}
@@ -2394,7 +2404,7 @@ export default function NewRemoteSessionScreen() {
                       const selected = draft.agentKind === option.kind;
                       return (
                         <Pressable
-                          accessibilityLabel={`切换到 ${option.label}`}
+                          accessibilityLabel={t('session.new.switchToAgent', { label: option.label })}
                           accessibilityRole="button"
                           accessibilityState={{ selected }}
                           disabled={creating}
@@ -2419,7 +2429,7 @@ export default function NewRemoteSessionScreen() {
               </View>
               <View style={styles.workspaceSelectorWrap}>
                 <Pressable
-                  accessibilityLabel="选择工作区"
+                  accessibilityLabel={t('session.new.selectWorkspace')}
                   accessibilityRole="button"
                   accessibilityState={{ expanded: workspacePickerOpen || undefined }}
                   disabled={creating}
@@ -2439,7 +2449,7 @@ export default function NewRemoteSessionScreen() {
                 {workspacePickerOpen ? (
                   <View style={styles.workspacePickerPanel} testID="newSession.workspacePickerPanel">
                     <Pressable
-                      accessibilityLabel="对话(不绑定项目)"
+                      accessibilityLabel={t('session.new.dialogueNoProject')}
                       accessibilityRole="button"
                       accessibilityState={{ selected: draft.workspaceKind === 'dialogue' }}
                       onPress={selectDialogueWorkspace}
@@ -2447,7 +2457,7 @@ export default function NewRemoteSessionScreen() {
                       testID="newSession.workspaceDialogueOption"
                     >
                       <MessageCircle color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                      <Text style={styles.workspaceOptionText} numberOfLines={1}>对话</Text>
+                      <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('session.new.workspaceDialogue')}</Text>
                       {draft.workspaceKind === 'dialogue' ? (
                         <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.medium} />
                       ) : null}
@@ -2464,7 +2474,7 @@ export default function NewRemoteSessionScreen() {
                             && draft.workingDir.trim() === workspace.workingDir;
                           return (
                             <Pressable
-                              accessibilityLabel={`选择项目 ${workspace.title}`}
+                              accessibilityLabel={t('session.new.selectProjectNamed', { title: workspace.title })}
                               accessibilityRole="button"
                               accessibilityState={{ selected }}
                               disabled={creating}
@@ -2486,11 +2496,11 @@ export default function NewRemoteSessionScreen() {
                         })}
                       </ScrollView>
                     ) : (
-                      <Text style={styles.workspaceEmptyText}>暂无项目</Text>
+                      <Text style={styles.workspaceEmptyText}>{t('session.new.noProjects')}</Text>
                     )}
                     <View style={styles.workspaceDivider} />
                     <Pressable
-                      accessibilityLabel="选择其他项目文件夹"
+                      accessibilityLabel={t('session.new.chooseOtherFolder')}
                       accessibilityRole="button"
                       disabled={creating}
                       onPress={openProjectBrowse}
@@ -2498,7 +2508,7 @@ export default function NewRemoteSessionScreen() {
                       testID="newSession.workspaceBrowseOption"
                     >
                       <FolderPlus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                      <Text style={styles.workspaceOptionText} numberOfLines={1}>选择其他项目文件夹</Text>
+                      <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('session.new.chooseOtherFolder')}</Text>
                     </Pressable>
                   </View>
                 ) : null}
@@ -2509,7 +2519,7 @@ export default function NewRemoteSessionScreen() {
               <View style={styles.browsePanel} testID="newSession.remoteBrowsePanel">
                 <View style={styles.browseHeader}>
                   <Text style={styles.browsePath} numberOfLines={1} testID="newSession.remoteBrowseCurrentPath">
-                    {browsePath || '正在读取远程目录...'}
+                    {browsePath || t('session.new.readingRemoteDir')}
                   </Text>
                   {browseLoading ? <ActivityIndicator color={colors.textSecondary} size="small" /> : null}
                 </View>
@@ -2522,7 +2532,7 @@ export default function NewRemoteSessionScreen() {
                   >
                     {recentWorkspaces.map((workspace) => (
                       <Pressable
-                        accessibilityLabel={`选择项目 ${workspace.title}`}
+                        accessibilityLabel={t('session.new.selectProjectNamed', { title: workspace.title })}
                         accessibilityRole="button"
                         disabled={creating}
                         key={workspace.workingDir}
@@ -2537,7 +2547,7 @@ export default function NewRemoteSessionScreen() {
                 ) : null}
                 <View style={styles.browseActions} testID="newSession.remoteBrowseActions">
                   <Pressable
-                    accessibilityLabel="返回上级目录"
+                    accessibilityLabel={t('session.new.goParentDir')}
                     accessibilityRole="button"
                     disabled={!browseParent || browseLoading}
                     onPress={() => browseParent && void loadBrowsePath(browseParent)}
@@ -2548,10 +2558,10 @@ export default function NewRemoteSessionScreen() {
                     ]}
                     testID="newSession.remoteBrowseParentButton"
                   >
-                    <Text style={styles.browseActionText}>上级</Text>
+                    <Text style={styles.browseActionText}>{t('session.new.parentDir')}</Text>
                   </Pressable>
                   <Pressable
-                    accessibilityLabel="使用当前远程目录"
+                    accessibilityLabel={t('session.new.useCurrentRemoteDir')}
                     accessibilityRole="button"
                     disabled={!browsePath || browseLoading}
                     onPress={() => browsePath && selectWorkingDir(browsePath)}
@@ -2562,7 +2572,7 @@ export default function NewRemoteSessionScreen() {
                     ]}
                     testID="newSession.remoteBrowseSelectCurrent"
                   >
-                    <Text style={styles.browseActionText}>使用当前</Text>
+                    <Text style={styles.browseActionText}>{t('session.new.useCurrent')}</Text>
                   </Pressable>
                 </View>
                 <Pressable
@@ -2626,14 +2636,14 @@ export default function NewRemoteSessionScreen() {
             <View style={styles.composerCard} testID="newSession.composer">
               {composerTrigger.kind === 'slash' ? (
                 <NewComposerPaletteFrame
-                  emptyText="没有匹配的命令"
+                  emptyText={t('session.common.noMatchingCommands')}
                   errorText={slashPaletteError}
                   loading={slashPaletteLoading}
                   testID="newSession.slashPalette"
                 >
                   {visibleSlashCommands.map((command) => (
                     <NewComposerPaletteRow
-                      accessibilityLabel={`插入命令 ${command.name}`}
+                      accessibilityLabel={t('session.common.insertCommand', { name: command.name })}
                       key={`${command.kind}:${command.name}`}
                       onPress={() => selectSlashCommand(command)}
                       primary={`/${command.name}`}
@@ -2645,14 +2655,14 @@ export default function NewRemoteSessionScreen() {
               ) : null}
               {composerTrigger.kind === 'at' ? (
                 <NewComposerPaletteFrame
-                  emptyText={atResourcesTruncated ? '继续输入以缩小结果' : '没有匹配的资源'}
+                  emptyText={atResourcesTruncated ? t('session.common.keepTypingToNarrow') : t('session.common.noMatchingResources')}
                   errorText={atPaletteError}
                   loading={atPaletteLoading}
                   testID="newSession.atPalette"
                 >
                   {visibleAtResources.map((item) => (
                     <NewComposerPaletteRow
-                      accessibilityLabel={`插入资源 ${item.name}`}
+                      accessibilityLabel={t('session.common.insertResource', { name: item.name })}
                       key={`${item.type}:${item.relPath}`}
                       onPress={() => selectAtResource(item)}
                       primary={item.type === 'dir' ? `${item.name}/` : item.name}
@@ -2674,7 +2684,7 @@ export default function NewRemoteSessionScreen() {
                   </Text>
                   {canOpenVoiceSettings ? (
                     <Pressable
-                      accessibilityLabel="打开麦克风权限设置"
+                      accessibilityLabel={t('session.common.openMicPermission')}
                       accessibilityRole="button"
                       hitSlop={10}
                       onPress={openVoiceSettings}
@@ -2688,7 +2698,7 @@ export default function NewRemoteSessionScreen() {
               ) : null}
               <View style={styles.composerToolbarWrap}>
                 <MobileComposerInputRow
-                  accessibilityLabel="输入首条消息"
+                  accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                   autoFocus={visualFocusComposer}
                   cardActive={composerCardActive}
@@ -2726,7 +2736,7 @@ export default function NewRemoteSessionScreen() {
                   trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}
                   value={draft.firstMessage}
                   voicePlacement={composerVoicePlacement}
-                  floatingVoiceButton={renderComposerVoiceButton}
+                  floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
                 />
               </View>
             </View>
@@ -2737,7 +2747,7 @@ export default function NewRemoteSessionScreen() {
         footer={contextSheetView !== 'goal' && pendingMediaAssets.length > 0 ? (
           <ContextSheetFooterButton
             disabled={creating}
-            label={`加入对话（${pendingMediaAssets.length} 张）`}
+            label={t('session.common.joinConversation', { num: pendingMediaAssets.length })}
             onPress={() => void commitPendingMediaAssets()}
             testID="newSession.contextSheetCommitMedia"
           />
@@ -2746,7 +2756,7 @@ export default function NewRemoteSessionScreen() {
         onBack={contextSheetView !== 'main' ? () => setContextSheetView('main') : undefined}
         onClose={() => setContextSheetOpen(false)}
         testID="newSession.contextSheet"
-        title={contextSheetView === 'screenshots' ? '截图' : contextSheetView === 'goal' ? '目标模式' : '上下文'}
+        title={contextSheetView === 'screenshots' ? t('session.common.screenshot') : contextSheetView === 'goal' ? t('session.common.goalMode') : t('session.common.context')}
         visible={contextSheetOpen}
       >
         {contextSheetView === 'main' ? (
@@ -2760,13 +2770,13 @@ export default function NewRemoteSessionScreen() {
               selectedAssetIds={selectedMediaAssetIds}
               testID="newSession.contextSheetPhotos"
             />
-            <ContextSheetGroup label="模式">
+            <ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
                 <ContextSheetRow
                   disabled={creating}
                   icon={<ListTodo color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label="计划模式"
+                  label={t('session.common.planMode')}
                   onPress={() => {
                     togglePlanMode(!planModeOn);
                     setContextSheetOpen(false);
@@ -2778,24 +2788,24 @@ export default function NewRemoteSessionScreen() {
               <ContextSheetRow
                 disabled={creating}
                 icon={<Target color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label="目标模式"
+                label={t('session.common.goalMode')}
                 onPress={() => setContextSheetView('goal')}
                 testID="newSession.contextSheetGoalRow"
                 trailing="chevron"
               />
             </ContextSheetGroup>
-            <ContextSheetGroup label="添加">
+            <ContextSheetGroup label={t('session.common.groupAdd')}>
               <ContextSheetRow
                 disabled={creating}
                 icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label="照片"
+                label={t('session.common.photo')}
                 onPress={() => void addLocalImageAttachments('library')}
                 testID="newSession.contextSheetPhotoRow"
               />
               <ContextSheetRow
                 disabled={creating}
                 icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label="截图"
+                label={t('session.common.screenshot')}
                 onPress={() => setContextSheetView('screenshots')}
                 testID="newSession.contextSheetScreenshotsRow"
                 trailing="chevron"
@@ -2803,14 +2813,14 @@ export default function NewRemoteSessionScreen() {
               <ContextSheetRow
                 disabled={creating}
                 icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label="拍照"
+                label={t('session.common.takePhoto')}
                 onPress={() => void addLocalImageAttachments('camera')}
                 testID="newSession.contextSheetCameraRow"
               />
               <ContextSheetRow
                 disabled={creating}
                 icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label="文件"
+                label={t('session.common.file')}
                 onPress={() => void addLocalFileAttachment()}
                 testID="newSession.contextSheetFileRow"
               />
@@ -2849,7 +2859,7 @@ export default function NewRemoteSessionScreen() {
         apiKeyStatus={deviceApiKeyStatus}
         capabilities={capabilities}
         disabled={creating}
-        emptyHint={selectedDeviceId ? '暂无可用模型' : '请先选择电脑'}
+        emptyHint={selectedDeviceId ? t('session.new.noModelsAvailable') : t('session.new.selectDeviceFirst')}
         flatOptions={runtimeOptions.modelOptions}
         modelVisibilityOverrides={deviceProviders.modelVisibilityOverrides}
         keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2914,10 +2924,11 @@ function RemoteDirectoryRow({
   onSelect(): void;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <View style={styles.browseRow} testID="newSession.remoteBrowseEntry">
       <Pressable
-        accessibilityLabel={`进入目录 ${entry.name}`}
+        accessibilityLabel={t('session.new.enterDir', { name: entry.name })}
         accessibilityRole="button"
         disabled={disabled}
         onPress={onEnter}
@@ -2929,14 +2940,14 @@ function RemoteDirectoryRow({
         </Text>
       </Pressable>
       <Pressable
-        accessibilityLabel={`选择目录 ${entry.name}`}
+        accessibilityLabel={t('session.new.selectDir', { name: entry.name })}
         accessibilityRole="button"
         disabled={disabled}
         onPress={onSelect}
         style={({ pressed }) => [styles.browseSelectButton, disabled && styles.disabled, pressed && styles.pressed]}
         testID="newSession.remoteBrowseSelectEntry"
       >
-        <Text style={styles.browseActionText}>选择</Text>
+        <Text style={styles.browseActionText}>{t('session.new.select')}</Text>
       </Pressable>
     </View>
   );
@@ -2957,13 +2968,14 @@ function NewComposerPaletteFrame({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const hasRows = Array.isArray(children) ? children.length > 0 : !!children;
   return (
     <View style={styles.palettePanel} testID={testID}>
       {loading ? (
         <View style={styles.paletteStatusRow}>
           <ActivityIndicator color={colors.textSecondary} />
-          <Text style={styles.paletteStatusText}>读取中</Text>
+          <Text style={styles.paletteStatusText}>{t('session.common.paletteLoading')}</Text>
         </View>
       ) : errorText ? (
         <Text style={styles.paletteStatusText}>{errorText}</Text>
@@ -3029,7 +3041,7 @@ function choiceLabel(options: readonly { id: string; label: string }[], value: s
 
 function formatWorkingDirLabel(workingDir: string): string {
   const trimmed = workingDir.trim();
-  if (!trimmed) return '选择工作区';
+  if (!trimmed) return i18n.t('session.new.selectWorkspace');
   const normalized = stripTrailingPathSeparators(trimmed);
   const segments = normalized.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) ?? normalized;

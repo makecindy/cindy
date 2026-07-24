@@ -51,6 +51,7 @@ import { useAgentCapabilities, type AgentKind as MakerAgentKind } from '@/hooks/
 import { useSessionFileOrigin } from './ChatSessionFileContext';
 import { originDeviceId } from '@/lib/sessionFileOrigin';
 import { buildSessionMessageDeepLink } from '@/lib/deepLink';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { MessageActionBar } from './MessageActionBar';
@@ -247,8 +248,12 @@ export const AssistantMessage = memo(function AssistantMessage({
     navigationMode === 'route-owner' &&
     Boolean(currentSessionId && messageClientId) &&
     forkSupported;
+  // 远程会话的消息深链把归属设备冻进 `?device=`(粘滞解析,relay 重连窗口不丢),
+  // 复制/「加入对话」产出的链接在任何时刻发送都能路由回来源设备。
   const messageDeepLink = currentSessionId && messageClientId
-    ? buildSessionMessageDeepLink(currentSessionId, messageClientId)
+    ? buildSessionMessageDeepLink(currentSessionId, messageClientId, {
+        deviceId: getStickySessionDeviceId(currentSessionId),
+      })
     : undefined;
   const handleAddToChat = useCallback(() => {
     if (!currentSessionId || !messageDeepLink) return;

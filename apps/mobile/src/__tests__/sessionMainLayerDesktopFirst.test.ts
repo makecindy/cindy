@@ -9,7 +9,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const emptyEnd = source.indexOf('function MessageListActionButton', emptyStart);
     const emptySource = source.slice(emptyStart, emptyEnd);
 
-    expect(emptySource).toContain('暂无消息');
+    expect(emptySource).toContain('message.renderer.emptyMessages');
     expect(emptySource).not.toContain('这台电脑暂无活动消息');
     expect(emptySource).not.toContain('先在桌面端创建或继续一个会话');
     expect(emptySource).not.toContain('emptyText');
@@ -25,7 +25,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(syncingStart).toBeGreaterThan(-1);
     const syncingEnd = rendererSource.indexOf('function MessageListActionButton', syncingStart);
     const syncingSource = rendererSource.slice(syncingStart, syncingEnd);
-    expect(syncingSource).toContain('正在同步');
+    expect(syncingSource).toContain('message.renderer.syncing');
     expect(syncingSource).toContain('ActivityIndicator');
     expect(rendererSource).toContain('SYNCING_PLACEHOLDER_DELAY_MS');
     expect(rendererSource).toContain('ListEmptyComponent={syncingWhileEmpty');
@@ -47,8 +47,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     expect(routeSource).toContain('{showConnectionBanner ? (');
     expect(source).toContain('useShowConnectionBanner(status, connectionError, connectionIssue)');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');
-    expect(syncSource).toContain('等待会话同步');
-    expect(syncSource).toContain('重新同步');
+    expect(syncSource).toContain("t('session.screen.awaitingSync')");
+    expect(syncSource).toContain("t('session.screen.resync')");
     expect(syncSource).toContain('RefreshCw');
     expect(syncSource).toContain('sessionSyncRow');
     expect(syncSource).not.toContain('上方同步成功后');
@@ -115,7 +115,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
       'if (contextUsageSessionRef.current !== sessionId) return;',
       refresh,
     );
-    const alert = resetSource.indexOf("Alert.alert('请重新确认', '重置凭证已过期", refresh);
+    const alert = resetSource.indexOf("Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'))", refresh);
 
     expect(refresh).toBeGreaterThan(-1);
     expect(sessionGuard).toBeGreaterThan(refresh);
@@ -127,7 +127,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     // 消息队列已从独立弹层退役,inline 到消息流(InlineQueueSection),不再有 sheet 标题。
     expect(source).not.toContain('消息队列');
-    expect(source).toContain('搜索当前会话');
+    expect(source).toContain("t('session.screen.searchTitle')");
     expect(source).not.toContain('REMOTE QUEUE');
     expect(source).not.toContain('MESSAGE SEARCH');
     expect(source).not.toContain('queueSheetEyebrow');
@@ -140,8 +140,8 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const deleteEnd = source.indexOf('const confirmRewind', deleteStart);
     const deleteSource = source.slice(deleteStart, deleteEnd);
 
-    expect(deleteSource).toContain("Alert.alert('删除本条对话？'");
-    expect(deleteSource).toContain('用户消息只删除本条；AI 消息会删除上一次用户输入之后产生的整轮输出。');
+    expect(deleteSource).toContain("Alert.alert(t('session.screen.deleteMessageTitle')");
+    expect(deleteSource).toContain("t('session.screen.deleteMessageBody')");
     expect(deleteSource).toContain('const result = await maker.deleteMessage(sessionId, clientId);');
     expect(deleteSource).toContain('Array.isArray(result.clientIds)');
     expect(deleteSource).toContain('remoteSessionStore.removeMessages(');

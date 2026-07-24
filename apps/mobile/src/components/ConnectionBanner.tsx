@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import type { DeviceLinkConnectionIssue, DeviceLinkStatus } from '@cindy/device-link';
 import {
@@ -62,6 +63,7 @@ export function ConnectionBanner({
   variant?: 'bar' | 'inline';
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   // 链路已 online 说明 issue 已过期(client 侧 online 会清除,这里兜底不展示)。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' ? issue : null;
@@ -72,7 +74,7 @@ export function ConnectionBanner({
   const compact = density === 'compact';
   const title = activeIssue
     ? connectionIssueTitle(activeIssue.kind)
-    : friendlyError ? '同步失败' : relayStatusLabel(status);
+    : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
   const copy = activeIssue
     ? connectionIssueHint(activeIssue.kind)
     : friendlyError ?? relayStatusHint(status, lastSyncedAt);
@@ -129,13 +131,14 @@ function ConnectionSyncButton({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <MainWindowActionButton
       action={{
-        accessibilityLabel: loading ? '正在重新同步' : '重新同步',
+        accessibilityLabel: loading ? t('deviceLink.resyncing') : t('deviceLink.resync'),
         busy: loading,
         disabled: loading,
-        label: compact ? '同步' : '重新同步',
+        label: compact ? t('deviceLink.syncShort') : t('deviceLink.resync'),
         onPress,
         testID,
       }}

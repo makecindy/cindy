@@ -1,3 +1,5 @@
+import { i18n } from '@/i18n';
+
 /** 手动整包检查结果,供统一流程决定是否继续检查 JS 热更新。 */
 export type BundleUpdateCheckOutcome =
   | 'skipped'
@@ -48,10 +50,10 @@ export async function runManualUpdateCheck({
     try {
       bundleOutcome = await checkBundleUpdate();
     } catch {
-      return { kind: 'error', message: '无法检查整包更新，请稍后重试' };
+      return { kind: 'error', message: i18n.t('settings.version.bundleCheckFailed') };
     }
     if (bundleOutcome === 'update-available') return { kind: 'bundle-update-available' };
-    if (bundleOutcome === 'error') return { kind: 'error', message: '无法检查整包更新，请稍后重试' };
+    if (bundleOutcome === 'error') return { kind: 'error', message: i18n.t('settings.version.bundleCheckFailed') };
     if (bundleOutcome === 'busy') return { kind: 'busy' };
   }
 
@@ -68,7 +70,9 @@ export async function runManualUpdateCheck({
     const detail = error instanceof Error ? error.message.trim() : String(error).trim();
     return {
       kind: 'error',
-      message: detail ? `检查更新失败：${detail}` : '检查更新失败，请稍后重试',
+      message: detail
+        ? i18n.t('settings.version.checkFailedDetail', { detail })
+        : i18n.t('settings.version.checkFailed'),
     };
   }
 }

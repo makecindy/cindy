@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('expo-constants', () => ({
   default: {
@@ -16,11 +16,17 @@ vi.mock('@/auth/secureStorage', () => ({
 }));
 
 import { ApiError } from '@/api/client';
+import { i18n } from '@/i18n';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
   createMobileCindyVoiceCredential,
   MobileCindyVoiceRunContext,
 } from '@/session/mobileCindyVoiceSession';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function sessionResponse(overrides: Partial<{
   sessionId: string;
