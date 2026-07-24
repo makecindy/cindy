@@ -5218,6 +5218,12 @@
       },
       "gallery": {
         "heading": "템플릿에서 시작"
+      },
+      "capability": {
+        "worktree": "격리 워크트리",
+        "pr": "PR 자동화",
+        "web": "웹 검색",
+        "params": "사용자 지정 가능"
       }
     },
     "projectAutomation": {
@@ -5635,6 +5641,62 @@
         "description": "실행 기록 항목이 제거됩니다. 이 작업은 되돌릴 수 없습니다.",
         "confirm": "삭제",
         "cancel": "취소"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "개발 자동화",
+        "info-radar": "정보 레이더",
+        "office-docs": "문서와 사무"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "야간 자가 복구 테스트",
+          "description": "매일 밤 테스트를 실행하고 실패 항목을 격리 워크트리에서 최소 수정",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR 게이트키퍼",
+          "description": "평일마다 오픈 PR의 새 변경을 사전 리뷰하고 심각도별로 위험 보고",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits since the last run, citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "repo-weekly-report": {
+          "name": "저장소 주간 보고서",
+          "description": "매주 진행 상황과 위험을 정리하고 다음 주 우선순위 제안",
+          "prompt": "Summarize this week's development progress in the repository as a report the team can use directly.\nConstraints:\n- Use commits, PRs, issues, and CI status as evidence; organize by theme instead of listing every commit\n- Clearly list completed, in-progress, and blocked items as well as high-risk changes\n- Suggest priorities for next week and explain the reasoning\n- Where evidence is insufficient, state the gap honestly instead of inventing progress"
+        },
+        "domain-radar": {
+          "name": "관심 분야 레이더",
+          "description": "관심 분야의 최신 동향을 정기 수집해 관점 있는 요약 제공",
+          "prompt": "Collect the latest developments about \"{{topic}}\" since the last run and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "관심 주제",
+              "placeholder": "예: AI 에이전트, 신에너지, 프런트엔드"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "경쟁사 동향 추적",
+          "description": "경쟁사의 제품·시장 동향을 매주 정리하고 영향 분석",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "경쟁사 목록",
+              "placeholder": "예: Notion, Linear, Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "주간 보고서 초안 도우미",
+          "description": "작업 디렉터리의 문서와 산출물로 주간 보고서 초안 생성",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "지식 베이스 신선도 점검",
+          "description": "매월 문서를 점검해 오래된 내용과 모순 찾기",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },

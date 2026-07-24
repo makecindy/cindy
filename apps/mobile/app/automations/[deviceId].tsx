@@ -2082,11 +2082,11 @@ function markRunReadLocally(list: readonly RemoteScheduleRun[], runId: string): 
   return list.map((run) => (run.id === runId ? { ...run, readAt } : run));
 }
 
+// 与 packages/maker-scheduler builtin-templates.ts 的 TEMPLATE_CATEGORIES order 保持一致。
 const TEMPLATE_CATEGORY_RANK: Record<string, number> = {
-  'status-reports': 1,
-  'release-prep': 2,
-  'code-quality': 3,
-  'repo-maintenance': 4,
+  'dev-automation': 1,
+  'info-radar': 2,
+  'office-docs': 3,
 };
 
 function sortTemplatesForMobile(

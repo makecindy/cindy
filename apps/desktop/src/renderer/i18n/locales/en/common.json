@@ -5228,6 +5228,12 @@
       },
       "gallery": {
         "heading": "Start from a template"
+      },
+      "capability": {
+        "worktree": "Isolated worktree",
+        "pr": "PR automation",
+        "web": "Web search",
+        "params": "Customizable"
       }
     },
     "projectAutomation": {
@@ -5645,6 +5651,62 @@
         "description": "The run history entry will be removed. This cannot be undone.",
         "confirm": "Delete",
         "cancel": "Cancel"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "Development automation",
+        "info-radar": "Information radar",
+        "office-docs": "Docs & office work"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "Nightly test self-healing",
+          "description": "Run tests every night and attempt minimal fixes for failures in an isolated worktree",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR gatekeeper",
+          "description": "Pre-review new changes on open PRs each weekday and report risks by severity",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits since the last run, citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "repo-weekly-report": {
+          "name": "Repository weekly report",
+          "description": "Summarize weekly progress and risks, with priority suggestions for next week",
+          "prompt": "Summarize this week's development progress in the repository as a report the team can use directly.\nConstraints:\n- Use commits, PRs, issues, and CI status as evidence; organize by theme instead of listing every commit\n- Clearly list completed, in-progress, and blocked items as well as high-risk changes\n- Suggest priorities for next week and explain the reasoning\n- Where evidence is insufficient, state the gap honestly instead of inventing progress"
+        },
+        "domain-radar": {
+          "name": "Domain radar",
+          "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
+          "prompt": "Collect the latest developments about \"{{topic}}\" since the last run and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "Topic to follow",
+              "placeholder": "e.g. AI agents, EV market, frontend frameworks"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "Competitor watch",
+          "description": "Weekly roundup of competitors' product and market moves, with impact analysis",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "Competitors",
+              "placeholder": "e.g. Notion, Linear, Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "Weekly report drafter",
+          "description": "Compile this week's work from documents in the working directory into a report draft",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "Knowledge base freshness check",
+          "description": "Monthly health check of working-directory docs for outdated or conflicting content",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },

@@ -5218,6 +5218,12 @@
       },
       "gallery": {
         "heading": "テンプレートから開始"
+      },
+      "capability": {
+        "worktree": "分離ワークツリー",
+        "pr": "PR 自動化",
+        "web": "Web 検索",
+        "params": "カスタマイズ可"
       }
     },
     "projectAutomation": {
@@ -5635,6 +5641,62 @@
         "description": "実行履歴のエントリが削除されます。この操作は元に戻せません。",
         "confirm": "削除",
         "cancel": "キャンセル"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "開発自動化",
+        "info-radar": "情報レーダー",
+        "office-docs": "ドキュメントとオフィスワーク"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "夜間セルフヒーリングテスト",
+          "description": "毎晩テストを実行し、失敗項目を分離ワークツリーで最小修正",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR ゲートキーパー",
+          "description": "平日にオープン PR の新規変更を事前レビューし、重大度別にリスクを報告",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits since the last run, citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "repo-weekly-report": {
+          "name": "リポジトリ週報",
+          "description": "週次で進捗とリスクをまとめ、来週の優先度を提案",
+          "prompt": "Summarize this week's development progress in the repository as a report the team can use directly.\nConstraints:\n- Use commits, PRs, issues, and CI status as evidence; organize by theme instead of listing every commit\n- Clearly list completed, in-progress, and blocked items as well as high-risk changes\n- Suggest priorities for next week and explain the reasoning\n- Where evidence is insufficient, state the gap honestly instead of inventing progress"
+        },
+        "domain-radar": {
+          "name": "分野レーダー",
+          "description": "注目分野の最新動向を定期収集し、見解付きサマリーを出力",
+          "prompt": "Collect the latest developments about \"{{topic}}\" since the last run and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "注目テーマ",
+              "placeholder": "例：AI エージェント、新エネルギー、フロントエンド"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "競合ウォッチ",
+          "description": "競合の製品・市場動向を週次でまとめ、自社への影響を分析",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "競合リスト",
+              "placeholder": "例：Notion、Linear、Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "週報ドラフトアシスタント",
+          "description": "作業ディレクトリのドキュメントから今週の作業を整理し、週報ドラフトを生成",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "ナレッジベース鮮度チェック",
+          "description": "毎月ドキュメントを点検し、古い内容や矛盾を洗い出す",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },

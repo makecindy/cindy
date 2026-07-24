@@ -392,6 +392,12 @@ export interface TemplateCategory {
   order: number;
 }
 
+/**
+ * 模板能力标签，desktop 在模板卡片上渲染为能力 chip。
+ * 词表收敛在这里而不是放开 string，让渲染端的图标/文案映射可以被 typecheck 兜住。
+ */
+export type TemplateCapability = 'worktree' | 'pr' | 'web' | 'params';
+
 export interface ScheduleTemplate {
   id: string;
   name: string;
@@ -421,6 +427,8 @@ export interface ScheduleTemplate {
   notify?: ScheduleNotifyConfig;
 
   parameters?: TemplateParameter[];
+  /** 能力标签（隔离工作区 / PR 自动化 / Web 搜索 / 可自定义），仅影响展示。 */
+  capabilities?: TemplateCapability[];
 
   createdAt?: number;
   updatedAt?: number;
