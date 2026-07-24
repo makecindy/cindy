@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractRolloutUpdatePlanFunctionCallEvent,
   newCodexRuntimeState,
+  translateAgentMessageDelta,
   translateErrorNotification,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
@@ -389,6 +390,44 @@ describe('translateItemNotification contextCompaction', () => {
         data: expect.objectContaining({ boundaryId: 'compact-item-1' }),
       }),
     ]);
+  });
+});
+
+describe('translateAgentMessageDelta', () => {
+  it('streams deltas, deduplicates a later full update, and keeps final calibration', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateAgentMessageDelta({
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'message-1',
+      delta: 'Hello',
+    }, q, ctx);
+    translateAgentMessageDelta({
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'message-1',
+      delta: ' world',
+    }, q, ctx);
+    translateItemNotification('updated', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { type: 'agentMessage', id: 'message-1', text: 'Hello world' },
+    }, q, ctx);
+    translateItemNotification('completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { type: 'agentMessage', id: 'message-1', text: 'Hello world' },
+    }, q, ctx);
+
+    expect(await collect(q)).toEqual([
+      expect.objectContaining({ type: 'text', data: { text: 'Hello', isFinal: false } }),
+      expect.objectContaining({ type: 'text', data: { text: ' world', isFinal: false } }),
+      expect.objectContaining({ type: 'text', data: { text: 'Hello world', isFinal: true } }),
+    ]);
+    expect(rt.itemTextLen.has('message-1')).toBe(false);
   });
 });
 

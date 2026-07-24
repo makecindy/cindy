@@ -34,6 +34,7 @@ import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { isNetworkishErrorMessage } from '../shared/network-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import type {
+  AgentMessageDeltaNotification,
   ItemCompletedNotification,
   ItemStartedNotification,
   ItemUpdatedNotification,
@@ -518,8 +519,8 @@ interface ContextCompactionItem {
 }
 
 // ── agentMessage → text {isFinal} ───────────────────────────────────────────
-// item.started / item.updated 出 delta (isFinal=false), item.completed 出 final 全文。
-// Phase 1 没订阅 item/agentMessage/delta, 增量靠 item.updated 的 text 全量字段算 diff。
+// Dedicated delta notifications stream text; item.updated remains a full-snapshot fallback.
+// item.completed emits the authoritative final text so renderers can calibrate the stream.
 
 function handleAgentMessage(
   phase: ItemPhase,
@@ -546,6 +547,21 @@ function handleAgentMessage(
   queue.push({
     type: 'text',
     data: { text: delta, isFinal: false },
+    source: 'codex',
+  });
+}
+
+export function translateAgentMessageDelta(
+  params: AgentMessageDeltaNotification['params'],
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  if (!params.delta) return;
+  const prevLen = ctx.rt.itemTextLen.get(params.itemId) ?? 0;
+  ctx.rt.itemTextLen.set(params.itemId, prevLen + params.delta.length);
+  queue.push({
+    type: 'text',
+    data: { text: params.delta, isFinal: false },
     source: 'codex',
   });
 }

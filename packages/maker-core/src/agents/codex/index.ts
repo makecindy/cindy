@@ -78,6 +78,7 @@ import { commandExecutionDisplayInput } from './command-display.js';
 import {
   newCodexRuntimeState,
   translateErrorNotification,
+  translateAgentMessageDelta,
   translateItemNotification,
   translateReasoningSummaryTextDelta,
   translateReasoningSummaryPartAdded,
@@ -3620,6 +3621,10 @@ export class CodexAgent extends BaseAgent {
         // item 完成后, 若 turn 仍在跑, 先回到 'Generating...' 兜底 — 下一条 item 起来会再覆盖。
         // turn/completed 在 turn 结束时会 push 'Done' 终态, 不需要在这里特判。
         if (isTurnInFlight) pushStatus('Generating...');
+      },
+      agentMessageDelta: (params) => {
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        translateAgentMessageDelta(params, eventQueue, { rt: translatorRt, log });
       },
       turnPlanUpdated: (params) => {
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
