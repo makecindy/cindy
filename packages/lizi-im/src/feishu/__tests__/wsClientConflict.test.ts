@@ -22,6 +22,8 @@ interface MockSdkOptions {
   onError?: (error: Error) => void;
 }
 
+type EventHandler = (data: unknown) => Promise<unknown> | unknown;
+
 const mocks = {
   options: [] as MockSdkOptions[],
   start: vi.fn(async () => undefined),
@@ -30,9 +32,10 @@ const mocks = {
   unbindClient: vi.fn(),
   getBoundClient: vi.fn(() => null),
   sendText: vi.fn(),
-  firstAllowed: vi.fn(() => null),
+  firstAllowed: vi.fn<() => string | null>(() => null),
   checkOwner: vi.fn(() => true),
   tryClaimOwner: vi.fn(() => false),
+  eventHandlers: {} as Record<string, EventHandler>,
   log: {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -53,7 +56,8 @@ vi.doMock('@larksuiteoapi/node-sdk', () => ({
     }
   },
   EventDispatcher: class {
-    register(): this {
+    register(handlers: Record<string, EventHandler>): this {
+      mocks.eventHandlers = handlers;
       return this;
     }
   },
@@ -98,6 +102,7 @@ function latestClient() {
 beforeEach(async () => {
   await wsClient.stop({ announceOffline: false, reason: 'test-reset' });
   mocks.options.length = 0;
+  mocks.eventHandlers = {};
   vi.clearAllMocks();
 });
 
@@ -175,5 +180,44 @@ describe('Feishu WebSocket conflict handling', () => {
     await expect(connecting).resolves.toBe('conflict');
     expect(wsClient.getCurrentStatus()).toBe('conflict');
     expect(sdkClient.close).toHaveBeenCalledWith({ force: true });
+  });
+});
+
+describe('Feishu owner binding updates', () => {
+  it('emits the claimed owner after the first valid p2p message', async () => {
+    mocks.tryClaimOwner.mockReturnValueOnce(true);
+    mocks.firstAllowed.mockReturnValueOnce(null).mockReturnValue('ou_new_owner');
+    mocks.sendText.mockResolvedValueOnce({ messageId: 'welcome-message' });
+    const onStatus = vi.fn();
+
+    try {
+      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      latestClient().options.onReady?.();
+      await expect(connecting).resolves.toBe('connected');
+      feishuEvents.on('status', onStatus);
+
+      const handleMessage = mocks.eventHandlers['im.message.receive_v1'];
+      expect(handleMessage).toBeDefined();
+      await handleMessage?.({
+        sender: { sender_id: { open_id: 'ou_new_owner' } },
+        message: {
+          message_id: 'om_first',
+          chat_id: 'oc_owner_chat',
+          chat_type: 'p2p',
+          message_type: 'text',
+          content: JSON.stringify({ text: 'hello' }),
+        },
+      });
+
+      expect(onStatus).toHaveBeenCalledOnce();
+      expect(onStatus).toHaveBeenCalledWith({
+        status: 'connected',
+        error: undefined,
+        botAppId: credentials.appId,
+        ownerOpenId: 'ou_new_owner',
+      });
+    } finally {
+      feishuEvents.off('status', onStatus);
+    }
   });
 });

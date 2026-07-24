@@ -1535,6 +1535,7 @@ interface ElectronAPI {
         status: FeishuBotStatus;
         error?: string;
         botAppId: string | null;
+        ownerOpenId: string | null;
       }) => void,
     ) => () => void;
     onConflict: (callback: (payload: { appId: string }) => void) => () => void;

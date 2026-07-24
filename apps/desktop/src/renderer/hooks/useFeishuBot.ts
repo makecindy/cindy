@@ -142,11 +142,13 @@ export function useFeishuBot(): UseFeishuBotReturn {
     const unsub = window.electronAPI.feishuBot.onStatusChange((update) => {
       setStatus(update.status);
       setErrorMessage(update.error ?? null);
+      setOwnerOpenId(update.ownerOpenId);
       if (cachedState) {
         cachedState = {
           ...cachedState,
           status: update.status,
           errorMessage: update.error ?? null,
+          ownerOpenId: update.ownerOpenId,
         };
       }
     });

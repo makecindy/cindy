@@ -60,9 +60,18 @@ let pendingOfflineNotice = false;
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
 export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
 
+function emitRendererStatus(error?: string): void {
+  feishuEvents.emit('status', {
+    status: currentStatus,
+    error,
+    botAppId: currentBotAppId,
+    ownerOpenId: ownerGuard.firstAllowed(),
+  });
+}
+
 function setStatus(status: FeishuConnectionStatus, error?: string): void {
   currentStatus = status;
-  feishuEvents.emit('status', { status, error, botAppId: currentBotAppId });
+  emitRendererStatus(error);
   // Also broadcast public IMStatus to host orchestrator subscribers
   feishuEvents.emit('imStatus', toImStatus(status, error));
 }
@@ -515,6 +524,7 @@ async function handleIncomingMessage(
   // processing this very message (so the user's first ask isn't lost).
   if (ownerGuard.tryClaimOwner(senderOpenId)) {
     log.info(`[feishu/wsClient] TOFU: claimed owner ...${senderOpenId.slice(-8)}`);
+    emitRendererStatus();
     try {
       await outbound.sendText(senderOpenId, transportMessages.ownerBinding.welcome);
     } catch (err) {

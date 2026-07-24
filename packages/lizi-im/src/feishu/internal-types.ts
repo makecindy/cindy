@@ -18,6 +18,7 @@ export interface FeishuStatusUpdate {
   status: FeishuConnectionStatus;
   error?: string;
   botAppId: string | null;
+  ownerOpenId: string | null;
 }
 
 export type ConnectVerdict =
