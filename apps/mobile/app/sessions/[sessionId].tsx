@@ -315,6 +315,7 @@ import {
 import {
   resolveMobileVoiceRecordingPermission,
   shouldCancelMobileVoiceForBackground,
+  waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
@@ -1130,6 +1131,7 @@ export default function SessionScreen() {
   const voiceRecordingActiveRef = useRef(false);
   const voicePermissionRequestInFlightRef = useRef(false);
   const voicePermissionRequestSeqRef = useRef(0);
+  const voicePermissionRequestAbortRef = useRef<AbortController | null>(null);
   const voiceStartupInFlightRef = useRef(false);
   // Increments whenever a startup is superseded (screen unmount / session
   // switch). startVoiceRecording re-checks it after each await so a startup
@@ -3350,7 +3352,9 @@ export default function SessionScreen() {
     setVoiceReleaseToSendActive(false);
     let claimedPrewarm: PrewarmedMobileVoiceAsr | null = null;
     let permissionRequestSeq: number | null = null;
+    let permissionRequestAbortController: AbortController | null = null;
     let startupSeq: number | null = null;
+    let audioModeEnabled = false;
     // The controller THIS startup created. Stale-teardown paths must only touch
     // this one: by the time a superseded continuation resumes, the shared ref
     // may already point at a newer session's live recording. Read through the
@@ -3370,6 +3374,9 @@ export default function SessionScreen() {
       }
       permissionRequestSeq = voicePermissionRequestSeqRef.current + 1;
       voicePermissionRequestSeqRef.current = permissionRequestSeq;
+      const currentPermissionAbortController = new AbortController();
+      permissionRequestAbortController = currentPermissionAbortController;
+      voicePermissionRequestAbortRef.current = currentPermissionAbortController;
       voicePermissionRequestInFlightRef.current = true;
       let permissionResult;
       try {
@@ -3378,10 +3385,21 @@ export default function SessionScreen() {
           requestPermission: requestRecordingPermissionsAsync,
           isRequestCurrent: () => voicePermissionRequestSeqRef.current === permissionRequestSeq,
           isAppActive: () => AppState.currentState === 'active',
+          waitForAppActive: () => waitForMobileVoiceAppActive({
+            isAppActive: () => AppState.currentState === 'active',
+            subscribe: (listener) => {
+              const subscription = AppState.addEventListener('change', listener);
+              return () => subscription.remove();
+            },
+            signal: currentPermissionAbortController.signal,
+          }),
         });
       } finally {
         if (voicePermissionRequestSeqRef.current === permissionRequestSeq) {
           voicePermissionRequestInFlightRef.current = false;
+        }
+        if (voicePermissionRequestAbortRef.current === permissionRequestAbortController) {
+          voicePermissionRequestAbortRef.current = null;
         }
       }
       if (permissionResult === 'cancelled') return;
@@ -3399,6 +3417,7 @@ export default function SessionScreen() {
         allowsRecording: true,
         playsInSilentMode: true,
       });
+      audioModeEnabled = true;
       // Open the device link in the background: voice dictation writes into the
       // local composer via the cloud ASR proxy and does not need the mobile↔desktop
       // link (only submitting the composed message later does). Awaiting it used
@@ -3511,7 +3530,8 @@ export default function SessionScreen() {
       // controller's own teardown is harmless — provider stop is idempotent.
       void claimedPrewarm?.asr.stop().catch(() => undefined);
       if (
-        permissionRequestSeq !== null
+        startupSeq === null
+        && permissionRequestSeq !== null
         && voicePermissionRequestSeqRef.current !== permissionRequestSeq
       ) return;
       if (startupSeq !== null && voiceStartupSeqRef.current !== startupSeq) {
@@ -3521,8 +3541,17 @@ export default function SessionScreen() {
         if (created) {
           if (voiceControllerSessionRef.current === created) {
             voiceControllerSessionRef.current = null;
+            voiceRecordingActiveRef.current = false;
           }
           await created.cancel().catch(() => undefined);
+        }
+        if (
+          audioModeEnabled
+          && !voiceControllerSessionRef.current
+          && !voiceStartupInFlightRef.current
+          && !voiceRecordingActiveRef.current
+        ) {
+          await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
         }
         return;
       }
@@ -3590,6 +3619,8 @@ export default function SessionScreen() {
       // Supersede any in-flight startup so its post-await re-checks tear down
       // the resources it acquired for this now-dead screen.
       voicePermissionRequestSeqRef.current += 1;
+      voicePermissionRequestAbortRef.current?.abort();
+      voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;

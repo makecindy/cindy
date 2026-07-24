@@ -2,14 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   resolveMobileVoiceRecordingPermission,
   shouldCancelMobileVoiceForBackground,
+  waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
 
-function deferredPermission(): {
-  promise: Promise<{ granted: boolean }>;
-  resolve: (permission: { granted: boolean }) => void;
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
 } {
-  let resolve!: (permission: { granted: boolean }) => void;
-  const promise = new Promise<{ granted: boolean }>((settle) => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
     resolve = settle;
   });
   return { promise, resolve };
@@ -24,18 +25,21 @@ describe('mobileVoiceStartup', () => {
       requestPermission,
       isRequestCurrent: () => true,
       isAppActive: () => true,
+      waitForAppActive: async () => true,
     })).resolves.toBe('granted');
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
-  it('survives Android background/active transitions caused by the first permission prompt', async () => {
-    const pendingPermission = deferredPermission();
+  it('waits for Android to publish active after the first permission prompt resolves', async () => {
+    const pendingPermission = deferred<{ granted: boolean }>();
+    const pendingForeground = deferred<boolean>();
     let appActive = true;
     const result = resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: false }),
       requestPermission: () => pendingPermission.promise,
       isRequestCurrent: () => true,
       isAppActive: () => appActive,
+      waitForAppActive: () => pendingForeground.promise,
     });
 
     await Promise.resolve();
@@ -47,8 +51,16 @@ describe('mobileVoiceStartup', () => {
       hasController: false,
     })).toBe(false);
 
-    appActive = true;
     pendingPermission.resolve({ granted: true });
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    appActive = true;
+    pendingForeground.resolve(true);
     await expect(result).resolves.toBe('granted');
   });
 
@@ -58,16 +70,20 @@ describe('mobileVoiceStartup', () => {
       requestPermission: async () => ({ granted: false }),
       isRequestCurrent: () => true,
       isAppActive: () => true,
+      waitForAppActive: async () => true,
     })).resolves.toBe('denied');
   });
 
-  it('does not start recording while the app is genuinely backgrounded', async () => {
+  it('cancels an already-granted request that genuinely backgrounds', async () => {
+    const waitForAppActive = vi.fn(async () => true);
     await expect(resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: true }),
       requestPermission: async () => ({ granted: true }),
       isRequestCurrent: () => true,
       isAppActive: () => false,
+      waitForAppActive,
     })).resolves.toBe('cancelled');
+    expect(waitForAppActive).not.toHaveBeenCalled();
     expect(shouldCancelMobileVoiceForBackground({
       permissionRequestInFlight: false,
       startupInFlight: true,
@@ -77,18 +93,38 @@ describe('mobileVoiceStartup', () => {
   });
 
   it('cancels a granted request when the screen is superseded while the prompt is open', async () => {
-    const pendingPermission = deferredPermission();
+    const pendingPermission = deferred<{ granted: boolean }>();
     let requestCurrent = true;
     const result = resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: false }),
       requestPermission: () => pendingPermission.promise,
       isRequestCurrent: () => requestCurrent,
       isAppActive: () => true,
+      waitForAppActive: async () => true,
     });
 
     await Promise.resolve();
     requestCurrent = false;
     pendingPermission.resolve({ granted: true });
     await expect(result).resolves.toBe('cancelled');
+  });
+
+  it('removes the foreground listener when a waiting screen is superseded', async () => {
+    let appStateListener: ((state: string) => void) | null = null;
+    const unsubscribe = vi.fn();
+    const abortController = new AbortController();
+    const result = waitForMobileVoiceAppActive({
+      isAppActive: () => false,
+      subscribe: (listener) => {
+        appStateListener = listener;
+        return unsubscribe;
+      },
+      signal: abortController.signal,
+    });
+
+    expect(appStateListener).not.toBeNull();
+    abortController.abort();
+    await expect(result).resolves.toBe(false);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
