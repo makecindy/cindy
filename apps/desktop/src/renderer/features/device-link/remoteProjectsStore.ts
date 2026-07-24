@@ -10,8 +10,8 @@
  *    让 All Sessions 稳定;明确撤销 / 关闭控制 / 删除才移除。**不做任何乐观预测 / 本地覆盖**——
  *    视图 = f(bootstrap snapshot + 被控端 push 流):
  *      · snapshot(`setDeviceSessions`):listing tier 订阅后拉一次有界列表 / reconnect 重拉。
- *      · anti-entropy(`mergeDeviceSessions`):周期有界列表只更新命中行并保留窗口外会话，
- *        避免把 limit 之外仍有效的会话误当成已删除。
+ *      · anti-entropy(`mergeDeviceSessions`):周期满窗口列表先更新命中行并保留窗口外会话，
+ *        再由 refresh 层有界补查缺席 id 的终态；未满窗口则可直接安全替换。
  *      · 增量(`applyPatch`):收到被控端 `local-db:sessions:patched` push 时就地幂等合并;
  *        status=deleted/archived → 移出分片;落到未知 session → 丢弃(后续 snapshot 带最终态)。
  *      · 新建(`requestRemoteReseed`):`sessions:created` push 无 row 数据 → 触发该设备重拉。
@@ -174,8 +174,8 @@ const actions = {
 
   /**
    * 合并一份有界会话快照。周期 anti-entropy 只拿最近 LIST_LIMIT 条 + 旧置顶，响应缺席
-   * 不能证明窗口外会话已归档/删除；因此命中行用权威值替换，未命中行继续保留并等待 push
-   * 收口。首次无分片时等价于 setDeviceSessions。
+   * 不能证明窗口外会话已归档/删除；因此命中行用权威值替换，未命中行先保留，再由 refresh
+   * 层有界补查终态。首次无分片时等价于 setDeviceSessions。
    */
   mergeDeviceSessions(deviceId: string, deviceName: string, rawSessions: readonly Session[]): void {
     const existing = shards.get(deviceId);
@@ -303,6 +303,11 @@ const actions = {
   /** 侧边栏合并点用:当前所有远端会话的扁平列表(引用稳定)。 */
   getMergedRemoteSessions(): Session[] {
     return mergedSnapshot;
+  },
+
+  /** refresh anti-entropy 用:取某设备当前缓存分片，调用方只读。 */
+  getDeviceSessions(deviceId: string): readonly Session[] {
+    return shards.get(deviceId)?.sessions ?? EMPTY;
   },
 
   /**

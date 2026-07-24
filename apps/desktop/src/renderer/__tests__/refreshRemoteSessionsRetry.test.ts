@@ -149,11 +149,16 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
   it('周期有界快照更新命中行但保留 200 条窗口外的有效会话', async () => {
     const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) =>
+      session(`recent-${index}`, { title: index === 0 ? 'new' : undefined }),
+    );
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [
-      session('recent', { title: 'old' }),
+      session('recent-0', { title: 'old' }),
       session('outside-window'),
     ]);
-    invoke.mockResolvedValueOnce([session('recent', { title: 'new' })]);
+    invoke
+      .mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce(session('outside-window', { status: 'active' }));
 
     await refreshRemoteDeviceSessions(d, 'Mac B', {
       sleep: noSleep,
@@ -161,8 +166,66 @@ describe('refreshRemoteDeviceSessions retry', () => {
     });
 
     const merged = remoteProjectsStore.getMergedRemoteSessions();
-    expect(merged.map((s) => s.id)).toEqual(['recent', 'outside-window']);
+    expect(merged).toHaveLength(201);
+    expect(merged.map((s) => s.id)).toContain('outside-window');
     expect(merged[0].title).toBe('new');
+    expect(invoke).toHaveBeenNthCalledWith(2, d, 'local-db:sessions:get', ['outside-window']);
+  });
+
+  it('周期快照未满 200 条时视为完整 active 集合并清理缺席行', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [
+      session('fresh'),
+      session('stale-archived'),
+    ]);
+    invoke.mockResolvedValueOnce([session('fresh')]);
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('周期满窗口用既有 sessions:get 有界补查并清理已归档的窗口外行', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('stale-archived')]);
+    invoke
+      .mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce(session('stale-archived', { status: 'archived' }));
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(200);
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).not.toContain(
+      'stale-archived',
+    );
+  });
+
+  it('周期满窗口每轮最多补查 8 个缺席缓存 id', async () => {
+    const d = did();
+    const recent = Array.from({ length: 200 }, (_, index) => session(`recent-${index}`));
+    const outside = Array.from({ length: 12 }, (_, index) => session(`outside-${index}`));
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', outside);
+    invoke.mockImplementation(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:list') return recent;
+      return session(String(args[0]), { status: 'active' });
+    });
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    const probes = invoke.mock.calls.filter(([, channel]) => channel === 'local-db:sessions:get');
+    expect(probes).toHaveLength(8);
+    expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(212);
   });
 
   it('同设备并发重拉合并为单飞执行,期间新触发只补跑一次', async () => {
@@ -175,6 +238,28 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
+  });
+
+  it('慢周期 merge 在途时忽略后续周期 tick，不 bump epoch 自取消', async () => {
+    const d = did();
+    const snapshot = deferred<Session[]>();
+    invoke.mockReturnValueOnce(snapshot.promise);
+
+    const first = refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+    const second = refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    snapshot.resolve([session('slow-but-valid')]);
+    await expect(Promise.all([first, second])).resolves.toEqual(['ok', 'ok']);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual([
+      'slow-but-valid',
+    ]);
   });
 
   it('同设备补跑排队时立即作废当前 snapshot,避免旧结果短暂覆盖 push 状态', async () => {
@@ -224,16 +309,11 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
   });
 
-  it('周期 merge 排在正常 refresh 后时不能降级 replace 语义', async () => {
+  it('正常 refresh 在途时周期 merge 直接复用，不补跑也不降级 replace 语义', async () => {
     const d = did();
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
     const bootstrapSnapshot = deferred<Session[]>();
-    const periodicSnapshot = deferred<Session[]>();
-    const periodicStarted = deferred<void>();
-    invoke.mockReturnValueOnce(bootstrapSnapshot.promise).mockImplementationOnce(() => {
-      periodicStarted.resolve();
-      return periodicSnapshot.promise;
-    });
+    invoke.mockReturnValueOnce(bootstrapSnapshot.promise);
 
     const bootstrap = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
     const periodic = refreshRemoteDeviceSessions(d, 'Mac B', {
@@ -241,11 +321,10 @@ describe('refreshRemoteDeviceSessions retry', () => {
       snapshotMode: 'merge',
     });
 
-    bootstrapSnapshot.resolve([session('stale')]);
-    await periodicStarted.promise;
-    periodicSnapshot.resolve([session('fresh')]);
+    bootstrapSnapshot.resolve([session('fresh')]);
 
     await expect(Promise.all([bootstrap, periodic])).resolves.toEqual(['ok', 'ok']);
+    expect(invoke).toHaveBeenCalledTimes(1);
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
   });
 });

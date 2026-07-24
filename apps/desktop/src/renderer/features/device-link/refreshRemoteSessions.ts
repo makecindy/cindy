@@ -17,12 +17,16 @@
 
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectsStore } from './remoteProjectsStore';
 
 const log = createLogger('device-link-refresh');
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
 const LIST_LIMIT = 200;
+
+/** 满窗口时每轮最多补查多少个缺席缓存 id，避免退化成无界 N+1。 */
+const MISSING_STATUS_PROBE_LIMIT = 8;
 
 /** 默认重试次数(含首次):退避 250→500→1000→2000→3000ms,总窗口 ~6.75s,覆盖被控端冷启动迁移。 */
 const DEFAULT_MAX_ATTEMPTS = 6;
@@ -98,9 +102,13 @@ export async function refreshRemoteDeviceSessions(
 ): Promise<RefreshResult> {
   const existing = refreshTasks.get(deviceId);
   if (existing) {
+    const requestedSnapshotMode = opts.snapshotMode ?? 'replace';
+    // periodic merge 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
+    // 都 bump epoch 让慢请求自取消。bootstrap/reseed 的 replace 仍走下方强语义补跑。
+    if (requestedSnapshotMode === 'merge') return existing.promise;
+
     existing.rerun = true;
     existing.name = name ?? existing.name;
-    const requestedSnapshotMode = opts.snapshotMode ?? 'replace';
     existing.opts = {
       ...existing.opts,
       ...opts,
@@ -141,6 +149,54 @@ async function drainRefreshTask(deviceId: string, task: RefreshTask): Promise<Re
   return result;
 }
 
+async function probeMissingSessionStatuses(
+  deviceId: string,
+  epoch: number,
+  missingSessionIds: readonly string[],
+): Promise<void> {
+  if (missingSessionIds.length === 0) return;
+  // epoch 每轮递增，用它旋转候选起点；满窗口外有很多有效会话时，不会永远只检查前几个。
+  const count = Math.min(MISSING_STATUS_PROBE_LIMIT, missingSessionIds.length);
+  const start = epoch % missingSessionIds.length;
+  const candidates = Array.from(
+    { length: count },
+    (_, index) => missingSessionIds[(start + index) % missingSessionIds.length],
+  );
+  const results = await Promise.all(
+    candidates.map(async (sessionId) => {
+      try {
+        const value = await window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'local-db:sessions:get',
+          [sessionId],
+        );
+        return { sessionId, value };
+      } catch (error) {
+        return { sessionId, errorCode: extractIpcError(error)?.code };
+      }
+    }),
+  );
+  // 更强的 refresh / remove / disconnect 已使本轮失效时，不应用迟到的补查结果。
+  if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return;
+  for (const result of results) {
+    if (result.errorCode === 'NOT_FOUND') {
+      remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
+      continue;
+    }
+    if (!result.value || typeof result.value !== 'object') continue;
+    const session = result.value as Partial<Session>;
+    if (
+      session.id === result.sessionId &&
+      (session.status === 'archived' || session.status === 'deleted')
+    ) {
+      remoteProjectsStore.applyPatch(deviceId, result.sessionId, {
+        status: session.status,
+        updatedAt: session.updatedAt,
+      });
+    }
+  }
+}
+
 async function runRefreshRemoteDeviceSessions(
   deviceId: string,
   name?: string,
@@ -164,7 +220,20 @@ async function runRefreshRemoteDeviceSessions(
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'gave-up';
       if (Array.isArray(list)) {
         if (opts.snapshotMode === 'merge') {
-          remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, list as Session[]);
+          const sessions = list as Session[];
+          // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace 并清掉缺席的归档/删除行。
+          // 满窗口时先 merge，再用既有只读 sessions:get 有界轮询窗口外缓存 id 的终态。
+          if (sessions.length < LIST_LIMIT) {
+            remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
+          } else {
+            const incomingIds = new Set(sessions.map((session) => session.id));
+            const missingSessionIds = remoteProjectsStore
+              .getDeviceSessions(deviceId)
+              .filter((session) => !incomingIds.has(session.id))
+              .map((session) => session.id);
+            remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions);
+            await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
+          }
         } else {
           remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
         }
