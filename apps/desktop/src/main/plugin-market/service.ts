@@ -272,12 +272,24 @@ export class PluginMarketService {
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
       );
       if (!record) throw new Error('该市场 Plugin 未安装');
+      const installSubject = defaultInstallSubject(owner);
       requireSameMarketOwner(owner);
       await uninstallGhostAndCleanup(record.ghostId, { skipMarketLedger: true });
-      requireSameMarketOwner(owner);
-      await this.withLedgerMutation(owner, () => {
-        ledger.markRemoved(record.ghostId, defaultInstallSubject(owner));
-      });
+      // The package removal is already complete at this point. The session may
+      // have changed while the runtime was stopping, so ledger reconciliation
+      // must not turn a successful uninstall into an IPC failure. The ledger
+      // instance is bound to the original owner's path, and the write is
+      // serialized separately from the active-session check.
+      try {
+        await this.withCapturedLedgerMutation(ledger, () => {
+          ledger.markRemoved(record.ghostId, installSubject);
+        });
+      } catch (error) {
+        log.warn('market uninstall ledger reconciliation deferred', {
+          ghostId: record.ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return { ok: true };
     });
   }
@@ -547,6 +559,25 @@ export class PluginMarketService {
   ): Promise<T> {
     const current = this.ledgerMutation.then(() => {
       requireSameMarketOwner(owner);
+      return operation();
+    });
+    this.ledgerMutation = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
+  }
+
+  /**
+   * Serializes a ledger mutation against other operations without resolving
+   * the ledger path from the current session. Callers that use this directly
+   * must pass a ledger already bound to the operation's original owner.
+   */
+  private withCapturedLedgerMutation<T>(
+    _ledger: PluginMarketLedger,
+    operation: () => T | Promise<T>,
+  ): Promise<T> {
+    const current = this.ledgerMutation.then(() => {
       return operation();
     });
     this.ledgerMutation = current.then(

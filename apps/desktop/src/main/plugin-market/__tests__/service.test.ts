@@ -592,6 +592,34 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
     expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
   });
+
+  it('reports a successful market uninstall when the owner changes during cleanup', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+    runtime.ghosts = [
+      {
+        manifest: manifest(),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      },
+    ];
+    runtime.uninstall.mockImplementationOnce(async () => {
+      runtime.session = {
+        mode: 'cloud',
+        dataOwnerId: 'user-2',
+        generation: 2,
+      };
+      runtime.ghosts = [];
+    });
+
+    await expect(h.service.uninstall(item.id)).resolves.toEqual({ ok: true });
+    expect(runtime.uninstall).toHaveBeenCalledWith(item.ghostId, {
+      skipMarketLedger: true,
+    });
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
+  });
 });
 
 function recordForTest(item: VisiblePluginSummary) {
