@@ -206,12 +206,18 @@ describe('serverApiFetch', () => {
     expect(logged).not.toContain('PROVIDER_PRIVATE_FAILURE');
     expect(logged).not.toContain('merchant private response body');
     expect(logged).not.toContain('private detail');
+    expect(logged).not.toContain('order-1');
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       'serverApiFetch.redacted_not_ok',
-      'path=/api/billing/orders/order-1',
+      'path=/api/billing/orders',
       'method=GET',
       'status=502',
       'code=INTERNAL_ERROR',
+    );
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_network_error',
+      'path=/api/billing/orders',
+      'method=GET',
     );
   });
 });

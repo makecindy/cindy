@@ -16,6 +16,12 @@ import { createLogger } from './logger';
 
 const log = createLogger('serverApiClient');
 
+function redactedLogPath(apiPath: string): string {
+  const pathname = apiPath.split(/[?#]/, 1)[0];
+  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
+  return segments.length > 0 ? `/${segments.join('/')}` : '/';
+}
+
 export class ServerApiError extends Error {
   constructor(
     public readonly code: string,
@@ -84,7 +90,11 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     return { ok: response.ok, status: response.status, data };
   } catch (err) {
     if (opts.redactErrorDetails) {
-      log.error('serverApiFetch.redacted_network_error', 'path=' + apiPath, 'method=' + method);
+      log.error(
+        'serverApiFetch.redacted_network_error',
+        'path=' + redactedLogPath(apiPath),
+        'method=' + method,
+      );
     } else {
       log.error('fetch failed', apiPath, err);
     }
@@ -135,7 +145,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     if (opts.redactErrorDetails) {
       log.warn(
         'serverApiFetch.redacted_not_ok',
-        'path=' + apiPath,
+        'path=' + redactedLogPath(apiPath),
         'method=' + (opts.method ?? 'GET'),
         'status=' + result.status,
         'code=' + statusToCode(result.status),

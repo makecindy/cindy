@@ -78,7 +78,8 @@ function isRecoverableTopup(value: {
   paymentAction: { expiresAt: string } | null;
 }): boolean {
   return (
-    ((value.status === 'CREATED' || value.status === 'PENDING') && value.paymentAction !== null) ||
+    value.status === 'CREATED' ||
+    value.status === 'PENDING' ||
     (value.status === 'SUCCEEDED' && value.fulfillmentStatus !== 'SUCCEEDED')
   );
 }

@@ -103,6 +103,21 @@ describe('billing checkout phase projection', () => {
     ).toBe(true);
   });
 
+  it('keeps pending top-ups recoverable before a payment action is projected', () => {
+    expect(
+      isRecoverableTopup({
+        status: 'CREATED',
+        paymentAction: null,
+      }),
+    ).toBe(true);
+    expect(
+      isRecoverableTopup({
+        status: 'PENDING',
+        paymentAction: null,
+      }),
+    ).toBe(true);
+  });
+
   it('keeps paid but unfulfilled top-ups recoverable without a payment action', () => {
     expect(
       isRecoverableTopup({
