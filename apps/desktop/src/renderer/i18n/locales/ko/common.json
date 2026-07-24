@@ -3889,6 +3889,29 @@
       "saveEdit": "텍스트 저장"
     }
   },
+  "onboarding": {
+    "connectProvider": {
+      "title": "모델 제공업체를 연결하고 시작하세요",
+      "desc": "아직 사용 가능한 모델이 없습니다. 제공업체를 연결하면 대화를 시작할 수 있습니다.",
+      "recommendedLabel": "추천",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "공식 서비스 · 전체 모델 · Claude Code / Codex 지원",
+        "loginTitle": "Cindy 로그인",
+        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다"
+      },
+      "othersToggle": "기타 제공업체 ({{count}})",
+      "presetSub": "API 키로 연결",
+      "dismiss": "나중에",
+      "haveApiKey": "API 키가 있어요",
+      "banner": {
+        "text": "사용 가능한 모델이 없습니다. 제공업체를 연결하면 대화할 수 있습니다.",
+        "connectCta": "제공업체 연결",
+        "loginCta": "Cindy 로그인",
+        "dismissAria": "닫기"
+      }
+    }
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "음성 입력 중",

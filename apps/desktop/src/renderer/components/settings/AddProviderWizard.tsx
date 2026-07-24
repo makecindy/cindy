@@ -31,11 +31,14 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { sortPresetsForLocale } from '@cindy/model-providers';
 import type { AgentKind, CustomProviderConfig, ProviderPreset, ProviderView } from '@cindy/model-providers';
 
-/** 外部直达入口(左栏检测建议点击):直接进入该内置渠道的授权步。 */
-export interface WizardEntry {
-  kind: 'builtin';
-  providerId: string;
-}
+/**
+ * 外部直达入口:
+ *   - builtin(左栏检测建议 / 引导卡 OAuth 行):直接进入该内置渠道的授权步。
+ *   - preset(引导卡「其他供应商」行):presets 异步载入后直达该预设的表单步。
+ */
+export type WizardEntry =
+  | { kind: 'builtin'; providerId: string }
+  | { kind: 'preset'; presetId: string };
 
 interface AddProviderWizardProps {
   providers: ProviderView[];
@@ -178,8 +181,9 @@ export function AddProviderWizard({
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [query, setQuery] = useState('');
-  // entry(左栏检测建议直达):目录里找得到该渠道才直达授权步,否则回落目录页。
-  const entryProvider = entry ? providers.find((x) => x.id === entry.providerId) : undefined;
+  // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
+  const entryProvider =
+    entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
   const [sel, setSel] = useState<Selection | null>(() =>
     entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
   );
@@ -260,6 +264,16 @@ export function AddProviderWizard({
     setApiKey('');
     setStep(2);
   }, []);
+
+  // entry(preset 直达):presets 异步载入,到位后一次性消费;找不到该预设则留在目录页。
+  const presetEntryConsumedRef = useRef(false);
+  useEffect(() => {
+    if (entry?.kind !== 'preset' || presetEntryConsumedRef.current) return;
+    if (presets.length === 0) return;
+    presetEntryConsumedRef.current = true;
+    const preset = presets.find((p) => p.id === entry.presetId);
+    if (preset) pickPreset(preset);
+  }, [entry, presets, pickPreset]);
 
   /**
    * 本向导内是否发起过 OpenAI 登录。codexAuth 反映的是整机 ChatGPT 凭证,不含

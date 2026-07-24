@@ -3889,6 +3889,29 @@
       "saveEdit": "テキストを保存"
     }
   },
+  "onboarding": {
+    "connectProvider": {
+      "title": "モデルプロバイダーに接続して始めましょう",
+      "desc": "利用可能なモデルがまだありません。プロバイダーを接続すると会話を始められます。",
+      "recommendedLabel": "おすすめ",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "公式サービス · 全モデル · Claude Code / Codex 対応",
+        "loginTitle": "Cindy にサインイン",
+        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます"
+      },
+      "othersToggle": "その他のプロバイダー({{count}})",
+      "presetSub": "API キーで接続",
+      "dismiss": "あとで",
+      "haveApiKey": "API キーを持っています",
+      "banner": {
+        "text": "利用可能なモデルがありません。プロバイダーを接続すると会話できます。",
+        "connectCta": "プロバイダーを接続",
+        "loginCta": "Cindy にサインイン",
+        "dismissAria": "閉じる"
+      }
+    }
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "音声入力中",

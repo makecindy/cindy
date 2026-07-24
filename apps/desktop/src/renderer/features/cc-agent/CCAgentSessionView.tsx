@@ -81,6 +81,7 @@ import { clearInterruptedAttentionIfOwned } from '@/hooks/useInterruptedSessions
 import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWaitBanner';
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
+import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
@@ -2983,6 +2984,12 @@ export function CCAgentSessionView({
                 style={{ width: inputWidth }}
                 className="py-1"
               />
+            )}
+
+            {/* 零可用模型引导条:与首屏引导卡共享判定与 dismiss(useProviderOnboarding),
+              组件自判 visible、不可见渲染 null。device-link 远程会话不出——连接态在被控端。 */}
+            {!remoteDeviceId && (
+              <ConnectProviderBanner style={{ width: inputWidth }} className="py-1" />
             )}
 
             <div

@@ -3889,6 +3889,29 @@
       "saveEdit": "保存文本"
     }
   },
+  "onboarding": {
+    "connectProvider": {
+      "title": "连接一个模型供应商,开始对话",
+      "desc": "还没有可用的模型。连接任意一个供应商即可开始对话。",
+      "recommendedLabel": "推荐",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "官方服务 · 全部模型 · Claude Code / Codex 通用",
+        "loginTitle": "登录 Cindy",
+        "loginDesc": "登录后自动开通 Cindy AI 官方服务,即可使用全部模型"
+      },
+      "othersToggle": "其他供应商({{count}})",
+      "presetSub": "使用 API Key 连接",
+      "dismiss": "稍后再说",
+      "haveApiKey": "我有 API Key",
+      "banner": {
+        "text": "当前没有可用的模型,连接一个供应商后即可对话。",
+        "connectCta": "连接供应商",
+        "loginCta": "登录 Cindy",
+        "dismissAria": "关闭引导"
+      }
+    }
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "语音输入中",

@@ -3890,6 +3890,29 @@
       "saveEdit": "Save Text"
     }
   },
+  "onboarding": {
+    "connectProvider": {
+      "title": "Connect a model provider to get started",
+      "desc": "No models are available yet. Connect a provider to start chatting.",
+      "recommendedLabel": "Recommended",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "Official service · all models · works with Claude Code and Codex",
+        "loginTitle": "Sign in to Cindy",
+        "loginDesc": "Sign in to enable the official Cindy AI service with access to all models"
+      },
+      "othersToggle": "Other providers ({{count}})",
+      "presetSub": "Connect with an API key",
+      "dismiss": "Maybe later",
+      "haveApiKey": "I have an API key",
+      "banner": {
+        "text": "No models available — connect a provider to start chatting.",
+        "connectCta": "Connect a provider",
+        "loginCta": "Sign in to Cindy",
+        "dismissAria": "Dismiss"
+      }
+    }
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "Voice input",

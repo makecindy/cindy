@@ -54,6 +54,8 @@ import {
   type RemoteProjectTarget,
 } from '@/components/new-chat/AddRemoteProjectDialog';
 import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
+import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { buildDeviceLinkCreateArgs } from './deviceLinkCreateArgs';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
@@ -416,6 +418,9 @@ export function NewMakerDraftRoute() {
   const effectiveDeviceLinkDeviceId = draft.deviceLinkDeviceId ?? undefined;
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   const isDeviceLinkDraft = effectiveWorkingDir != null && effectiveDeviceLinkDeviceId != null;
+  // 零可用模型引导卡:device-link 草稿不出(连接态在被控端,本机替它连不上)。
+  const providerOnboarding = useProviderOnboarding();
+  const showProviderOnboardingCard = providerOnboarding.visible && !isDeviceLinkDraft;
   const effectiveExtraDirs = draft.extraDirs;
   const effectiveCollab = collab;
   const effectiveCollabEnabled =
@@ -2204,56 +2209,65 @@ export function NewMakerDraftRoute() {
                     }
                   />
                 </div>
+                {/* 零可用模型 → 快速开始换成「连接供应商」引导卡(互斥:此时快捷入口
+                    只会把 prompt 填进发不出去的输入框);dismiss / 连上后恢复快捷入口。 */}
+                {showProviderOnboardingCard && (
+                  <div className="mt-[42px] w-full" style={{ maxWidth: 800 }}>
+                    <ConnectProviderCard />
+                  </div>
+                )}
                 {/* 输入框跟随 inputWidth 变宽后,快捷入口只有 4 项,若也铺满全宽
                     会被撑成又宽又空的短卡。这里把卡片区封顶在 800px、左对齐(与输入框
                     左缘齐),保持每张卡当前的紧凑比例;输入框仍独立用满可用宽度。 */}
-                <div
-                  data-testid="create-agent-quick-starts"
-                  className="mt-[42px] w-full"
-                  style={{ maxWidth: 800 }}
-                >
-                  {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
-                      (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
-                  <div className="mb-2.5 px-0.5">
-                    <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
-                      {t('newChat.createAgent.quickStart')}
+                {!showProviderOnboardingCard && (
+                  <div
+                    data-testid="create-agent-quick-starts"
+                    className="mt-[42px] w-full"
+                    style={{ maxWidth: 800 }}
+                  >
+                    {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
+                        (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
+                    <div className="mb-2.5 px-0.5">
+                      <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
+                        {t('newChat.createAgent.quickStart')}
+                      </div>
+                    </div>
+                    <div
+                      className={cn(
+                        'grid w-full gap-3',
+                        isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
+                      )}
+                    >
+                      {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => handleQuickStart(labelKey)}
+                          // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl);
+                          // 窄态横排 / 常态竖排自适应(#562)。
+                          className={cn(
+                            'group rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
+                            isDraftNarrow
+                              ? 'flex min-h-[84px] items-center gap-3 p-3'
+                              : 'flex min-h-[112px] flex-col items-start gap-3 p-4',
+                          )}
+                        >
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
+                            <Icon
+                              size={16}
+                              strokeWidth={2}
+                              className="text-[var(--create-agent-quick-card-icon)]"
+                            />
+                          </span>
+                          {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。 */}
+                          <span className="flex min-w-0 min-h-10 items-center text-13 font-semibold leading-[16px]">
+                            {t(labelKey)}
+                          </span>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  <div
-                    className={cn(
-                      'grid w-full gap-3',
-                      isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
-                    )}
-                  >
-                    {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => handleQuickStart(labelKey)}
-                        // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl);
-                        // 窄态横排 / 常态竖排自适应(#562)。
-                        className={cn(
-                          'group rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
-                          isDraftNarrow
-                            ? 'flex min-h-[84px] items-center gap-3 p-3'
-                            : 'flex min-h-[112px] flex-col items-start gap-3 p-4',
-                        )}
-                      >
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
-                          <Icon
-                            size={16}
-                            strokeWidth={2}
-                            className="text-[var(--create-agent-quick-card-icon)]"
-                          />
-                        </span>
-                        {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。 */}
-                        <span className="flex min-w-0 min-h-10 items-center text-13 font-semibold leading-[16px]">
-                          {t(labelKey)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。
                 initialObjective = 点「新建目标」时输入框里已有的文字。 */}
                 <NewGoalDialog

@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
@@ -1042,6 +1043,40 @@ export function ProvidersSection() {
           !!s.provider && !s.provider.connected,
       );
   }, [detections, byId, listProviders]);
+
+  /**
+   * 深链定位(?connect=<id> / ?wizard=1,来自「连接供应商」引导卡等):providers
+   * 就绪后一次性消费,消费即从 URL 摘除(replace,防返回/刷新重复触发)。
+   *   - connect 命中左栏占行的供应商(如 xd)→ 直接选中;
+   *   - connect 命中目录内置渠道 → 向导直达该渠道授权步;
+   *   - 其余 id 视为 preset id → 向导 preset 直达(presets 异步匹配,未命中回落目录页);
+   *   - wizard=1 → 打开向导目录第一步。
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepLinkConsumedRef = useRef(false);
+  useEffect(() => {
+    if (loading || deepLinkConsumedRef.current) return;
+    const connect = searchParams.get('connect');
+    const wizardFlag = searchParams.get('wizard');
+    if (!connect && !wizardFlag) return;
+    deepLinkConsumedRef.current = true;
+    if (connect) {
+      const target = byId.get(connect);
+      if (listProviders.some((p) => p.id === connect)) {
+        setSelectedId(connect);
+      } else if (target && target.source === 'builtin') {
+        setWizard({ entry: { kind: 'builtin', providerId: connect } });
+      } else {
+        setWizard({ entry: { kind: 'preset', presetId: connect } });
+      }
+    } else {
+      setWizard({});
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('connect');
+    next.delete('wizard');
+    setSearchParams(next, { replace: true });
+  }, [loading, searchParams, setSearchParams, byId, listProviders]);
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
   const effectiveSelected = useMemo(() => {
