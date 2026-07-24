@@ -57,7 +57,7 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
     source: 'builtin',
     prompt: `检查仓库当前开放的 PR，对新增改动做一轮预审。
 约束：
-- 逐个查看自上次运行以来有新提交的开放 PR，引用 PR 编号、文件路径和具体 diff
+- 逐个查看过去 24 小时内有新提交的开放 PR（周一回看整个周末），引用 PR 编号、文件路径和具体 diff
 - 重点找正确性、安全、数据丢失和兼容性问题，按严重程度分级
 - 只报告有证据支撑的问题，说明失败场景，不要凭风格偏好挑刺
 - 除非用户明确授权，只输出审查结论，不要直接在 PR 上留言或改动代码`,
@@ -75,7 +75,7 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
     description: '定期搜集你关注领域的最新动态，输出有观点的摘要',
     category: 'info-radar',
     source: 'builtin',
-    prompt: `围绕主题「{{topic}}」搜集自上次运行以来的最新动态，输出一份有观点的摘要。
+    prompt: `围绕主题「{{topic}}」搜集过去 24 小时的最新动态（周一回看整个周末），输出一份有观点的摘要。
 约束：
 - 用 Web 搜索获取信息，交叉核对多个来源后再采信，标注每条信息的来源链接
 - 优先收录有实质内容的进展（发布、研究、政策、重要讨论），过滤营销软文和重复转载

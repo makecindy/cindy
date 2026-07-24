@@ -5658,12 +5658,12 @@
         "pr-gatekeeper": {
           "name": "PR 게이트키퍼",
           "description": "평일마다 오픈 PR의 새 변경을 사전 리뷰하고 심각도별로 위험 보고",
-          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits since the last run, citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
         },
         "domain-radar": {
           "name": "관심 분야 레이더",
           "description": "관심 분야의 최신 동향을 정기 수집해 관점 있는 요약 제공",
-          "prompt": "Collect the latest developments about \"{{topic}}\" since the last run and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
           "params": {
             "topic": {
               "label": "관심 주제",
