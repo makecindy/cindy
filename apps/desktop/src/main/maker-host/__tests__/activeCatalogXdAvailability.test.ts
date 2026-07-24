@@ -6,7 +6,7 @@
  *       efforts 缺失 → 合成 3 档(low/medium/high,默认 high);显式 [] → 不可调;
  *       supportsFastMode 缺失 → true;defaultEnabled 缺失 → 默认可见;
  *   - perAgent 覆盖块按 tab 应用(gpt 系 cc/codex 的 Fast / 窗口分叉);
- *   - tab 归属:服务端 agents > 仅 claude-code;
+ *   - tab 归属:服务端 agents > claude-code + codex 双 runtime;
  *   - 其它供应商永不受影响。
  * 另含 anthropic 权威清单 setter 的同款语义单测。
  */
@@ -45,20 +45,21 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('未登记模型的确定性默认:3 档 effort + fast=true + 仅 cc tab + 200k 窗口', () => {
+  it('未登记模型的确定性默认:3 档 effort + fast=true + 双 runtime + 200k 窗口', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
 
-    const cc = xdModels('claude-code');
-    expect(cc.map((m) => m.id)).toEqual(['brand-new-model']);
-    expect(cc[0]).toMatchObject({
-      name: 'brand-new-model',
-      contextWindow: 200_000,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'high',
-      supportsFastMode: true,
-    });
-    expect(xdModels('codex')).toEqual([]);
+    for (const agent of ['claude-code', 'codex'] as const) {
+      const models = xdModels(agent);
+      expect(models.map((m) => m.id)).toEqual(['brand-new-model']);
+      expect(models[0]).toMatchObject({
+        name: 'brand-new-model',
+        contextWindow: 200_000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'high',
+        supportsFastMode: true,
+      });
+    }
   });
 
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {

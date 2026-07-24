@@ -55,7 +55,7 @@ export interface XdGatewayAgentOverride {
 /** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 同形)。 */
 export interface XdGatewayModelInfo {
   id: string;
-  /** 进哪些 runtime tab;缺省 = 仅 claude-code 兜底。 */
+  /** 进哪些 runtime tab;缺省 = claude-code + codex。 */
   agents?: AgentKind[];
   name?: string;
   group?: string;
@@ -80,8 +80,7 @@ export interface XdGatewayModelInfo {
  * 列表完全以网关为准,不再由 OSS 产品目录决定)。未登录 / 拉取失败 / 空响应时
  * 保持空数组,绝不把产品目录里的静态模型冒充成网关实时可用模型。有值时 xd
  * 供应商的模型列表整体重建,每个条目:
- *  - tab 归属:服务端 `agents` > 目录同 id 条目的归属 > 仅 claude-code 兜底
- *    (网关 /v1/messages 跨供应商翻译覆盖面最广;Responses 协议不猜);
+ *  - tab 归属:服务端 `agents` > claude-code + codex 双 runtime 兜底;
  *  - 展示元数据逐字段:服务端条目 > 目录同 id 条目 > 合成默认(id 当展示名,
  *    口径同自定义 OAuth 模型发现,见 maker-ipc/register.ts oauthLogin);
  *  - 目录里有、网关没有 → 不展示。
@@ -395,8 +394,9 @@ function computeMerged(): Catalog {
     const models: Provider['models'] = {};
     for (const agent of agentKeys) models[agent] = [];
     for (const gm of gwModels) {
-      // tab 归属:服务端 agents > 仅 claude-code(网关 /v1/messages 翻译覆盖面最广,不猜)
-      const targetAgents: AgentKind[] = gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
+      // 服务端未声明 runtime 时，默认同时开放给 Claude Code 与 Codex。
+      const targetAgents: AgentKind[] =
+        gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code', 'codex'];
       for (const agent of targetAgents) {
         if (!models[agent]) continue; // 未知 agent 键防御(wire 数据)
         const ov = gm.perAgent?.[agent] ?? {};

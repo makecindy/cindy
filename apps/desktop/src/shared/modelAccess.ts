@@ -56,7 +56,7 @@ export interface ModelAccessAgentOverride {
 
 export interface ModelAccessGatewayModel {
   id: string;
-  /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
+  /** 进哪些 runtime tab;缺省 = claude-code + codex。 */
   agents?: ('claude-code' | 'codex')[];
   name?: string;
   group?: string;
