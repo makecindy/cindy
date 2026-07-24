@@ -121,6 +121,33 @@ function requiredTwoGroups(): GhostSetupAssessment {
   };
 }
 
+function requiredNavigation(revision = 0): GhostSetupAssessment {
+  return {
+    state: 'required',
+    revision,
+    groups: [
+      {
+        id: 'settings',
+        mode: 'any_of',
+        items: [
+          {
+            ref: 'plugin_config:settings',
+            kind: 'plugin_config',
+            label: '插件设置',
+            state: 'missing',
+            actions: [
+              {
+                id: 'open_plugin_settings:plugin_config:settings',
+                kind: 'open_plugin_settings',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function harness(initial: GhostSetupAssessment) {
   const changeBus = new GhostSetupChangeBus();
   const broadcast = vi.fn();
@@ -129,6 +156,7 @@ function harness(initial: GhostSetupAssessment) {
   let targetValidation: GhostSetupTargetValidation = { ok: true };
   const executeAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
   const executeInlineAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
+  let requestNumber = 0;
   const coordinator = new GhostSetupCoordinator({
     changeBus,
     bridge,
@@ -141,7 +169,7 @@ function harness(initial: GhostSetupAssessment) {
     }),
     executeAction,
     executeInlineAction,
-    createRequestId: () => 'request-1',
+    createRequestId: () => `request-${++requestNumber}`,
     timeoutMs: 5_000,
     terminalGraceMs: 0,
   });
@@ -277,6 +305,48 @@ describe('GhostSetupCoordinator', () => {
     h.setAssessment(ready(1));
     release();
     await expect(waiting).resolves.toMatchObject({ ok: true });
+  });
+
+  it('executes navigation actions once per session instead of sharing the first route', async () => {
+    const h = harness(requiredNavigation());
+    h.executeAction.mockResolvedValue({ ok: true, waitingExternal: true });
+    const first = h.coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'settings-ghost',
+      tool: 'run',
+    });
+    const second = h.coordinator.ensureReady({
+      sessionId: 'session-2',
+      ghostId: 'settings-ghost',
+      tool: 'run',
+    });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(2));
+
+    for (const { request } of h.bridge.pendingSnapshots()) {
+      h.bridge.resolve(request.requestId, {
+        kind: 'plugin_setup',
+        action: 'run_action',
+        actionId: 'open_plugin_settings:plugin_config:settings',
+        expectedRevision: request.revision,
+      });
+    }
+
+    await vi.waitFor(() => expect(h.executeAction).toHaveBeenCalledTimes(2));
+    expect(h.executeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1' }),
+    );
+    expect(h.executeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-2' }),
+    );
+
+    for (const { request } of h.bridge.pendingSnapshots()) {
+      h.bridge.resolve(request.requestId, {
+        kind: 'plugin_setup',
+        action: 'cancel',
+        expectedRevision: request.revision,
+      });
+    }
+    await Promise.all([first, second]);
   });
 
   it('cancel settles the waiting call without executing an action', async () => {

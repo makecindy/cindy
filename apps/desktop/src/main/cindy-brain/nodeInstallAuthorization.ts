@@ -33,7 +33,8 @@ export function buildNodeInstallDialogOptions(
         ? t('settings.ghosts.updateConfirm.cancel')
         : t('settings.ghosts.installConfirm.nodeRiskCancel'),
     ],
-    defaultId: 0,
+    // Node 插件可执行本机代码；Enter 必须保持失败关闭，只有显式点继续才授权。
+    defaultId: 1,
     cancelId: 1,
     noLink: true,
   };
