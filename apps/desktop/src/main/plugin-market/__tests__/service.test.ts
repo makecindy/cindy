@@ -415,9 +415,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     const h = harness([item]);
 
-    await expect(h.service.install(item.id)).rejects.toThrow(
-      'Plugin 不存在或当前身份不可见',
-    );
+    await expect(h.service.install(item.id)).rejects.toThrow('[NOT_FOUND]');
     expect(h.api.detail).not.toHaveBeenCalled();
     expect(runtime.install).not.toHaveBeenCalled();
   });
@@ -591,7 +589,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       installed: false,
     });
 
-    await expect(h.service.install(item.id)).rejects.toThrow('本地已存在同 id Plugin');
+    await expect(h.service.install(item.id)).rejects.toThrow('[ALREADY_EXISTS]');
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
@@ -623,7 +621,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     h.api.detail.mockResolvedValue(detail(item, ['notify', 'fs']));
 
-    await expect(h.service.install(item.id)).rejects.toThrow('增加了权限');
+    await expect(h.service.install(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
     expect(runtime.install).not.toHaveBeenCalled();
 
     await expect(
@@ -644,7 +642,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       sizeBytes: item.currentRelease.sizeBytes,
     });
 
-    await expect(h.service.install(item.id)).rejects.toThrow('下载凭证已过期');
+    await expect(h.service.install(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
@@ -660,7 +658,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       return [item];
     });
 
-    await expect(h.service.install(item.id)).rejects.toThrow('账号已切换');
+    await expect(h.service.install(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
     expect(runtime.install).not.toHaveBeenCalled();
     expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
   });

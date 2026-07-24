@@ -2226,6 +2226,16 @@
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
         "authenticationRequired": "Sign in to Cindy to view the plugin market.",
         "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "errors": {
+          "generic": "The plugin market operation failed. Please try again.",
+          "invalidRequest": "The plugin request is invalid.",
+          "notFound": "This plugin is no longer available. Refresh the market and try again.",
+          "conflict": "Another installed or market plugin uses the same plugin ID.",
+          "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
+          "accessDenied": "This plugin operation is not permitted or was cancelled.",
+          "notConfigured": "The plugin market is not available in this environment.",
+          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
+        },
         "securityTitle": "Install and permissions",
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. New installs stay disabled until you review permissions and enable them.",
         "noPermissions": "This plugin declares no additional capabilities.",

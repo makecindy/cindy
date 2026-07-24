@@ -36,6 +36,7 @@ import {
 } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
 import {
@@ -53,7 +54,7 @@ function captureMarketOwner(): ActiveAppSession {
     !session.dataOwnerId ||
     isAppSessionBoundaryPending()
   ) {
-    throw new Error('Plugin 市场需要稳定的应用会话');
+    throwIpcError('PRECONDITION_FAILED', 'Plugin market requires a stable app session');
   }
   return session;
 }
@@ -66,7 +67,7 @@ function requireSameMarketOwner(expected: ActiveAppSession): void {
     current.dataOwnerId !== expected.dataOwnerId ||
     current.generation !== expected.generation
   ) {
-    throw new Error('账号已切换，已取消本次 Plugin 操作');
+    throwIpcError('PRECONDITION_FAILED', 'The active account changed during the Plugin operation');
   }
 }
 
@@ -84,7 +85,9 @@ function visiblePluginsForOwner(
 
 function defaultInstallSubject(owner: ActiveAppSession): string {
   const subject = getCurrentUserId() ?? owner.dataOwnerId;
-  if (!subject) throw new Error('Plugin 市场缺少本地数据身份');
+  if (!subject) {
+    throwIpcError('PRECONDITION_FAILED', 'Plugin market data owner is unavailable');
+  }
   return subject;
 }
 
@@ -201,17 +204,19 @@ export class PluginMarketService {
   }
 
   async detail(pluginId: string): Promise<PluginMarketDetail> {
-    if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
+    if (!isValidPluginResourceId(pluginId)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
+    }
     this.requireConfigured();
     const owner = captureMarketOwner();
     const plugin = await this.api.detail(pluginId);
     requireSameMarketOwner(owner);
     if (owner.mode === 'local' && plugin.scope !== 'public') {
-      throw new Error('游客模式只能使用公开 Plugin');
+      throwIpcError('PERMISSION_DENIED', 'Local mode can only access public Plugins');
     }
     const compatible = validateGhostManifest(plugin.currentRelease.manifest);
     if (!compatible.ok) {
-      throw new Error(`当前 Cindy 不支持此 Plugin 清单: ${compatible.reason}`);
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
     }
     return {
       ...this.toItem(
@@ -230,7 +235,9 @@ export class PluginMarketService {
       nodeAuthorizationWebContents?: WebContents;
     },
   ): Promise<{ ghost: InstalledGhost }> {
-    if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
+    if (!isValidPluginResourceId(pluginId)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
+    }
     this.requireConfigured();
     const owner = captureMarketOwner();
     const ledger = this.ledgerForOwner(owner);
@@ -239,11 +246,13 @@ export class PluginMarketService {
       const catalog = visiblePluginsForOwner(owner, await this.api.listAll());
       requireSameMarketOwner(owner);
       const selected = catalog.find((plugin) => plugin.id === pluginId);
-      if (!selected) throw new Error('Plugin 不存在或当前身份不可见');
+      if (!selected) {
+        throwIpcError('NOT_FOUND', 'Plugin is unavailable to the active account');
+      }
       if (
         catalog.filter((plugin) => plugin.ghostId === selected.ghostId).length !== 1
       ) {
-        throw new Error(`存在同 id Plugin，当前客户端无法安全共存: ${selected.ghostId}`);
+        throwIpcError('ALREADY_EXISTS', 'Multiple market Plugins use the same Plugin ID');
       }
       const plugin = await this.api.detail(pluginId);
       return {
@@ -264,7 +273,9 @@ export class PluginMarketService {
   }
 
   async uninstall(pluginId: string): Promise<{ ok: true }> {
-    if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
+    if (!isValidPluginResourceId(pluginId)) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
+    }
     const owner = captureMarketOwner();
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
@@ -273,7 +284,9 @@ export class PluginMarketService {
       const record = Object.values(data.installations).find(
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
       );
-      if (!record) throw new Error('该市场 Plugin 未安装');
+      if (!record) {
+        throwIpcError('NOT_FOUND', 'The market Plugin is not installed');
+      }
       const installSubject = defaultInstallSubject(owner);
       requireSameMarketOwner(owner);
       await uninstallGhostAndCleanup(record.ghostId, { skipMarketLedger: true });
@@ -330,26 +343,26 @@ export class PluginMarketService {
   ): Promise<InstalledGhost> {
     requireSameMarketOwner(owner);
     if (owner.mode === 'local' && plugin.scope !== 'public') {
-      throw new Error('游客模式只能使用公开 Plugin');
+      throwIpcError('PERMISSION_DENIED', 'Local mode can only access public Plugins');
     }
     const existing = getGhostManager()
       .list()
       .find((ghost) => ghost.manifest.id === plugin.ghostId);
     const currentRecord = ledger.installationForGhost(plugin.ghostId);
     if (existing && (!currentRecord?.installed || currentRecord.pluginId !== plugin.id)) {
-      throw new Error(`本地已存在同 id Plugin: ${plugin.ghostId}`);
+      throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
     }
 
     const compatible = validateGhostManifest(plugin.currentRelease.manifest);
     if (!compatible.ok) {
-      throw new Error(`当前 Cindy 不支持此 Plugin 清单: ${compatible.reason}`);
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
     }
     if (
       existing &&
       diffGhostPermissionItems(existing.manifest, compatible.manifest).added.length > 0 &&
       options.allowPermissionExpansion !== true
     ) {
-      throw new Error('Plugin 更新增加了权限，需要用户确认');
+      throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
     }
     const download = await this.api.download(plugin.id, plugin.currentRelease.id);
     requireSameMarketOwner(owner);
@@ -357,11 +370,11 @@ export class PluginMarketService {
       download.sha256 !== plugin.currentRelease.sha256 ||
       download.sizeBytes !== plugin.currentRelease.sizeBytes
     ) {
-      throw new Error('下载凭证与当前 Release 不一致');
+      throwIpcError('PRECONDITION_FAILED', 'Plugin release metadata changed');
     }
     const expiresAt = Date.parse(download.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      throw new Error('Plugin 下载凭证已过期');
+      throwIpcError('PRECONDITION_FAILED', 'Plugin download authorization expired');
     }
 
     const tempPath = path.join(
@@ -393,7 +406,7 @@ export class PluginMarketService {
 
   private requireConfigured(): void {
     if (!getClientEndpoint('pluginApiBaseUrl')) {
-      throw new Error('Plugin 市场未配置');
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'Plugin market is not configured');
     }
   }
 

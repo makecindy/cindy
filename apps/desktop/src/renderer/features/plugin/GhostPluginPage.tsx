@@ -66,6 +66,7 @@ import {
   pluginPresentationOrigin,
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
+import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
@@ -78,13 +79,6 @@ const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
   'organization',
   'local',
 ];
-
-function marketErrorMessage(error: unknown, fallback: string): string {
-  const ipcMessage = extractIpcError(error)?.message;
-  if (ipcMessage) return ipcMessage;
-  if (error instanceof Error && error.message.trim()) return error.message;
-  return fallback;
-}
 
 /**
  * Ghost-backed Plugin page.
@@ -372,7 +366,7 @@ export function GhostPluginPage() {
         );
         await refreshMarket();
       } catch (error) {
-        toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
+        toast.error(t(pluginMarketErrorKey(error)));
       } finally {
         setMarketBusyId(null);
       }
@@ -492,7 +486,7 @@ export function GhostPluginPage() {
     } catch (error) {
       toast.error(
         selectedMarketInstall
-          ? marketErrorMessage(error, t('settings.ghosts.errors.generic'))
+          ? t(pluginMarketErrorKey(error))
           : t(ghostInstallErrorKey(extractIpcError(error)?.code)),
       );
     }
@@ -507,7 +501,7 @@ export function GhostPluginPage() {
         if (requestId === marketDetailRequestRef.current) setMarketDetail(detail);
       } catch (error) {
         if (requestId === marketDetailRequestRef.current) {
-          toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
+          toast.error(t(pluginMarketErrorKey(error)));
         }
       } finally {
         if (requestId === marketDetailRequestRef.current) setMarketBusyId(null);
@@ -540,7 +534,7 @@ export function GhostPluginPage() {
       setSelectedId(result.ghost.manifest.id);
       await refreshMarket();
     } catch (error) {
-      toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
+      toast.error(t(pluginMarketErrorKey(error)));
     } finally {
       setMarketBusyId(null);
     }

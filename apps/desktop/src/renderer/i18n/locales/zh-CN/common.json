@@ -2225,6 +2225,16 @@
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
         "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
         "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "errors": {
+          "generic": "插件市场操作失败，请重试。",
+          "invalidRequest": "插件请求无效。",
+          "notFound": "该插件已不可用，请刷新市场后重试。",
+          "conflict": "已有本地或市场插件使用相同的插件标识。",
+          "stateChanged": "操作期间账号、插件或版本已发生变化，请确认最新状态后重试。",
+          "accessDenied": "当前插件操作不被允许，或操作已取消。",
+          "notConfigured": "当前环境未提供插件市场。",
+          "invalidPackage": "该插件包无效，或当前 Cindy 版本不支持它。"
+        },
         "securityTitle": "安装与权限",
         "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。安装后默认不生效，由你确认权限后再开启。",
         "noPermissions": "此插件未声明额外能力。",
