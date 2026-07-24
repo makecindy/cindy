@@ -801,7 +801,11 @@ function MarketPluginCard({
         className="flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait"
         aria-label={item.name}
       >
-        <GhostPluginIcon iconId={item.ghostId} iconName={item.name} />
+        <GhostPluginIcon
+          iconDataUrl={item.icon?.url}
+          iconId={item.ghostId}
+          iconName={item.name}
+        />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-15 font-medium text-[var(--text-primary)]">

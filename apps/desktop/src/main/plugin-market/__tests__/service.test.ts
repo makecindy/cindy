@@ -112,6 +112,7 @@ function summary(
       sha256: 'a'.repeat(64),
       sizeBytes: 42,
       publishedAt: '2026-07-23T00:00:00.000Z',
+      icon: null,
     },
     ...overrides,
   };
@@ -153,6 +154,27 @@ function harness(items: VisiblePluginSummary[]) {
 }
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  it('passes the optional release icon metadata to renderer-safe market items', async () => {
+    const icon = {
+      mimeType: 'image/png',
+      sha256: 'b'.repeat(64),
+      sizeBytes: 128,
+      url: 'https://oss.example.invalid/icons/test.png',
+      expiresAt: '2026-07-23T00:05:00.000Z',
+    };
+    const h = harness([summary({
+      currentRelease: {
+        ...summary().currentRelease,
+        icon,
+      },
+    })]);
+
+    await expect(h.service.snapshot()).resolves.toMatchObject({
+      items: [{ icon }],
+      unavailableReason: null,
+    });
+  });
+
   it('does not query the authenticated market in account-free local mode', async () => {
     runtime.session = {
       mode: 'local',

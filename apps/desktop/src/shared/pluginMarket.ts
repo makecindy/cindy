@@ -1,4 +1,5 @@
 import type { GhostManifest } from './ghost';
+import type { PluginIconMetadata } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -20,6 +21,7 @@ export interface PluginMarketItem {
   releaseId: string;
   version: string;
   publishedAt: string;
+  icon: PluginIconMetadata | null;
   installState: PluginMarketInstallState;
   enabled: boolean | null;
 }

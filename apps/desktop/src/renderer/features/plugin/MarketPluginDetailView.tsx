@@ -50,7 +50,12 @@ export function MarketPluginDetailView({
 
         <header>
           <div className="grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-5">
-            <GhostPluginIcon iconId={detail.ghostId} iconName={detail.name} size="detail" />
+            <GhostPluginIcon
+              iconDataUrl={detail.icon?.url}
+              iconId={detail.ghostId}
+              iconName={detail.name}
+              size="detail"
+            />
             <div className="min-w-0">
               <h1 className="truncate text-28 font-medium leading-[34px] text-[var(--text-primary)]">
                 {detail.name}

@@ -340,6 +340,7 @@ export class PluginMarketService {
       releaseId: plugin.currentRelease.id,
       version: plugin.currentRelease.version,
       publishedAt: plugin.currentRelease.publishedAt,
+      icon: plugin.currentRelease.icon,
       installState,
       enabled: ownsInstall ? (ghost?.enabled ?? null) : null,
     };
