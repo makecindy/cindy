@@ -84,7 +84,7 @@ export function LoginStage({
           data-testid="login-stage-footer"
           className="absolute z-30 flex flex-col items-center text-center"
           style={{
-            left: '50%',
+            left: placement.centerX,
             top:
               placement.topY +
               LOGIN_GROUP.height * placement.scale +
