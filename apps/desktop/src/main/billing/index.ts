@@ -212,9 +212,12 @@ export function createBillingHandlers(
       }
       return projectResponse(response, projectModelAccessBalance);
     }),
-    [BILLING_INVOKE.GET_CATALOG]: protect(async () =>
-      projectResponse(await invoke<unknown>('/api/billing/catalog'), projectBillingCatalog),
-    ),
+    [BILLING_INVOKE.GET_CATALOG]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'catalog request does not accept a payload');
+      }
+      return projectResponse(await invoke<unknown>('/api/billing/catalog'), projectBillingCatalog);
+    }),
     [BILLING_INVOKE.LIST_ORDERS]: protect(async (raw) => {
       const payload = requireObject(raw);
       assertOnlyKeys(payload, ['limit'], 'payload');
@@ -290,12 +293,15 @@ export function createBillingHandlers(
         projectBillingSubscription,
       );
     }),
-    [BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION]: protect(async () =>
-      projectResponse(
+    [BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'subscription request does not accept a payload');
+      }
+      return projectResponse(
         await invoke<unknown>('/api/billing/subscription'),
         projectBillingCurrentSubscription,
-      ),
-    ),
+      );
+    }),
     [BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE]: protect(async (raw) => {
       const { purchaseAttemptId } = parseIdPayload(raw, 'purchaseAttemptId');
       return projectResponse(

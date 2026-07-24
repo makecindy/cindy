@@ -912,7 +912,9 @@ function BillingOfferDialog({
                     const active = selected?.offer.code === offer.code;
                     return (
                       <button
-                        key={offer.code}
+                        // Offer codes are only unique within a product, so the key
+                        // must include the product to stay collision-free.
+                        key={`${product.code}:${offer.code}`}
                         type="button"
                         onClick={() => onSelectOffer(offer.code)}
                         aria-pressed={active}

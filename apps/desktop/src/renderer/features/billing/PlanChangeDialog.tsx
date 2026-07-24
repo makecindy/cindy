@@ -118,7 +118,9 @@ export function PlanChangeTargetDialog({
                     candidate.direction === 'UPGRADE' ? ArrowUpRight : ArrowDownRight;
                   return (
                     <button
-                      key={candidate.offer.code}
+                      // Offer codes are only unique within a product, so the key
+                      // must include the product to stay collision-free.
+                      key={`${candidate.product.code}:${candidate.offer.code}`}
                       type="button"
                       onClick={() => onSelect(candidate)}
                       className={cn(

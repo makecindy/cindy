@@ -97,6 +97,16 @@ describe('billing IPC', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([BILLING_INVOKE.GET_CATALOG, BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION])(
+    'rejects any payload on the no-payload channel %s before network access',
+    async (channel) => {
+      const { call, fetch } = harness();
+
+      await expect(call(channel, {})).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ['NOT_FOUND', 404, 'NOT_FOUND'],
     ['INTERNAL', 501, 'UNSUPPORTED_CAPABILITY'],

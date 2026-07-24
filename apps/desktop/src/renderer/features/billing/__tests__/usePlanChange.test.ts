@@ -162,6 +162,49 @@ describe('usePlanChange', () => {
     expect(api.confirmPlanChange).toHaveBeenCalledTimes(1);
   });
 
+  it('re-reads the server state when confirm fails, instead of restoring a stale quote', async () => {
+    const onSettled = vi.fn();
+    api.quotePlanChange.mockResolvedValue(
+      change({ changeType: 'DOWNGRADE', quotedAmountMinor: null }),
+    );
+    api.confirmPlanChange.mockRejectedValue(new Error('network'));
+    api.refreshPlanChange.mockResolvedValue(
+      change({ changeType: 'DOWNGRADE', status: 'SCHEDULED', quotedAmountMinor: null }),
+    );
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, onSettled));
+
+    await act(() => result.current.startQuote('plus_month', null));
+    await act(() => result.current.confirm());
+
+    expect(api.refreshPlanChange).toHaveBeenCalledWith('plan_change_1');
+    expect(result.current.state).toMatchObject({ phase: 'SCHEDULED', error: false });
+    expect(onSettled).toHaveBeenCalledWith('SCHEDULED');
+  });
+
+  it('flags an error but keeps the quote when confirm fails and the change did not progress', async () => {
+    api.quotePlanChange.mockResolvedValue(change());
+    api.confirmPlanChange.mockRejectedValue(new Error('network'));
+    api.refreshPlanChange.mockResolvedValue(change());
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
+
+    await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+    await act(() => result.current.confirm());
+
+    expect(result.current.state).toMatchObject({ phase: 'QUOTE_READY', error: true });
+  });
+
+  it('falls back to the pre-confirm snapshot when the recovery read also fails', async () => {
+    api.quotePlanChange.mockResolvedValue(change());
+    api.confirmPlanChange.mockRejectedValue(new Error('network'));
+    api.refreshPlanChange.mockRejectedValue(new Error('network'));
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
+
+    await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+    await act(() => result.current.confirm());
+
+    expect(result.current.state).toMatchObject({ phase: 'QUOTE_READY', error: true });
+  });
+
   it('adopts the server pending projection when the quote request fails', async () => {
     api.quotePlanChange.mockRejectedValue(new Error('conflict'));
     api.getCurrentSubscription.mockResolvedValue({

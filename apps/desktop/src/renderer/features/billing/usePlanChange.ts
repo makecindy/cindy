@@ -203,7 +203,22 @@ export function usePlanChange(
       try {
         applyChange(await billingApi.confirmPlanChange(change.planChangeId));
       } catch {
-        if (mountedRef.current) {
+        // The confirm may have landed server-side even though the response was
+        // lost. Re-read the change before restoring anything local, so a
+        // progressed change is never re-rendered as a confirmable quote.
+        let latest: BillingPlanChange | null = null;
+        try {
+          latest = await billingApi.refreshPlanChange(change.planChangeId);
+        } catch {
+          // Fall back to the pre-request snapshot below.
+        }
+        if (!mountedRef.current) return;
+        if (latest) {
+          applyChange(latest);
+          if (latest.status === change.status) {
+            setState((value) => ({ ...value, error: true }));
+          }
+        } else {
           setState((value) => ({
             ...value,
             phase: phaseForPlanChange(change),
