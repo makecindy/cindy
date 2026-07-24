@@ -104,6 +104,9 @@ import {
   type AskForApproval,
   type ApprovalsReviewer,
   type ApprovalDecision,
+  type ItemGuardianApprovalReviewCompletedNotification,
+  type ItemGuardianApprovalReviewStartedNotification,
+  type GuardianWarningNotification,
   type CodexModelListResponse,
   type CommandExecutionRequestApprovalParams,
   type CommandExecutionRequestApprovalResponse,
@@ -2446,6 +2449,7 @@ export class CodexAgent extends BaseAgent {
       forcePrompt?: boolean;
     }
     const pendingApprovals = new Map<string, PendingEntry>();
+    const seenGuardianReviewIds = new Set<string>();
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
@@ -3513,6 +3517,51 @@ export class CodexAgent extends BaseAgent {
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
+    const emitGuardianTimeout = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
+      const rationale = params.review.rationale?.trim();
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: rationale
+            ? `Codex automatic approval review timed out: ${rationale}`
+            : 'Codex automatic approval review timed out. The action was blocked and this session is switching to Ask mode.',
+          isTerminal: false,
+          reason: 'codex-auto-review-timeout',
+          reviewId: params.reviewId,
+        },
+        source: 'codex',
+      });
+    };
+
+    const handleGuardianReviewCompleted = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
+      if (seenGuardianReviewIds.has(params.reviewId)) return;
+      seenGuardianReviewIds.add(params.reviewId);
+      if (params.review.status === 'timedOut') {
+        emitGuardianTimeout(params);
+        if (mutablePermissionMode === 'auto' && typeof opts.sessionId === 'string') {
+          this.deps.onAutoPermissionClassifierUnavailable?.({
+            sessionId: opts.sessionId,
+            agentKind: 'codex',
+            status: 408,
+          });
+        }
+        return;
+      }
+      if (params.review.status === 'denied') {
+        // Match Claude Auto: a real classifier verdict is authoritative. Codex has
+        // already blocked the action and returned the denial to the model; do not
+        // weaken Auto by offering a user override prompt.
+        log.info('Codex automatic approval review denied action', {
+          reviewId: params.reviewId,
+          turnId: params.turnId,
+          targetItemId: params.targetItemId,
+          actionType: params.action.type,
+          riskLevel: params.review.riskLevel,
+          rationale: params.review.rationale,
+        });
+      }
+    };
+
     // ── subscribeThread: notification 路由 + approval handlers ─────────────
     const handlers: ThreadEventHandlers = {
       threadStarted: (params) => {
@@ -3668,6 +3717,22 @@ export class CodexAgent extends BaseAgent {
             fastMode: isFastServiceTier(mutableServiceTier),
           });
         }
+      },
+      autoApprovalReviewStarted: (params: ItemGuardianApprovalReviewStartedNotification) => {
+        log.debug('Codex automatic approval review started', {
+          reviewId: params.reviewId,
+          turnId: params.turnId,
+          targetItemId: params.targetItemId,
+          actionType: params.action.type,
+        });
+      },
+      autoApprovalReviewCompleted: (params) => {
+        handleGuardianReviewCompleted(params);
+      },
+      guardianWarning: (params: GuardianWarningNotification) => {
+        // The completed review carries the actionable denial/timeout details. Keep the
+        // warning for diagnostics to avoid rendering a duplicate error card.
+        log.warn('Codex Guardian warning', { threadId: params.threadId, message: params.message });
       },
       error: (params) => {
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;

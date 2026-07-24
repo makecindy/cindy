@@ -203,6 +203,19 @@ export interface AgentDeps {
   ) => void | Promise<void>;
 
   /**
+   * Host-owned Auto permission fallback. A vendor reviewer timeout/unavailable
+   * result has already blocked the current action; the host persists this session
+   * from Auto to Ask and broadcasts the selector/toast update. Fire-and-forget:
+   * classifier failure handling must never hold the vendor notification loop.
+   */
+  onAutoPermissionClassifierUnavailable?: (args: {
+    sessionId: string;
+    agentKind: 'claude-code' | 'codex';
+    /** HTTP status when available; Codex reviewer timeout uses synthetic 408. */
+    status: number;
+  }) => void;
+
+  /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context
    * for host-owned HTTP MCP bridges. Missing hooks keep the old no-session
    * behavior; implementations should be in-memory and best-effort.

@@ -3159,6 +3159,86 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('keeps a denied Guardian auto-review fail-closed without opening a user override prompt', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-guardian-denial-fail-closed',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    handle.setInteractionResolver(resolver);
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
+
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-guardian',
+      startedAtMs: 1_000,
+      completedAtMs: 1_042,
+      reviewId: 'review-denied-1',
+      targetItemId: 'item-command-1',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'low',
+        rationale: 'The command removes persistent data.',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'rm -f /tmp/data.db',
+        cwd: '/repo',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(resolver).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.some(([method]) => method === 'thread/approveGuardianDeniedAction')).toBe(false);
+    await handle.close();
+  });
+
+  it('surfaces Guardian auto-review timeouts as visible non-terminal errors', async () => {
+    const classifierUnavailable = vi.fn();
+    const agent = new CodexAgent(createDeps({}, {
+      onAutoPermissionClassifierUnavailable: classifierUnavailable,
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-guardian-timeout',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-guardian',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-timeout-1',
+      targetItemId: 'item-network-1',
+      decisionSource: 'agent',
+      review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: 'review timed out' },
+      action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
+    });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'error',
+      data: { reason: 'codex-auto-review-timeout', isTerminal: false },
+    });
+    expect(classifierUnavailable).toHaveBeenCalledWith({
+      sessionId: 'session-guardian-timeout',
+      agentKind: 'codex',
+      status: 408,
+    });
+    await handle.close();
+  });
+
   it('interrupts an active Auto-review turn when switching back to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {

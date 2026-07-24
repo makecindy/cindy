@@ -936,6 +936,69 @@ export interface ErrorNotification {
   };
 }
 
+/** Codex 0.144.x automatic Guardian approval review lifecycle. */
+export type GuardianApprovalReviewStatus =
+  | 'inProgress'
+  | 'approved'
+  | 'denied'
+  | 'timedOut'
+  | 'aborted';
+export type GuardianRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type GuardianUserAuthorization = 'unknown' | 'low' | 'medium' | 'high';
+
+export type GuardianCommandSource = 'shell' | 'unifiedExec';
+export type GuardianNetworkProtocol = string;
+
+/** The action shape emitted by item/autoApprovalReview/* notifications. */
+export type GuardianApprovalReviewAction =
+  | { type: 'command'; source: GuardianCommandSource; command: string; cwd: string }
+  | { type: 'execve'; source: GuardianCommandSource; program: string; argv: string[]; cwd: string }
+  | { type: 'applyPatch'; cwd: string; files: string[] }
+  | { type: 'networkAccess'; target: string; host: string; protocol: GuardianNetworkProtocol; port: number }
+  | {
+      type: 'mcpToolCall';
+      server: string;
+      toolName: string;
+      connectorId: string | null;
+      connectorName: string | null;
+      toolTitle: string | null;
+    }
+  | { type: 'requestPermissions'; reason: string | null; permissions: Record<string, unknown> };
+
+export interface GuardianApprovalReview {
+  status: GuardianApprovalReviewStatus;
+  riskLevel: GuardianRiskLevel | null;
+  userAuthorization: GuardianUserAuthorization | null;
+  rationale: string | null;
+}
+
+export interface ItemGuardianApprovalReviewStartedNotification {
+  threadId: string;
+  turnId: string;
+  startedAtMs: number;
+  reviewId: string;
+  targetItemId: string | null;
+  review: GuardianApprovalReview;
+  action: GuardianApprovalReviewAction;
+}
+
+export interface ItemGuardianApprovalReviewCompletedNotification {
+  threadId: string;
+  turnId: string;
+  startedAtMs: number;
+  completedAtMs: number;
+  reviewId: string;
+  targetItemId: string | null;
+  decisionSource: 'agent';
+  review: GuardianApprovalReview;
+  action: GuardianApprovalReviewAction;
+}
+
+export interface GuardianWarningNotification {
+  threadId: string;
+  message: string;
+}
+
 /**
  * v2 ThreadItem 的 envelope — 至少有 id / type, 余字段按 type narrow。
  * 完整 union 在 v2.rs ThreadItem (太大, 不在 Phase 1 全列)。translator 用
@@ -962,6 +1025,9 @@ export type ServerNotification =
   | ThreadStatusChangedNotification
   | ThreadSettingsUpdatedNotification
   | ServerRequestResolvedNotification
+  | ItemGuardianApprovalReviewStartedNotification
+  | ItemGuardianApprovalReviewCompletedNotification
+  | GuardianWarningNotification
   | ErrorNotification;
 
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
@@ -992,6 +1058,9 @@ export const Method = {
   PermissionsRequestApproval: 'item/permissions/requestApproval',
   ToolRequestUserInput: 'item/tool/requestUserInput',
   DynamicToolCall: 'item/tool/call',
+  ItemGuardianApprovalReviewStarted: 'item/autoApprovalReview/started',
+  ItemGuardianApprovalReviewCompleted: 'item/autoApprovalReview/completed',
+  GuardianWarning: 'guardianWarning',
 } as const;
 
 export type {
