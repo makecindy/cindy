@@ -69,6 +69,7 @@ import {
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
 import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
+import type { GhostSetupInteractionResponseTarget } from './ghostSetupInteractionBridge.js';
 import { executeGhostSetupInlineSubmission } from './ghostSetupInlineExecutor.js';
 import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
@@ -157,6 +158,7 @@ import {
   type CindyCapabilityKey,
 } from './cindyPrefsStore.js';
 import {
+  isGhostDisabledForWorkdir,
   listDisabledGhostIdsForWorkdir,
   setGhostDisabledForWorkdir,
 } from './ghostWorkdirPrefs.js';
@@ -1628,6 +1630,7 @@ export async function executeGhostSetupAction(args: {
   sessionId: string;
   ghostId: string;
   action: GhostSetupAllowedAction;
+  responseTarget?: GhostSetupInteractionResponseTarget;
 }): Promise<GhostSetupActionResult> {
   const ghost = findAvailableGhost(args.ghostId);
   if (!ghost) return { ok: false, message: '目标插件已卸载或不可用' };
@@ -1658,16 +1661,18 @@ export async function executeGhostSetupAction(args: {
 
   const navigation = ghostSetupNavigationForAction(args.ghostId, args.action);
   if (!navigation) return { ok: false, message: '不支持的插件设置动作' };
+  if (!args.responseTarget || args.responseTarget.isDestroyed()) {
+    return { ok: false, message: '发起设置的窗口已关闭，请重新尝试' };
+  }
   // Settings are rendered by the trusted Desktop Renderer. Main sends only a
   // fixed local route target after validating the action against this ghost;
-  // no URL or route supplied by Agent/plugin is accepted.
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed()) continue;
-    window.webContents.send(MAKER_PUSH.PLUGIN_SETUP_NAVIGATE, {
-      sessionId: args.sessionId,
-      ...navigation,
-    });
-  }
+  // no URL or route supplied by Agent/plugin is accepted. The response target
+  // is captured from the trusted RESOLVE_INTERACTION sender, so another window
+  // observing the globally-broadcast snapshot is never navigated by this action.
+  args.responseTarget.send(MAKER_PUSH.PLUGIN_SETUP_NAVIGATE, {
+    sessionId: args.sessionId,
+    ...navigation,
+  });
   return { ok: true, waitingExternal: true };
 }
 
@@ -2694,7 +2699,14 @@ export function registerGhostIpc(): void {
     if (typeof disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled must be a boolean');
     }
+    const wasDisabled = isGhostDisabledForWorkdir(ghostId, workdir);
     const next = setGhostDisabledForWorkdir(workdir, ghostId, disabled);
+    // A setup card may already be waiting for this plugin in the affected
+    // project. Wake all waiters for the plugin; each one revalidates its own
+    // captured workdir and only the matching scope is rejected.
+    if (wasDisabled !== disabled) {
+      getGhostSetupChangeBus().emit(ghostId, { source: 'workdir_policy' });
+    }
     // 生效面变了(新会话花名册 / $ 菜单),借 ghosts:changed 通知所有窗口
     // 重拉——载荷仍是完整已装清单,消费方按需再 sendSync 取目录级清单。
     broadcastGhostsChanged(manager.list());

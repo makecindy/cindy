@@ -34,18 +34,35 @@ describe('GhostSetupInteractionBridge', () => {
     const broadcast = vi.fn();
     const onCommand = vi.fn();
     const bridge = new GhostSetupInteractionBridge({ broadcast });
+    const responseTarget = {
+      id: 101,
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
     bridge.open('session-1', snapshot(), onCommand);
 
     expect(
-      bridge.resolve('request-1', {
+      bridge.resolve(
+        'request-1',
+        {
+          kind: 'plugin_setup',
+          action: 'run_action',
+          actionId: 'oauth_connect:secret:google',
+          expectedRevision: 1,
+        },
+        responseTarget,
+      ),
+    ).toBe(true);
+    await Promise.resolve();
+    expect(onCommand).toHaveBeenCalledWith(
+      {
         kind: 'plugin_setup',
         action: 'run_action',
         actionId: 'oauth_connect:secret:google',
         expectedRevision: 1,
-      }),
-    ).toBe(true);
-    await Promise.resolve();
-    expect(onCommand).toHaveBeenCalledOnce();
+      },
+      responseTarget,
+    );
     expect(bridge.pendingSnapshots('session-1')).toHaveLength(1);
 
     expect(bridge.update(snapshot(2))).toBe(true);
@@ -64,6 +81,35 @@ describe('GhostSetupInteractionBridge', () => {
     expect(bridge.pendingSnapshots()).toEqual([{ sessionId: 'session-1', request: snapshot() }]);
     expect(bridge.close('request-1', 'ready')).toBe(true);
     expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.INTERACTION_DISMISSED, {
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      reason: 'ready',
+    });
+  });
+
+  it('retires a terminal snapshot from pending semantics before delayed dismissal', () => {
+    const broadcast = vi.fn();
+    const onCommand = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast });
+    bridge.open('session-1', snapshot(), onCommand);
+    const terminal = { ...snapshot(2), terminal: true as const };
+
+    expect(bridge.update(terminal)).toBe(true);
+    expect(bridge.complete('request-1')).toBe(true);
+    expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(
+      bridge.resolve('request-1', {
+        kind: 'plugin_setup',
+        action: 'cancel',
+        expectedRevision: 2,
+      }),
+    ).toBe(false);
+    expect(bridge.submitInline('request-1', {})).toBe(false);
+    expect(onCommand).not.toHaveBeenCalled();
+
+    // The retained entry still owns the delayed visual dismissal.
+    expect(bridge.close('request-1', 'ready')).toBe(true);
     expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.INTERACTION_DISMISSED, {
       sessionId: 'session-1',
       requestId: 'request-1',

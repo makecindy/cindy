@@ -3560,6 +3560,13 @@
       "retry": "다시 시도",
       "saveConfiguration": "설정 저장",
       "saving": "저장 중…",
+      "assessmentReadFailed": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI 모델 서비스",
+          "description": "플러그인에서 선언한 이미지 또는 동영상 기능을 사용하기 전에 사용 가능한 모델 서비스에 연결하세요."
+        }
+      },
       "form": {
         "placeholder": "{{label}} 입력",
         "required": "{{label}}을(를) 입력하세요",

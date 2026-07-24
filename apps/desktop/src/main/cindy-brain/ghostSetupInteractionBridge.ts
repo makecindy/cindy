@@ -26,6 +26,11 @@ export interface GhostSetupInteractionSnapshot {
   kind: 'plugin_setup';
   requestId: string;
   revision: number;
+  /**
+   * The call has settled. Renderer may retain this snapshot briefly for
+   * terminal feedback, but it is no longer actionable or pending.
+   */
+  terminal?: true;
   ghost: {
     id: string;
     name: string;
@@ -60,6 +65,18 @@ export interface GhostSetupInlineSubmitRequest extends GhostSetupInlineSubmit {
   requestId: string;
 }
 
+/**
+ * Main-owned response destination captured from the trusted IPC sender.
+ *
+ * This stays separate from the parsed Renderer command so an untrusted
+ * payload cannot nominate another window as the navigation target.
+ */
+export interface GhostSetupInteractionResponseTarget {
+  readonly id: number;
+  isDestroyed(): boolean;
+  send(channel: string, payload: unknown): void;
+}
+
 export interface GhostSetupInteractionBridgeDeps {
   broadcast: (channel: string, payload: unknown) => void;
   logger?: {
@@ -70,7 +87,11 @@ export interface GhostSetupInteractionBridgeDeps {
 interface PendingSetupInteraction {
   sessionId: string;
   snapshot: GhostSetupInteractionSnapshot;
-  onCommand: (command: GhostSetupInteractionCommand) => Promise<void> | void;
+  completed: boolean;
+  onCommand: (
+    command: GhostSetupInteractionCommand,
+    responseTarget?: GhostSetupInteractionResponseTarget,
+  ) => Promise<void> | void;
   onInlineSubmit?: (submit: GhostSetupInlineSubmit) => Promise<void> | void;
 }
 
@@ -91,6 +112,7 @@ export class GhostSetupInteractionBridge {
     this.pending.set(snapshot.requestId, {
       sessionId,
       snapshot,
+      completed: false,
       onCommand,
       ...(onInlineSubmit ? { onInlineSubmit } : {}),
     });
@@ -104,22 +126,28 @@ export class GhostSetupInteractionBridge {
 
   update(snapshot: GhostSetupInteractionSnapshot): boolean {
     const entry = this.pending.get(snapshot.requestId);
-    if (!entry) return false;
+    if (!entry || entry.completed) return false;
     if (snapshot.revision < entry.snapshot.revision) return false;
     entry.snapshot = snapshot;
     this.broadcastSnapshot(entry.sessionId, snapshot);
     return true;
   }
 
-  resolve(requestId: string, rawCommand: unknown): boolean {
+  resolve(
+    requestId: string,
+    rawCommand: unknown,
+    responseTarget?: GhostSetupInteractionResponseTarget,
+  ): boolean {
     const entry = this.pending.get(requestId);
-    if (!entry) return false;
+    if (!entry || entry.completed) return false;
     const command = parseGhostSetupInteractionCommand(rawCommand);
     if (!command) {
       this.deps.logger?.warn('plugin setup interaction received invalid command', { requestId });
       return true;
     }
-    Promise.resolve(entry.onCommand(command)).catch((error) => {
+    Promise.resolve(
+      entry.onCommand(command, command.action === 'run_action' ? responseTarget : undefined),
+    ).catch((error) => {
       this.deps.logger?.warn('plugin setup interaction command failed', {
         requestId,
         error: error instanceof Error ? error.message : String(error),
@@ -134,7 +162,7 @@ export class GhostSetupInteractionBridge {
    */
   submitInline(requestId: string, rawSubmit: unknown): boolean {
     const entry = this.pending.get(requestId);
-    if (!entry) return false;
+    if (!entry || entry.completed) return false;
     const submit = parseGhostSetupInlineSubmit(rawSubmit);
     if (!submit || !entry.onInlineSubmit) {
       this.deps.logger?.warn('plugin setup interaction received invalid inline submission', {
@@ -148,6 +176,17 @@ export class GhostSetupInteractionBridge {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+    return true;
+  }
+
+  /**
+   * Retire a settled request from pending/actionable semantics while keeping
+   * its last snapshot addressable for a delayed visual dismissal.
+   */
+  complete(requestId: string): boolean {
+    const entry = this.pending.get(requestId);
+    if (!entry || entry.completed) return false;
+    entry.completed = true;
     return true;
   }
 
@@ -173,7 +212,7 @@ export class GhostSetupInteractionBridge {
 
   cleanupForSession(sessionId: string, reason: 'session_closed' | 'session_aborted'): void {
     for (const [requestId, entry] of Array.from(this.pending.entries())) {
-      if (entry.sessionId !== sessionId) continue;
+      if (entry.sessionId !== sessionId || entry.completed) continue;
       void Promise.resolve(
         entry.onCommand({
           kind: 'plugin_setup',
@@ -196,7 +235,9 @@ export class GhostSetupInteractionBridge {
     request: GhostSetupInteractionSnapshot;
   }> {
     return Array.from(this.pending.values())
-      .filter((entry) => sessionId === undefined || entry.sessionId === sessionId)
+      .filter(
+        (entry) => !entry.completed && (sessionId === undefined || entry.sessionId === sessionId),
+      )
       .map((entry) => ({ sessionId: entry.sessionId, request: entry.snapshot }));
   }
 

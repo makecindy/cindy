@@ -428,25 +428,93 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
     });
   });
 
-  it("无交互面 → SETUP_REQUIRED 连同脱敏 assessment 原样返回", async () => {
-    const setup = { state: "required" as const, revision: 2, groups: [] };
+  it("无交互面 → SETUP_REQUIRED 重新净化 assessment 并剥离 Desktop-only 字段", async () => {
+    const setup = {
+      state: "required" as const,
+      revision: 2,
+      groups: [
+        {
+          id: "credential",
+          mode: "any_of" as const,
+          items: [
+            {
+              ref: "secret:api_key",
+              kind: "secret" as const,
+              label: "API Key",
+              state: "missing" as const,
+              actions: [
+                {
+                  id: "inline_form:opaque",
+                  kind: "inline_form" as const,
+                  storageKey: "real_api_key",
+                  form: {
+                    fields: [
+                      {
+                        id: "value" as const,
+                        type: "secret" as const,
+                        label: "API Key",
+                        externalLink: {
+                          url: "https://console.example.com/keys",
+                        },
+                        required: true as const,
+                        maxLength: 4096,
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
     const result = await handleGhostCall(
       fakeDeps({
         callGhostTool: async () => ({
           ok: false,
           errorCode: "SETUP_REQUIRED",
           message: "当前渠道无法完成插件设置",
-          setup,
+          setup: setup as unknown as CindyGhostSetupAssessment,
         }),
       }),
       { ghost_id: "gmail", tool: "search", args: {} },
     );
     expect(result.isError).toBe(true);
-    expect(parsePayload(result)).toMatchObject({
+    const payload = parsePayload(result);
+    expect(payload).toMatchObject({
       ok: false,
       errorCode: "SETUP_REQUIRED",
-      setup,
+      setup: {
+        state: "required",
+        revision: 2,
+        groups: [
+          {
+            items: [
+              {
+                actions: [
+                  {
+                    id: "inline_form:opaque",
+                    kind: "inline_form",
+                    form: {
+                      fields: [
+                        {
+                          id: "value",
+                          type: "secret",
+                          label: "API Key",
+                          required: true,
+                          maxLength: 4096,
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     });
+    expect(JSON.stringify(payload)).not.toMatch(/externalLink|storageKey|console\.example\.com/);
   });
 
   it("host 回调抛错 → INTERNAL,不抛穿", async () => {
@@ -778,7 +846,16 @@ describe("ghost_call · setup_plan MCP 边界", () => {
     expect(
       ghostSetupPlanInputSchema.safeParse({
         ...validPlan,
-        steps: Array.from({ length: 17 }, (_, i) => ({
+        steps: Array.from({ length: 64 }, (_, i) => ({
+          ...validPlan.steps[0],
+          id: `step-${i}`,
+        })),
+      }).success,
+    ).toBe(true);
+    expect(
+      ghostSetupPlanInputSchema.safeParse({
+        ...validPlan,
+        steps: Array.from({ length: 65 }, (_, i) => ({
           ...validPlan.steps[0],
           id: `step-${i}`,
         })),

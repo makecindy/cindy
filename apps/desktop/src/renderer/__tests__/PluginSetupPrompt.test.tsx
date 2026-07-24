@@ -298,6 +298,73 @@ describe('PluginSetupPrompt', () => {
     expect(input.value).toBe('');
   });
 
+  it('drops an unsubmitted inline Secret when the Host advances the setup revision', () => {
+    const onCommand = vi.fn();
+    const { rerender } = render(
+      <PluginSetupPrompt
+        pending={inlinePending}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={onCommand}
+      />,
+    );
+
+    const previousInput = screen.getByLabelText('API Key') as HTMLInputElement;
+    fireEvent.change(previousInput, { target: { value: 'transient-secret' } });
+    expect(previousInput.value).toBe('transient-secret');
+
+    rerender(
+      <PluginSetupPrompt
+        pending={{ ...inlinePending, revision: inlinePending.revision + 1 }}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={onCommand}
+      />,
+    );
+
+    const nextInput = screen.getByLabelText('API Key') as HTMLInputElement;
+    expect(nextInput).not.toBe(previousInput);
+    expect(nextInput.value).toBe('');
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it('replaces the completed card with the next queued request and resets transient input', () => {
+    const onCommand = vi.fn();
+    const { rerender } = render(
+      <PluginSetupPrompt
+        pending={inlinePending}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={onCommand}
+      />,
+    );
+
+    const firstInput = screen.getByLabelText('API Key') as HTMLInputElement;
+    fireEvent.change(firstInput, { target: { value: 'transient-secret' } });
+
+    rerender(
+      <PluginSetupPrompt
+        pending={{ ...pending, requestId: 'setup-2', revision: inlinePending.revision }}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={onCommand}
+      />,
+    );
+
+    expect(screen.queryByLabelText('API Key')).toBeNull();
+    expect(screen.getByText('Filo Google Settings')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize' }));
+    expect(onCommand).toHaveBeenCalledWith('setup-2', 'run_action', 'oauth-connect:google-account');
+  });
+
   it('opens the Host-declared credential page as a compact auxiliary link', async () => {
     render(
       <PluginSetupPrompt

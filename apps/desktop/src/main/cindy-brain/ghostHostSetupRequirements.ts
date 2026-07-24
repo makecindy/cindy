@@ -7,10 +7,8 @@
  * remains the authority for whether that client configuration is ready.
  */
 
-import type {
-  GhostManifest,
-  GhostSetupAssessmentGroup,
-} from '../../shared/ghost.js';
+import type { GhostManifest, GhostSetupAssessmentGroup } from '../../shared/ghost.js';
+import { t } from '../i18n.js';
 
 export interface GhostHostSetupRequirementProbes {
   clientConfigReady(configId: string): boolean;
@@ -18,16 +16,16 @@ export interface GhostHostSetupRequirementProbes {
 
 interface GhostHostSetupRequirementProvider {
   configId: string;
-  label: string;
-  description: string;
+  labelKey: string;
+  descriptionKey: string;
   matches(manifest: GhostManifest): boolean;
 }
 
 const providers: readonly GhostHostSetupRequirementProvider[] = [
   {
     configId: 'model-provider',
-    label: 'AI 模型服务',
-    description: '使用插件声明的图片或视频能力前，需要先连接可用的模型服务',
+    labelKey: 'newChat.pluginSetup.hostRequirements.modelProvider.label',
+    descriptionKey: 'newChat.pluginSetup.hostRequirements.modelProvider.description',
     matches: (manifest) =>
       Object.values(manifest.cindy ?? {}).some((actions) => (actions?.length ?? 0) > 0),
   },
@@ -49,8 +47,8 @@ export function assessGhostHostSetupRequirements(
           {
             ref,
             kind: 'client_config' as const,
-            label: provider.label,
-            description: provider.description,
+            label: t(provider.labelKey),
+            description: t(provider.descriptionKey),
             state: satisfied ? ('satisfied' as const) : ('missing' as const),
             actions: satisfied
               ? []

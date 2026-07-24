@@ -3560,6 +3560,13 @@
       "retry": "重试",
       "saveConfiguration": "保存配置",
       "saving": "保存中…",
+      "assessmentReadFailed": "暂时无法刷新配置状态，请重试。",
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI 模型服务",
+          "description": "使用插件声明的图片或视频能力前，需要先连接可用的模型服务"
+        }
+      },
       "form": {
         "placeholder": "请输入{{label}}",
         "required": "请输入{{label}}",

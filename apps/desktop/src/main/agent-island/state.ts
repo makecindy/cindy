@@ -680,7 +680,11 @@ export function applyAgentIslandInteractionDismissed(
 ): void {
   const session = state.sessions.get(sessionId);
   if (!session) return;
-  dismissPendingInteraction(state, session, requestId, now);
+  // Dismissal broadcasts can arrive after the turn has already completed
+  // (plugin setup intentionally keeps terminal UI visible for a short grace).
+  // A request that is no longer pending must not clear newer completion/error
+  // attention.
+  dismissPendingInteraction(state, session, requestId, now, { requirePending: true });
 }
 
 function dismissPendingInteraction(

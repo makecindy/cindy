@@ -31,6 +31,23 @@ describe('GhostSetupChangeBus', () => {
     expect(bus.currentRevision('gmail')).toBe(2);
   });
 
+  it('wakes waiters without advancing the accepted setup revision', () => {
+    const bus = new GhostSetupChangeBus();
+    const listener = vi.fn();
+    bus.subscribe('gmail', listener);
+    bus.emit('gmail', { source: 'oauth' });
+
+    expect(bus.wake('gmail', { source: 'focus' })).toEqual({
+      ghostId: 'gmail',
+      source: 'focus',
+      revision: 1,
+    });
+    expect(bus.currentRevision('gmail')).toBe(1);
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ source: 'focus', revision: 1 }),
+    );
+  });
+
   it('isolates listener failures so committed writes and other waiters keep progressing', () => {
     const warn = vi.fn();
     const bus = new GhostSetupChangeBus({ warn });

@@ -3560,6 +3560,13 @@
       "retry": "再試行",
       "saveConfiguration": "設定を保存",
       "saving": "保存中…",
+      "assessmentReadFailed": "設定状況を更新できませんでした。もう一度お試しください。",
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AIモデルサービス",
+          "description": "プラグインが宣言した画像または動画機能を使用する前に、利用可能なモデルサービスへ接続してください。"
+        }
+      },
       "form": {
         "placeholder": "{{label}}を入力",
         "required": "{{label}}を入力してください",

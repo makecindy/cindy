@@ -527,6 +527,36 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup?.revision).toBe(2);
   });
 
+  it('keeps terminal setup feedback mounted without reporting a pending interaction', () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(2),
+      terminal: true,
+      steps: pluginSetupRequest(2).steps.map((step) => ({
+        ...step,
+        phase: 'satisfied',
+      })),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toMatchObject({
+      requestId: 'plugin-setup-1',
+      revision: 2,
+      terminal: true,
+    });
+    expect(
+      makerChatStore.getRunningSnapshot().get(SESSION_ID)?.hasPendingPluginSetup ?? false,
+    ).toBe(false);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'claude-code', data: {} },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).not.toBeNull();
+    expect(
+      makerChatStore.getRunningSnapshot().get(SESSION_ID)?.hasPendingPluginSetup ?? false,
+    ).toBe(false);
+  });
+
   it('keeps plugin_setup mounted across done and clears only on matching dismissal', () => {
     emitInteractionRequest(pluginSetupRequest(1));
 
@@ -552,6 +582,70 @@ describe('makerChatStore text delta batching', () => {
     });
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
     expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupViewerState).toBe('expanded');
+  });
+
+  it('queues concurrent plugin_setup requests and promotes them in first-seen order', () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+
+    let snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup?.requestId).toBe('plugin-setup-1');
+    expect(snapshot.pendingPluginSetupQueue.map((setup) => setup.requestId)).toEqual([
+      'plugin-setup-2',
+    ]);
+
+    emitInteractionRequest({
+      ...pluginSetupRequest(3),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup?.requestId).toBe('plugin-setup-1');
+    expect(snapshot.pendingPluginSetupQueue[0]).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-2',
+        revision: 3,
+      }),
+    );
+
+    onInteractionDismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'plugin-setup-1',
+      reason: 'ready',
+    });
+    snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-2',
+        revision: 3,
+      }),
+    );
+    expect(snapshot.pendingPluginSetupQueue).toEqual([]);
+
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-2',
+      'run_action',
+      'oauth:google-account',
+    );
+    expect(window.electronAPI.maker.resolveInteraction).toHaveBeenCalledWith(
+      'plugin-setup-2',
+      expect.objectContaining({
+        kind: 'plugin_setup',
+        action: 'run_action',
+        expectedRevision: 3,
+      }),
+    );
   });
 
   it('sends the independent plugin_setup decision and waits for a newer snapshot', async () => {
@@ -624,6 +718,31 @@ describe('makerChatStore text delta batching', () => {
     const unsafeLink = inlinePluginSetupRequest(1);
     unsafeLink.steps[0].action.form.fields[0].externalLink.url = 'http://unsafe.example.com';
     emitInteractionRequest(unsafeLink);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
+  });
+
+  it('accepts all 64 manifest-valid setup steps and rejects a 65th', () => {
+    const step = pluginSetupRequest(1).steps[0];
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      steps: Array.from({ length: 64 }, (_, index) => ({
+        ...step,
+        id: `setup-${index}`,
+        action: { ...step.action, id: `oauth:${index}` },
+      })),
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup?.steps).toHaveLength(64);
+
+    makerChatStore.purgeSession(SESSION_ID);
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-oversized',
+      steps: Array.from({ length: 65 }, (_, index) => ({
+        ...step,
+        id: `setup-${index}`,
+        action: { ...step.action, id: `oauth:${index}` },
+      })),
+    });
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
   });
 

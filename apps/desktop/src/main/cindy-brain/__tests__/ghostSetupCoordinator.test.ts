@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { GhostSetupAssessment, GhostSetupPlan } from '../../../shared/ghost';
+import type {
+  GhostSetupAllowedAction,
+  GhostSetupAssessment,
+  GhostSetupPlan,
+} from '../../../shared/ghost';
+import { MAKER_PUSH } from '../../maker-ipc/channels';
 import { GhostSetupChangeBus } from '../ghostSetupChangeBus';
 import {
   GhostSetupCoordinator,
@@ -10,6 +15,7 @@ import {
 import {
   GhostSetupInteractionBridge,
   type GhostSetupInteractionCommand,
+  type GhostSetupInteractionResponseTarget,
 } from '../ghostSetupInteractionBridge';
 
 function required(revision = 0): GhostSetupAssessment {
@@ -154,7 +160,14 @@ function harness(initial: GhostSetupAssessment) {
   const bridge = new GhostSetupInteractionBridge({ broadcast });
   let assessment = initial;
   let targetValidation: GhostSetupTargetValidation = { ok: true };
-  const executeAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
+  const executeAction = vi.fn(
+    async (_args: {
+      sessionId: string;
+      ghostId: string;
+      action: GhostSetupAllowedAction;
+      responseTarget?: GhostSetupInteractionResponseTarget;
+    }): Promise<GhostSetupActionResult> => ({ ok: true }),
+  );
   const executeInlineAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
   let requestNumber = 0;
   const coordinator = new GhostSetupCoordinator({
@@ -347,6 +360,59 @@ describe('GhostSetupCoordinator', () => {
       });
     }
     await Promise.all([first, second]);
+  });
+
+  it('carries navigation only to the webContents that responded', async () => {
+    const h = harness(requiredNavigation());
+    const firstWindow: GhostSetupInteractionResponseTarget = {
+      id: 101,
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+    const secondWindow: GhostSetupInteractionResponseTarget = {
+      id: 202,
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+    h.executeAction.mockImplementationOnce(async ({ responseTarget }) => {
+      responseTarget?.send('maker:plugin-setup:navigate', {
+        sessionId: 'session-1',
+        target: 'plugin_settings',
+      });
+      return { ok: true, waitingExternal: true };
+    });
+
+    const waiting = h.coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'settings-ghost',
+      tool: 'run',
+    });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const request = h.bridge.pendingSnapshots()[0].request;
+
+    h.bridge.resolve(
+      request.requestId,
+      {
+        kind: 'plugin_setup',
+        action: 'run_action',
+        actionId: 'open_plugin_settings:plugin_config:settings',
+        expectedRevision: request.revision,
+      },
+      firstWindow,
+    );
+
+    await vi.waitFor(() => expect(firstWindow.send).toHaveBeenCalledOnce());
+    expect(secondWindow.send).not.toHaveBeenCalled();
+    expect(h.executeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ responseTarget: firstWindow }),
+    );
+
+    h.bridge.resolve(request.requestId, {
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: request.revision,
+    });
+    await waiting;
   });
 
   it('cancel settles the waiting call without executing an action', async () => {
@@ -683,6 +749,50 @@ describe('GhostSetupCoordinator', () => {
     expect(assess).toHaveBeenCalledTimes(3);
   });
 
+  it('publishes the injected localized message when re-assessment fails', async () => {
+    const changeBus = new GhostSetupChangeBus();
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    let assessmentReads = 0;
+    const assess = vi.fn(() => {
+      assessmentReads += 1;
+      if (assessmentReads === 1) return required();
+      throw new Error('setup storage unavailable');
+    });
+    const coordinator = new GhostSetupCoordinator({
+      changeBus,
+      bridge,
+      assess,
+      validateTarget: () => ({ ok: true }),
+      getGhostIdentity: () => ({ id: 'gmail', name: 'Gmail' }),
+      executeAction: vi.fn(),
+      assessmentReadFailureMessage: () => 'Could not refresh setup. Try again.',
+      terminalGraceMs: 0,
+    });
+
+    const waiting = coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'gmail',
+      tool: 'search',
+    });
+    await vi.waitFor(() => expect(bridge.pendingSnapshots()).toHaveLength(1));
+
+    changeBus.emit('gmail', { source: 'oauth' });
+    await vi.waitFor(() => {
+      expect(bridge.pendingSnapshots()[0].request.steps[0]).toMatchObject({
+        phase: 'failed',
+        errorMessage: 'Could not refresh setup. Try again.',
+      });
+    });
+
+    const snapshot = bridge.pendingSnapshots()[0].request;
+    bridge.resolve(snapshot.requestId, {
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: snapshot.revision,
+    });
+    await expect(waiting).resolves.toMatchObject({ errorCode: 'SETUP_CANCELLED' });
+  });
+
   it.each([
     ['GHOST_NOT_FOUND', '目标插件已卸载或当前不可用'],
     ['GHOST_ASLEEP', '目标插件已被停用'],
@@ -702,6 +812,121 @@ describe('GhostSetupCoordinator', () => {
 
       await expect(waiting).resolves.toEqual({ ok: false, errorCode, message });
       expect(h.bridge.pendingSnapshots()).toEqual([]);
+    },
+  );
+
+  it('revalidates the captured workdir policy and ignores changes for other workdirs', async () => {
+    const changeBus = new GhostSetupChangeBus();
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    const executeAction = vi.fn();
+    let disabledWorkdir: string | null = null;
+    const validateTarget = vi.fn((_ghostId: string, _tool: string, workingDir?: string | null) =>
+      workingDir === disabledWorkdir
+        ? ({
+            ok: false,
+            errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+            message: '用户已在当前工作目录停用该插件;不要重试。',
+          } as const)
+        : ({ ok: true } as const),
+    );
+    const coordinator = new GhostSetupCoordinator({
+      changeBus,
+      bridge,
+      assess: () => required(),
+      validateTarget,
+      getGhostIdentity: () => ({ id: 'gmail', name: 'Gmail' }),
+      executeAction,
+      terminalGraceMs: 0,
+    });
+    const waiting = coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'gmail',
+      tool: 'search',
+      workingDir: '/proj/alpha',
+    });
+    await vi.waitFor(() => expect(bridge.pendingSnapshots()).toHaveLength(1));
+
+    disabledWorkdir = '/proj/beta';
+    changeBus.emit('gmail', { source: 'workdir_policy' });
+    await vi.waitFor(() => expect(validateTarget).toHaveBeenCalledTimes(2));
+    expect(validateTarget).toHaveBeenLastCalledWith('gmail', 'search', '/proj/alpha');
+    expect(bridge.pendingSnapshots()).toHaveLength(1);
+
+    disabledWorkdir = '/proj/alpha';
+    changeBus.emit('gmail', { source: 'workdir_policy' });
+    await expect(waiting).resolves.toEqual({
+      ok: false,
+      errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+      message: '用户已在当前工作目录停用该插件;不要重试。',
+    });
+    expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'run_action' as const, assessment: required() },
+    { kind: 'inline_form' as const, assessment: requiredInline() },
+  ])(
+    'revalidates the captured workdir immediately before $kind side effects',
+    async ({ kind, assessment }) => {
+      const changeBus = new GhostSetupChangeBus();
+      const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+      const executeAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({ ok: true }));
+      const executeInlineAction = vi.fn(async (): Promise<GhostSetupActionResult> => ({
+        ok: true,
+      }));
+      let disabled = false;
+      const coordinator = new GhostSetupCoordinator({
+        changeBus,
+        bridge,
+        assess: () => assessment,
+        validateTarget: (_ghostId, _tool, workingDir) =>
+          disabled && workingDir === '/proj/alpha'
+            ? {
+                ok: false,
+                errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+                message: '用户已在当前工作目录停用该插件;不要重试。',
+              }
+            : { ok: true },
+        getGhostIdentity: () => ({ id: 'api', name: 'API' }),
+        executeAction,
+        executeInlineAction,
+        terminalGraceMs: 0,
+      });
+      const waiting = coordinator.ensureReady({
+        sessionId: 'session-1',
+        ghostId: 'api',
+        tool: 'call',
+        workingDir: '/proj/alpha',
+      });
+      await vi.waitFor(() => expect(bridge.pendingSnapshots()).toHaveLength(1));
+      const snapshot = bridge.pendingSnapshots()[0].request;
+      const actionId = snapshot.steps[0]?.action?.id;
+      if (!actionId) throw new Error('expected an actionable setup step');
+
+      disabled = true;
+      if (kind === 'run_action') {
+        bridge.resolve(snapshot.requestId, {
+          kind: 'plugin_setup',
+          action: 'run_action',
+          actionId,
+          expectedRevision: snapshot.revision,
+        });
+      } else {
+        bridge.submitInline(snapshot.requestId, {
+          actionId,
+          expectedRevision: snapshot.revision,
+          value: 'must-not-be-stored',
+        });
+      }
+
+      await expect(waiting).resolves.toEqual({
+        ok: false,
+        errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+        message: '用户已在当前工作目录停用该插件;不要重试。',
+      });
+      expect(executeAction).not.toHaveBeenCalled();
+      expect(executeInlineAction).not.toHaveBeenCalled();
     },
   );
 
@@ -806,7 +1031,8 @@ describe('GhostSetupCoordinator', () => {
   it('shows cancelled during terminal grace but resolves the original promise immediately', async () => {
     vi.useFakeTimers();
     const changeBus = new GhostSetupChangeBus();
-    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    const broadcast = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast });
     const coordinator = new GhostSetupCoordinator({
       changeBus,
       bridge,
@@ -830,16 +1056,29 @@ describe('GhostSetupCoordinator', () => {
       expectedRevision: 0,
     });
     await expect(waiting).resolves.toMatchObject({ errorCode: 'SETUP_CANCELLED' });
-    expect(bridge.pendingSnapshots()[0].request.steps[0].phase).toBe('cancelled');
+    expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.INTERACTION_REQUEST, {
+      sessionId: 'session-1',
+      request: expect.objectContaining({
+        terminal: true,
+        steps: [expect.objectContaining({ phase: 'cancelled' })],
+      }),
+    });
     await vi.advanceTimersByTimeAsync(700);
     expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.INTERACTION_DISMISSED, {
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      reason: 'cancelled',
+    });
     vi.useRealTimers();
   });
 
   it('marks every pending step cancelled after an action has selected one active step', async () => {
     vi.useFakeTimers();
     const changeBus = new GhostSetupChangeBus();
-    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    const broadcast = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast });
     let releaseAction!: () => void;
     const coordinator = new GhostSetupCoordinator({
       changeBus,
@@ -880,10 +1119,17 @@ describe('GhostSetupCoordinator', () => {
       expectedRevision: bridge.pendingSnapshots()[0].request.revision,
     });
     await expect(waiting).resolves.toMatchObject({ errorCode: 'SETUP_CANCELLED' });
-    expect(bridge.pendingSnapshots()[0].request.steps.map((step) => step.phase)).toEqual([
-      'cancelled',
-      'cancelled',
-    ]);
+    expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.INTERACTION_REQUEST, {
+      sessionId: 'session-1',
+      request: expect.objectContaining({
+        terminal: true,
+        steps: [
+          expect.objectContaining({ phase: 'cancelled' }),
+          expect.objectContaining({ phase: 'cancelled' }),
+        ],
+      }),
+    });
 
     releaseAction();
     await vi.advanceTimersByTimeAsync(700);
@@ -894,7 +1140,8 @@ describe('GhostSetupCoordinator', () => {
   it('publishes a timeout failure before resolving and keeps it visible for terminal grace', async () => {
     vi.useFakeTimers();
     const changeBus = new GhostSetupChangeBus();
-    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
+    const broadcast = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast });
     const coordinator = new GhostSetupCoordinator({
       changeBus,
       bridge,
@@ -915,9 +1162,18 @@ describe('GhostSetupCoordinator', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     await expect(waiting).resolves.toMatchObject({ errorCode: 'TIMEOUT' });
-    expect(bridge.pendingSnapshots()[0].request.steps[0]).toMatchObject({
-      phase: 'failed',
-      errorMessage: '等待超时',
+    expect(bridge.pendingSnapshots()).toEqual([]);
+    expect(broadcast).toHaveBeenLastCalledWith(MAKER_PUSH.INTERACTION_REQUEST, {
+      sessionId: 'session-1',
+      request: expect.objectContaining({
+        terminal: true,
+        steps: [
+          expect.objectContaining({
+            phase: 'failed',
+            errorMessage: '等待超时',
+          }),
+        ],
+      }),
     });
     await vi.advanceTimersByTimeAsync(700);
     expect(bridge.pendingSnapshots()).toEqual([]);

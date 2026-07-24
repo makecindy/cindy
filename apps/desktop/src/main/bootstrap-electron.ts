@@ -1739,7 +1739,7 @@ app.on('browser-window-focus', (_event, win) => {
       ),
     );
     for (const ghostId of pendingGhostIds) {
-      getGhostSetupChangeBus().emit(ghostId, { source: 'focus' });
+      getGhostSetupChangeBus().wake(ghostId, { source: 'focus' });
     }
   }
 });

@@ -554,17 +554,31 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             (g.manifest.tools?.length ?? 0) > 0 &&
             !isGhostDisabledForWorkdir(g.manifest.id, workdir),
         )
-        .map((g) => ({
-          id: g.manifest.id,
-          name: g.manifest.name,
-          ...(g.manifest.command ? { command: g.manifest.command } : {}),
-          setup: getGhostSetupAssessment(g.manifest.id),
-          tools: (g.manifest.tools ?? []).map((t) => ({
-            name: t.name,
-            description: t.description,
-            ...(t.parameters ? { parameters: t.parameters } : {}),
-          })),
-        }));
+        .map((g) => {
+          let setup: CindyGhostInfo['setup'];
+          try {
+            setup = getGhostSetupAssessment(g.manifest.id);
+          } catch (error) {
+            // Roster discovery is best-effort per plugin. Keep this plugin
+            // discoverable without claiming it is ready; ghost_call retains
+            // the strict setup gate and will fail before dispatch.
+            log.warn('ghost setup assessment omitted from roster', {
+              ghostId: g.manifest.id,
+              errorType: error instanceof Error ? error.name : typeof error,
+            });
+          }
+          return {
+            id: g.manifest.id,
+            name: g.manifest.name,
+            ...(g.manifest.command ? { command: g.manifest.command } : {}),
+            ...(setup ? { setup } : {}),
+            tools: (g.manifest.tools ?? []).map((t) => ({
+              name: t.name,
+              description: t.description,
+              ...(t.parameters ? { parameters: t.parameters } : {}),
+            })),
+          };
+        });
     },
     async callGhostTool({
       ghostId,
@@ -688,6 +702,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         sessionId: ghostSetupInteractionSessionId(sessionContext),
         ghostId,
         tool,
+        workingDir: sessionWorkdir,
         ...(setupPlan ? { plan: setupPlan } : {}),
       });
       if (!setup.ok) return setup;

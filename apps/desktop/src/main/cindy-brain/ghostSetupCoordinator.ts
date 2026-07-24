@@ -17,6 +17,7 @@ import type { GhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import type {
   GhostSetupInteractionBridge,
   GhostSetupInteractionCommand,
+  GhostSetupInteractionResponseTarget,
   GhostSetupInteractionSnapshot,
   GhostSetupInteractionStep,
 } from './ghostSetupInteractionBridge.js';
@@ -32,6 +33,7 @@ export type GhostSetupEnsureResult =
         | 'INTERNAL'
         | 'GHOST_NOT_FOUND'
         | 'GHOST_ASLEEP'
+        | 'GHOST_DISABLED_IN_WORKDIR'
         | 'TOOL_NOT_FOUND';
       message: string;
       setup?: GhostSetupAssessment;
@@ -41,7 +43,8 @@ export type GhostSetupTargetValidation =
   | { ok: true }
   | {
       ok: false;
-      errorCode: 'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'TOOL_NOT_FOUND';
+      errorCode:
+        'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'TOOL_NOT_FOUND';
       message: string;
     };
 
@@ -56,7 +59,11 @@ export interface GhostSetupCoordinatorDeps {
   changeBus: GhostSetupChangeBus;
   bridge: GhostSetupInteractionBridge;
   assess: (ghostId: string) => Promise<GhostSetupAssessment> | GhostSetupAssessment;
-  validateTarget: (ghostId: string, tool: string) => GhostSetupTargetValidation;
+  validateTarget: (
+    ghostId: string,
+    tool: string,
+    workingDir?: string | null,
+  ) => GhostSetupTargetValidation;
   getGhostIdentity: (ghostId: string) => {
     id: string;
     name: string;
@@ -66,6 +73,7 @@ export interface GhostSetupCoordinatorDeps {
     sessionId: string;
     ghostId: string;
     action: GhostSetupAllowedAction;
+    responseTarget?: GhostSetupInteractionResponseTarget;
   }) => Promise<GhostSetupActionResult>;
   executeInlineAction?: (args: {
     sessionId: string;
@@ -76,6 +84,8 @@ export interface GhostSetupCoordinatorDeps {
   timeoutMs?: number;
   terminalGraceMs?: number;
   createRequestId?: () => string;
+  /** Resolved lazily so a renderer-synced Main locale is used at failure time. */
+  assessmentReadFailureMessage?: () => string;
   logger?: {
     warn: (message: string, context?: Record<string, unknown>) => void;
   };
@@ -85,6 +95,8 @@ export interface GhostSetupEnsureRequest {
   sessionId: string | null;
   ghostId: string;
   tool: string;
+  /** Captured call scope; revalidated after every setup/policy change. */
+  workingDir?: string | null;
   plan?: GhostSetupPlan;
 }
 
@@ -117,7 +129,7 @@ export class GhostSetupCoordinator {
       for (;;) {
         assessmentDirty = false;
         const startRevision = this.deps.changeBus.currentRevision(request.ghostId);
-        const target = this.deps.validateTarget(request.ghostId, request.tool);
+        const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
         if (!target.ok) return { ok: false, target };
         const next = await this.deps.assess(request.ghostId);
         if (
@@ -184,6 +196,16 @@ export class GhostSetupCoordinator {
         settled = true;
         unsubscribe();
         if (timeoutId) clearTimeout(timeoutId);
+        // The terminal card may remain visible for a short grace period, but
+        // the request must stop participating in pending/actionable semantics
+        // before the original ghost_call resumes.
+        snapshot = {
+          ...snapshot,
+          revision: snapshot.revision + 1,
+          terminal: true,
+        };
+        this.deps.bridge.update(snapshot);
+        this.deps.bridge.complete(requestId);
         if (dismissDelayMs > 0) {
           setTimeout(() => this.deps.bridge.close(requestId, dismissReason), dismissDelayMs);
         } else {
@@ -232,7 +254,12 @@ export class GhostSetupCoordinator {
             current = await readUntilQuiet();
           } catch (error) {
             if (settled) return;
-            publish(assessment, 'failed', '插件配置状态读取失败');
+            publish(
+              assessment,
+              'failed',
+              this.deps.assessmentReadFailureMessage?.() ??
+                'Could not refresh the plugin setup status. Please try again.',
+            );
             this.deps.logger?.warn('plugin setup assessment failed', {
               ghostId: request.ghostId,
               error: error instanceof Error ? error.message : String(error),
@@ -262,13 +289,17 @@ export class GhostSetupCoordinator {
         void verify(waitingExternal ? 'waiting_external' : undefined);
       };
 
-      const runAction = async (actionId: string, expectedRevision: number): Promise<void> => {
+      const runAction = async (
+        actionId: string,
+        expectedRevision: number,
+        responseTarget?: GhostSetupInteractionResponseTarget,
+      ): Promise<void> => {
         if (settled) return;
         if (expectedRevision !== snapshot.revision) {
           await verify();
           return;
         }
-        const target = this.deps.validateTarget(request.ghostId, request.tool);
+        const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
         if (!target.ok) {
           settleTargetFailure(target);
           return;
@@ -288,7 +319,12 @@ export class GhostSetupCoordinator {
         let flight = this.actionFlights.get(flightKey);
         if (!flight) {
           flight = this.deps
-            .executeAction({ sessionId, ghostId: request.ghostId, action })
+            .executeAction({
+              sessionId,
+              ghostId: request.ghostId,
+              action,
+              ...(responseTarget ? { responseTarget } : {}),
+            })
             .finally(() => this.actionFlights.delete(flightKey));
           this.actionFlights.set(flightKey, flight);
         }
@@ -310,7 +346,10 @@ export class GhostSetupCoordinator {
         await verify(result.waitingExternal ? 'waiting_external' : undefined);
       };
 
-      const onCommand = async (command: GhostSetupInteractionCommand): Promise<void> => {
+      const onCommand = async (
+        command: GhostSetupInteractionCommand,
+        responseTarget?: GhostSetupInteractionResponseTarget,
+      ): Promise<void> => {
         if (command.action === 'cancel') {
           publish(assessment, 'cancelled', undefined, true);
           settle(
@@ -324,7 +363,7 @@ export class GhostSetupCoordinator {
           );
           return;
         }
-        await runAction(command.actionId, command.expectedRevision);
+        await runAction(command.actionId, command.expectedRevision, responseTarget);
       };
 
       const submitInline = async (submit: {
@@ -343,7 +382,7 @@ export class GhostSetupCoordinator {
           await verify();
           return;
         }
-        const target = this.deps.validateTarget(request.ghostId, request.tool);
+        const target = this.deps.validateTarget(request.ghostId, request.tool, request.workingDir);
         if (!target.ok) {
           settleTargetFailure(target);
           return;

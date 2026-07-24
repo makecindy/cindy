@@ -82,8 +82,11 @@ const ROSTER_DESC_MAX = 120;
 /** 花名册条数上限(超出的意识仍可经 ghost_list 实时查到,只是不进描述)。 */
 const ROSTER_MAX_ITEMS = 16;
 
-/** Agent setup plan 的 MCP 边界上限；避免模型输出撑大工具调用与聊天卡。 */
-const SETUP_PLAN_MAX_STEPS = 16;
+/**
+ * Agent setup plan 的 MCP 边界上限。须与 Desktop manifest 的
+ * max groups × max any-of items (8 × 8) 保持一致；本包刻意不依赖 Desktop。
+ */
+const SETUP_PLAN_MAX_STEPS = 64;
 const SETUP_PLAN_MAX_REFS_PER_STEP = 8;
 const SETUP_PLAN_MAX_ID_LENGTH = 128;
 const SETUP_PLAN_MAX_INTRO_LENGTH = 500;
@@ -525,7 +528,22 @@ export async function handleGhostCall(
         tool: input.tool,
         errorCode: result.errorCode,
       });
-      return textResult(result, true);
+      // Headless / non-Desktop callers receive the setup assessment through
+      // the MCP boundary. Re-apply the same public sanitizer used by
+      // ghost_list so Desktop-only metadata (for example externalLink) cannot
+      // leak through the failure path.
+      const { setup: unsafeSetup, ...safeResult } = result;
+      const setup =
+        result.errorCode === "SETUP_REQUIRED"
+          ? sanitizeGhostSetupAssessment(unsafeSetup)
+          : null;
+      return textResult(
+        {
+          ...safeResult,
+          ...(setup ? { setup } : {}),
+        },
+        true,
+      );
     }
     const hoisted = hoistMediaFields(result.result);
     // 兜底账本(规则 9,主机侧事实):意识没声明任何媒体字段、但本次调用

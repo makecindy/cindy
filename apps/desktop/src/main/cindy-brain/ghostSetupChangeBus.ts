@@ -13,6 +13,7 @@ export type GhostSetupChangeSource =
   | 'connection'
   | 'manifest'
   | 'host_config'
+  | 'workdir_policy'
   | 'focus';
 
 export interface GhostSetupChangeEvent {
@@ -49,21 +50,27 @@ export class GhostSetupChangeBus {
       revision: this.currentRevision(ghostId) + 1,
     };
     this.revisions.set(ghostId, event.revision);
-    for (const listener of this.listeners.get(ghostId) ?? []) {
-      try {
-        listener(event);
-      } catch (error) {
-        // Configuration writes have already committed by the time they emit.
-        // A broken waiter must not turn that successful write into a failure
-        // or prevent the remaining waiters from observing the revision.
-        this.logger?.warn('ghost setup change listener failed', {
-          ghostId,
-          source: change.source,
-          revision: event.revision,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    this.notify(event);
+    return event;
+  }
+
+  /**
+   * Re-assess one pending plugin without claiming that configuration changed.
+   * This is for external-completion probes such as returning focus after an
+   * OAuth flow. The current revision is preserved so an accepted setup plan
+   * does not become stale merely because the app regained focus.
+   */
+  wake(
+    ghostId: string,
+    change: { source: GhostSetupChangeSource; ref?: string },
+  ): GhostSetupChangeEvent {
+    const event: GhostSetupChangeEvent = {
+      ghostId,
+      source: change.source,
+      ...(change.ref ? { ref: change.ref } : {}),
+      revision: this.currentRevision(ghostId),
+    };
+    this.notify(event);
     return event;
   }
 
@@ -87,6 +94,23 @@ export class GhostSetupChangeBus {
       listeners?.delete(listener);
       if (listeners?.size === 0) this.listeners.delete(ghostId);
     };
+  }
+
+  private notify(event: GhostSetupChangeEvent): void {
+    for (const listener of this.listeners.get(event.ghostId) ?? []) {
+      try {
+        listener(event);
+      } catch (error) {
+        // A wake follows either an already committed write or a metadata-only
+        // probe. A broken waiter must not affect other subscribers.
+        this.logger?.warn('ghost setup change listener failed', {
+          ghostId: event.ghostId,
+          source: event.source,
+          revision: event.revision,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 }
 

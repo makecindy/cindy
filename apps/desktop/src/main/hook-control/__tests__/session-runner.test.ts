@@ -57,6 +57,7 @@ const h = vi.hoisted(() => {
     /** 每个 fake session 被装上的 interaction listener(交互测试驱动用)。 */
     interactionListeners: new Map<string, (req: unknown) => Promise<unknown>>(),
     headlessDuringSend: [] as boolean[],
+    headlessAfterAccepted: [] as boolean[],
     installDesktopInteractionListener: vi.fn(),
     /** mocked resolveHookSessionConfig 的返回值(测试内可改写)。 */
     resolvedConfig: {
@@ -177,6 +178,7 @@ function makeFakeSession(id: string) {
       async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }): Promise<unknown> => {
         h.headlessDuringSend.push(isHeadlessGhostSetupTurn(id));
         await opts.onAccepted?.();
+        h.headlessAfterAccepted.push(isHeadlessGhostSetupTurn(id));
         // 收口: 模拟 agent 立刻完成本 turn
         queueMicrotask(() => h.eventCbs.get(id)?.({ type: 'done', data: null }));
         return { accepted: true };
@@ -265,6 +267,7 @@ beforeEach(() => {
   h.calls.length = 0;
   h.eventCbs.clear();
   h.headlessDuringSend.length = 0;
+  h.headlessAfterAccepted.length = 0;
   h.listProviders.mockReset();
   h.listProviders.mockResolvedValue([]);
   h.getModelVisibilityOverride.mockReset();
@@ -553,7 +556,29 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     // 渠道说明仍逐 turn 生效(不依赖 vendorOptions)
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({ content: HELLO_WITH_NOTE });
-    expect(h.headlessDuringSend).toEqual([true]);
+    expect(h.headlessDuringSend).toEqual([false]);
+    expect(h.headlessAfterAccepted).toEqual([true]);
+    expect(isHeadlessGhostSetupTurn('sess-old')).toBe(false);
+  });
+
+  it('does not leak a headless marker when an accept arrives after send failure cleanup', async () => {
+    const session = makeFakeSession('sess-old');
+    let lateAccepted: (() => Promise<void>) | undefined;
+    session.send.mockImplementationOnce(
+      async (_msg: unknown, opts: { onAccepted?: () => Promise<void> }) => {
+        lateAccepted = opts.onAccepted;
+        throw new Error('send failed before admission');
+      },
+    );
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+
+    await expect(
+      runner.run(baseReq({ sessionId: 'sess-old', isNew: false })),
+    ).resolves.toMatchObject({ status: 'error' });
+    expect(isHeadlessGhostSetupTurn('sess-old')).toBe(false);
+
+    await lateAccepted?.();
     expect(isHeadlessGhostSetupTurn('sess-old')).toBe(false);
   });
 

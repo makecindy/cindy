@@ -51,10 +51,12 @@ import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBri
 import {
   initGhostSetupInteractionBridge,
   parseGhostSetupInlineSubmitRequest,
+  type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {
   executeGhostSetupAction,
   executeGhostSetupInlineAction,
@@ -138,6 +140,7 @@ import {
 } from '../localDb/orcaTeamStore.js';
 import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
 import { desktopClaudeAuthAdapter, desktopCodexAuthAdapter, readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
 import { syncExternalCodexSessionFromDesktop } from '../maker-host/codex-local-sessions.js';
@@ -411,6 +414,10 @@ import {
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import {
+  assertResolveInteractionOrigin,
+  isPluginSetupInteractionDecision,
+} from './interactionResolveOrigin.js';
 import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
 import { createBusinessSessionId } from '../sessionIds.js';
@@ -1112,6 +1119,15 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
     };
     if (typeof value.sessionId !== 'string') return;
     if (channel === MAKER_PUSH.INTERACTION_REQUEST && value.request?.kind === 'plugin_setup') {
+      if (value.request.terminal === true) {
+        // The Renderer keeps the terminal snapshot for its short visual
+        // grace, while Agent Island must stop treating it as attention now.
+        getAgentIslandService()?.handleInteractionDismissed(
+          value.sessionId,
+          value.request.requestId,
+        );
+        return;
+      }
       const activeStep = value.request.steps.find(
         (step) => step.phase !== 'satisfied' && step.phase !== 'cancelled',
       );
@@ -1139,7 +1155,7 @@ initGhostSetupCoordinator({
   changeBus: getGhostSetupChangeBus(),
   bridge: ghostSetupInteractionBridge,
   assess: (ghostId) => getGhostSetupAssessment(ghostId),
-  validateTarget: (ghostId, tool) => {
+  validateTarget: (ghostId, tool, workingDir) => {
     const ghost = getGhostManager()
       .list()
       .find((candidate) => candidate.manifest.id === ghostId);
@@ -1155,6 +1171,13 @@ initGhostSetupCoordinator({
         ok: false,
         errorCode: 'GHOST_ASLEEP',
         message: '目标插件已被停用',
+      };
+    }
+    if (isGhostDisabledForWorkdir(ghostId, workingDir)) {
+      return {
+        ok: false,
+        errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+        message: '用户已在当前工作目录停用该插件;不要重试。',
       };
     }
     if (!(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
@@ -1176,10 +1199,16 @@ initGhostSetupCoordinator({
         }
       : null;
   },
-  executeAction: ({ sessionId, ghostId, action }) =>
-    executeGhostSetupAction({ sessionId, ghostId, action }),
+  executeAction: ({ sessionId, ghostId, action, responseTarget }) =>
+    executeGhostSetupAction({
+      sessionId,
+      ghostId,
+      action,
+      ...(responseTarget ? { responseTarget } : {}),
+    }),
   executeInlineAction: ({ sessionId, ghostId, action, value }) =>
     executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
+  assessmentReadFailureMessage: () => t('newChat.pluginSetup.assessmentReadFailed'),
   logger: log,
 });
 
@@ -6630,8 +6659,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }));
   });
 
-  ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION, (_e, requestId: unknown, decision: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION, (event, requestId: unknown, decision: unknown) => {
     if (typeof requestId !== 'string') throwIpcError('INVALID_PARAMS', 'requestId required');
+    // permission / ask / plan and setup cancellation remain remotely
+    // resolvable, but Host-owned setup side effects may only originate from
+    // the trusted local Desktop.
+    assertResolveInteractionOrigin(decision);
+    let pluginSetupResponseTarget: GhostSetupInteractionResponseTarget | undefined;
+    if (isPluginSetupInteractionDecision(decision) && !isDeviceLinkInvoke()) {
+      assertTrustedAppRendererEvent(event);
+      if (decision.action === 'run_action') {
+        // Electron's real sender identity stays outside the untrusted command
+        // payload and is carried only through the Host-owned action path.
+        pluginSetupResponseTarget = event.sender;
+      }
+    }
     if (!resolvePendingInteraction(requestId, decision as InteractionDecision)) {
       if (isPermissionInteractionDecision(decision)) {
         handleAgentIslandInteractionDismissedByRequestId(requestId);
@@ -6642,7 +6684,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       if (issueConfirmBridge.resolve(requestId, decision)) return;
       if (renameSessionsConfirmBridge.resolve(requestId, decision)) return;
       if (ghostGrantConfirmBridge.resolve(requestId, decision)) return;
-      if (ghostSetupInteractionBridge.resolve(requestId, decision)) return;
+      if (ghostSetupInteractionBridge.resolve(requestId, decision, pluginSetupResponseTarget)) {
+        return;
+      }
       log.warn('resolve-interaction: no pending resolver (likely already dismissed/timed out)', { requestId });
     }
   });

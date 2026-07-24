@@ -771,6 +771,9 @@ export const GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS: readonly string[] = [
 export const GHOST_SETUP_MAX_GROUPS = 8;
 /** 每个需求组内 anyOf 条目上限。 */
 export const GHOST_SETUP_MAX_ITEMS_PER_GROUP = 8;
+/** 一张 setup 卡最多需要覆盖 manifest 合法声明的全部可操作条目。 */
+export const GHOST_SETUP_MAX_STEPS =
+  GHOST_SETUP_MAX_GROUPS * GHOST_SETUP_MAX_ITEMS_PER_GROUP;
 /** setup kv 引用的键名形状(意识 /kv 顶层键;点号仅作普通字符,不做路径下钻)。 */
 export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 

@@ -41,7 +41,17 @@ function normalizedCopy(value: string | undefined): string {
   return (value ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 }
 
-export function PluginSetupPrompt({
+export function PluginSetupPrompt({ pending, ...props }: PluginSetupPromptProps) {
+  return (
+    <PluginSetupPromptStateful
+      key={`${pending.requestId}:${pending.revision}`}
+      pending={pending}
+      {...props}
+    />
+  );
+}
+
+function PluginSetupPromptStateful({
   pending,
   viewerState,
   commandInFlight,
@@ -104,11 +114,6 @@ export function PluginSetupPrompt({
   const formValueMissing = !!inlineFormField?.required && normalizedFormValue.length === 0;
   const formValueTooLong =
     !!inlineFormField && normalizedFormValue.length > inlineFormField.maxLength;
-  useEffect(() => {
-    setFormValues({});
-    setFormTouched({});
-    setLinkOpenFailed({});
-  }, [pending.requestId]);
 
   useEffect(() => {
     if (!inlineFormAction) return;

@@ -1088,16 +1088,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
     /** 绑定会话的当前路由基线(meta.model / meta.effort / sessions.provider_id)。 */
     routingBaseline: { model?: string; effort?: string; providerId: string | null },
   ): Promise<FireResult> {
-    const releaseHeadlessGhostSetupTurn = beginHeadlessGhostSetupTurn(sessionId);
+    const headlessTurn = {
+      closed: false,
+      release: null as (() => void) | null,
+    };
     try {
       return await this.fireTrackedHeartbeatViaQueue(
         schedule,
         ctx,
         sessionId,
         routingBaseline,
+        () => {
+          // A cancelled queue item may still report a late accept after the
+          // runner has already settled. Do not acquire a marker that no
+          // remaining finally block could release.
+          if (headlessTurn.closed || headlessTurn.release) return;
+          headlessTurn.release = beginHeadlessGhostSetupTurn(sessionId);
+        },
       );
     } finally {
-      releaseHeadlessGhostSetupTurn();
+      headlessTurn.closed = true;
+      headlessTurn.release?.();
+      headlessTurn.release = null;
     }
   }
 
@@ -1106,6 +1118,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     ctx: FireContext,
     sessionId: string,
     routingBaseline: { model?: string; effort?: string; providerId: string | null },
+    markHeadlessTurnDispatched: () => void,
   ): Promise<FireResult> {
     const sq = this.deps.schedulerQueue;
     if (!sq) throw new Error('fireHeartbeatViaQueue requires schedulerQueue dep');
@@ -1156,6 +1169,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       origin,
       onAccepted: async () => {
         dispatched = true;
+        // Queue admission happens while another (possibly user-driven)
+        // Desktop turn still owns the session. Only the accepted scheduler
+        // turn is headless; marking the whole queue wait would suppress setup
+        // cards in that unrelated interactive turn.
+        markHeadlessTurnDispatched();
         const live = this.deps.maker.getSession(sessionId);
         // abort 撞上"项已转 activeTurn、尚未 accept"的派发窗口时,removeQueuedPrompt
         // 是 no-op、coordinator 会继续把 turn 发出去 —— 这里在 accept 时刻补杀:

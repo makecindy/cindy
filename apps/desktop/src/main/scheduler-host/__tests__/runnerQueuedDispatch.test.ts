@@ -314,7 +314,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     // 不直发、不自行落库(coordinator drain 负责)。
     expect(harness.send).not.toHaveBeenCalled();
     expect(mocks.createMessage).not.toHaveBeenCalled();
-    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
+    // 排队等待仍属于当前 Desktop turn，不能被未来的 scheduler turn
+    // 提前标成 headless，否则当前 turn 的插件设置卡会被错误抑制。
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
 
     // drain 派发 → runner 挂 turn 监听 → done 收尾。
     await queue.accept();
@@ -355,6 +357,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 
     await expect(firePromise).rejects.toThrow(/aborted/i);
     expect(harness.listenerCount()).toBe(0);
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
   });
 
   it('removes the queued prompt when ctx.signal aborts while waiting', async () => {
@@ -369,6 +372,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 
     await expect(firePromise).rejects.toThrow(/aborted/i);
     expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
   });
 
   it('defers when enqueuePrompt reports an authoritative duplicate (restored snapshot)', async () => {
@@ -453,6 +457,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect((harness.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort).toHaveBeenCalled();
     // 不再挂 turn 监听(run 已收口)。
     expect(harness.listenerCount()).toBe(0);
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
   });
 
   it('applies schedule model override to the live session at dispatch-accept time', async () => {
@@ -509,6 +514,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 
     await expect(firePromise).rejects.toThrow(/rolled back after accept/i);
     expect(harness.listenerCount()).toBe(0);
+    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
   });
 
   it('re-applies the schedule model when the live session model drifted while queued', async () => {

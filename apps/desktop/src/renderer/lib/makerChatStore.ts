@@ -34,7 +34,11 @@ import type {
 } from '../../shared/agentInputQueue';
 import { getAgentFacingText, reconcileSessionRefsForText } from '../../shared/agentInputQueue';
 import { providerSecretStorageKey } from '../../shared/providerSecrets';
-import { GHOST_HOST_NOTICE_KEYS, GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost';
+import {
+  GHOST_HOST_NOTICE_KEYS,
+  GHOST_SECRET_VALUE_MAX_CHARS,
+  GHOST_SETUP_MAX_STEPS,
+} from '../../shared/ghost';
 import type {
   GhostSetupActionKind,
   GhostSetupAllowedAction,
@@ -464,6 +468,8 @@ type PluginSetupInlineFormAction = Extract<GhostSetupAllowedAction, { kind: 'inl
 export interface PendingPluginSetup {
   requestId: string;
   revision: number;
+  /** Settled but retained briefly so the card can show terminal feedback. */
+  terminal?: true;
   ghost: {
     id: string;
     name: string;
@@ -480,6 +486,20 @@ export interface PendingPluginSetup {
     action?: PluginSetupAction;
     errorMessage?: string;
   }>;
+}
+
+function isPluginSetupInteractionPending(setup: PendingPluginSetup | null): boolean {
+  return setup !== null && setup.terminal !== true;
+}
+
+function hasPendingPluginSetupInteraction(
+  current: PendingPluginSetup | null,
+  queue: readonly PendingPluginSetup[],
+): boolean {
+  return (
+    isPluginSetupInteractionPending(current) ||
+    queue.some((setup) => isPluginSetupInteractionPending(setup))
+  );
 }
 
 export type PluginSetupViewerState = 'expanded' | 'minimized';
@@ -735,6 +755,13 @@ export interface SessionChatState {
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
   pendingPluginSetup: PendingPluginSetup | null;
+  /**
+   * Additional setup requests for this session, in first-seen order.
+   *
+   * Only the head prompt is interactive. Snapshot updates replace the matching
+   * request in place, and dismissal promotes the next request without losing it.
+   */
+  pendingPluginSetupQueue: PendingPluginSetup[];
   /** UI-only fold state for the current plugin setup prompt. */
   pluginSetupViewerState: PluginSetupViewerState;
   /** Prevents duplicate commands until Main publishes a newer snapshot/dismissal. */
@@ -944,6 +971,7 @@ function createInitialState(): SessionChatState {
     pendingPermission: null,
     pendingAskUser: null,
     pendingPluginSetup: null,
+    pendingPluginSetupQueue: [],
     pluginSetupViewerState: 'expanded',
     pluginSetupCommandInFlight: null,
     askUserViewerState: 'expanded',
@@ -1008,6 +1036,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingPermission: null,
   pendingAskUser: null,
   pendingPluginSetup: null,
+  pendingPluginSetupQueue: [],
   pluginSetupViewerState: 'expanded',
   pluginSetupCommandInFlight: null,
   askUserViewerState: 'expanded',
@@ -1197,7 +1226,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     hasBackgroundAgentWork(sessionId, s) ||
     s.pendingPermission ||
     s.pendingAskUser ||
-    s.pendingPluginSetup ||
+    hasPendingPluginSetupInteraction(s.pendingPluginSetup, s.pendingPluginSetupQueue) ||
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
     s.pendingRenameSessionsConfirm ||
@@ -2497,11 +2526,24 @@ export function handleStreamEvent(
         return { ...state, pendingPermission: null };
       }
       if (state.pendingPluginSetup?.requestId === data.requestId) {
+        const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
         return {
           ...state,
-          pendingPluginSetup: null,
+          pendingPluginSetup: nextSetup,
+          pendingPluginSetupQueue: remainingSetups,
           pluginSetupViewerState: 'expanded',
           pluginSetupCommandInFlight: null,
+        };
+      }
+      const queuedSetupIndex = state.pendingPluginSetupQueue.findIndex(
+        (setup) => setup.requestId === data.requestId,
+      );
+      if (queuedSetupIndex >= 0) {
+        return {
+          ...state,
+          pendingPluginSetupQueue: state.pendingPluginSetupQueue.filter(
+            (_, index) => index !== queuedSetupIndex,
+          ),
         };
       }
       if (state.pendingIssueConfirm?.requestId === data.requestId) {
@@ -2798,6 +2840,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.pendingPermission &&
     !state.pendingAskUser &&
     !state.pendingPluginSetup &&
+    state.pendingPluginSetupQueue.length === 0 &&
     !state.pendingPlanReview &&
     !state.pendingIssueConfirm &&
     !state.pendingRenameSessionsConfirm &&
@@ -2840,6 +2883,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingPermission: null,
     pendingAskUser: null,
     pendingPluginSetup: null,
+    pendingPluginSetupQueue: [],
     pluginSetupViewerState: 'expanded',
     pluginSetupCommandInFlight: null,
     askUserViewerState: 'expanded',
@@ -3216,6 +3260,7 @@ function parsePluginSetupInlineFormAction(
 export function parsePendingPluginSetup(request: {
   requestId?: unknown;
   revision?: unknown;
+  terminal?: unknown;
   ghost?: unknown;
   intro?: unknown;
   steps?: unknown;
@@ -3231,7 +3276,8 @@ export function parsePendingPluginSetup(request: {
     typeof request.ghost !== 'object' ||
     !Array.isArray(request.steps) ||
     request.steps.length === 0 ||
-    request.steps.length > 16 ||
+    request.steps.length > GHOST_SETUP_MAX_STEPS ||
+    (request.terminal !== undefined && request.terminal !== true) ||
     (request.intro !== undefined &&
       (typeof request.intro !== 'string' || request.intro.length > 500))
   ) {
@@ -3325,6 +3371,7 @@ export function parsePendingPluginSetup(request: {
   return {
     requestId: request.requestId,
     revision: request.revision,
+    ...(request.terminal === true ? { terminal: true as const } : {}),
     ghost: {
       id: ghost.id,
       name: ghost.name,
@@ -3661,17 +3708,38 @@ function initGlobalListeners(): void {
       if (!parsed) return;
       setState(sessionId, (s) => {
         const current = s.pendingPluginSetup;
-        if (current?.requestId === parsed.requestId && parsed.revision < current.revision) {
-          return s;
+        if (!current) {
+          return {
+            ...s,
+            pendingPluginSetup: parsed,
+            pluginSetupViewerState: 'expanded',
+            pluginSetupCommandInFlight: null,
+          };
         }
-        const sameRequest = current?.requestId === parsed.requestId;
-        const advanced = sameRequest && parsed.revision > current.revision;
+        if (current.requestId === parsed.requestId) {
+          if (parsed.revision < current.revision) return s;
+          const advanced = parsed.revision > current.revision;
+          return {
+            ...s,
+            pendingPluginSetup: parsed,
+            pluginSetupCommandInFlight: advanced ? null : s.pluginSetupCommandInFlight,
+          };
+        }
+
+        const queuedIndex = s.pendingPluginSetupQueue.findIndex(
+          (setup) => setup.requestId === parsed.requestId,
+        );
+        if (queuedIndex >= 0) {
+          const queued = s.pendingPluginSetupQueue[queuedIndex];
+          if (parsed.revision < queued.revision) return s;
+          const nextQueue = s.pendingPluginSetupQueue.slice();
+          nextQueue[queuedIndex] = parsed;
+          return { ...s, pendingPluginSetupQueue: nextQueue };
+        }
+
         return {
           ...s,
-          pendingPluginSetup: parsed,
-          pluginSetupViewerState: sameRequest ? s.pluginSetupViewerState : 'expanded',
-          pluginSetupCommandInFlight:
-            advanced || !sameRequest ? null : s.pluginSetupCommandInFlight,
+          pendingPluginSetupQueue: [...s.pendingPluginSetupQueue, parsed],
         };
       });
       return;
@@ -3954,9 +4022,11 @@ function initGlobalListeners(): void {
           const p = push.payload as { sessionId?: string; totalCostUsd?: number } | null;
           // 跨设备 payload 防御:NaN / 负数不入镜像(否则 chip 显示 $NaN / 污染后续计算)。
           if (
-            push.deviceId && p?.sessionId
-            && typeof p.totalCostUsd === 'number'
-            && Number.isFinite(p.totalCostUsd) && p.totalCostUsd >= 0
+            push.deviceId &&
+            p?.sessionId &&
+            typeof p.totalCostUsd === 'number' &&
+            Number.isFinite(p.totalCostUsd) &&
+            p.totalCostUsd >= 0
           ) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalCostUsd: p.totalCostUsd,
@@ -3968,9 +4038,11 @@ function initGlobalListeners(): void {
           // 同上:session 终身累计 token 镜像(chip tooltip 的 token 累计行)。
           const p = push.payload as { sessionId?: string; totalTokens?: number } | null;
           if (
-            push.deviceId && p?.sessionId
-            && typeof p.totalTokens === 'number'
-            && Number.isFinite(p.totalTokens) && p.totalTokens >= 0
+            push.deviceId &&
+            p?.sessionId &&
+            typeof p.totalTokens === 'number' &&
+            Number.isFinite(p.totalTokens) &&
+            p.totalTokens >= 0
           ) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
               totalTokenUsage: p.totalTokens,
@@ -4547,7 +4619,10 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasPendingAskUser = state.pendingAskUser !== null;
     const hasPendingPermission = state.pendingPermission !== null;
     const hasPendingPlanReview = state.pendingPlanReview !== null;
-    const hasPendingPluginSetup = state.pendingPluginSetup !== null;
+    const hasPendingPluginSetup = hasPendingPluginSetupInteraction(
+      state.pendingPluginSetup,
+      state.pendingPluginSetupQueue,
+    );
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -4601,7 +4676,10 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasPendingAskUser: state.pendingAskUser !== null,
       hasPendingPermission: state.pendingPermission !== null,
       hasPendingPlanReview: state.pendingPlanReview !== null,
-      hasPendingPluginSetup: state.pendingPluginSetup !== null,
+      hasPendingPluginSetup: hasPendingPluginSetupInteraction(
+        state.pendingPluginSetup,
+        state.pendingPluginSetupQueue,
+      ),
     });
   }
 
@@ -5593,7 +5671,9 @@ function buildCreateOptsForCurrentSession(
     // device-link routes to the target desktop, so omit the controller setting;
     // SSH still starts the agent through this process and must not inherit the
     // controller's default-enabled Maker Memory for a remote working directory.
-    ...(deviceLinkRemote ? {} : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
+    ...(deviceLinkRemote
+      ? {}
+      : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
@@ -6534,6 +6614,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       pendingPermission: null,
       pendingAskUser: null,
       pendingPluginSetup: null,
+      pendingPluginSetupQueue: [],
       pluginSetupViewerState: 'expanded',
       pluginSetupCommandInFlight: null,
       // F-AUQ-MIN-5: Clear session — wipe viewer state too.

@@ -3561,6 +3561,13 @@
       "retry": "Retry",
       "saveConfiguration": "Save Configuration",
       "saving": "Saving…",
+      "assessmentReadFailed": "Couldn't refresh the setup status. Please try again.",
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI Model Service",
+          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
+        }
+      },
       "form": {
         "placeholder": "Enter {{label}}",
         "required": "Enter {{label}}",
