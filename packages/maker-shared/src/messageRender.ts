@@ -442,11 +442,17 @@ export function applyCodexPlanSnapshotOnDone<
   turnId?: string | null,
   terminalStatus?: unknown,
 ): CodexPlanSnapshotApplyResult<TMessage> {
-  const hasAuthoritativeSnapshot = Array.isArray(snapshot);
-  if (!hasAuthoritativeSnapshot && terminalStatus !== 'completed') {
+  const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
+  const hasAuthoritativeSnapshot = authoritativeSnapshot !== null;
+  const canInferCompletion = terminalStatus === 'completed' && Boolean(turnId);
+  if (!hasAuthoritativeSnapshot && !canInferCompletion) {
     return { messages, changed: false, toolUseId: null };
   }
   const expectedToolUseId = turnId ? `plan:${turnId}` : null;
+  const shouldInferCompletion = canInferCompletion && (
+    !hasAuthoritativeSnapshot
+    || authoritativeSnapshot.some((item) => readRecord(item)?.status !== 'completed')
+  );
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -458,18 +464,23 @@ export function applyCodexPlanSnapshotOnDone<
 
     const input = readRecord(toolInputOf(message));
     if (!Array.isArray(input?.plan)) continue;
-    // Some Codex hosts finish a successful turn without echoing the final
-    // turn/plan/updated notification. The plan card must still converge after
-    // the turn has completed; otherwise it remains stuck on the first
-    // in_progress/pending snapshot forever. Only synthesize this fallback for
-    // the matching successful turn. Failed/interrupted turns intentionally keep
-    // their last known state.
-    const nextSnapshot = hasAuthoritativeSnapshot
-      ? snapshot
-      : input.plan.map((item) => {
+    // maker-core attaches the latest cached turn/plan/updated snapshot to done.
+    // When Codex omits its final plan update, that array still contains open
+    // items and is in progress rather than a terminal snapshot. Converge that
+    // cached progress (or the persisted row when no snapshot exists) only for a
+    // matching, explicitly successful turn. Without a turn id, an array can
+    // still be applied as supplied but completion must never be inferred for an
+    // unrelated last plan row.
+    const snapshotSource = authoritativeSnapshot ?? input.plan;
+    const nextSnapshot = shouldInferCompletion
+      ? snapshotSource.map((item) => {
           const record = readRecord(item);
           return record ? { ...record, status: 'completed' } : item;
-        });
+        })
+      : authoritativeSnapshot;
+    if (!nextSnapshot) {
+      return { messages, changed: false, toolUseId: null };
+    }
     if (samePlanSnapshot(input.plan, nextSnapshot)) {
       return { messages, changed: false, toolUseId };
     }
