@@ -15,6 +15,10 @@ describe('renderOrcaLeadSystemPrompt', () => {
     'Use create_worker only when the user explicitly asks to open one new worker, and use create_workers only when the user explicitly asks to open multiple new workers.';
   const missingWorkerBoundary =
     'If no existing worker matches a requested role or label, say so and ask whether to create one; do not silently substitute another worker or a native subagent.';
+  const asyncDispatchBoundary =
+    'A worker response is expected only when the tool result says a task was accepted or queued.';
+  const batchResultRule =
+    'After create_workers returns, always relay user_report verbatim when present and summarize every per-item result or error.';
 
   it('routes explicit Worker assignments through Orca before considering native subagents', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
@@ -38,18 +42,34 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(channelDisclosureRule);
   });
 
-  it('declares create_workers across the visible tool surface and turn-ending rules', () => {
+  it('declares create_workers while preserving batch result reporting boundaries', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(toolSurfaceRule);
+    expect(prompt).toContain(asyncDispatchBoundary);
+    expect(prompt).toContain(batchResultRule);
     expect(prompt).toContain(
-      'When you call create_worker, create_workers, or send_to_worker, the task is sent to the worker asynchronously.',
+      'If at least one task was accepted or queued, end the turn immediately after that single batch report',
     );
     expect(prompt).toContain(
+      'If no task was accepted or queued, report the result and do not wait or poll.',
+    );
+    expect(prompt).not.toContain(
       'After create_worker, create_workers, or send_to_worker returns, your turn is OVER.',
     );
-    expect(prompt).toContain(
+    expect(prompt).not.toContain(
       'After calling create_worker, create_workers, or send_to_worker, your turn ENDS immediately.',
+    );
+  });
+
+  it('reports failed or no-dispatch tool results instead of waiting for a worker wake-up', () => {
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain(
+      'If create_worker or send_to_worker fails, or no task was accepted or queued, report the result immediately instead of ending silently.',
+    );
+    expect(prompt).toContain(
+      'Silence is tied to an actual asynchronous dispatch, not merely to calling a tool.',
     );
   });
 

@@ -178,6 +178,17 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
    `renderOrcaLeadSystemPrompt`，以及 `packages/maker-core/src/agents/codex/translator.ts`
    的 `handleCollabAgentToolCall`。
 
+3. **只有真实异步派发才静默结束 turn（状态：不变量）**<br>
+   `create_worker`／`send_to_worker` 只有在工具结果明确表示任务已 accepted／queued 时，
+   Lead 才能零输出结束当前 turn；工具失败、只创建 Worker 而没有首任务，或首任务未派发时，
+   必须立即向用户报告真实结果，不能等待一个不会到来的 Worker 回报。`create_workers`
+   每次返回都必须先转告 `user_report`（若存在）并汇总逐项终态；若至少一个任务已
+   accepted／queued，报告后立即结束 turn 且不再调用工具，否则报告结果后等待用户决定，
+   不 sleep、不 poll。实现指针：
+   `packages/orca-workflow/src/orca-bridge-prompt.ts` 的
+   `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
+   的批量结果契约。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>
