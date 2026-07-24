@@ -12,7 +12,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ user: null, mode: 'remote', dataOwnerId: null }),
+  useAuth: () => ({ user: null, mode: 'signed-out', dataOwnerId: null }),
 }));
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ text, children }: { text: string; children: ReactNode }) => (
