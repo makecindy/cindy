@@ -860,15 +860,27 @@ describe('new session composer surface', () => {
     expect(voiceButtonSource).toContain('disabled={creating || voiceIsProcessing}');
     expect(newSource).toContain('const startVoiceRecording = useCallback(async () => {');
     expect(newSource).toContain('const voiceStartupInFlightRef = useRef(false);');
+    expect(newSource).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStartupSeqRef = useRef(0);');
     expect(newSource).toContain('|| voiceStopInFlightRef.current');
-    expect(newSource.indexOf('voiceStartupInFlightRef.current = true;')).toBeLessThan(
-      newSource.indexOf('const permission = await requestRecordingPermissionsAsync();'),
+    expect(newSource).toContain('resolveMobileVoiceRecordingPermission({');
+    expect(newSource).toContain('voiceStartupInFlightRef.current = true;');
+    expect(newSource.indexOf('resolveMobileVoiceRecordingPermission({')).toBeLessThan(
+      newSource.indexOf('voiceStartupInFlightRef.current = true;'),
     );
-    expect(newSource).toContain('if (voiceStartupSeqRef.current !== startupSeq) return;');
+    expect(newSource).toContain('getPermission: getRecordingPermissionsAsync');
+    expect(newSource).toContain("isAppActive: () => AppState.currentState === 'active'");
+    expect(newSource).toContain(
+      "voicePermissionRequestSeqRef.current !== permissionRequestSeq\n"
+      + "        || AppState.currentState !== 'active'\n"
+      + "      ) return;\n"
+      + "      startupSeq = voiceStartupSeqRef.current + 1;",
+    );
     expect(newSource).toContain('const cancelVoiceForDeviceSwitch = useCallback(() => {');
-    expect(selectDeviceSource).toContain('if (voiceStopInFlightRef.current || voiceIsProcessing) return;');
+    expect(selectDeviceSource).toContain('voicePermissionRequestInFlightRef.current');
+    expect(selectDeviceSource).toContain('|| voiceStopInFlightRef.current');
+    expect(selectDeviceSource).toContain('|| voiceIsProcessing');
     expect(selectDeviceSource).toContain('cancelVoiceForDeviceSwitch();');
     expect(newSource).toContain('voiceStartupInFlightRef.current = false;');
     expect(newSource).toContain('createMobileVoiceControllerSession({');

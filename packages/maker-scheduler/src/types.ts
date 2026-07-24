@@ -241,8 +241,12 @@ export interface ScheduleRun {
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */
   estimatedValueUsd?: number;
-  /** exact = 有持久化 runId 归因；legacy = 历史数据无法精确拆到单次 run。 */
-  costAttribution?: 'exact' | 'legacy';
+  /**
+   * exact = 已确认费用（可能是实际账单，也可能是 estimate-only）；direct = 费用仅来自
+   * 无法挂载消息的直接账本；mixed = 快照同时包含直接账本和消息账本；zero = 已确认零费用；
+   * unavailable = agent run 尚无可靠计价；legacy = 历史数据无法精确拆到单次 run。
+   */
+  costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   /**
    * Agent 这一轮 turn 的最终文本（与飞书正常对话气泡显示内容同源 — 按 isFinal
    * 替换、否则追加 delta，done 时定格）。仅 prompt 类 run 在 success 时填，
@@ -392,6 +396,12 @@ export interface TemplateCategory {
   order: number;
 }
 
+/**
+ * 模板能力标签，desktop 在模板卡片上渲染为能力 chip。
+ * 词表收敛在这里而不是放开 string，让渲染端的图标/文案映射可以被 typecheck 兜住。
+ */
+export type TemplateCapability = 'worktree' | 'pr' | 'web' | 'params';
+
 export interface ScheduleTemplate {
   id: string;
   name: string;
@@ -421,6 +431,8 @@ export interface ScheduleTemplate {
   notify?: ScheduleNotifyConfig;
 
   parameters?: TemplateParameter[];
+  /** 能力标签（隔离工作区 / PR 自动化 / Web 搜索 / 可自定义），仅影响展示。 */
+  capabilities?: TemplateCapability[];
 
   createdAt?: number;
   updatedAt?: number;

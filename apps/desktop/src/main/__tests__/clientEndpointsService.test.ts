@@ -54,6 +54,7 @@ const FULL_MANIFEST = JSON.stringify({
   voiceApiBaseUrl: 'https://voice.remote.example.com',
   githubApiBaseUrl: 'https://github-api.remote.example.com',
   skillhubApiBaseUrl: 'https://skillhub.remote.example.com',
+  pluginApiBaseUrl: 'https://plugin.remote.example.com',
   cdnBaseUrl: 'https://cdn.remote.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update.remote.example.com',
 });

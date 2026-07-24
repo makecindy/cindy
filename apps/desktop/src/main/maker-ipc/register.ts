@@ -216,7 +216,11 @@ import {
   recordSessionTurnSpend,
   recordSessionTurnTokens,
 } from '../sessionSpendBroadcaster.js';
-import { codexUsageToTokens, recordTurnCostOnMessage } from '../turnCostBroadcaster.js';
+import {
+  codexUsageToTokens,
+  recordSchedulerTurnCost,
+  recordTurnCostOnMessage,
+} from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
@@ -257,6 +261,7 @@ import type {
 import { runAcceptedCallback } from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
+import { broadcastSchedulerChanged } from './schedule.js';
 import { validateExtraDirs } from './extraDirsValidator.js';
 import { prepareHandoffWorktree, shouldRecycleHandoffWorktreeOnFailure } from './handoffWorktree.js';
 import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandlers.js';
@@ -396,7 +401,7 @@ import {
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
-import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard.js';
+import { checkRemoteWorkingDir } from '../device-link/remote-workdir-guard.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
@@ -613,11 +618,10 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
 }
 
 // ─── Sessions push helpers ────────────────────────────────────────────────
-// 同 cardActionHandler.ts / maker-host/index.ts:308 — 之所以重复一份是因为
-// 跨 module 提取一个 sessions-broadcast helper 不在本次范围内。所有 caller
-// 都广播 `local-db:sessions:created`, renderer sessionsStore.onCreated 收到后
-// forceRefreshAll 重拉所有桶。
-function broadcastSessionCreated(sessionId: string): void {
+// maker-ipc 会话创建路径与 scheduler-host 共享此导出，统一广播
+// `local-db:sessions:created`；renderer sessionsStore.onCreated 收到后
+// forceRefreshAll 重拉所有桶。其它生命周期专属路径仍保留各自的同契约 helper。
+export function broadcastSessionCreated(sessionId: string): void {
   tapWindowBroadcast('local-db:sessions:created', { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -1667,10 +1671,15 @@ function isRemoteAuthRetryErrorEvent(
 function handleAgentIslandInteractionAfterBroadcast(
   session: { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown },
   request: InteractionRequest,
+  interactionEpoch: number | null,
 ): void {
-  if (!shouldNotifyAgentIslandForSession(session.id)) return;
+  if (interactionEpoch === null || !shouldNotifyAgentIslandForSession(session.id)) return;
   try {
-    getAgentIslandService()?.handleInteractionRequest(sessionMetaForIsland(session), request);
+    getAgentIslandService()?.handleInteractionRequest(
+      sessionMetaForIsland(session),
+      request,
+      interactionEpoch,
+    );
   } catch (error) {
     log.warn('Agent Island interaction update failed after maker interaction broadcast', {
       sessionId: session.id,
@@ -1716,6 +1725,23 @@ function handleAgentIslandSessionClosedAfterCleanup(sessionId: string): void {
   }
 }
 
+function handleAgentIslandSessionStopped(
+  session: { id: string; getCurrentTurnId?: () => string | null },
+): void {
+  if (!shouldNotifyAgentIslandForSession(session.id)) return;
+  try {
+    getAgentIslandService()?.handleSessionStopped(
+      session.id,
+      session.getCurrentTurnId?.() ?? null,
+    );
+  } catch (error) {
+    log.warn('Agent Island session stop update failed before provider abort', {
+      sessionId: session.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function shouldNotifyAgentIslandForSession(sessionId: string): boolean {
   return shouldNotifyAgentIslandForSessionByPolicy(
     AGENT_ISLAND_DISPLAY_CONFIG,
@@ -1747,6 +1773,18 @@ function notifyAgentIslandUserPrompt(
       sessionId: session.id,
       source: options.source,
       clientId: options.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function dispatchAgentIslandUserPrompt(sessionId: string): void {
+  if (!shouldNotifyAgentIslandForSession(sessionId)) return;
+  try {
+    getAgentIslandService()?.handleUserPromptDispatching(sessionId);
+  } catch (error) {
+    log.warn('Agent Island prompt dispatch boundary update failed', {
+      sessionId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -1869,9 +1907,22 @@ export function installDesktopInteractionListener(
   session: { id: string; setInteractionListener: (l: ((req: InteractionRequest) => Promise<InteractionDecision>) | null) => void },
 ): void {
   session.setInteractionListener(async (req: InteractionRequest) => {
+    const agentIslandInteractionEpoch = shouldNotifyAgentIslandForSession(session.id)
+      ? getAgentIslandService()?.captureInteractionEpoch(session.id) ?? null
+      : null;
     // F1-a Phase 2: interaction(ask_user / plan_review / permission)是 turn 暂停边界,
     // 且不走 onEvent —— 在这把在飞 assistant 文本落库,等价于 renderer 老逻辑在
     // ask_user_question / plan_review case 里的 mid-turn assistant 抢救(只入队、不阻塞)。
+    if (
+      agentIslandInteractionEpoch !== null &&
+      shouldNotifyAgentIslandForSession(session.id) &&
+      getAgentIslandService()?.isInteractionCurrent(
+        session.id,
+        agentIslandInteractionEpoch,
+      ) === false
+    ) {
+      return defaultDecisionForPending(req.kind, 'stale_turn');
+    }
     flushAssistantBlock(session.id);
     // F1-a Phase 5: ask_user / plan_review 的消息本身也收口 main 单点落库(单 persistId,
     // 修 F1 重复),persistId 盖进 payload 让 renderer 用同一 id 建气泡 + answered 回写命中。
@@ -1905,6 +1956,7 @@ export function installDesktopInteractionListener(
       handleAgentIslandInteractionAfterBroadcast(
         session as { id: string; agentKind?: unknown; workDir?: unknown; workspaceKind?: unknown },
         req,
+        agentIslandInteractionEpoch,
       );
     });
   });
@@ -2789,16 +2841,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 void recordTurnSpend(cost);
                 void recordSessionTurnSpend(session.id, cost);
               }
-              if (turnAssistantPersistId) {
-                await recordTurnCostOnMessage({
-                  sessionId: session.id,
-                  clientId: turnAssistantPersistId,
-                  costUsd: cost,
-                  isEstimate: isSubscriptionValue,
-                  turnUsageDetails,
-                  turnOrigin: event.turnOrigin,
-                });
-              }
+            }
+            if (cost != null) {
+              const changedScheduleId = await recordSchedulerTurnCost({
+                sessionId: session.id,
+                clientId: turnAssistantPersistId,
+                costUsd: cost,
+                isEstimate: isSubscriptionValue,
+                turnUsageDetails,
+                turnOrigin: event.turnOrigin,
+              });
+              if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
             }
           } catch {
             // token row 已在价格请求前落库;价格失败只影响 API cost / message cost。
@@ -2885,9 +2938,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   // 它每 5s 取一次、翻转才上报,让控制端设备列表显示 busy 三态(规则 2:回调注入解耦)。
   setDeviceLinkBusyProbe(() => anySessionInTurn(maker));
 
-  // device-link 参数级收敛:远程 create-session / fork 的 workingDir 必须落在本机已知目录,
-  // 挡掉控制端用任意路径让本机 agent 越权起进程(规则 2:回调注入,allowlist 只挡 channel)。
-  setDeviceLinkRemoteWorkingDirGuard(isRemoteWorkingDirAllowed);
+  // device-link 参数级收敛:远程 create-session 的 workingDir / worktree:create 的 baseRepo
+  // 必须是本机当前可访问的目录,挡掉控制端用任意路径越权起进程或执行 git。
+  setDeviceLinkRemoteWorkingDirGuard(checkRemoteWorkingDir);
 
   // device-link 远程 set-* 持久化回流:控制端远程切 model/effort/permission/fastMode/extraDirs
   // 时,被控端 set-* 只改运行时不落库;这里注入「写被控端 DB + 广播 patched」,让控制端镜像
@@ -4237,6 +4290,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             // (jump/resume 分支是既有 session 重建,不在此发,见 wakeKind:'resumed' 分支。)
             broadcastSessionCreated(session.id);
           },
+          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),
         });
         if (createdPreviewStarted) {
           if (sendResult.accepted) {
@@ -4407,7 +4461,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
           const sendResult = await sendUserMessageWithAwaitedGitBaseline(
             live,
             message,
-            { planMode: false, onAccepted: persistUserMessage },
+            {
+              planMode: false,
+              onAccepted: persistUserMessage,
+              onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
+            },
           );
           if (userPromptPreviewStarted) {
             if (sendResult.accepted) {
@@ -4491,7 +4549,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         const sendResult = await sendUserMessageWithAwaitedGitBaseline(
           session,
           message,
-          { planMode: false, onAccepted: persistUserMessage },
+          {
+            planMode: false,
+            onAccepted: persistUserMessage,
+            onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),
+          },
         );
         if (userPromptPreviewStarted) {
           if (sendResult.accepted) {
@@ -5606,6 +5668,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     previewUserPrompt: (session, content, options) => {
       notifyAgentIslandUserPrompt(session, content, options);
     },
+    dispatchUserPromptPreview: (sessionId) => {
+      dispatchAgentIslandUserPrompt(sessionId);
+    },
     commitUserPromptPreview: (sessionId, clientId) => {
       commitAgentIslandUserPrompt(sessionId, clientId);
     },
@@ -5801,6 +5866,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       markWorkerManualInterruptIfKnown(sessionId, 'input_stop');
       const sess = maker.getSession(sessionId);
       if (!sess) return;
+      handleAgentIslandSessionStopped(sess);
       await sess.abort();
       cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
     },
@@ -6480,6 +6546,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     silentStopAutoResumeGuard.noteSessionReset(sessionId);
     const sess = maker.getSession(sessionId);
     if (!sess) return;
+    handleAgentIslandSessionStopped(sess);
     // 用户 Stop 当前 turn → 若该会话有 active goal,先暂停目标(置 paused + 停续跑 + detach
     // 监听),**再** abort。这样 abort 产生的终止事件到来时目标已暂停、监听已摘,不会被误判成
     // 续跑(原本依赖 error 文案正则判 paused/blocked,不可靠)。null-safe;无 active goal 时 no-op。

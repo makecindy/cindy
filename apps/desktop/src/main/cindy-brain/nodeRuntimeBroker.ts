@@ -34,12 +34,24 @@ import {
   GHOST_NODE_CHILD_MODE_FLAG,
   GHOST_NODE_MAX_CHILDREN_PER_GHOST,
   GHOST_NODE_REQUEST_MAX_TOTAL_MS,
+  isGhostNodeMcpReservedMethod,
   parseGhostNodeChildToHostMessage,
 } from '../../shared/ghost.js';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_START_TIMEOUT_MS = 10_000;
+/**
+ * 启动失败重试(2026-07-24):Windows 上杀软实时扫描刚写入的 .vite 产物 /
+ * 刚更新的 app.asar 时,子进程读引导入口会瞬时 ACCESS_DENIED(表现为
+ * "EPERM: operation not permitted, open …nodeRuntimeWorkerProcess.js" 后
+ * 立即退出)。这类失败几百毫秒内自愈,给"fork 抛错 / 就绪前退出"留有界
+ * 重试;启动超时不重试——进程活着只是没就绪,重跑只会成倍拉长等待。
+ */
+const WORKER_START_ATTEMPTS = 3;
+const WORKER_START_RETRY_DELAYS_MS = [250, 750] as const;
+/** 启动期 stderr 只留头部这么多字符,够提取一行诊断,不给日志灌洪。 */
+const STARTUP_STDERR_CAP = 4_096;
 const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_PENDING_REQUESTS = 32;
 const MAX_REQUEST_BYTES = 256 * 1024;
@@ -76,6 +88,11 @@ export interface NodeWorkerProcess {
 
 export interface GhostNodeRuntimeBrokerDeps {
   getGhost(id: string): InstalledGhost | null;
+  /**
+   * 读取当前插件自己声明的 Node 凭证。生产接 safeStorage；返回 null =
+   * 未保存或保险库不可用。调用方不得记录返回值。
+   */
+  readSecret?: (ghostId: string, secretKey: string) => string | null;
   spawnProcess?: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess?: (
@@ -120,6 +137,10 @@ interface WorkerEntry {
   /** 本进程对应的入口(相对路径;主入口 = manifest.node.entry)。 */
   entryRel: string;
   child: NodeWorkerProcess;
+  /** 就绪握手完成前为 true:此阶段的退出由 ensureWorker 统一报告(可能重试),handleExit 不发 crashed。 */
+  startupPhase: boolean;
+  /** 启动期 stderr 头部截存,失败时提取一行诊断拼进错误消息(如杀软拦截的 EPERM)。 */
+  startupStderr: string;
   /** stdout 的 UTF-8 字节可能把一个汉字切在两个 chunk 之间，必须流式解码。 */
   stdoutDecoder: StringDecoder;
   stdoutBuffer: string;
@@ -141,6 +162,39 @@ class NodeRpcError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * 工作进程启动失败:retryable 决定 ensureWorker 是否值得再试一次;
+ * silent = 状态已由别处如实播报(如 stop 时的 'stopped'),不再补发 'crashed'。
+ */
+class WorkerStartError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly silent = false,
+  ) {
+    super(message);
+  }
+}
+
+/** 从启动期 stderr 里挑最有诊断价值的一行(优先含 error 的行),截短拼进失败消息。 */
+function startupStderrHint(text: string): string | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  const line = lines.find((candidate) => /error/i.test(candidate)) ?? lines[0];
+  return sanitizePathsInHint(line.slice(0, 240));
+}
+
+function sanitizePathsInHint(hint: string): string {
+  const basename = (p: string) => p.split(/[/\\]/).pop() ?? p;
+  return hint
+    .replace(/(['"])((?:[A-Z]:[/\\]|\/)[^'"]+)\1/g, (_, q, p) => `${q}${basename(p)}${q}`)
+    .replace(/[A-Z]:[/\\][^\s'")\]]*/g, basename)
+    .replace(/\/(?:[^\s/'")\]]+\/)+[^\s'")\]]*/g, basename);
 }
 
 type UtilityFork = typeof utilityProcess.fork;
@@ -307,6 +361,11 @@ function errorResult(
   return { ok: false, errorCode, message, ...(data !== undefined ? { data } : {}) };
 }
 
+function clearHostSecrets(secrets: Record<string, string> | undefined): void {
+  if (!secrets) return;
+  for (const key of Object.keys(secrets)) secrets[key] = '';
+}
+
 /**
  * 每意识的本地 Node 工作进程生命周期与 JSON-RPC stdio 中继。
  * 多进程窄版(2026-07-23):主入口之外,manifest.node.entries 申报的每个额外
@@ -333,8 +392,10 @@ export class GhostNodeRuntimeBroker {
     return 'off';
   }
 
-  /** resident 档在插件启用/启动时调用；按需档保持零进程。常驻只覆盖主入口。 */
+  /** resident 档在插件启用/启动时调用；按需档保持零进程。常驻只覆盖主入口。
+   *  同时也是 stop() 的对称点:上层完成更新/重启后调用此方法,清除停止标记。 */
   async startResident(ghost: InstalledGhost): Promise<void> {
+    this.stoppedGhosts.delete(ghost.manifest.id);
     if (!ghost.enabled || ghost.manifest.node?.lifecycle !== 'resident') return;
     const entry = await this.ensureWorker(ghost, ghost.manifest.node.entry);
     if (ghost.manifest.node.protocol === 'mcp-stdio') await this.ensureMcpInitialized(entry);
@@ -346,6 +407,9 @@ export class GhostNodeRuntimeBroker {
     if (!ghost?.enabled || !ghost.manifest.slots.includes('node') || !ghost.manifest.node) {
       return errorResult('PERMISSION_DENIED', '插件未申请本地 Node 权限，或当前未启用');
     }
+    // getGhost 确认插件当前已启用——这是按需插件的"后更新/重启边界",
+    // 清除 stop() 留下的停止标记,使按需进程可以恢复启动。
+    this.stoppedGhosts.delete(ghostId);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorResult('INVALID_REQUEST', 'node-request 载荷必须是对象');
     }
@@ -407,37 +471,77 @@ export class GhostNodeRuntimeBroker {
       }
       entryRel = request.entry;
     }
+    const secretBindings = (ghost.manifest.node.secretBindings ?? []).filter(
+      (binding) =>
+        binding.methods.includes(request.method as string) &&
+        (binding.entry ?? ghost.manifest.node!.entry) === entryRel,
+    );
+
+    if (
+      ghost.manifest.node.protocol === 'mcp-stdio' &&
+      isGhostNodeMcpReservedMethod(request.method as string)
+    ) {
+      return errorResult('INVALID_REQUEST', 'MCP 初始化由 Cindy 主机统一管理');
+    }
+
+    let hostSecrets: Record<string, string> | undefined;
+    if (secretBindings.length > 0) {
+      hostSecrets = Object.create(null) as Record<string, string>;
+      try {
+        for (const binding of secretBindings) {
+          const value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          if (value === null) {
+            clearHostSecrets(hostSecrets);
+            return errorResult(
+              'PERMISSION_DENIED',
+              `Node 请求需要先配置凭证「${binding.label}」`,
+            );
+          }
+          hostSecrets[binding.key] = value;
+        }
+      } catch {
+        clearHostSecrets(hostSecrets);
+        return errorResult('INTERNAL', '读取 Node 请求所需凭证失败');
+      }
+    }
 
     let entry: WorkerEntry;
     try {
       entry = await this.ensureWorker(ghost, entryRel);
     } catch (error) {
+      clearHostSecrets(hostSecrets);
       return errorResult(
         'PROCESS_START_FAILED',
         error instanceof Error ? error.message : 'Node 工作进程启动失败',
       );
     }
     if (entry.pending.size >= MAX_PENDING_REQUESTS) {
+      clearHostSecrets(hostSecrets);
       return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
     }
 
     try {
       if (ghost.manifest.node.protocol === 'mcp-stdio') {
-        if (request.method === 'initialize' || request.method === 'notifications/initialized') {
-          return errorResult('INVALID_REQUEST', 'MCP 初始化由 Cindy 主机统一管理');
-        }
         await this.ensureMcpInitialized(entry);
         if (entry.pending.size >= MAX_PENDING_REQUESTS) {
           return errorResult('RATE_LIMITED', '这个插件同时等待的 Node 请求太多');
         }
       }
-      const result = await this.sendRpc(
+      const pendingResult = this.sendRpc(
         entry,
         request.method,
         request.params ?? null,
         effectiveTimeoutMs,
         request.maxTotalMs as number | undefined,
+        hostSecrets,
       );
+      // writeLine/JSON.stringify 在 sendRpc 内同步完成；随即抹掉本次临时对象，
+      // 不让凭证明文跟随 Promise 生命周期常驻在 broker 闭包里。
+      if (hostSecrets) {
+        clearHostSecrets(hostSecrets);
+        hostSecrets = undefined;
+      }
+      const result = await pendingResult;
       return { ok: true, result };
     } catch (error) {
       if (error instanceof NodeRpcError) {
@@ -447,6 +551,7 @@ export class GhostNodeRuntimeBroker {
       }
       return errorResult('INTERNAL', error instanceof Error ? error.message : String(error));
     } finally {
+      clearHostSecrets(hostSecrets);
       this.scheduleIdleStop(entry);
     }
   }
@@ -689,6 +794,7 @@ export class GhostNodeRuntimeBroker {
 
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
+    this.stoppedGhosts.add(ghostId);
     for (const [key, entry] of [...this.workers]) {
       if (entry.ghost.manifest.id === ghostId) this.stopWorker(key, entry);
     }
@@ -724,33 +830,103 @@ export class GhostNodeRuntimeBroker {
 
   /** Cindy 退出时收掉全部随包 Node 进程。 */
   destroyAll(): void {
+    this.destroyed = true;
     for (const [key, entry] of [...this.workers]) this.stopWorker(key, entry);
   }
 
+  /** 同 key 在途启动去重:重试退避窗口内的并发请求共享同一次启动,不双开进程。 */
+  private readonly startingWorkers = new Map<string, Promise<WorkerEntry>>();
+
+  /** stop(ghostId) 置入:在途重试检测到后立即中止,不继续拉新进程。 */
+  private readonly stoppedGhosts = new Set<string>();
+
+  /** destroyAll(主机退出)后置真:退避中的重试不得再拉新进程。 */
+  private destroyed = false;
+
   private async ensureWorker(ghost: InstalledGhost, entryRel: string): Promise<WorkerEntry> {
     const key = GhostNodeRuntimeBroker.keyOf(ghost.manifest.id, entryRel);
+    const inflight = this.startingWorkers.get(key);
+    if (inflight) return inflight;
     const existing = this.workers.get(key);
     if (existing) return existing;
-    const node = ghost.manifest.node;
-    if (!node) throw new Error('ghost.json 缺少 node 工作进程详单');
+    const starting = this.startWorkerWithRetry(ghost, entryRel, key);
+    this.startingWorkers.set(key, starting);
+    try {
+      return await starting;
+    } finally {
+      this.startingWorkers.delete(key);
+    }
+  }
 
+  private async startWorkerWithRetry(
+    ghost: InstalledGhost,
+    entryRel: string,
+    key: string,
+  ): Promise<WorkerEntry> {
+    if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
+      throw new WorkerStartError('Node 工作进程启动已取消', false, true);
+    }
+    this.sendStatus(ghost, 'starting', undefined, entryRel);
+    let current = ghost;
+    let lastError = new Error('Node 工作进程启动失败');
+    for (let attempt = 1; attempt <= WORKER_START_ATTEMPTS; attempt++) {
+      if (attempt > 1) {
+        await this.delay(WORKER_START_RETRY_DELAYS_MS[attempt - 2] ?? 750);
+        // 退避期间插件可能被停用/卸载/更新/停止,主机也可能正在退出:
+        // 现查现用;已停用/已收摊/已停止就不再拉进程,也不补发状态事件。
+        if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) throw lastError;
+        const fresh = this.deps.getGhost(ghost.manifest.id);
+        if (!fresh?.enabled) throw lastError;
+        // 跨更新边界时重验入口:新 manifest 可能已不再申报该 entry。
+        if (!fresh.manifest.node) throw lastError;
+        const declaredEntries = [fresh.manifest.node.entry, ...(fresh.manifest.node.entries ?? [])];
+        if (!declaredEntries.includes(entryRel)) throw lastError;
+        current = fresh;
+      }
+      try {
+        return await this.startWorkerOnce(current, entryRel, key);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const retryable = error instanceof WorkerStartError ? error.retryable : true;
+        this.deps.log?.warn('ghost node start attempt failed', {
+          ghostId: ghost.manifest.id,
+          entry: entryRel,
+          attempt,
+          message: lastError.message,
+        });
+        if (!retryable) break;
+      }
+    }
+    if (!(lastError instanceof WorkerStartError) || !lastError.silent) {
+      this.sendStatus(current, 'crashed', lastError.message, entryRel);
+    }
+    throw lastError;
+  }
+
+  private async startWorkerOnce(
+    ghost: InstalledGhost,
+    entryRel: string,
+    key: string,
+  ): Promise<WorkerEntry> {
+    const node = ghost.manifest.node;
+    if (!node) throw new WorkerStartError('ghost.json 缺少 node 工作进程详单', false);
     const entryPath = path.resolve(ghost.dir, ...entryRel.split('/'));
     const root = path.resolve(ghost.dir);
     if (entryPath === root || !entryPath.startsWith(`${root}${path.sep}`)) {
-      throw new Error('node 入口越出插件安装目录');
+      throw new WorkerStartError('node 入口越出插件安装目录', false);
     }
-    this.sendStatus(ghost, 'starting', undefined, entryRel);
     let child: NodeWorkerProcess;
     try {
       child = (this.deps.spawnProcess ?? defaultSpawnProcess)(entryPath, root, ghost.manifest.id);
     } catch (error) {
-      this.sendStatus(ghost, 'crashed', error instanceof Error ? error.message : String(error), entryRel);
-      throw error;
+      throw new WorkerStartError(error instanceof Error ? error.message : String(error), true);
     }
     const entry: WorkerEntry = {
       ghost,
       entryRel,
       child,
+      startupPhase: true,
+      startupStderr: '',
       stdoutDecoder: new StringDecoder('utf8'),
       stdoutBuffer: '',
       nextId: 1,
@@ -762,10 +938,18 @@ export class GhostNodeRuntimeBroker {
       stopping: false,
     };
     this.workers.set(key, entry);
+    if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
+      this.workers.delete(key);
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      throw new WorkerStartError('Node 工作进程启动已取消', false, true);
+    }
     // 代启子进程的控制帧入口(childSpawn):帧形状严格把关,资格在 handle 里查。
     child.onControl?.((message) => this.handleWorkerControl(entry, message));
     child.stdout.on('data', (chunk) => this.handleStdout(entry, chunk));
     child.stderr.on('data', (chunk) => {
+      if (entry.startupPhase && entry.startupStderr.length < STARTUP_STDERR_CAP) {
+        entry.startupStderr = (entry.startupStderr + String(chunk)).slice(0, STARTUP_STDERR_CAP);
+      }
       const text = String(chunk).trim().slice(0, 4_096);
       if (text) this.deps.log?.warn('ghost node stderr', { ghostId: ghost.manifest.id, text });
       // stderr 是手册钦定的日志口——构建刷日志就是活着的证据,给续命请求重置沉默窗口。
@@ -785,16 +969,34 @@ export class GhostNodeRuntimeBroker {
           outcome();
         };
         startTimer = this.setTimer(
-          () => settle(() => reject(new Error('Node 工作进程启动超时'))),
+          () => settle(() => reject(new WorkerStartError('Node 工作进程启动超时', false))),
           DEFAULT_START_TIMEOUT_MS,
         );
         startTimer.unref?.();
         child.once('spawn', () => settle(resolve));
-        child.once('error', (error) => settle(() => reject(error)));
+        child.once('error', (error) =>
+          settle(() => reject(new WorkerStartError(error.message, true))),
+        );
         child.once('exit', (code, signal) => {
-          settle(() =>
-            reject(new Error(`Node 工作进程启动前退出(code=${code}, signal=${signal ?? 'none'})`)),
-          );
+          // stderr 管道字节可能晚于 exit 事件到达:给在途 chunk 一个极短的
+          // 落地窗口,诊断行(如杀软拦截的 EPERM)才截得到。
+          const drainTimer = this.setTimer(() => {
+            settle(() => {
+              if (entry.stopping) {
+                reject(new WorkerStartError('Node 工作进程启动已取消', false, true));
+              } else {
+                const hint = startupStderrHint(entry.startupStderr);
+                reject(
+                  new WorkerStartError(
+                    `Node 工作进程启动前退出(code=${code}, signal=${signal ?? 'none'})${hint ? `:${hint}` : ''}`,
+                    true,
+                    false,
+                  ),
+                );
+              }
+            });
+          }, 10);
+          drainTimer.unref?.();
         });
       });
     } catch (error) {
@@ -806,6 +1008,7 @@ export class GhostNodeRuntimeBroker {
       }
       throw error;
     }
+    entry.startupPhase = false;
     this.deps.log?.info('ghost node process started', {
       ghostId: ghost.manifest.id,
       entry: entryRel,
@@ -815,6 +1018,13 @@ export class GhostNodeRuntimeBroker {
     this.sendStatus(ghost, 'running', undefined, entryRel);
     this.scheduleIdleStop(entry);
     return entry;
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = this.setTimer(resolve, ms);
+      timer.unref?.();
+    });
   }
 
   private async ensureMcpInitialized(entry: WorkerEntry): Promise<void> {
@@ -848,6 +1058,7 @@ export class GhostNodeRuntimeBroker {
     params: unknown,
     timeoutMs: number,
     maxTotalMs?: number,
+    hostSecrets?: Readonly<Record<string, string>>,
   ): Promise<unknown> {
     this.clearIdleTimer(entry);
     const id = String(entry.nextId++);
@@ -868,7 +1079,15 @@ export class GhostNodeRuntimeBroker {
       entry.pending.set(id, pending);
       this.armPendingTimer(pending);
       try {
-        this.writeLine(entry, { jsonrpc: '2.0', id, method, params });
+        this.writeLine(entry, {
+          jsonrpc: '2.0',
+          id,
+          method,
+          params,
+          ...(hostSecrets && Object.keys(hostSecrets).length > 0
+            ? { cindy: { secrets: hostSecrets } }
+            : {}),
+        });
       } catch (error) {
         entry.pending.delete(id);
         this.clearTimer(pending.timer);
@@ -1037,7 +1256,9 @@ export class GhostNodeRuntimeBroker {
       pending.reject(new NodeRpcError('exit', `Node 工作进程已退出(${detail})`));
     }
     entry.pending.clear();
-    if (!entry.stopping) {
+    // 启动期退出不在这里报 crashed:ensureWorker 统一收口(可能还要重试,
+    // 重试成功时插件不该看到一次假 crash)。
+    if (!entry.stopping && !entry.startupPhase) {
       this.deps.log?.warn('ghost node process exited', { ghostId, entry: entry.entryRel, detail });
       this.sendStatus(entry.ghost, 'crashed', detail, entry.entryRel);
     }

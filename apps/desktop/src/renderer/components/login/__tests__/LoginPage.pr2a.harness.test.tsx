@@ -176,6 +176,8 @@ describe('verification-code', () => {
     const identifierState = reduceAuthFlow(null, { type: 'providers-loaded', providers });
     const view = mount(identifierState);
     // tabs 已随分区互斥拍板(2026-07-21)移除:测试构建区域=cn,providers:both 直落手机形态
+    // consent PR:先勾选协议 radio,提交才会派发 request-code(未勾选路径见 consent 专测)
+    fireEvent.click(screen.getByTestId('login-consent-radio'));
     fireEvent.change(screen.getByTestId('login-input'), { target: { value: '13800138000' } });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-continue-button'));

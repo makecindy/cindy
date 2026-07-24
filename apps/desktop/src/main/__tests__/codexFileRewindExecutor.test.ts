@@ -19,7 +19,12 @@ const REAL_GIT_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
 let repoPath: string;
 async function initRepo() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-codex-rewind-'));
-  for (const args of [['init'], ['config', 'user.email', 'test@xdt.local'], ['config', 'user.name', 'XDT Test'], ['config', 'commit.gpgsign', 'false'], ['config', 'core.autocrlf', 'false']]) await gitExec(args, dir);
+  await gitExec(['init'], dir);
+  // 仓库级覆写 core.excludesFile:宿主机全局 gitignore(常见如 *.tmp)会吞掉
+  // 未跟踪文件,让 status 断言在部分开发机上失真。
+  const excludesOverride = path.join(dir, '.git', 'xdt-test-empty-excludes');
+  await fs.writeFile(excludesOverride, '', 'utf8');
+  for (const args of [['config', 'core.excludesFile', excludesOverride], ['config', 'user.email', 'test@xdt.local'], ['config', 'user.name', 'XDT Test'], ['config', 'commit.gpgsign', 'false'], ['config', 'core.autocrlf', 'false']]) await gitExec(args, dir);
   return dir;
 }
 

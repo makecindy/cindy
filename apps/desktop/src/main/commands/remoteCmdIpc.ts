@@ -8,8 +8,8 @@
  * 安全:
  *  - channel 在 REMOTE_INVOKE_ALLOWLIST(default-deny)且经被控端三道 gate
  *    (remoteControlEnabled + 撤销黑名单 + allowlist)后才会 dispatch 到这里;
- *  - cwd 过 remote-workdir-guard 收敛(已知目录集合 / 真实存在目录),挡掉
- *    不存在路径 / 文件冒充目录;越权论证同 fs:list-dir——同账号 + 显式 opt-in
+ *  - cwd 过 remote-workdir-guard 实时探测,挡掉不可访问 / 不存在路径 /
+ *    文件冒充目录;越权论证同 fs:list-dir——同账号 + 显式 opt-in
  *    下控制端本就能驱动 agent 执行任意命令,不扩大攻击面;
  *  - 执行体复用 builtins 的 runShellCommand(30s 超时 / 64KB 截断 / 编码兜底),
  *    本机与远程 /cmd 行为一致。

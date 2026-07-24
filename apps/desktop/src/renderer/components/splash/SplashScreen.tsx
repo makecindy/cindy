@@ -243,6 +243,9 @@ export function SplashScreen() {
             {title !== null && (
               <LoginTitleBlock
                 title={title}
+                // 故障说明(spawnFailed 等)比登录副标题长,3 行下界 y=144,
+                // 距 spinner(y=188)/主按钮(y=300)均有余量。
+                subtitleMaxLines={3}
                 subtitle={
                   dialogKind === 'manifest'
                     ? t('splash.manifestFailed.description')

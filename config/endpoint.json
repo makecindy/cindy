@@ -12,6 +12,7 @@
   "voiceApiBaseUrl": "https://voice.cindy.com.cn",
   "githubApiBaseUrl": "https://github.cindy.com.cn",
   "skillhubApiBaseUrl": "https://xd-skillhub.cindy.com.cn",
+  "pluginApiBaseUrl": "https://plugin.cindy.com.cn",
   "cdnBaseUrl": "https://hotfix.cindy.com.cn/cindy",
   "mobileUpdateBaseUrl": "https://mobile-update.cindy.com.cn",
   "review": "0.1.0"

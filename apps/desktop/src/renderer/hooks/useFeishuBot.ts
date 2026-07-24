@@ -96,20 +96,37 @@ export function useFeishuBot(): UseFeishuBotReturn {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadRequestVersionRef = useRef(0);
+  const statusPushVersionRef = useRef(0);
+  const latestStatusPushRef = useRef<{
+    status: FeishuBotStatus;
+    errorMessage: string | null;
+    ownerOpenId: string | null;
+  } | null>(null);
 
   // 重新从 main 拉一次凭证 + 状态。挂载时和扫码注册成功后都要走一次,
   // 否则 device-code 流程在 main 写完凭证后, renderer 这边 appId/secret
   // 仍然停留在初始空字符串, 导致 ConnectedCard 显示空 + 跳转链接拼成
   // /app//event 落到飞书 app 列表页。
   const reloadState = useCallback(async (): Promise<void> => {
+    const reloadRequestVersion = ++reloadRequestVersionRef.current;
+    const statusPushVersion = statusPushVersionRef.current;
     try {
       const state = await window.electronAPI.feishuBot.getState();
+      if (reloadRequestVersion !== reloadRequestVersionRef.current) return;
       const nextAppId = state.appId ?? '';
       const nextAppSecret = state.appSecret ?? '';
-      setStatus(state.status);
+      const newerStatusPush =
+        statusPushVersionRef.current !== statusPushVersion ? latestStatusPushRef.current : null;
+      const nextStatus = newerStatusPush?.status ?? state.status;
+      const nextErrorMessage = newerStatusPush
+        ? newerStatusPush.errorMessage
+        : (state.error ?? null);
+      const nextOwnerOpenId = newerStatusPush ? newerStatusPush.ownerOpenId : state.ownerOpenId;
+      setStatus(nextStatus);
       setHasSavedCreds(state.hasSecret);
-      setOwnerOpenId(state.ownerOpenId);
-      setErrorMessage(state.error ?? null);
+      setOwnerOpenId(nextOwnerOpenId);
+      setErrorMessage(nextErrorMessage);
       setLifecycleAnnouncementState(state.lifecycleAnnouncement);
       if (state.appId) {
         setAppIdState(state.appId);
@@ -120,10 +137,10 @@ export function useFeishuBot(): UseFeishuBotReturn {
       cachedState = {
         appId: nextAppId || cachedState?.appId || '',
         appSecret: nextAppSecret || cachedState?.appSecret || '',
-        status: state.status,
-        errorMessage: state.error ?? null,
+        status: nextStatus,
+        errorMessage: nextErrorMessage,
         hasSavedCreds: state.hasSecret,
-        ownerOpenId: state.ownerOpenId,
+        ownerOpenId: nextOwnerOpenId,
         lifecycleAnnouncement: state.lifecycleAnnouncement,
       };
     } catch (err) {
@@ -132,26 +149,36 @@ export function useFeishuBot(): UseFeishuBotReturn {
     }
   }, []);
 
-  // ── initial load ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    void reloadState();
-  }, [reloadState]);
-
   // ── status push subscription ─────────────────────────────────────────────
   useEffect(() => {
     const unsub = window.electronAPI.feishuBot.onStatusChange((update) => {
+      const nextErrorMessage = update.error ?? null;
+      statusPushVersionRef.current += 1;
+      latestStatusPushRef.current = {
+        status: update.status,
+        errorMessage: nextErrorMessage,
+        ownerOpenId: update.ownerOpenId,
+      };
       setStatus(update.status);
-      setErrorMessage(update.error ?? null);
+      setErrorMessage(nextErrorMessage);
+      setOwnerOpenId(update.ownerOpenId);
       if (cachedState) {
         cachedState = {
           ...cachedState,
           status: update.status,
-          errorMessage: update.error ?? null,
+          errorMessage: nextErrorMessage,
+          ownerOpenId: update.ownerOpenId,
         };
       }
     });
     return unsub;
   }, []);
+
+  // Subscribe before starting the initial read so a push cannot fall between
+  // getState's snapshot and listener registration.
+  useEffect(() => {
+    void reloadState();
+  }, [reloadState]);
 
   // ── registration success: hydrate from payload + refetch ────────────────
   // device-code 流程不走 save() 路径, payload 里直接有 appId/ownerOpenId,

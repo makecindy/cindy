@@ -65,6 +65,7 @@ interface GhostPluginDetailViewProps {
   onToggle: (enabled: boolean) => void;
   onUse: () => void;
   onUpdate: () => void;
+  updateLabel?: string;
   onUninstall: () => void;
   toggleDisabled: boolean;
 }
@@ -119,6 +120,7 @@ export function GhostPluginDetailView({
   onToggle,
   onUse,
   onUpdate,
+  updateLabel,
   onUninstall,
   toggleDisabled,
 }: GhostPluginDetailViewProps) {
@@ -246,7 +248,7 @@ export function GhostPluginDetailView({
                     onSelect={onUpdate}
                     className="h-10 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
                   >
-                    {t('settings.ghosts.detail.updateFromFile')}
+                    {updateLabel ?? t('settings.ghosts.detail.updateFromFile')}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
                   <DropdownMenuItem

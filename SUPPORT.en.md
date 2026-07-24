@@ -11,7 +11,7 @@ custom environment or commercial support is not guaranteed.
 ## Where to start
 
 - Installation, dependencies, and development setup: read
-  [README.en.md](README.en.md) and [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
+  [README.md](README.md) and [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
 - Security vulnerabilities, credentials, or exploitable details: follow
   [SECURITY.en.md](SECURITY.en.md) and report privately.
 - Ordinary bugs: open a GitHub issue with the version, platform, reproduction

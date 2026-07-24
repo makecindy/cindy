@@ -20,6 +20,10 @@ export type NativeSocialCredential =
       authorizationCode?: string;
       rawNonce: string;
       user?: { name?: string };
+      // Apple 首次授权返回的明文 email(后续登录为 null,服务端应从 identityToken
+      // JWT payload 自行解 email)。补传以消除客户端侧丢 email 的缺陷,对齐 App Store
+      // Guideline 4.2(不得在 Apple 登录后再向用户索要 email)。
+      email?: string | null;
     }
   | { code: string };
 
@@ -85,6 +89,9 @@ async function acquireAppleCredential(): Promise<NativeSocialCredential> {
       : {}),
     rawNonce,
     ...(name ? { user: { name } } : {}),
+    // EMAIL scope 请求到的明文 email(仅首次授权有值,后续为 null);服务端据此
+    // 或 identityToken JWT 解析建立账号 email,避免登录后再向用户索要(Apple 审核硬要求)。
+    ...(credential.email ? { email: credential.email } : {}),
   };
 }
 

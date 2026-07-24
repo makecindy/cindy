@@ -576,6 +576,110 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
   return next;
 }
 
+/**
+ * ByteDance Seed accepts standard function tools and web search. Codex also
+ * emits namespaced and other built-in descriptors that Volcengine rejects
+ * before the request reaches the model. Its web-search descriptor must also
+ * be reduced to the standard shape: Codex's `external_web_access` extension
+ * is rejected as an unknown field.
+ */
+function isByteDanceSeedModel(model: unknown): boolean {
+  return typeof model === 'string' && model.startsWith('bytedance-seed/');
+}
+
+function seedToolChoiceReferencesRemovedTool(
+  toolChoice: unknown,
+  tools: Record<string, unknown>[],
+): boolean {
+  if (!isPlainObject(toolChoice) || typeof toolChoice.type !== 'string') return false;
+
+  return !tools.some((tool) => {
+    if (tool.type !== toolChoice.type) return false;
+    if (toolChoice.type !== 'function') return true;
+    return typeof toolChoice.name === 'string' && tool.name === toolChoice.name;
+  });
+}
+
+function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.tools)) return null;
+
+  let changed = false;
+  const tools: Record<string, unknown>[] = [];
+  for (const tool of body.tools) {
+    if (!isPlainObject(tool)) {
+      changed = true;
+      continue;
+    }
+    if (tool.type === 'function') {
+      tools.push(tool);
+      continue;
+    }
+    if (tool.type === 'web_search') {
+      // Seed cannot represent Codex's cache-only search policy. Dropping the
+      // tool preserves the caller's explicit prohibition on live web access.
+      if (tool.external_web_access === false) {
+        changed = true;
+        continue;
+      }
+      tools.push({ type: 'web_search' });
+      if (Object.keys(tool).length !== 1) changed = true;
+      continue;
+    }
+    changed = true;
+  }
+  if (!changed) return null;
+
+  const next: Record<string, unknown> = { ...body };
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (seedToolChoiceReferencesRemovedTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
+  return next;
+}
+
+/** Volcengine requires replayed assistant messages to carry their output status. */
+function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.input)) return null;
+
+  let changed = false;
+  const input = body.input.map((item) => {
+    if (
+      !isPlainObject(item) ||
+      item.type !== 'message' ||
+      item.role !== 'assistant' ||
+      typeof item.status === 'string'
+    ) {
+      return item;
+    }
+    changed = true;
+    return { ...item, status: 'completed' };
+  });
+  return changed ? { ...body, input } : null;
+}
+
+function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
+  return (body) => {
+    if (!isPlainObject(body)) return null;
+    let changed = false;
+    let current = body;
+    const withSanitizedTools = sanitizeByteDanceSeedTools(current);
+    if (withSanitizedTools) {
+      current = withSanitizedTools;
+      changed = true;
+    }
+    const withNormalizedInput = normalizeByteDanceSeedInput(current);
+    if (withNormalizedInput) {
+      current = withNormalizedInput;
+      changed = true;
+    }
+    return changed ? current : null;
+  };
+}
+
 function createXaiResponsesCompatTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -1041,6 +1145,7 @@ function createTransformRequestChain(): RequestTransform[] {
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
     createXaiResponsesCompatTransform(),
+    createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
     stripNonAnthropicFields,

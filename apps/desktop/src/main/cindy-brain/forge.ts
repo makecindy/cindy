@@ -711,7 +711,15 @@ Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机
   "lifecycle": "on-demand",           // 可选:on-demand(缺省)/resident(常驻,单列高风险权限)
   "idleTimeoutSeconds": 120,           // 可选:按需档空闲关闭时间,30–3600;resident 禁写
   "entries": ["node/build.cjs"],       // 可选 ≤4 条:额外工作进程入口(每入口一个独立进程,调用时用 entry 指名,见 §4.12.1;不能与 entry / 浏览器沙箱 entry / 彼此重复)
-  "childSpawn": true                   // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;装入确认框单列一行)
+  "childSpawn": true,                  // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;装入确认框单列一行)
+  "secretBindings": [{                 // 可选 1–4 条:safeStorage 持久化凭证按方法临时注入 Worker
+    "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线
+    "label": "邮箱授权码",             // 安装确认与设置页展示名
+    "methods": ["mail/action"],         // 只在这些 JSON-RPC 方法中注入,每条 1–128 位
+    "entry": "node/worker.cjs",         // 可选:逐字命中 node.entry/entries;缺省仅主入口
+    "hint": "请填写服务商授权码",       // 可选 ≤200 字
+    "url": "https://mail.example.com/settings" // 可选 https 申请页
+  }]
 }
 \`\`\`
 
@@ -798,10 +806,11 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
-- 条目三种引用:\`secret:<key>\`(network.secrets 声明的凭证:user 源查已保存、oauth 源
-  查已连接账号;账号全过期时主机弹「重新连接」话术)、\`connection:<key>\`(该连接声明
-  下至少添加一条)、\`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;
-  键名主机无先验,label 必填)。
+- 条目三种引用:\`secret:<key>\`(\`network.secrets\` 或 \`node.secretBindings\` 声明的
+  凭证:Node 绑定与 user 源查已保存、oauth 源查已连接账号;账号全过期时主机弹「重新连接」
+  话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
+  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;键名主机无先验,
+  label 必填)。Node 凭证同样可参与 setup.requires。
 - 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
   引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
 - **绝大多数意识不需要写本字段**:不声明时主机走启发式——声明过凭证/连接的意识,
@@ -1350,6 +1359,9 @@ const r = await cindy.fetch({
 **凭证语义(必读)**:你在详单里只声明"需要一条叫什么的凭证、注入到哪个请求头";
 值由主机加密保管、只在代发请求时注入。**保险库里的明文你的代码永远读不回**——
 不要试图让用户把 key 发进聊天,更不要把 key 硬编码在源码里。
+这里说的是 \`network.secrets\` 的浏览器沙箱/HTTP 代发语义；确需本地协议时，
+\`node.secretBindings\` 是唯一允许把对应凭证交给 Node Worker 的显式例外，
+并会在安装权限清单单独披露(见 §4.12.1)。
 
 **收单一律由你的 settingsHtml 负责**(宿主不渲染凭证输入框,声明 user 凭证必须
 同时声明 settingsHtml,校验强制):你在 settingsHtml 里画输入框收单,值经
@@ -1850,6 +1862,51 @@ const response = await cindy.node.request({
 if (!response.ok) throw new Error(response.message);
 const result = response.result;
 \`\`\`
+
+#### Node Worker 的持久化凭证绑定
+
+本地 IMAP/SMTP 等协议确实需要 Worker 使用凭证明文时，在
+\`node.secretBindings\` 声明凭证键与允许注入的方法。设置页仍只负责收单：
+
+\`\`\`js
+// settings.js:输入框里的值立即交给主机 safeStorage,不要进 /kv / 日志 / BroadcastChannel
+await fetch('/secrets/mail_code', {
+  method: 'PUT',
+  body: JSON.stringify({ value: authorizationCode })
+});
+// GET /secrets 只能看到 { key:'mail_code', saved:true, tail? },永远没有明文
+\`\`\`
+
+浏览器 \`main.js\` 发给 Node 的业务参数里不要放凭证：
+
+\`\`\`js
+await cindy.node.request({
+  method: 'mail/action',
+  params: { action: 'search', query: '账单' }
+});
+\`\`\`
+
+宿主现查清单，只有 method 与目标 entry 同时命中绑定时，才从 safeStorage
+读取本插件自己的键，并在发往 Worker 的 JSON-RPC 保留字段中临时注入：
+
+\`\`\`js
+// worker 收到的 request；cindy 字段由宿主铸造，main.js 自报同名字段会被忽略
+const authorizationCode = request.cindy.secrets.mail_code;
+\`\`\`
+
+规则与红线：
+
+- \`secretBindings\` 最多 4 条，每条 \`methods\` 1–16 个；省略 \`entry\`
+  只绑定主入口，不能借同名方法把凭证送去其它入口；
+- 未保存凭证时宿主在请求进入 Worker 前返回 \`PERMISSION_DENIED\`，设置页可用
+  \`GET /secrets\` 的 saved 状态引导用户；
+- 宿主不会直接把明文交给 \`main.js\`、Agent 参数或写入宿主日志；但 Worker
+  收到明文后可以主动回传、落盘或写日志，浏览器侧代码和 Agent 也可能因此间接
+  获得它。安装/更新权限清单会逐条披露此风险，只安装可信来源插件；
+- Worker 用完不要缓存、落盘、回传或写日志；每次请求都以
+  \`request.cindy.secrets\` 的当次值为准；
+- \`node.secretBindings\` 与 \`network.secrets\` / \`network.connections\`
+  共用插件内凭证键命名空间，撞名拒装；声明它必须同时提供 \`settingsHtml\`。
 
 长任务(构建/打包这类几分钟量级的活)加 \`maxTotalMs\` 开启**有动静就续期**:
 \`timeoutMs\` 变成"沉默窗口"——worker 只要还在输出(stdout 协议消息或 stderr

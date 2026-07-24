@@ -12,6 +12,9 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
+import type { DbClient } from '../../localDb/client/DbClient';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
+import { recordScheduleRunCostDirect } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage';
 
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
@@ -740,6 +743,271 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
               totalEstimatedValueUsd: 0,
             },
           ],
+        },
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('includes direct run ledger costs when no assistant message can carry origin', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-direct', targetSessionId: 'sess-direct' });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at, total_cost_usd)
+        VALUES ('sess-direct', 'Direct cost session', 'desktop', 'dialogue', 1, 1, 0.42)
+      `);
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-direct',
+        scheduleId: schedule.id,
+        sessionId: 'sess-direct',
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costUsd: 0.42,
+        costAttribution: 'exact',
+      });
+
+      await expect(harness.storage.listCostSummaries()).resolves.toEqual([
+        {
+          scheduleId: schedule.id,
+          totalCostUsd: 0.42,
+          totalEstimatedValueUsd: 0,
+          sessionCount: 1,
+          sessions: [
+            {
+              sessionId: 'sess-direct',
+              totalCostUsd: 0.42,
+              totalEstimatedValueUsd: 0,
+            },
+          ],
+        },
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('accumulates multiple direct run ledger segments', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-direct-segments' });
+    const dbClient = { drizzle: harness.db } as unknown as DbClient;
+    try {
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-direct-segments',
+        scheduleId: schedule.id,
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costAttribution: 'unavailable',
+      });
+      setCurrentDbClient(dbClient, 'test-user');
+
+      await recordScheduleRunCostDirect({
+        runId: 'run-direct-segments',
+        costUsd: 0.42,
+        isEstimate: false,
+      });
+      await recordScheduleRunCostDirect({
+        runId: 'run-direct-segments',
+        costUsd: 0.18,
+        isEstimate: false,
+      });
+      await recordScheduleRunCostDirect({
+        runId: 'run-direct-segments',
+        costUsd: 0,
+        isEstimate: false,
+      });
+
+      await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
+        expect.objectContaining({
+          id: 'run-direct-segments',
+          costUsd: 0.6,
+          estimatedValueUsd: 0,
+          costAttribution: 'exact',
+        }),
+      ]);
+    } finally {
+      clearCurrentDbClient(dbClient);
+      harness.close();
+    }
+  });
+
+  it('keeps direct ledger remainder when a run also has message costs', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-mixed-ledger', targetSessionId: 'sess-mixed-ledger' });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at, total_cost_usd)
+        VALUES ('sess-mixed-ledger', 'Mixed ledger session', 'desktop', 'dialogue', 1, 1, 0)
+      `);
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-mixed-ledger',
+        scheduleId: schedule.id,
+        sessionId: 'sess-mixed-ledger',
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costUsd: 0.6,
+        costAttribution: 'mixed',
+      });
+      harness.db.run(sql`
+        INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+        VALUES
+          ('mixed-user', 'mixed-user', 'sess-mixed-ledger', 'user', '{}',
+            '{"origin":{"kind":"scheduler","scheduleId":"sch-mixed-ledger","runId":"run-mixed-ledger"}}', 10),
+          ('mixed-assistant', 'mixed-assistant', 'sess-mixed-ledger', 'assistant', '{}',
+            '{"origin":{"kind":"scheduler","scheduleId":"sch-mixed-ledger","runId":"run-mixed-ledger"},"turnCostUsd":0.42}', 11)
+      `);
+
+      await expect(harness.storage.listCostSummaries()).resolves.toEqual([
+        {
+          scheduleId: schedule.id,
+          totalCostUsd: 0.6,
+          totalEstimatedValueUsd: 0,
+          sessionCount: 1,
+          sessions: [
+            {
+              sessionId: 'sess-mixed-ledger',
+              totalCostUsd: 0.6,
+              totalEstimatedValueUsd: 0,
+            },
+          ],
+        },
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('merges direct-only snapshot with a later message ledger update', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-direct-only-snapshot', targetSessionId: 'sess-direct-only' });
+    const dbClient = { drizzle: harness.db } as unknown as DbClient;
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at, total_cost_usd)
+        VALUES ('sess-direct-only', 'Direct-only snapshot session', 'desktop', 'dialogue', 1, 1, 0)
+      `);
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-direct-only-snapshot',
+        scheduleId: schedule.id,
+        sessionId: 'sess-direct-only',
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costAttribution: 'unavailable',
+      });
+      setCurrentDbClient(dbClient, 'test-user');
+      await recordScheduleRunCostDirect({
+        runId: 'run-direct-only-snapshot',
+        costUsd: 0.6,
+        isEstimate: false,
+      });
+      harness.db.run(sql`
+        INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+        VALUES
+          ('direct-only-user', 'direct-only-user', 'sess-direct-only', 'user', '{}',
+            '{"origin":{"kind":"scheduler","scheduleId":"sch-direct-only-snapshot","runId":"run-direct-only-snapshot"}}', 10),
+          ('direct-only-assistant', 'direct-only-assistant', 'sess-direct-only', 'assistant', '{}',
+            '{"origin":{"kind":"scheduler","scheduleId":"sch-direct-only-snapshot","runId":"run-direct-only-snapshot"},"turnCostUsd":0.4}', 11)
+      `);
+
+      await expect(harness.storage.listRuns(schedule.id)).resolves.toEqual([
+        expect.objectContaining({
+          id: 'run-direct-only-snapshot',
+          costUsd: 1,
+          estimatedValueUsd: 0,
+          costAttribution: 'exact',
+        }),
+      ]);
+      await expect(harness.storage.listCostSummaries()).resolves.toEqual([
+        {
+          scheduleId: schedule.id,
+          totalCostUsd: 1,
+          totalEstimatedValueUsd: 0,
+          sessionCount: 1,
+          sessions: [
+            {
+              sessionId: 'sess-direct-only',
+              totalCostUsd: 1,
+              totalEstimatedValueUsd: 0,
+            },
+          ],
+        },
+      ]);
+    } finally {
+      clearCurrentDbClient(dbClient);
+      harness.close();
+    }
+  });
+
+  it('marks runs with no reliable pricing as unavailable instead of zero', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-unavailable', targetSessionId: 'sess-unavailable' });
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at, total_cost_usd)
+        VALUES ('sess-unavailable', 'Unavailable cost session', 'desktop', 'dialogue', 1, 1, 0)
+      `);
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-unavailable',
+        scheduleId: schedule.id,
+        sessionId: 'sess-unavailable',
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costAttribution: 'unavailable',
+      });
+
+      await expect(harness.storage.listCostSummaries()).resolves.toEqual([
+        {
+          scheduleId: schedule.id,
+          totalCostUsd: 0,
+          totalEstimatedValueUsd: 0,
+          hasUnavailableCost: true,
+          sessionCount: 1,
+          sessions: [
+            {
+              sessionId: 'sess-unavailable',
+              totalCostUsd: 0,
+              totalEstimatedValueUsd: 0,
+            },
+          ],
+        },
+      ]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('keeps a confirmed zero-cost run distinct from unavailable pricing', async () => {
+    const harness = createStorageHarness();
+    const schedule = baseSchedule({ id: 'sch-zero', executionMode: 'script' });
+    try {
+      await harness.storage.insert(schedule);
+      await harness.storage.insertRun({
+        id: 'run-zero',
+        scheduleId: schedule.id,
+        firedAt: 10,
+        finishedAt: 20,
+        status: 'success',
+        costAttribution: 'zero',
+      });
+
+      await expect(harness.storage.listCostSummaries()).resolves.toEqual([
+        {
+          scheduleId: schedule.id,
+          totalCostUsd: 0,
+          totalEstimatedValueUsd: 0,
+          sessionCount: 0,
+          sessions: [],
         },
       ]);
     } finally {

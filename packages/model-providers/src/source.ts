@@ -1,13 +1,13 @@
 /**
  * 目录源解析与加载（纯逻辑，IO 由 host 注入，零 Electron / node 依赖）。
  *
- *   - release：从 OSS `{base}/cfg/providers.json` 拉取（base 复用 manifest 的内外网探测）。
- *   - dev：直接读仓库本地文件（`localPath`），改了即时生效、不联网。
- *   - 兜底优先级：本地(dev) → 远端拉取 → 内置 bundled。
+ *   - release：优先从 Model Access 公共匿名接口拉取完整 Catalog；失败时回退旧 OSS 目录。
+ *   - dev：直接读仓库本地文件（`localPath`），改了即时生效、默认不联网。
+ *   - 兜底优先级：本地(dev) → 公共 API → 旧 OSS → 内置 bundled。
  *
  * 目录每进程加载一次、存内存、**无 TTL**（由 host 的 active-catalog 在启动期 await 一次）；
- * 本模块刻意**不做磁盘缓存**——OSS 是运行时真源、bundled 是兜底，无需在两者之间再缓一层
- * （否则磁盘缓存的新鲜窗口会让「重启即拉最新」失效）。
+ * 本模块刻意**不做磁盘缓存**——公共 API 与迁移期 OSS 都是远端目录源，bundled 是最终兜底，
+ * 无需再引入会让「重启即拉最新」失效的磁盘新鲜窗口。
  *
  * 本模块不碰文件系统 / 网络 / userData——这些能力由 host 通过 `CatalogIO` 注入，
  * 保证包可独立单测，也保证跨平台路径 / CORS 等细节留在 host。
@@ -16,36 +16,53 @@
 import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
 import type { Catalog, Provider } from './types.js';
 
-/** OSS bucket 下目录文件的相对路径（与 notice 同 bucket、并列）。 */
+/** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
+export const CATALOG_API_PATH = '/api/model-catalog/catalog';
+/** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = '/cfg/providers.json';
 
+/** 整条远端 Catalog fallback 链共享的默认启动等待预算。 */
+export const DEFAULT_REMOTE_CATALOG_BUDGET_MS = 15_000;
+
 export interface CatalogSourceConfig {
-  /** 完整覆盖源 URL（env XDT_MODELS_URL）；缺省由 baseUrl 拼。 */
+  /** 完整覆盖源 URL（env XDT_MODELS_URL）；缺省使用公共 catalog API。 */
   url?: string;
+  /** 公共 catalog API 基址（modelAccessApiBaseUrl）。 */
+  baseUrl?: string;
+  /** 迁移期旧 OSS/CDN 基址；公共 API 失败后读取 `${fallbackBaseUrl}/cfg/providers.json`。 */
+  fallbackBaseUrl?: string;
   /** dev 本地文件路径（env XDT_MODELS_PATH）；命中则只读它、不联网。 */
   localPath?: string;
-  /** 关闭远端拉取（env XDT_DISABLE_MODELS_FETCH）；只用缓存 / 内置。 */
+  /** 整条远端 fallback 链共享的等待预算；缺省 15 秒。 */
+  remoteBudgetMs?: number;
+  /** 注入单调时钟（测试用）；缺省 Date.now。 */
+  now?: () => number;
+  /** 关闭远端拉取（env XDT_DISABLE_MODELS_FETCH）；不影响 localPath 覆盖。 */
   disableFetch?: boolean;
-  /** OSS base（复用 manifestService.getBaseUrl()）；拼成 `${base}/cfg/providers.json`。 */
-  baseUrl?: string;
 }
 
 export interface CatalogIO {
-  /** 拉取远端文本（host 用 electron net.request 绕 CORS）。 */
-  fetchText?: (url: string) => Promise<string>;
+  /** 拉取远端文本（host 用 electron net.request 绕 CORS；timeoutMs 为本次剩余共享预算）。 */
+  fetchText?: (url: string, timeoutMs: number) => Promise<string>;
   /** 读本地文件（dev / localPath）；不存在返回 null。 */
   readFile?: (path: string) => Promise<string | null>;
   /** 诊断日志（可选）。 */
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
 
-/** 解析最终要拉取的 URL：显式 url 优先，否则 `${baseUrl}${CATALOG_CFG_PATH}`。 */
+/** 解析主 catalog URL：显式 url 优先，否则 `${baseUrl}${CATALOG_API_PATH}`。 */
 export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
   if (cfg.url && cfg.url.trim()) return cfg.url.trim();
   if (cfg.baseUrl && cfg.baseUrl.trim()) {
-    return cfg.baseUrl.trim().replace(/\/+$/, '') + CATALOG_CFG_PATH;
+    return cfg.baseUrl.trim().replace(/\/+$/, '') + CATALOG_API_PATH;
   }
   return null;
+}
+
+/** 解析迁移期旧 OSS 回退 URL。 */
+export function resolveFallbackCatalogUrl(cfg: CatalogSourceConfig): string | null {
+  if (!cfg.fallbackBaseUrl?.trim()) return null;
+  return cfg.fallbackBaseUrl.trim().replace(/\/+$/, '') + CATALOG_CFG_PATH;
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
@@ -112,8 +129,8 @@ function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?
  *
  * 顺序：
  *  1. dev：cfg.localPath + io.readFile → 读本地、合并 bundled、直接返回（不联网）。
- *  2. 远端拉取（除非 disableFetch / 无 url / 无 fetchText）→ 合并 bundled、用之。
- *  3. 任意上述失败 → 内置 bundled。
+ *  2. 远端依次尝试公共 API、迁移期旧 OSS（除非 disableFetch / 无 URL / 无 fetchText）。
+ *  3. 任意上述来源均不可用 → 内置 bundled。
  */
 export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Promise<Catalog> {
   // 1) dev 本地文件优先（命中即用，不联网）。
@@ -130,16 +147,34 @@ export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Prom
     }
   }
 
-  // 2) 远端 OSS 拉取（每进程一次，不落盘缓存）。
+  // 2) 公共 model-access catalog API；迁移期失败后尝试旧 OSS 目录。
   const url = resolveCatalogUrl(cfg);
-  if (!cfg.disableFetch && url && io.fetchText) {
-    try {
-      const text = await io.fetchText(url);
-      const parsed = parseCatalog(text);
-      log(io, 'info', 'loaded catalog from remote', { url });
-      return mergeWithBundled(parsed);
-    } catch (err) {
-      log(io, 'warn', 'remote catalog fetch/parse failed, falling back to bundled', { url, err: String(err) });
+  const fallbackUrl = resolveFallbackCatalogUrl(cfg);
+  if (!cfg.disableFetch && io.fetchText) {
+    const remoteUrls = cfg.url?.trim()
+      ? [url].filter((value): value is string => !!value)
+      : [url, fallbackUrl].filter((value): value is string => !!value);
+    const now = cfg.now ?? Date.now;
+    const configuredBudget = cfg.remoteBudgetMs ?? DEFAULT_REMOTE_CATALOG_BUDGET_MS;
+    const budgetMs = Number.isFinite(configuredBudget) ? Math.max(0, configuredBudget) : 0;
+    const deadline = now() + budgetMs;
+    for (const remoteUrl of remoteUrls) {
+      const remainingMs = Math.max(0, deadline - now());
+      if (remainingMs === 0) {
+        log(io, 'warn', 'remote catalog fallback budget exhausted');
+        break;
+      }
+      try {
+        const text = await io.fetchText(remoteUrl, remainingMs);
+        const parsed = parseCatalog(text);
+        log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
+        return mergeWithBundled(parsed);
+      } catch (err) {
+        log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
+          url: remoteUrl,
+          err: String(err),
+        });
+      }
     }
   }
 

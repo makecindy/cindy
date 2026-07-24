@@ -1,7 +1,11 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "이 세션은 현재 작업을 실행 중입니다. 잠시 후 다시 시도해 주세요.",
-    "CREDENTIAL_SWITCH_BUSY": "다른 Codex 작업이 실행 중이어서 이번 제공자 전환은 적용되지 않았습니다(세션은 기존 제공자를 유지합니다). 다른 작업이 끝난 후 다시 시도해 주세요."
+    "CREDENTIAL_SWITCH_BUSY": "다른 Codex 작업이 실행 중이어서 이번 제공자 전환은 적용되지 않았습니다(세션은 기존 제공자를 유지합니다). 다른 작업이 끝난 후 다시 시도해 주세요.",
+    "REMOTE_WORKDIR_INVALID": "원격 프로젝트 경로가 올바르지 않습니다. 프로젝트 폴더를 다시 선택하세요.",
+    "REMOTE_WORKDIR_NOT_FOUND": "원격 프로젝트 폴더가 없습니다. 프로젝트 폴더를 다시 선택하세요.",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "원격 프로젝트 경로가 폴더가 아닙니다. 프로젝트 폴더를 다시 선택하세요.",
+    "REMOTE_WORKDIR_UNAVAILABLE": "원격 프로젝트 폴더에 접근할 수 없습니다. 네트워크 드라이브를 다시 연결한 후 재시도하세요."
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -78,6 +82,7 @@
     },
     "tabs": {
       "general": "일반",
+      "billing": "사용량 및 결제",
       "personalization": "개인화",
       "apiKeys": "도구 키",
       "voiceInput": "음성 입력",
@@ -99,6 +104,7 @@
     },
     "sections": {
       "user": "사용자",
+      "billing": "사용량 및 결제",
       "appearance": "외관",
       "notifications": "알림",
       "agentIsland": "Agent Island",
@@ -550,6 +556,7 @@
       },
       "copyUserId": {
         "action": "사용자 ID 복사",
+        "display": "ID: {{id}}",
         "success": "사용자 ID를 복사했습니다",
         "failed": "사용자 ID를 복사하지 못했습니다"
       },
@@ -1282,7 +1289,7 @@
         "stepConnect": "연결",
         "stepModels": "모델 선택",
         "searchPlaceholder": "공급자 검색…",
-        "groupSubscription": "구독 인증 · 권장, API 키 불필요",
+        "groupSubscription": "구독 인증 · 추천",
         "groupApiKey": "API 키 공급자 · 프리셋은 카탈로그와 함께 업데이트",
         "groupCustom": "사용자 지정",
         "metaOAuth": "구독 인증",
@@ -1307,7 +1314,14 @@
         "next": "다음",
         "back": "← 이전",
         "finish": "추가 완료",
-        "cancel": "취소"
+        "cancel": "취소",
+        "useApiKey": "API 키로 연결",
+        "metaOAuthOrApi": "구독 인증 · API 키"
+      },
+      "xdSignin": {
+        "badge": "추천",
+        "desc": "Cindy에 로그인하면 공식 Cindy AI 서비스가 활성화됩니다. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "cta": "Cindy 로그인"
       }
     },
     "experimental": {
@@ -2195,13 +2209,53 @@
         "installedExpand": "설치된 플러그인 {{count}}개 더 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
         "allTitle": "모든 플러그인",
+        "filterAll": "전체",
+        "filtersAria": "출처별 플러그인 필터",
+        "origin": {
+          "public": "공개",
+          "organization": "팀 공유",
+          "local": "로컬"
+        },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
         "useAction": "사용",
         "useAria": "{{name}} 사용"
       },
+      "market": {
+        "scopeAria": "플러그인 출처 필터",
+        "scope": {
+          "all": "전체",
+          "public": "공개",
+          "organization": "조직",
+          "personal": "개인",
+          "local": "로컬"
+        },
+        "install": "설치",
+        "details": "상세",
+        "update": "마켓에서 업데이트",
+        "installed": "설치됨",
+        "conflict": "플러그인 ID 충돌",
+        "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "authenticationRequired": "플러그인 마켓을 보려면 Cindy에 로그인하세요.",
+        "notConfigured": "이 환경에는 플러그인 마켓이 구성되지 않았습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "errors": {
+          "generic": "플러그인 마켓 작업에 실패했습니다. 다시 시도해 주세요.",
+          "invalidRequest": "플러그인 요청이 올바르지 않습니다.",
+          "notFound": "이 플러그인은 더 이상 사용할 수 없습니다. 마켓을 새로 고친 후 다시 시도해 주세요.",
+          "conflict": "설치된 플러그인 또는 마켓 플러그인이 동일한 플러그인 ID를 사용하고 있습니다.",
+          "stateChanged": "작업 중 계정, 플러그인 또는 릴리스가 변경되었습니다. 최신 상태를 확인한 후 다시 시도해 주세요.",
+          "accessDenied": "이 플러그인 작업은 허용되지 않았거나 취소되었습니다.",
+          "notConfigured": "이 환경에서는 플러그인 마켓을 사용할 수 없습니다.",
+          "invalidPackage": "이 플러그인 패키지가 올바르지 않거나 현재 Cindy 버전에서 지원되지 않습니다."
+        },
+        "securityTitle": "설치 및 권한",
+        "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 권한을 확인하고 활성화할 때까지 새 플러그인은 비활성 상태로 유지됩니다.",
+        "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
+        "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
+        "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 비활성 상태로 설치합니다. 설정을 검토한 후 직접 활성화할 수 있습니다."
+      },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
-      "emptyHint": "오른쪽 위 \"플러그인 설치…\"에서 .cindy 파일을 선택하세요",
+      "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
       "disabledTag": "비활성",
       "projectDisabledTag": "이 프로젝트에서 꺼짐",
       "projectSwitchLockedTip": "이 플러그인은 전역에서 비활성 상태입니다. 먼저 '전역' 보기에서 활성화해 주세요",
@@ -2253,11 +2307,7 @@
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
         "expandDescription": "전체 소개 보기",
-        "collapseDescription": "소개 접기",
-        "nodeRiskTitle": "로컬 Node 프로그램 실행을 허용할까요?",
-        "nodeRiskDescription": "고위험 권한입니다. 플러그인의 Node 프로그램은 사용자 계정과 같은 로컬 권한으로 접근 가능한 파일을 읽거나 바꾸고, 네트워크를 사용하며, 다른 프로그램을 시작할 수 있습니다. 브라우저 샌드박스로 격리할 수 없습니다. 신뢰하는 출처의 플러그인만 설치하세요.",
-        "nodeRiskConfirm": "위험을 이해하고 계속",
-        "nodeRiskCancel": "설치 취소"
+        "collapseDescription": "소개 접기"
       },
       "trust": {
         "official": "Cindy 공식 플러그인",
@@ -2288,6 +2338,8 @@
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
         "nodeMcp": "함께 제공된 stdio MCP를 이 컴퓨터에서 실행할 수 있음",
         "nodeRuntimeDetail": "고위험:사용자 계정과 같은 권한으로 로컬 파일을 읽거나 수정하고, 네트워크에 접근하며, 다른 프로그램을 시작할 수 있습니다. Cindy의 브라우저 샌드박스로 격리할 수 없습니다.",
+        "nodeSecret": "저장된 자격 증명 ‘{{name}}’을(를) 로컬 Node 프로그램에 제공할 수 있음",
+        "nodeSecretDetail": "Cindy가 암호화해 보관하고 아래에 선언된 Worker 메서드가 실행될 때만 임시로 주입합니다. Node 프로그램은 평문을 받으며 브라우저 측 플러그인 코드나 Agent 매개변수로 반환하거나 로그 또는 파일에 저장할 수 있으므로 신뢰할 수 있는 플러그인만 설치하세요.",
         "nodeResident": "Node 프로그램을 백그라운드에서 계속 실행할 수 있음",
         "nodeResidentDetail": "플러그인이 활성화된 동안 실행되며 비활성화, 업데이트, 제거 또는 Cindy 종료 시 중지됩니다.",
         "tool": "도구 \"{{name}}\"",
@@ -2756,9 +2808,16 @@
     "localModeOpening": "로컬 모드를 여는 중...",
     "returnToLocalMode": "로컬 모드로 돌아가기",
     "localModeDescription": "Cindy 계정이 필요하지 않습니다. 데이터는 이 기기에 저장되며 클라우드 모델, 기기 간 연결 및 마켓 서비스는 사용할 수 없습니다.",
+    "consentStatement": "<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다",
+    "consentDialog": {
+      "title": "서비스 이용약관 및 개인정보 처리방침",
+      "body": "계속하려면 Cindy의 <terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의해 주세요.",
+      "agree": "동의",
+      "disagree": "동의 안 함"
+    },
     "ssoOrgTitle": "기업 SSO 로그인",
     "ssoOrgSubtitle": "회사 ID, 조직 slug 또는 인증된 도메인을 입력해 통합 로그인(SSO)으로 이동합니다",
-    "ssoOrgPlaceholder": "회사 ID, 조직 slug 또는 인증된 도메인",
+    "ssoOrgPlaceholder": "회사 ID, slug 또는 도메인",
     "ssoOrgHint": "기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요",
     "ssoOrgDetected": "\"{{org}}\"의 통합 로그인 방식을 선택하세요",
     "ssoVerificationTitle": "기업 신원 확인",
@@ -3887,6 +3946,31 @@
       "editTitle": "붙여넣은 텍스트 편집",
       "cancelEdit": "편집 취소",
       "saveEdit": "텍스트 저장"
+    }
+  },
+  "onboarding": {
+    "connectProvider": {
+      "title": "모델 제공업체를 연결하고 시작하세요",
+      "desc": "아직 사용 가능한 모델이 없습니다. 제공업체를 연결하면 대화를 시작할 수 있습니다.",
+      "recommendedLabel": "추천",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "공식 서비스 · 전체 모델 · Claude Code / Codex 지원",
+        "loginTitle": "Cindy 로그인",
+        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다"
+      },
+      "othersToggle": "기타 제공업체 ({{count}})",
+      "presetSub": "API 키를 입력하여 연결",
+      "dismiss": "나중에",
+      "haveApiKey": "API 키가 있어요",
+      "banner": {
+        "text": "사용 가능한 모델이 없습니다. 제공업체를 연결하면 대화할 수 있습니다.",
+        "connectCta": "제공업체 연결",
+        "loginCta": "Cindy 로그인",
+        "dismissAria": "닫기"
+      },
+      "detectedLabel": "감지됨",
+      "oauthSub": "브라우저에서 인증 페이지가 열리며, 로그인 후 자동으로 연결됩니다"
     }
   },
   "voiceInputOverlay": {
@@ -5218,6 +5302,12 @@
       },
       "gallery": {
         "heading": "템플릿에서 시작"
+      },
+      "capability": {
+        "worktree": "격리 워크트리",
+        "pr": "PR 자동화",
+        "web": "웹 검색",
+        "params": "사용자 지정 가능"
       }
     },
     "projectAutomation": {
@@ -5290,6 +5380,7 @@
       "tagManual": "수동",
       "totalCost": "비용 {{cost}}",
       "totalValue": "가치 {{value}}",
+      "costUnavailable": "비용을 확인할 수 없음",
       "menu": {
         "rename": "이름 변경",
         "resume": "재개",
@@ -5329,6 +5420,7 @@
       "sessionValue": "세션 가치 {{value}}",
       "runCost": "실행 비용 {{cost}}",
       "runValue": "실행 추정 가치 {{value}}",
+      "costUnavailable": "비용을 확인할 수 없음",
       "legacyCostUnavailable": "이전 비용은 실행별로 구분할 수 없습니다",
       "persistentSessionGroup": "지속 세션 {{session}} · {{count}}회 실행",
       "expandRemainingRuns": "나머지 {{count}}회 보기",
@@ -5635,6 +5727,57 @@
         "description": "실행 기록 항목이 제거됩니다. 이 작업은 되돌릴 수 없습니다.",
         "confirm": "삭제",
         "cancel": "취소"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "개발 자동화",
+        "info-radar": "정보 레이더",
+        "office-docs": "문서와 사무"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "야간 자가 복구 테스트",
+          "description": "매일 밤 테스트를 실행하고 실패 항목을 격리 워크트리에서 최소 수정",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR 게이트키퍼",
+          "description": "평일마다 오픈 PR의 새 변경을 사전 리뷰하고 심각도별로 위험 보고",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "domain-radar": {
+          "name": "관심 분야 레이더",
+          "description": "관심 분야의 최신 동향을 정기 수집해 관점 있는 요약 제공",
+          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "관심 주제",
+              "placeholder": "예: AI 에이전트, 신에너지, 프런트엔드"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "경쟁사 동향 추적",
+          "description": "경쟁사의 제품·시장 동향을 매주 정리하고 영향 분석",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "경쟁사 목록",
+              "placeholder": "예: Notion, Linear, Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "주간 보고서 초안 도우미",
+          "description": "작업 디렉터리의 문서와 산출물로 주간 보고서 초안 생성",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "지식 베이스 신선도 점검",
+          "description": "매월 문서를 점검해 오래된 내용과 모순 찾기",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },
@@ -6812,6 +6955,229 @@
     "note": {
       "codexStateSkipped": "이 컴퓨터에서 Codex가 아직 초기화되지 않아 세션 상태가 완전히 복원되지 않았습니다. Codex 세션을 한 번 실행하면 이어갈 수 있습니다.",
       "workdirKeyInexact": "선택한 디렉터리 경로가 너무 길어 트랜스크립트를 배치할 수 없어 채팅 기록만 가져왔습니다."
+    }
+  },
+  "billing": {
+    "sidebar": "크레딧 및 요금제",
+    "settings": {
+      "title": "사용량 및 결제",
+      "subtitle": "현재 구독을 확인하거나 서버에서 제공하는 구독 상품과 크레딧을 구매할 수 있습니다.",
+      "loading": "구독 상태를 불러오는 중…",
+      "subscriptionCard": {
+        "title": "현재 요금제",
+        "empty": "활성 구독이 없습니다",
+        "emptyTitle": "구독 요금제 없음",
+        "unnamedPlan": "구독 요금제",
+        "unavailable": "구독 상태를 불러올 수 없습니다. 새로고침 후 다시 시도하세요.",
+        "action": "요금제 보기",
+        "changeAction": "플랜 변경"
+      },
+      "topupCard": {
+        "title": "크레딧",
+        "description": "사용량 기반 모델과 기능을 위한 크레딧을 구매합니다.",
+        "cardTitle": "필요할 때 크레딧 구매",
+        "cardDescription": "구매 가능한 크레딧 상품은 서버에서 설정됩니다.",
+        "action": "크레딧 구매"
+      }
+    },
+    "balance": {
+      "title": "사용 가능 잔액",
+      "plan": "요금제 크레딧",
+      "purchased": "구매한 크레딧",
+      "promotional": "프로모션 크레딧",
+      "notProvisioned": "이 계정에는 아직 크레딧이 활성화되지 않았습니다.",
+      "notSupported": "이 계정에서는 잔액 조회를 지원하지 않습니다.",
+      "unavailable": "잔액을 불러올 수 없습니다. 새로고침 후 다시 시도하세요."
+    },
+    "usage": {
+      "observedAt": "크레딧 업데이트: {{date}}",
+      "used": "사용",
+      "total": "전체",
+      "remaining": "잔여",
+      "progressLabel": "{{label}} 사용량",
+      "historyUnavailable": "사용 기록이 완전하지 않아 잔여 크레딧만 표시합니다.",
+      "percentUsed": "{{percent}}% 사용",
+      "detailsUnavailable": "사용량 상세를 불러올 수 없어 현재 잔액만 표시합니다.",
+      "promotionalDetails": {
+        "title": "프로모션 크레딧 상세",
+        "description": "각 지급 건은 상태와 만료 시간이 서로 다릅니다. 잔여 금액은 마지막 원장 정산 기준이며 반영이 조금 늦을 수 있습니다.",
+        "count": "{{count}}건",
+        "empty": "프로모션 크레딧 지급 내역이 없습니다.",
+        "incomplete": "지급 내역이 많아 최근 {{count}}건만 표시합니다.",
+        "historicalUsageUnavailable": "만료되었거나 무효화된 지급분의 실제 사용량은 현재 Gateway에서 복원할 수 없어 '—'로 표시됩니다.",
+        "unnamed": "프로모션 크레딧",
+        "original": "지급액",
+        "used": "사용",
+        "remaining": "잔여",
+        "expiresAt": "{{date}} 만료",
+        "states": {
+          "active": "사용 중",
+          "depleted": "소진됨",
+          "expired": "만료됨",
+          "voided": "무효"
+        }
+      }
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "구독 요금제 선택",
+        "description": "서버에 현재 설정된 구독 요금제만 표시합니다. 요금제를 선택하면 결제 수단이 표시됩니다."
+      },
+      "topup": {
+        "title": "크레딧 구매",
+        "description": "서버에 현재 설정된 크레딧 상품만 표시합니다. 상품을 선택하면 결제 수단이 표시됩니다."
+      }
+    },
+    "eyebrow": "계정 및 사용량",
+    "title": "알맞은 요금제 선택",
+    "subtitle": "요금제와 결제 수단은 서버에서 실시간으로 제공됩니다. 요금제를 먼저 선택하면 현재 지원되는 결제 수단을 볼 수 있습니다.",
+    "steps": {
+      "offer": {
+        "title": "요금제 선택",
+        "description": "현재 구매 가능한 충전 및 구독만 표시합니다."
+      },
+      "channel": {
+        "title": "결제 수단 선택",
+        "description": "지원되는 결제 수단은 요금제마다 다를 수 있습니다.",
+        "selectOfferFirst": "요금제를 선택하면 지원되는 결제 수단이 표시됩니다"
+      },
+      "confirm": {
+        "title": "확인 및 결제",
+        "description": "요금제와 결제 수단을 확인한 뒤 결제를 생성합니다.",
+        "selectChannelFirst": "계속하려면 결제 수단을 선택하세요"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "새로고침",
+      "retry": "다시 시도",
+      "pay": "확인 및 결제",
+      "refresh": "상태 새로고침",
+      "cancelPayment": "결제 취소",
+      "close": "닫기"
+    },
+    "catalog": {
+      "errorTitle": "요금제를 불러올 수 없습니다",
+      "errorDescription": "네트워크를 확인하고 다시 시도하세요. 로컬 대체 요금제는 표시하지 않습니다.",
+      "emptyTitle": "사용 가능한 요금제가 없습니다",
+      "emptyDescription": "서버에 구매 가능한 요금제와 결제 수단이 아직 설정되지 않았습니다."
+    },
+    "offerKinds": {
+      "topup": "크레딧 충전",
+      "subscription": "구독"
+    },
+    "amount": {
+      "custom": "금액 직접 입력",
+      "label": "충전 금액",
+      "placeholder": "금액 입력",
+      "rangeHint": "{{min}}~{{max}} 입력",
+      "rangeError": "금액은 {{min}}~{{max}} 사이여야 합니다",
+      "formatError": "유효한 금액을 소수점 이하 {{digits}}자리 이내로 입력하세요"
+    },
+    "intervals": {
+      "MONTH": "월",
+      "YEAR": "년"
+    },
+    "credits": "{{amount}} 크레딧",
+    "confirm": {
+      "channel": "{{provider}}로 결제"
+    },
+    "paymentActions": {
+      "QR_CODE": "QR 코드 결제",
+      "REDIRECT": "결제 페이지 열기"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "카드"
+    },
+    "securityNotice": "결제는 선택한 결제사에서 안전하게 처리하며 Cindy는 결제 인증 정보를 저장하지 않습니다",
+    "currentSubscription": {
+      "title": "현재 구독",
+      "purchaseBlocked": "종료되지 않은 구독이 있습니다. 기존 구독을 처리한 후 새 요금제를 구매하세요."
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "결제 대기",
+      "INCOMPLETE_EXPIRED": "결제 만료",
+      "TRIALING": "체험 중",
+      "ACTIVE": "사용 중",
+      "PAST_DUE": "결제 연체",
+      "UNPAID": "미결제",
+      "CANCELED": "취소됨",
+      "PAUSED": "일시 중지"
+    },
+    "recovery": {
+      "title": "완료되지 않은 결제가 있습니다",
+      "description": "이전 결제를 계속하고 서버에서 최신 상태를 확인할 수 있습니다.",
+      "continueTopup": "{{amount}} 결제 계속",
+      "continueSubscription": "구독 결제 계속"
+    },
+    "checkout": {
+      "creatingTitle": "결제 생성 중",
+      "awaitingTitle": "결제 대기",
+      "fulfillingTitle": "크레딧 반영 중",
+      "completedTitle": "결제 완료",
+      "failedTitle": "완료할 수 없음",
+      "expiredTitle": "결제 만료",
+      "canceledTitle": "결제 취소됨",
+      "topupSubtitle": "크레딧 충전",
+      "subscriptionSubtitle": "구독",
+      "creatingBody": "결제 서비스에서 주문을 확인하고 있습니다…",
+      "qrAlt": "결제 QR 코드",
+      "scanHint": "해당 결제 앱으로 스캔하세요",
+      "checkingExpiry": "유효 시간을 확인하는 중…",
+      "expiresIn": "QR 코드 만료까지 {{minutes}}:{{seconds}}",
+      "redirectHint": "결제 페이지에서 완료한 뒤 Cindy로 돌아오세요.",
+      "openPayment": "결제 페이지 열기",
+      "refreshingAction": "결제 정보를 불러오는 중…",
+      "creditingBody": "결제가 완료되었습니다. 크레딧이 반영되기를 기다리는 중입니다…",
+      "paymentCompleted": "결제가 완료되었습니다.",
+      "requestFailed": "요청에 실패했습니다. 결과가 불확실한 생성 요청은 같은 멱등성 키로 안전하게 재시도합니다.",
+      "expiredBody": "결제 링크가 만료되었습니다. 새 결제를 생성하세요.",
+      "canceledBody": "이 결제가 취소되었습니다.",
+      "failedBody": "결제에 실패했습니다. 나중에 다시 시도하세요."
+    },
+    "planChange": {
+      "targetTitle": "구독 플랜 변경",
+      "targetDescription": "플랜 변경은 현재 결제 수단을 그대로 사용합니다. 최종 금액과 적용 시점은 다음 단계에서 확인합니다.",
+      "targetDescriptionWithCurrent": "현재 플랜: {{plan}}. 변경은 현재 결제 수단을 그대로 사용하며, 최종 금액과 적용 시점은 다음 단계에서 확인합니다.",
+      "upgradeBadge": "업그레이드",
+      "downgradeBadge": "다운그레이드",
+      "emptyTitle": "전환 가능한 플랜이 없습니다",
+      "emptyDescription": "현재 결제 수단으로 전환할 수 있는 다른 플랜이 아직 설정되지 않았습니다.",
+      "quotingTitle": "플랜 변경 준비 중",
+      "quotingBody": "서버에서 금액과 적용 시점을 가져오는 중…",
+      "quoteTitle": "플랜 변경 확인",
+      "confirmingTitle": "변경 제출 중",
+      "confirmingBody": "플랜 변경을 서버에 제출하는 중…",
+      "pendingProviderTitle": "요금제 변경 처리 중",
+      "pendingProviderBody": "결제 제공업체에서 변경을 처리하고 있습니다. Cindy가 결과를 계속 확인합니다…",
+      "awaitingTitle": "차액 결제",
+      "scheduledTitle": "다운그레이드 예약됨",
+      "scheduledBody": "새 플랜은 {{date}}에 적용됩니다. 그때까지 현재 플랜이 유지됩니다.",
+      "appliedTitle": "플랜 변경 완료",
+      "appliedBody": "새 플랜이 적용되었습니다.",
+      "canceledTitle": "변경 취소됨",
+      "canceledBody": "플랜 변경이 취소되었고 현재 플랜은 그대로 유지됩니다.",
+      "expiredTitle": "견적 만료",
+      "expiredBody": "견적이 만료되었습니다. 플랜 변경을 다시 시작해 주세요.",
+      "failedTitle": "플랜 변경 실패",
+      "failedBody": "플랜 변경이 완료되지 않았습니다. 현재 플랜은 그대로 유지됩니다.",
+      "requestFailed": "요청에 실패했습니다. 다시 시도해 주세요.",
+      "resyncHint": "확인 결과를 검증할 수 없습니다. 서버에서 최신 상태를 동기화하는 중…",
+      "upgradeDueNow": "이번 기간 차액 {{amount}}을(를) 결제하세요",
+      "upgradeNoAmount": "확인 후 업그레이드가 즉시 적용됩니다.",
+      "upgradeHint": "결제 완료 후 업그레이드가 즉시 적용되며 이후 새 플랜 가격으로 갱신됩니다.",
+      "downgradeAt": "{{date}}에 적용됩니다",
+      "downgradeHint": "현재 플랜은 이번 결제 주기 종료 시점까지 유지되며 환불은 발생하지 않습니다.",
+      "quoteExpiresIn": "견적은 {{minutes}}:{{seconds}} 후 만료됩니다",
+      "scanToPay": "스캔하여 {{amount}} 결제",
+      "confirm": "변경 확정",
+      "abandon": "취소",
+      "targetLabel": "대상 플랜: {{name}}",
+      "pendingDowngrade": "{{name}}(으)로의 다운그레이드가 {{date}}에 예약되어 있습니다.",
+      "pendingPayment": "{{name}}(으)로의 업그레이드가 차액 결제를 기다리고 있습니다.",
+      "pendingQuote": "{{name}}(으)로의 플랜 변경이 진행 중입니다.",
+      "resume": "계속",
+      "undo": "다운그레이드 취소"
     }
   },
   "fileAccess": {

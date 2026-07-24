@@ -7,7 +7,7 @@
 
 本文收拢一组适用于整个客户端的通用工程约束。IPC 的安全与授权边界另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
-UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & Content 一节，验证命令
+UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 Voice & Content 一节，验证命令
 见 [`desktop-development.md`](desktop-development.md)。
 
 > **增量适用原则**：本规则约束新增和正在修改的代码，不要求为统一形式专项重构存量。
@@ -104,8 +104,8 @@ UI 文案的语气与措辞另见根 [`DESIGN.md`](../../DESIGN.md) 的 Voice & 
 
 ## 7. 渲染性能与视觉连续性
 
-界面切换与动画的性能约束。动效的视觉规范（允许哪些过渡、时长、容器形变）见根
-[`DESIGN.md`](../../DESIGN.md) §14.4；本节只管性能红线与加载时序。
+界面切换与动画的性能约束。动效的视觉规范（允许哪些过渡、时长、容器形变）见
+[`DESIGN.md`](../design-rules/DESIGN.md) §14.4；本节只管性能红线与加载时序。
 
 - **杜绝跳变与空白帧**：所有界面／子界面／边栏切换，过程中不产生让人难受的视觉跳变。
 - **取数时序**：Render 层先异步获取数据（绝不能卡主线程渲染），获取期间界面不发生

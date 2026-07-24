@@ -1,10 +1,9 @@
 /**
  * refreshRemoteDeviceSessions —— 立即(可 await)重拉某被控设备的会话列表(bootstrap / reconcile)。
  *
- * 这是「读被控端真相」的一次性按需拉取,**不是**轮询补偿(控制端纯镜像下,稳态增量靠
- * 被控端 sessions:patched/created push 驱动;本函数只用于「刚在被控端创建了一个会话、要马上
- * navigate 过去」这类需要先把新 sessionId 注册进 store 才能避免 404 的 bootstrap-before-navigate
- * 场景:listing tier 首拉、reconnect 重拉、fork / orca worker / 远程新建会话)。
+ * 这是「读被控端真相」的一次性按需拉取。默认用于 listing tier 首拉、reconnect、
+ * sessions:created reseed、fork / orca worker / 远程新建会话；周期 anti-entropy 也复用本函数，
+ * 但使用 merge 模式，避免有界列表删除窗口外会话。
  *
  * 用 per-device epoch 防乱序:两次重拉乱序 resolve 时,旧的那次结果被丢弃(只接受最新一次),
  * 避免旧 snapshot 覆盖新 snapshot(reconcile 规则)。
@@ -18,12 +17,17 @@
 
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectsStore } from './remoteProjectsStore';
+import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
 
 const log = createLogger('device-link-refresh');
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
 const LIST_LIMIT = 200;
+
+/** 满窗口时每轮最多补查多少个缺席缓存 id，避免退化成无界 N+1。 */
+const MISSING_STATUS_PROBE_LIMIT = 8;
 
 /** 默认重试次数(含首次):退避 250→500→1000→2000→3000ms,总窗口 ~6.75s,覆盖被控端冷启动迁移。 */
 const DEFAULT_MAX_ATTEMPTS = 6;
@@ -43,7 +47,12 @@ const ACCESS_REVOKED_MARKER = 'DEVICE_LINK_ACCESS_REVOKED';
  * ⚠️ 超时码用 DEVICE_LINK_TIMEOUT:invoke 超时的原始 DeviceLinkError('INVOKE_TIMEOUT') 在 main IPC
  * 层被映射成 `[DEVICE_LINK_TIMEOUT]` 才到 renderer,这里匹配的是 renderer 实际看到的已映射码。
  */
-const TRANSIENT_MARKERS = ['DbClient not ready', 'NOT_CONNECTED', 'DEVICE_OFFLINE', 'DEVICE_LINK_TIMEOUT'] as const;
+const TRANSIENT_MARKERS = [
+  'DbClient not ready',
+  'NOT_CONNECTED',
+  'DEVICE_OFFLINE',
+  'DEVICE_LINK_TIMEOUT',
+] as const;
 
 /**
  * 该远程错误是否「瞬态、值得重试」。永久错误优先(命中即不重试);否则仅当命中已知瞬态标记
@@ -66,6 +75,10 @@ export interface RefreshOptions {
   sleep?: (ms: number) => Promise<void>;
   /** 最大尝试次数(含首次),默认 DEFAULT_MAX_ATTEMPTS。 */
   maxAttempts?: number;
+  /** sessions:list 始终有界，默认 merge；仅已知完整的调用方才可显式 replace。 */
+  snapshotMode?: 'replace' | 'merge';
+  /** 周期 tick 可弱合并到任意在途 refresh；事件型 refresh 默认强语义补跑。 */
+  coalescingMode?: 'strong' | 'weak';
 }
 
 /**
@@ -85,6 +98,39 @@ interface RefreshTask {
 
 const refreshTasks = new Map<string, RefreshTask>();
 
+/**
+ * 满窗口缺席行的轮询队列(per-device)。不能用 snapshot epoch 推导数组下标：前一轮
+ * 确认终态并移除候选后，数组会收缩，重算下标会跳过紧邻项。队列在每轮开始时与当前
+ * missing ids 对账，保留旧轮询顺序、移除已不缺席项，并把新缺席项追加到队尾。
+ */
+const missingStatusProbeQueues = new Map<string, string[]>();
+
+function reconcileMissingStatusProbeQueue(
+  deviceId: string,
+  missingSessionIds: readonly string[],
+): string[] {
+  if (missingSessionIds.length === 0) {
+    missingStatusProbeQueues.delete(deviceId);
+    return [];
+  }
+  const missingIds = new Set(missingSessionIds);
+  const previous = missingStatusProbeQueues.get(deviceId) ?? [];
+  const queuedIds = new Set<string>();
+  const queue: string[] = [];
+  for (const sessionId of previous) {
+    if (!missingIds.has(sessionId) || queuedIds.has(sessionId)) continue;
+    queuedIds.add(sessionId);
+    queue.push(sessionId);
+  }
+  for (const sessionId of missingSessionIds) {
+    if (queuedIds.has(sessionId)) continue;
+    queuedIds.add(sessionId);
+    queue.push(sessionId);
+  }
+  missingStatusProbeQueues.set(deviceId, queue);
+  return queue;
+}
+
 export async function refreshRemoteDeviceSessions(
   deviceId: string,
   name?: string,
@@ -92,9 +138,23 @@ export async function refreshRemoteDeviceSessions(
 ): Promise<RefreshResult> {
   const existing = refreshTasks.get(deviceId);
   if (existing) {
+    const requestedSnapshotMode = opts.snapshotMode ?? 'merge';
+    // periodic tick 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
+    // 都 bump epoch 让慢请求自取消。bootstrap/reseed 等事件型 refresh 仍走强语义补跑。
+    if (opts.coalescingMode === 'weak') return existing.promise;
+
     existing.rerun = true;
     existing.name = name ?? existing.name;
-    existing.opts = { ...existing.opts, ...opts };
+    existing.opts = {
+      ...existing.opts,
+      ...opts,
+      // 显式 replace 是更强的 snapshot 覆盖要求，不能被后续 merge 降级；默认的事件型
+      // refresh 则保持安全的有界 merge，并通过上面的强 coalescing 语义确保补跑。
+      snapshotMode:
+        (existing.opts.snapshotMode ?? 'merge') === 'replace' || requestedSnapshotMode === 'replace'
+          ? 'replace'
+          : 'merge',
+    };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
     remoteProjectsStore.nextSnapshotEpoch(deviceId);
     return existing.promise;
@@ -124,6 +184,66 @@ async function drainRefreshTask(deviceId: string, task: RefreshTask): Promise<Re
   return result;
 }
 
+async function probeMissingSessionStatuses(
+  deviceId: string,
+  epoch: number,
+  missingSessionIds: readonly string[],
+): Promise<void> {
+  const queue = reconcileMissingStatusProbeQueue(deviceId, missingSessionIds);
+  if (queue.length === 0) return;
+  const count = Math.min(MISSING_STATUS_PROBE_LIMIT, queue.length);
+  const candidates = queue.slice(0, count);
+  const results = await Promise.all(
+    candidates.map(async (sessionId) => {
+      try {
+        const value = await window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'local-db:sessions:get',
+          [sessionId],
+        );
+        return { sessionId, value };
+      } catch (error) {
+        return { sessionId, errorCode: extractIpcError(error)?.code };
+      }
+    }),
+  );
+  // 更强的 refresh / remove / disconnect 已使本轮失效时，不应用迟到的补查结果。
+  if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return;
+  const terminalIds = new Set<string>();
+  for (const result of results) {
+    if (result.errorCode === 'NOT_FOUND') {
+      terminalIds.add(result.sessionId);
+      remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
+      removeRemoteSessionActivityEntry(result.sessionId);
+      continue;
+    }
+    if (!result.value || typeof result.value !== 'object') continue;
+    const session = result.value as Partial<Session>;
+    if (session.id !== result.sessionId) continue;
+    if (session.status === 'archived' || session.status === 'deleted') {
+      terminalIds.add(result.sessionId);
+      remoteProjectsStore.applyPatch(deviceId, result.sessionId, {
+        status: session.status,
+        updatedAt: session.updatedAt,
+      });
+      removeRemoteSessionActivityEntry(result.sessionId);
+      continue;
+    }
+    // sessions:get 返回窗口外 active 行时同样是权威快照，回填 title / pinnedAt / model 等
+    // 元数据；否则丢失 patched push 后会永久保留旧字段。
+    remoteProjectsStore.applyPatch(deviceId, result.sessionId, { ...session });
+  }
+  const nextQueue = [
+    ...queue.slice(count),
+    ...candidates.filter((sessionId) => !terminalIds.has(sessionId)),
+  ];
+  if (nextQueue.length === 0) {
+    missingStatusProbeQueues.delete(deviceId);
+  } else {
+    missingStatusProbeQueues.set(deviceId, nextQueue);
+  }
+}
+
 async function runRefreshRemoteDeviceSessions(
   deviceId: string,
   name?: string,
@@ -146,7 +266,28 @@ async function runRefreshRemoteDeviceSessions(
       // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'gave-up';
       if (Array.isArray(list)) {
-        remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
+        if ((opts.snapshotMode ?? 'merge') === 'merge') {
+          const sessions = list as Session[];
+          const incomingIds = new Set(sessions.map((session) => session.id));
+          const missingSessionIds = remoteProjectsStore
+            .getDeviceSessions(deviceId)
+            .filter((session) => !incomingIds.has(session.id))
+            .map((session) => session.id);
+          // 未满 LIST_LIMIT 证明 active 集合完整，可安全 replace 并清掉缺席的归档/删除行。
+          // 满窗口时先 merge，再用既有只读 sessions:get 有界轮询窗口外缓存 id 的终态。
+          if (sessions.length < LIST_LIMIT) {
+            missingStatusProbeQueues.delete(deviceId);
+            remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions);
+            for (const sessionId of missingSessionIds) {
+              removeRemoteSessionActivityEntry(sessionId);
+            }
+          } else {
+            remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, sessions);
+            await probeMissingSessionStatuses(deviceId, epoch, missingSessionIds);
+          }
+        } else {
+          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
+        }
       }
       return 'ok'; // 成功
     } catch (err) {

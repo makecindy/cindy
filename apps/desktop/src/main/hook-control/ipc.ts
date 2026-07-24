@@ -68,6 +68,7 @@ import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { getAgentIslandService } from '../agent-island/service.js';
 
 const log = createLogger('hook-control');
 
@@ -296,7 +297,20 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       // task.cancel 的中断出口: 与用户手动 Stop 同一条 session.abort() 路径
       abortSession: async (sessionId) => {
-        await getMaker().getSession(sessionId)?.abort();
+        const session = getMaker().getSession(sessionId);
+        if (!session) return;
+        try {
+          getAgentIslandService()?.handleSessionStopped(
+            sessionId,
+            session.getCurrentTurnId?.() ?? null,
+          );
+        } catch (error) {
+          log.warn('Agent Island session stop update failed before hook provider abort', {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await session.abort();
       },
       // session.archive 的归档出口: 与 device-link 远程归档同一条
       // patchSessionMetaInDb 路径(落库 + sessions:patched 广播, sidebar 即时移出)

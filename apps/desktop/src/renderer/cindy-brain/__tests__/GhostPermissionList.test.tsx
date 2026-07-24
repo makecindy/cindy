@@ -117,6 +117,29 @@ describe('GhostPermissionList(装入全量清单)', () => {
     expect(screen.getByText('settings.ghosts.perm.codeDetailNetwork')).toBeTruthy();
     expect(screen.queryByText('settings.ghosts.perm.codeDetail')).toBeNull();
   });
+
+  it('Node 持久凭证单独披露明文注入范围', () => {
+    const node: GhostManifest = {
+      ...chip(),
+      slots: [...chip().slots, 'node'],
+      settingsHtml: 'settings.html',
+      node: {
+        entry: 'worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_authorization_code',
+            label: '邮箱授权码',
+            methods: ['account/connect', 'mail/action'],
+          },
+        ],
+      },
+    };
+    render(<GhostPermissionList items={ghostPermissionItems(node)} />);
+    expect(screen.getByText(/perm\.nodeSecret:.*邮箱授权码/)).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.nodeSecretDetail')).toBeTruthy();
+    expect(screen.getByText(/account\/connect\s+mail\/action/)).toBeTruthy();
+  });
 });
 
 describe('GhostPermissionDiffView(更新权限 diff)', () => {

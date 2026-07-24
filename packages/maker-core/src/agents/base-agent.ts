@@ -662,6 +662,9 @@ export interface AgentSessionHandle {
   /** 中断当前 turn */
   abort(): Promise<void>;
 
+  /** Provider turn identity when the adapter exposes one (currently Codex). */
+  getCurrentTurnId?(): string | null;
+
   /**
    * 停止会话内单个后台任务(SDK Query.stopTask 透传)。
    * 与 abort() 的区别:abort 是"用户 Stop"的全停语义(只连带 wake 型任务、并

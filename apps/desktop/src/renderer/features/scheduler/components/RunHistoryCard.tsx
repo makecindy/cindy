@@ -152,20 +152,27 @@ export function RunHistoryCard({
     run.status === 'running'
       ? formatStartedAgo(run.firedAt)
       : t('scheduler.runs.took', { duration: formatDuration(run.firedAt, run.finishedAt) });
-  const costText = run.costAttribution === 'legacy'
-    ? t('scheduler.runs.legacyCostUnavailable')
-    : run.costAttribution === 'exact'
-      ? [
-          (run.costUsd ?? 0) > 0
-            ? t('scheduler.runs.runCost', { cost: formatUsd(run.costUsd ?? 0) })
-            : null,
-          (run.estimatedValueUsd ?? 0) > 0
-            ? t('scheduler.runs.runValue', { value: formatUsd(run.estimatedValueUsd ?? 0) })
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') || t('scheduler.runs.runCost', { cost: formatUsd(0) })
-      : null;
+  const costText = run.status === 'running'
+    ? null
+    : run.costAttribution === 'legacy'
+      ? t('scheduler.runs.legacyCostUnavailable')
+      : run.costAttribution === 'unavailable'
+        ? t('scheduler.runs.costUnavailable')
+        : run.costAttribution === 'exact' ||
+            run.costAttribution === 'direct' ||
+            run.costAttribution === 'mixed' ||
+            run.costAttribution === 'zero'
+          ? [
+              (run.costUsd ?? 0) > 0
+                ? t('scheduler.runs.runCost', { cost: formatUsd(run.costUsd ?? 0) })
+                : null,
+              (run.estimatedValueUsd ?? 0) > 0
+                ? t('scheduler.runs.runValue', { value: formatUsd(run.estimatedValueUsd ?? 0) })
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || t('scheduler.runs.runCost', { cost: formatUsd(0) })
+          : null;
 
   // 终态且未读 → 在 agent 图标右上角点一个状态点(全端统一色表:失败结局红 / 成功绿)。
   // running 不算未读（结果还没出来，没什么"漏看"）。

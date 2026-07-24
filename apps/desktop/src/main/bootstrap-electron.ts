@@ -500,6 +500,7 @@ import {
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
+import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
   noteManualXdKeySaved,
@@ -531,7 +532,12 @@ import {
 } from './app-shortcuts/index.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
-import { registerGhostIpc, suspendAllGhosts } from './cindy-brain/index.js';
+import {
+  registerGhostIpc,
+  suspendAllGhosts,
+  waitForGhostMutations,
+} from './cindy-brain/index.js';
+import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
@@ -794,6 +800,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
+  await waitForGhostMutations();
   suspendAllGhosts();
   // Personal IM channels have the same DB boundary. Relogin restarts them via
   // app:ready-for-bot after the new DbClient is ready.
@@ -1013,6 +1020,7 @@ registerLayoutIpc();
 // renderer 首帧 sendSync 拉已装意识清单(意识面板与内置面板同帧注册,规则 7
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
 registerGhostIpc();
+registerPluginMarketIpc();
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
 // MUST run before app.whenReady(), and MUST be a SINGLE call:
@@ -2309,6 +2317,19 @@ const registerIpcHandlers = () => {
     const windows = BrowserWindow.getAllWindows();
     return windows.find((w) => !w.isDestroyed() && w.isMinimizable()) ?? windows[0];
   };
+
+  registerBillingIpc({
+    getMainWindow: () => mainWindowRef,
+    requirePersonalAccount: () => {
+      requireAppCapability(
+        'canUseCindyAccountServices',
+        'Billing requires a personal Cindy account.',
+      );
+      if (authManager.getAuthState().user?.membershipKind !== 'personal') {
+        throwIpcError('PERMISSION_DENIED', 'Billing is only available to personal accounts.');
+      }
+    },
+  });
 
   initAppBadgeService({
     getWindow: () => getWindow() ?? null,

@@ -1,7 +1,11 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
-    "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
+    "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
+    "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
+    "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
+    "REMOTE_WORKDIR_UNAVAILABLE": "The remote project directory is unavailable. Reconnect the network drive and try again."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -78,6 +82,7 @@
     },
     "tabs": {
       "general": "General",
+      "billing": "Usage and billing",
       "personalization": "Personalization",
       "apiKeys": "Tool Keys",
       "voiceInput": "Voice Input",
@@ -99,6 +104,7 @@
     },
     "sections": {
       "user": "User",
+      "billing": "Usage and billing",
       "appearance": "Appearance",
       "notifications": "Notifications",
       "agentIsland": "Agent Island",
@@ -550,6 +556,7 @@
       },
       "copyUserId": {
         "action": "Copy user ID",
+        "display": "ID: {{id}}",
         "success": "User ID copied",
         "failed": "Failed to copy user ID"
       },
@@ -1283,7 +1290,7 @@
         "stepConnect": "Connect",
         "stepModels": "Choose models",
         "searchPlaceholder": "Search providers…",
-        "groupSubscription": "Subscription sign-in · recommended, no API key",
+        "groupSubscription": "Subscription sign-in · recommended",
         "groupApiKey": "API key providers · presets update with the catalog",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription (OAuth)",
@@ -1308,7 +1315,14 @@
         "next": "Next",
         "back": "← Back",
         "finish": "Finish",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "useApiKey": "Use an API key instead",
+        "metaOAuthOrApi": "Subscription (OAuth) · API key"
+      },
+      "xdSignin": {
+        "badge": "Recommended",
+        "desc": "Sign in to Cindy to enable the official Cindy AI service — all models work out of the box, no keys to manage.",
+        "cta": "Sign in to Cindy"
       }
     },
     "experimental": {
@@ -2196,13 +2210,53 @@
         "installedExpand": "Show {{count}} more installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "allTitle": "All plugins",
+        "filterAll": "All",
+        "filtersAria": "Filter plugins by source",
+        "origin": {
+          "public": "Public",
+          "organization": "Team shared",
+          "local": "Local"
+        },
         "emptyFiltered": "No matching plugins",
         "useAction": "Use",
         "useAria": "Use {{name}}"
       },
+      "market": {
+        "scopeAria": "Filter plugin sources",
+        "scope": {
+          "all": "All",
+          "public": "Public",
+          "organization": "Organization",
+          "personal": "Personal",
+          "local": "Local"
+        },
+        "install": "Install",
+        "details": "Details",
+        "update": "Update from market",
+        "installed": "Installed",
+        "conflict": "Plugin ID conflict",
+        "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
+        "authenticationRequired": "Sign in to Cindy to view the plugin market.",
+        "notConfigured": "The plugin market is not configured for this environment. Installed plugins remain available.",
+        "errors": {
+          "generic": "The plugin market operation failed. Please try again.",
+          "invalidRequest": "The plugin request is invalid.",
+          "notFound": "This plugin is no longer available. Refresh the market and try again.",
+          "conflict": "Another installed or market plugin uses the same plugin ID.",
+          "stateChanged": "The account, plugin, or release changed during this operation. Review the latest state and try again.",
+          "accessDenied": "This plugin operation is not permitted or was cancelled.",
+          "notConfigured": "The plugin market is not available in this environment.",
+          "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
+        },
+        "securityTitle": "Install and permissions",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. New installs stay disabled until you review permissions and enable them.",
+        "noPermissions": "This plugin declares no additional capabilities.",
+        "installConfirmTitle": "Install “{{name}}”?",
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility, then installed disabled. Review its setup and enable it when ready."
+      },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
-      "emptyHint": "Click \"Install Plugin…\" above and pick a .cindy file",
+      "emptyHint": "Install from the market, or import a .cindy file from the menu above",
       "disabledTag": "Disabled",
       "projectDisabledTag": "Off in this project",
       "projectSwitchLockedTip": "This plugin is disabled globally; enable it in the Global view first",
@@ -2254,11 +2308,7 @@
         "metaWithAuthor": "By {{author}} · Version {{version}}. Installs locally and can be uninstalled anytime.",
         "enableNow": "Enable right after install",
         "expandDescription": "Show Full Description",
-        "collapseDescription": "Hide Full Description",
-        "nodeRiskTitle": "Allow a local Node program to run?",
-        "nodeRiskDescription": "This is high risk. The plugin's Node program has the same local permissions as your user account: it can read or change accessible files, use the network, and start other programs. The browser sandbox cannot contain it. Install only plugins from sources you trust.",
-        "nodeRiskConfirm": "I understand, continue",
-        "nodeRiskCancel": "Cancel installation"
+        "collapseDescription": "Hide Full Description"
       },
       "trust": {
         "official": "Official Cindy plugin",
@@ -2289,6 +2339,8 @@
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
+        "nodeSecret": "Can provide the stored credential “{{name}}” to the local Node program",
+        "nodeSecretDetail": "Cindy stores it encrypted and injects it only while the declared Worker methods below run. The Node program receives the plaintext and can return, log, save, or otherwise expose it to browser-side plugin code or Agent parameters. Only install plugins you trust.",
         "nodeResident": "The Node program can stay running in the background",
         "nodeResidentDetail": "Runs while the plugin is enabled and stops when disabled, updated, uninstalled, or when Cindy exits.",
         "tool": "Tool \"{{name}}\"",
@@ -2757,9 +2809,16 @@
     "localModeOpening": "Opening local mode...",
     "returnToLocalMode": "Return to local mode",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
+    "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+    "consentDialog": {
+      "title": "Terms of Service & Privacy Policy",
+      "body": "Read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy> to continue.",
+      "agree": "Agree",
+      "disagree": "Not Now"
+    },
     "ssoOrgTitle": "Enterprise SSO",
     "ssoOrgSubtitle": "Enter a company ID, organization slug, or verified domain to continue with single sign-on",
-    "ssoOrgPlaceholder": "Company ID, organization slug, or verified domain",
+    "ssoOrgPlaceholder": "Company ID, slug, or domain",
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
     "ssoVerificationTitle": "Verify Your Work Identity",
@@ -3888,6 +3947,31 @@
       "editTitle": "Edit Pasted Text",
       "cancelEdit": "Cancel Editing",
       "saveEdit": "Save Text"
+    }
+  },
+  "onboarding": {
+    "connectProvider": {
+      "title": "Connect a model provider to get started",
+      "desc": "No models are available yet. Connect a provider to start chatting.",
+      "recommendedLabel": "Recommended",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "Official service · all models · works with Claude Code and Codex",
+        "loginTitle": "Sign in to Cindy",
+        "loginDesc": "Sign in to enable the official Cindy AI service with access to all models"
+      },
+      "othersToggle": "Other providers ({{count}})",
+      "presetSub": "Paste an API key to connect",
+      "dismiss": "Maybe later",
+      "haveApiKey": "I have an API key",
+      "banner": {
+        "text": "No models available — connect a provider to start chatting.",
+        "connectCta": "Connect a provider",
+        "loginCta": "Sign in to Cindy",
+        "dismissAria": "Dismiss"
+      },
+      "detectedLabel": "Detected",
+      "oauthSub": "Opens a verification page in your browser — connects automatically"
     }
   },
   "voiceInputOverlay": {
@@ -5228,6 +5312,12 @@
       },
       "gallery": {
         "heading": "Start from a template"
+      },
+      "capability": {
+        "worktree": "Isolated worktree",
+        "pr": "PR automation",
+        "web": "Web search",
+        "params": "Customizable"
       }
     },
     "projectAutomation": {
@@ -5300,6 +5390,7 @@
       "tagManual": "Manual",
       "totalCost": "Cost {{cost}}",
       "totalValue": "Value {{value}}",
+      "costUnavailable": "Cost unavailable",
       "menu": {
         "rename": "Rename",
         "resume": "Resume",
@@ -5339,6 +5430,7 @@
       "sessionValue": "Session value {{value}}",
       "runCost": "Run cost {{cost}}",
       "runValue": "Estimated run value {{value}}",
+      "costUnavailable": "Cost unavailable",
       "legacyCostUnavailable": "Historical cost unavailable",
       "persistentSessionGroup": "Persistent session {{session}} · {{count}} runs",
       "expandRemainingRuns": "Show {{count}} more",
@@ -5645,6 +5737,57 @@
         "description": "The run history entry will be removed. This cannot be undone.",
         "confirm": "Delete",
         "cancel": "Cancel"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "Development automation",
+        "info-radar": "Information radar",
+        "office-docs": "Docs & office work"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "Nightly test self-healing",
+          "description": "Run tests every night and attempt minimal fixes for failures in an isolated worktree",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR gatekeeper",
+          "description": "Pre-review new changes on open PRs each weekday and report risks by severity",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "domain-radar": {
+          "name": "Domain radar",
+          "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",
+          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "Topic to follow",
+              "placeholder": "e.g. AI agents, EV market, frontend frameworks"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "Competitor watch",
+          "description": "Weekly roundup of competitors' product and market moves, with impact analysis",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "Competitors",
+              "placeholder": "e.g. Notion, Linear, Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "Weekly report drafter",
+          "description": "Compile this week's work from documents in the working directory into a report draft",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "Knowledge base freshness check",
+          "description": "Monthly health check of working-directory docs for outdated or conflicting content",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },
@@ -6823,6 +6966,229 @@
     "note": {
       "codexStateSkipped": "Codex has not been initialized on this machine, so session state was not fully restored. Run any Codex session once, then continuing will work.",
       "workdirKeyInexact": "The chosen directory path is too long to place transcripts; downgraded to chat history only."
+    }
+  },
+  "billing": {
+    "sidebar": "Credits & plans",
+    "settings": {
+      "title": "Usage and billing",
+      "subtitle": "Review your current subscription or purchase server-provided plans and credits.",
+      "loading": "Loading subscription status…",
+      "subscriptionCard": {
+        "title": "Current plan",
+        "empty": "No active subscription",
+        "emptyTitle": "No subscription plan",
+        "unnamedPlan": "Subscription plan",
+        "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
+        "action": "View plans",
+        "changeAction": "Change plan"
+      },
+      "topupCard": {
+        "title": "Credits",
+        "description": "Purchase credits for usage-based models and features.",
+        "cardTitle": "Buy credits as needed",
+        "cardDescription": "Available credit products are configured by the server.",
+        "action": "Buy credits"
+      }
+    },
+    "balance": {
+      "title": "Available balance",
+      "plan": "Plan credits",
+      "purchased": "Purchased credits",
+      "promotional": "Promotional credits",
+      "notProvisioned": "Credits have not been enabled for this account.",
+      "notSupported": "Balance lookup is not supported for this account.",
+      "unavailable": "Balance is temporarily unavailable. Refresh to try again."
+    },
+    "usage": {
+      "observedAt": "Balance updated {{date}}",
+      "used": "Used",
+      "total": "Total",
+      "remaining": "Remaining",
+      "progressLabel": "{{label}} usage",
+      "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
+      "percentUsed": "{{percent}}% used",
+      "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
+      "promotionalDetails": {
+        "title": "Promotional Credit Details",
+        "description": "Each grant has its own status and expiration. Remaining amounts come from the last ledger settlement and may be slightly delayed.",
+        "count": "{{count}} grants",
+        "empty": "No promotional credit grants are available.",
+        "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
+        "historicalUsageUnavailable": "Gateway cannot currently reconstruct actual usage for expired or voided grants; “—” is shown.",
+        "unnamed": "Promotional credit",
+        "original": "Original",
+        "used": "Used",
+        "remaining": "Remaining",
+        "expiresAt": "Expires {{date}}",
+        "states": {
+          "active": "Active",
+          "depleted": "Depleted",
+          "expired": "Expired",
+          "voided": "Voided"
+        }
+      }
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "Choose a subscription plan",
+        "description": "Only currently configured server plans are shown. Choose a plan before selecting its payment method."
+      },
+      "topup": {
+        "title": "Buy credits",
+        "description": "Only currently configured server credit products are shown. Choose a product before selecting its payment method."
+      }
+    },
+    "eyebrow": "Account & usage",
+    "title": "Choose the plan that fits",
+    "subtitle": "Plans and payment methods are delivered by the server. Choose a plan first to see its currently supported payment methods.",
+    "steps": {
+      "offer": {
+        "title": "Choose a plan",
+        "description": "Only currently purchasable credit and subscription offers are shown."
+      },
+      "channel": {
+        "title": "Choose a payment method",
+        "description": "Supported payment methods can differ by plan.",
+        "selectOfferFirst": "Choose a plan to see its supported payment methods"
+      },
+      "confirm": {
+        "title": "Review and pay",
+        "description": "Review the plan and payment method before creating payment.",
+        "selectChannelFirst": "Choose a payment method to continue"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "Refresh",
+      "retry": "Retry",
+      "pay": "Review and pay",
+      "refresh": "Refresh status",
+      "cancelPayment": "Cancel payment",
+      "close": "Close"
+    },
+    "catalog": {
+      "errorTitle": "Plans are temporarily unavailable",
+      "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
+      "emptyTitle": "No plans are available",
+      "emptyDescription": "The server has not configured a purchasable plan and payment method yet."
+    },
+    "offerKinds": {
+      "topup": "Credit top-up",
+      "subscription": "Subscription"
+    },
+    "amount": {
+      "custom": "Custom amount",
+      "label": "Top-up amount",
+      "placeholder": "Enter an amount",
+      "rangeHint": "Enter between {{min}} and {{max}}",
+      "rangeError": "Amount must be between {{min}} and {{max}}",
+      "formatError": "Enter a valid amount with no more than {{digits}} decimal places"
+    },
+    "intervals": {
+      "MONTH": "month",
+      "YEAR": "year"
+    },
+    "credits": "{{amount}} credits",
+    "confirm": {
+      "channel": "Pay with {{provider}}"
+    },
+    "paymentActions": {
+      "QR_CODE": "Scan to pay",
+      "REDIRECT": "Open payment page"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "Card"
+    },
+    "securityNotice": "Payments are securely handled by the selected provider; Cindy does not store payment credentials",
+    "currentSubscription": {
+      "title": "Current subscription",
+      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "Awaiting payment",
+      "INCOMPLETE_EXPIRED": "Payment expired",
+      "TRIALING": "Trial",
+      "ACTIVE": "Active",
+      "PAST_DUE": "Past due",
+      "UNPAID": "Unpaid",
+      "CANCELED": "Canceled",
+      "PAUSED": "Paused"
+    },
+    "recovery": {
+      "title": "Unfinished payment found",
+      "description": "Continue the previous payment and confirm its latest state with the server.",
+      "continueTopup": "Continue {{amount}} payment",
+      "continueSubscription": "Continue subscription payment"
+    },
+    "checkout": {
+      "creatingTitle": "Creating payment",
+      "awaitingTitle": "Awaiting payment",
+      "fulfillingTitle": "Crediting your account",
+      "completedTitle": "Payment successful",
+      "failedTitle": "Unable to complete",
+      "expiredTitle": "Payment expired",
+      "canceledTitle": "Payment canceled",
+      "topupSubtitle": "Credit top-up",
+      "subscriptionSubtitle": "Subscription",
+      "creatingBody": "Confirming the order with the payment service…",
+      "qrAlt": "Payment QR code",
+      "scanHint": "Scan with the corresponding payment app",
+      "checkingExpiry": "Checking expiration…",
+      "expiresIn": "QR code expires in {{minutes}}:{{seconds}}",
+      "redirectHint": "Complete payment on the provider page, then return to Cindy.",
+      "openPayment": "Open payment page",
+      "refreshingAction": "Loading payment instructions…",
+      "creditingBody": "Payment succeeded. Waiting for the credits to be applied…",
+      "paymentCompleted": "Your payment was completed.",
+      "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
+      "expiredBody": "This payment link expired. Create a new payment to continue.",
+      "canceledBody": "This payment was canceled.",
+      "failedBody": "Payment failed. Try again later or contact support."
+    },
+    "planChange": {
+      "targetTitle": "Change subscription plan",
+      "targetDescription": "Plan changes keep your current payment method. The final price and effective time are confirmed on the next step.",
+      "targetDescriptionWithCurrent": "Current plan: {{plan}}. Plan changes keep your current payment method; the final price and effective time are confirmed on the next step.",
+      "upgradeBadge": "Upgrade",
+      "downgradeBadge": "Downgrade",
+      "emptyTitle": "No plans available to switch to",
+      "emptyDescription": "The server has not configured another plan for your current payment method.",
+      "quotingTitle": "Preparing plan change",
+      "quotingBody": "Fetching the price and effective time from the server…",
+      "quoteTitle": "Confirm plan change",
+      "confirmingTitle": "Submitting plan change",
+      "confirmingBody": "Submitting your plan change to the server…",
+      "pendingProviderTitle": "Processing plan change",
+      "pendingProviderBody": "The payment provider is processing this change. Cindy will keep checking the result…",
+      "awaitingTitle": "Pay the difference",
+      "scheduledTitle": "Downgrade scheduled",
+      "scheduledBody": "The new plan takes effect on {{date}}. Your current plan stays active until then.",
+      "appliedTitle": "Plan change applied",
+      "appliedBody": "Your new plan is now active.",
+      "canceledTitle": "Plan change canceled",
+      "canceledBody": "The plan change was canceled. Your current plan is unchanged.",
+      "expiredTitle": "Quote expired",
+      "expiredBody": "The quote expired. Start the plan change again to get a new quote.",
+      "failedTitle": "Plan change failed",
+      "failedBody": "The plan change did not complete. Your current plan is unchanged.",
+      "requestFailed": "The request failed. Please try again.",
+      "resyncHint": "The confirmation result could not be verified. Syncing the latest status from the server…",
+      "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
+      "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",
+      "upgradeHint": "The upgrade takes effect immediately after payment. The renewal price becomes the new plan price.",
+      "downgradeAt": "Takes effect on {{date}}",
+      "downgradeHint": "Your current plan stays active until the end of this billing period. No refund is issued now.",
+      "quoteExpiresIn": "Quote expires in {{minutes}}:{{seconds}}",
+      "scanToPay": "Scan to pay {{amount}}",
+      "confirm": "Confirm change",
+      "abandon": "Discard",
+      "targetLabel": "Target plan: {{name}}",
+      "pendingDowngrade": "Downgrade to {{name}} is scheduled for {{date}}.",
+      "pendingPayment": "The upgrade to {{name}} is waiting for payment.",
+      "pendingQuote": "A plan change to {{name}} is in progress.",
+      "resume": "Continue",
+      "undo": "Undo downgrade"
     }
   },
   "fileAccess": {

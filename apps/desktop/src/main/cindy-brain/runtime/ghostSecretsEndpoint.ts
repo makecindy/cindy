@@ -1,7 +1,8 @@
 /**
- * /secrets 协议端点的纯函数分派层(user 凭证的只写入库通道,FORGE_GUIDE
- * §4.7「意识收单」——宿主凭证渲染 2026-07-13 整体退役,用户填的凭证一律
- * 经此通道)。与 ghostKvEndpoint 同拓扑:与 Electron 解耦、单测直接覆盖
+ * /secrets 协议端点的纯函数分派层(用户凭证的只写入库通道,FORGE_GUIDE
+ * §4.7「意识收单」——宿主凭证渲染 2026-07-13 整体退役,network.secrets
+ * 与 node.secretBindings 声明的用户凭证一律经此通道)。与
+ * ghostKvEndpoint 同拓扑:与 Electron 解耦、单测直接覆盖
  * (规范 14),唯一调用方是 electronSandboxAdapter 的 cindy-ghost:// 协议
  * handler(经 index.ts 注入的闭包供清单与保险库)。
  *
@@ -24,8 +25,10 @@
  * 明文的动作,GET 只回"存没存"布尔 + 尾 4 位指纹(2026-07-13 Lizi 拍板的
  * 有意识降级:指纹在入库那一刻由主机截取、分键保管;老键的懒回填发生在
  * main 保险库层——与注入同权限的进程,本就每次代发都读明文——本端点及
- * 沙箱可见面始终只有预截的 4 个字符)。保管(safeStorage)与注入
- * (主机代发请求时)完全不变;login-email 派生凭证没有收单动作,404 同未声明。
+ * 沙箱可见面始终只有预截的 4 个字符)。network 凭证仅在主机代发请求时
+ * 注入;node.secretBindings 凭证仅由 broker 在清单限定的方法/入口请求中
+ * 临时交给对应 Worker。两者都不经浏览器 main.js、Agent 参数或日志。
+ * login-email 派生凭证没有收单动作,404 同未声明。
  */
 
 import { GhostKvError } from '../ghostKvStore.js';
@@ -55,7 +58,10 @@ export async function handleGhostSecretsRequest(args: {
   pathname: string;
   /** 惰性读 body(调用方给有界读取器;只在 PUT 消费)。 */
   readBodyText: () => Promise<string>;
-  /** 当前清单里 user 来源的凭证键(index.ts 现查在装清单,不吃缓存)。 */
+  /**
+   * 当前清单里可由用户写入的凭证键(network user + node.secretBindings;
+   * index.ts 现查在装清单,不吃缓存)。
+   */
   userSecretKeys: string[];
   /** 清单里 source:'login-email' 的凭证键(只读身份:GET 回 identity,写/删 405)。 */
   identitySecretKeys?: string[];

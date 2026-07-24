@@ -28,6 +28,7 @@ vi.mock('../localDb/ipc/messages.js', () => ({
 }));
 vi.mock('../scheduler-host/runCostLedger.js', () => ({
   applyScheduleRunCostMetaChange: vi.fn(async () => undefined),
+  recordScheduleRunCostDirect: vi.fn(async () => null),
 }));
 vi.mock('../messagePersistBroadcaster.js', () => ({
   enqueueDurableWrite: vi.fn((_label: string, fn: () => unknown) => Promise.resolve(fn())),
@@ -35,6 +36,7 @@ vi.mock('../messagePersistBroadcaster.js', () => ({
 
 import {
   recordTurnCostOnMessage,
+  recordSchedulerTurnCost,
   codexUsageToTokens,
   type TurnCostDeps,
   type MessageTurnCostPayload,
@@ -97,7 +99,7 @@ beforeEach(() => {
 describe('recordTurnCostOnMessage', () => {
   it('patch 成功 → 写入原始分段与本用户轮累计，并广播同值', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true);
-    await recordTurnCostOnMessage(ARGS, deps);
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(true);
     expect(patchCalls).toEqual([
       {
         sessionId: 's1',
@@ -205,7 +207,7 @@ describe('recordTurnCostOnMessage', () => {
 
   it('patch 返回 false(行不存在,典型 rewind 已删)→ 不广播', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(false);
-    await recordTurnCostOnMessage(ARGS, deps);
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
     expect(patchCalls).toHaveLength(1);
     expect(broadcasts).toHaveLength(0);
   });
@@ -228,15 +230,117 @@ describe('recordTurnCostOnMessage', () => {
 
   it('patch 抛错 → 吞掉不传播、不广播', async () => {
     const { deps, broadcasts } = makeDeps(new Error('db locked'));
-    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBeUndefined();
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
     expect(broadcasts).toHaveLength(0);
   });
 
   it('读取累计失败 → 不写入错误的单段展示值，也不广播', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true, new Error('db locked'));
-    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBeUndefined();
+    await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
+  });
+});
+
+describe('recordSchedulerTurnCost', () => {
+  const schedulerOrigin = {
+    kind: 'scheduler',
+    scheduleId: 'schedule-1',
+    runId: 'run-1',
+  } as const;
+
+  it('有 assistant message 且写入成功时保持消息账本为唯一来源', async () => {
+    const recordOnMessage = vi.fn(async () => true);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        ...ARGS,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBeNull();
+
+    expect(recordOnMessage).toHaveBeenCalledOnce();
+    expect(recordDirect).not.toHaveBeenCalled();
+  });
+
+  it('纯 tool turn 没有 assistant message 时按 runId 直接归因并刷新自动化', async () => {
+    const recordOnMessage = vi.fn(async () => true);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        sessionId: 's1',
+        costUsd: 0.42,
+        isEstimate: false,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBe('schedule-1');
+
+    expect(recordOnMessage).not.toHaveBeenCalled();
+    expect(recordDirect).toHaveBeenCalledWith({
+      runId: 'run-1',
+      costUsd: 0.42,
+      isEstimate: false,
+    });
+  });
+
+  it('assistant message 已被删除时回退到 runId 归因', async () => {
+    const recordOnMessage = vi.fn(async () => false);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        ...ARGS,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBe('schedule-1');
+
+    expect(recordDirect).toHaveBeenCalledOnce();
+  });
+
+  it('broadcast failure after message persistence does not trigger scheduler fallback', async () => {
+    const { deps } = makeDeps(true);
+    deps.broadcast = () => {
+      throw new Error('window closed');
+    };
+    const recordOnMessage: typeof recordTurnCostOnMessage = (args) =>
+      recordTurnCostOnMessage(args, deps);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        ...ARGS,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBeNull();
+
+    expect(recordDirect).not.toHaveBeenCalled();
+  });
+
+  it('可靠计价结果为零时仍用 runId 标记为已确认费用', async () => {
+    const recordOnMessage = vi.fn(async () => false);
+    const recordDirect = vi.fn(async () => 'schedule-1');
+
+    await expect(recordSchedulerTurnCost(
+      {
+        sessionId: 's1',
+        costUsd: 0,
+        isEstimate: false,
+        turnOrigin: schedulerOrigin,
+      },
+      { recordOnMessage, recordDirect },
+    )).resolves.toBe('schedule-1');
+
+    expect(recordDirect).toHaveBeenCalledWith({
+      runId: 'run-1',
+      costUsd: 0,
+      isEstimate: false,
+    });
   });
 });
 

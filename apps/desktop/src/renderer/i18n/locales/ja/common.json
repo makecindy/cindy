@@ -1,7 +1,11 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
-    "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回の提供元切り替えは適用されませんでした（セッションは元の提供元のままです）。他のタスクが終わってからもう一度お試しください。"
+    "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回の提供元切り替えは適用されませんでした（セッションは元の提供元のままです）。他のタスクが終わってからもう一度お試しください。",
+    "REMOTE_WORKDIR_INVALID": "リモートプロジェクトのパスが無効です。プロジェクトディレクトリを選び直してください。",
+    "REMOTE_WORKDIR_NOT_FOUND": "リモートプロジェクトのディレクトリが見つかりません。選び直してください。",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "リモートプロジェクトのパスはディレクトリではありません。プロジェクトディレクトリを選び直してください。",
+    "REMOTE_WORKDIR_UNAVAILABLE": "リモートプロジェクトのディレクトリにアクセスできません。ネットワークドライブを再接続してから、もう一度お試しください。"
   },
   "providerError": {
     "AUTH_INVALID": "API キーが無効か期限切れです（401）。キーを確認して再試行してください",
@@ -78,6 +82,7 @@
     },
     "tabs": {
       "general": "一般",
+      "billing": "使用状況と請求",
       "personalization": "パーソナライズ",
       "apiKeys": "ツールキー",
       "voiceInput": "音声入力",
@@ -99,6 +104,7 @@
     },
     "sections": {
       "user": "ユーザー",
+      "billing": "使用状況と請求",
       "appearance": "外観",
       "notifications": "通知",
       "agentIsland": "Agent Island",
@@ -550,6 +556,7 @@
       },
       "copyUserId": {
         "action": "ユーザー ID をコピー",
+        "display": "ID: {{id}}",
         "success": "ユーザー ID をコピーしました",
         "failed": "ユーザー ID をコピーできませんでした"
       },
@@ -1282,7 +1289,7 @@
         "stepConnect": "接続",
         "stepModels": "モデルを選択",
         "searchPlaceholder": "プロバイダーを検索…",
-        "groupSubscription": "サブスクリプション認証 · 推奨、API キー不要",
+        "groupSubscription": "サブスクリプション認証 · おすすめ",
         "groupApiKey": "API キープロバイダー · プリセットはカタログと同期",
         "groupCustom": "カスタム",
         "metaOAuth": "サブスクリプション認証",
@@ -1307,7 +1314,14 @@
         "next": "次へ",
         "back": "← 戻る",
         "finish": "追加を完了",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "useApiKey": "API キーで接続する",
+        "metaOAuthOrApi": "サブスク認証 · API キー"
+      },
+      "xdSignin": {
+        "badge": "おすすめ",
+        "desc": "Cindy にサインインすると公式 Cindy AI サービスが有効になります。全モデルがすぐ使え、キー管理は不要です。",
+        "cta": "Cindy にサインイン"
       }
     },
     "experimental": {
@@ -2195,13 +2209,53 @@
         "installedExpand": "インストール済みプラグインをさらに {{count}} 件表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "allTitle": "すべてのプラグイン",
+        "filterAll": "すべて",
+        "filtersAria": "提供元でプラグインを絞り込む",
+        "origin": {
+          "public": "公開",
+          "organization": "チーム共有",
+          "local": "ローカル"
+        },
         "emptyFiltered": "一致するプラグインがありません",
         "useAction": "使用",
         "useAria": "{{name}} を使用"
       },
+      "market": {
+        "scopeAria": "プラグインの提供元を絞り込む",
+        "scope": {
+          "all": "すべて",
+          "public": "公開",
+          "organization": "組織",
+          "personal": "個人",
+          "local": "ローカル"
+        },
+        "install": "インストール",
+        "details": "詳細",
+        "update": "マーケットから更新",
+        "installed": "インストール済み",
+        "conflict": "プラグイン ID の競合",
+        "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
+        "authenticationRequired": "プラグインマーケットを表示するには Cindy にログインしてください。",
+        "notConfigured": "この環境ではプラグインマーケットが設定されていません。インストール済みプラグインは引き続き利用できます。",
+        "errors": {
+          "generic": "プラグインマーケットの操作に失敗しました。もう一度お試しください。",
+          "invalidRequest": "プラグインのリクエストが無効です。",
+          "notFound": "このプラグインは利用できなくなりました。マーケットを更新して、もう一度お試しください。",
+          "conflict": "インストール済みまたはマーケットの別のプラグインが同じプラグイン ID を使用しています。",
+          "stateChanged": "操作中にアカウント、プラグイン、またはリリースが変更されました。最新の状態を確認して、もう一度お試しください。",
+          "accessDenied": "このプラグイン操作は許可されていないか、キャンセルされました。",
+          "notConfigured": "この環境ではプラグインマーケットを利用できません。",
+          "invalidPackage": "このプラグインパッケージは無効か、現在の Cindy バージョンではサポートされていません。"
+        },
+        "securityTitle": "インストールと権限",
+        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。権限を確認して有効にするまで、新規プラグインは無効のままです。",
+        "noPermissions": "このプラグインは追加機能を宣言していません。",
+        "installConfirmTitle": "「{{name}}」をインストールしますか？",
+        "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認し、無効の状態でインストールします。設定を確認してから有効にできます。"
+      },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
-      "emptyHint": "右上の「プラグインをインストール…」から .cindy ファイルを選択してください",
+      "emptyHint": "マーケットからインストールするか、上のメニューから .cindy ファイルを読み込めます",
       "disabledTag": "無効",
       "projectDisabledTag": "このプロジェクトでは無効",
       "projectSwitchLockedTip": "このプラグインはグローバルで無効です。先に「グローバル」ビューで有効にしてください",
@@ -2253,11 +2307,7 @@
         "metaWithAuthor": "作者 {{author}} · バージョン {{version}}。ローカルにインストールされ、いつでもアンインストールできます。",
         "enableNow": "インストール後すぐに有効化",
         "expandDescription": "紹介全文を表示",
-        "collapseDescription": "紹介を折りたたむ",
-        "nodeRiskTitle": "ローカル Node プログラムの実行を許可しますか？",
-        "nodeRiskDescription": "これは高リスクな権限です。プラグインの Node プログラムはあなたのユーザーアカウントと同じローカル権限を持ち、アクセス可能なファイルの読み書き、ネットワーク利用、他のプログラムの起動ができます。ブラウザーサンドボックスでは隔離できません。信頼できる配布元のプラグインだけをインストールしてください。",
-        "nodeRiskConfirm": "リスクを理解して続行",
-        "nodeRiskCancel": "インストールを中止"
+        "collapseDescription": "紹介を折りたたむ"
       },
       "trust": {
         "official": "Cindy 公式プラグイン",
@@ -2288,6 +2338,8 @@
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
+        "nodeSecret": "保存済みの認証情報「{{name}}」をローカル Node プログラムに渡せます",
+        "nodeSecretDetail": "Cindy は暗号化して保管し、以下で宣言された Worker メソッドの実行時だけ一時的に注入します。Node プログラムは平文を受け取り、ブラウザー側のプラグインコードや Agent パラメーターへ返したり、ログやファイルに保存したりできるため、信頼できるプラグインだけをインストールしてください。",
         "nodeResident": "Node プログラムをバックグラウンドで常駐実行できます",
         "nodeResidentDetail": "プラグインが有効な間は実行を続け、無効化、更新、アンインストール、または Cindy 終了時に停止します。",
         "tool": "ツール「{{name}}」",
@@ -2756,9 +2808,16 @@
     "localModeOpening": "ローカルモードを開いています...",
     "returnToLocalMode": "ローカルモードに戻る",
     "localModeDescription": "Cindy アカウントは不要です。データはこのデバイスに保存され、クラウドモデル、デバイス間アクセス、マーケットサービスは利用できません。",
+    "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
+    "consentDialog": {
+      "title": "利用規約とプライバシーポリシー",
+      "body": "続行するには、Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を確認し、同意してください。",
+      "agree": "同意する",
+      "disagree": "同意しない"
+    },
     "ssoOrgTitle": "企業 SSO サインイン",
     "ssoOrgSubtitle": "企業 ID、組織 slug、または確認済みドメインを入力してシングルサインオンに進みます",
-    "ssoOrgPlaceholder": "企業 ID、組織 slug、または確認済みドメイン",
+    "ssoOrgPlaceholder": "企業 ID、slug、またはドメイン",
     "ssoOrgHint": "企業のログイン識別子が不明な場合は、管理者にお問い合わせください",
     "ssoOrgDetected": "「{{org}}」のシングルサインオン方法を選択してください",
     "ssoVerificationTitle": "企業 ID を確認",
@@ -3887,6 +3946,31 @@
       "editTitle": "貼り付けたテキストを編集",
       "cancelEdit": "編集をキャンセル",
       "saveEdit": "テキストを保存"
+    }
+  },
+  "onboarding": {
+    "connectProvider": {
+      "title": "モデルプロバイダーに接続して始めましょう",
+      "desc": "利用可能なモデルがまだありません。プロバイダーを接続すると会話を始められます。",
+      "recommendedLabel": "おすすめ",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "公式サービス · 全モデル · Claude Code / Codex 対応",
+        "loginTitle": "Cindy にサインイン",
+        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます"
+      },
+      "othersToggle": "その他のプロバイダー({{count}})",
+      "presetSub": "API キーを入力して接続",
+      "dismiss": "あとで",
+      "haveApiKey": "API キーを持っています",
+      "banner": {
+        "text": "利用可能なモデルがありません。プロバイダーを接続すると会話できます。",
+        "connectCta": "プロバイダーを接続",
+        "loginCta": "Cindy にサインイン",
+        "dismissAria": "閉じる"
+      },
+      "detectedLabel": "検出済み",
+      "oauthSub": "ブラウザで認証ページが開き、ログイン後に自動接続されます"
     }
   },
   "voiceInputOverlay": {
@@ -5218,6 +5302,12 @@
       },
       "gallery": {
         "heading": "テンプレートから開始"
+      },
+      "capability": {
+        "worktree": "分離ワークツリー",
+        "pr": "PR 自動化",
+        "web": "Web 検索",
+        "params": "カスタマイズ可"
       }
     },
     "projectAutomation": {
@@ -5290,6 +5380,7 @@
       "tagManual": "手動",
       "totalCost": "コスト {{cost}}",
       "totalValue": "価値 {{value}}",
+      "costUnavailable": "コストを取得できません",
       "menu": {
         "rename": "名前を変更",
         "resume": "再開",
@@ -5329,6 +5420,7 @@
       "sessionValue": "セッション価値 {{value}}",
       "runCost": "実行コスト {{cost}}",
       "runValue": "実行の推定価値 {{value}}",
+      "costUnavailable": "コストを取得できません",
       "legacyCostUnavailable": "過去のコストは実行別に分割できません",
       "persistentSessionGroup": "継続セッション {{session}} · {{count}} 回の実行",
       "expandRemainingRuns": "残り {{count}} 回を表示",
@@ -5635,6 +5727,57 @@
         "description": "実行履歴のエントリが削除されます。この操作は元に戻せません。",
         "confirm": "削除",
         "cancel": "キャンセル"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "開発自動化",
+        "info-radar": "情報レーダー",
+        "office-docs": "ドキュメントとオフィスワーク"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "夜間セルフヒーリングテスト",
+          "description": "毎晩テストを実行し、失敗項目を分離ワークツリーで最小修正",
+          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        },
+        "pr-gatekeeper": {
+          "name": "PR ゲートキーパー",
+          "description": "平日にオープン PR の新規変更を事前レビューし、重大度別にリスクを報告",
+          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        },
+        "domain-radar": {
+          "name": "分野レーダー",
+          "description": "注目分野の最新動向を定期収集し、見解付きサマリーを出力",
+          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+          "params": {
+            "topic": {
+              "label": "注目テーマ",
+              "placeholder": "例：AI エージェント、新エネルギー、フロントエンド"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "競合ウォッチ",
+          "description": "競合の製品・市場動向を週次でまとめ、自社への影響を分析",
+          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+          "params": {
+            "competitors": {
+              "label": "競合リスト",
+              "placeholder": "例：Notion、Linear、Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "週報ドラフトアシスタント",
+          "description": "作業ディレクトリのドキュメントから今週の作業を整理し、週報ドラフトを生成",
+          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        },
+        "knowledge-freshness": {
+          "name": "ナレッジベース鮮度チェック",
+          "description": "毎月ドキュメントを点検し、古い内容や矛盾を洗い出す",
+          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        }
       }
     }
   },
@@ -6812,6 +6955,229 @@
     "note": {
       "codexStateSkipped": "このマシンでは Codex がまだ初期化されていないため、セッション状態は完全には復元されていません。Codex セッションを一度実行すれば続行できるようになります。",
       "workdirKeyInexact": "選択したディレクトリのパスが長すぎるためトランスクリプトを配置できず、チャット履歴のみに切り替えました。"
+    }
+  },
+  "billing": {
+    "sidebar": "クレジットとプラン",
+    "settings": {
+      "title": "使用状況と請求",
+      "subtitle": "現在のサブスクリプションを確認し、サーバーから提供されるプランやクレジットを購入できます。",
+      "loading": "サブスクリプションの状態を取得中…",
+      "subscriptionCard": {
+        "title": "現在のプラン",
+        "empty": "有効なサブスクリプションはありません",
+        "emptyTitle": "サブスクリプションなし",
+        "unnamedPlan": "サブスクリプションプラン",
+        "unavailable": "サブスクリプションの状態を取得できません。更新してもう一度お試しください。",
+        "action": "プランを見る",
+        "changeAction": "プラン変更"
+      },
+      "topupCard": {
+        "title": "クレジット",
+        "description": "従量制のモデルや機能で使うクレジットを購入します。",
+        "cardTitle": "必要に応じてクレジットを購入",
+        "cardDescription": "購入可能なクレジット商品はサーバーで設定されます。",
+        "action": "クレジットを購入"
+      }
+    },
+    "balance": {
+      "title": "利用可能残高",
+      "plan": "プランクレジット",
+      "purchased": "購入済みクレジット",
+      "promotional": "特典クレジット",
+      "notProvisioned": "このアカウントではクレジットがまだ有効になっていません。",
+      "notSupported": "このアカウントでは残高照会を利用できません。",
+      "unavailable": "残高を取得できません。更新してもう一度お試しください。"
+    },
+    "usage": {
+      "observedAt": "クレジット更新: {{date}}",
+      "used": "使用済み",
+      "total": "合計",
+      "remaining": "残り",
+      "progressLabel": "{{label}}の使用状況",
+      "historyUnavailable": "使用履歴が完全ではないため、残りのクレジットのみ表示しています。",
+      "percentUsed": "{{percent}}% 使用済み",
+      "detailsUnavailable": "使用量の詳細を取得できないため、現在の残高のみ表示しています。",
+      "promotionalDetails": {
+        "title": "特典クレジット明細",
+        "description": "付与ごとに状態と有効期限が異なります。残量は前回の台帳精算時点の値で、反映が少し遅れる場合があります。",
+        "count": "{{count}}件",
+        "empty": "特典クレジットの付与履歴はありません。",
+        "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
+        "historicalUsageUnavailable": "期限切れまたは無効化された付与の実使用量は現在 Gateway から復元できないため、「—」で表示します。",
+        "unnamed": "特典クレジット",
+        "original": "付与額",
+        "used": "使用済み",
+        "remaining": "残り",
+        "expiresAt": "有効期限 {{date}}",
+        "states": {
+          "active": "利用可能",
+          "depleted": "使用済み",
+          "expired": "期限切れ",
+          "voided": "無効"
+        }
+      }
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "サブスクリプションプランを選択",
+        "description": "サーバーで現在設定されているプランのみ表示します。プランを選択すると支払い方法が表示されます。"
+      },
+      "topup": {
+        "title": "クレジットを購入",
+        "description": "サーバーで現在設定されているクレジット商品のみ表示します。商品を選択すると支払い方法が表示されます。"
+      }
+    },
+    "eyebrow": "アカウントと使用量",
+    "title": "最適なプランを選択",
+    "subtitle": "プランと支払い方法はサーバーから配信されます。先にプランを選ぶと、現在利用可能な支払い方法が表示されます。",
+    "steps": {
+      "offer": {
+        "title": "プランを選択",
+        "description": "現在購入できるチャージとサブスクリプションのみ表示します。"
+      },
+      "channel": {
+        "title": "支払い方法を選択",
+        "description": "利用できる支払い方法はプランごとに異なります。",
+        "selectOfferFirst": "プランを選ぶと、対応する支払い方法が表示されます"
+      },
+      "confirm": {
+        "title": "確認して支払う",
+        "description": "プランと支払い方法を確認して決済を作成します。",
+        "selectChannelFirst": "支払い方法を選択してください"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "更新",
+      "retry": "再試行",
+      "pay": "確認して支払う",
+      "refresh": "状態を更新",
+      "cancelPayment": "支払いをキャンセル",
+      "close": "閉じる"
+    },
+    "catalog": {
+      "errorTitle": "プランを取得できません",
+      "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
+      "emptyTitle": "利用可能なプランはありません",
+      "emptyDescription": "購入可能なプランと支払い方法がまだ設定されていません。"
+    },
+    "offerKinds": {
+      "topup": "クレジットチャージ",
+      "subscription": "サブスクリプション"
+    },
+    "amount": {
+      "custom": "金額を指定",
+      "label": "チャージ金額",
+      "placeholder": "金額を入力",
+      "rangeHint": "{{min}}〜{{max}}を入力",
+      "rangeError": "金額は{{min}}〜{{max}}の範囲で入力してください",
+      "formatError": "有効な金額を小数点以下{{digits}}桁以内で入力してください"
+    },
+    "intervals": {
+      "MONTH": "月",
+      "YEAR": "年"
+    },
+    "credits": "{{amount}} クレジット",
+    "confirm": {
+      "channel": "{{provider}}で支払う"
+    },
+    "paymentActions": {
+      "QR_CODE": "QRコードで支払う",
+      "REDIRECT": "支払いページを開く"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "カード"
+    },
+    "securityNotice": "支払いは選択した事業者が安全に処理し、Cindyは支払い認証情報を保存しません",
+    "currentSubscription": {
+      "title": "現在のサブスクリプション",
+      "purchaseBlocked": "未終了のサブスクリプションがあります。既存のサブスクリプションを処理してから新しいプランを購入してください。"
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "支払い待ち",
+      "INCOMPLETE_EXPIRED": "支払い期限切れ",
+      "TRIALING": "トライアル中",
+      "ACTIVE": "有効",
+      "PAST_DUE": "支払い遅延",
+      "UNPAID": "未払い",
+      "CANCELED": "キャンセル済み",
+      "PAUSED": "一時停止"
+    },
+    "recovery": {
+      "title": "未完了の支払いがあります",
+      "description": "前回の支払いを続け、最新状態をサーバーで確認できます。",
+      "continueTopup": "{{amount}}の支払いを続ける",
+      "continueSubscription": "サブスクリプションの支払いを続ける"
+    },
+    "checkout": {
+      "creatingTitle": "支払いを作成中",
+      "awaitingTitle": "支払い待ち",
+      "fulfillingTitle": "クレジットを反映中",
+      "completedTitle": "支払い完了",
+      "failedTitle": "完了できませんでした",
+      "expiredTitle": "支払い期限切れ",
+      "canceledTitle": "支払いキャンセル済み",
+      "topupSubtitle": "クレジットチャージ",
+      "subscriptionSubtitle": "サブスクリプション",
+      "creatingBody": "支払いサービスで注文を確認しています…",
+      "qrAlt": "支払いQRコード",
+      "scanHint": "対応する支払いアプリでスキャンしてください",
+      "checkingExpiry": "有効期限を確認中…",
+      "expiresIn": "QRコードの有効期限 {{minutes}}:{{seconds}}",
+      "redirectHint": "支払いページで完了後、Cindyに戻ってください。",
+      "openPayment": "支払いページを開く",
+      "refreshingAction": "支払い情報を取得中…",
+      "creditingBody": "支払いが完了しました。クレジットの反映を待っています…",
+      "paymentCompleted": "支払いが完了しました。",
+      "requestFailed": "リクエストに失敗しました。不明な作成結果では同じ冪等キーで安全に再試行します。",
+      "expiredBody": "支払いリンクの期限が切れました。新しい支払いを作成してください。",
+      "canceledBody": "この支払いはキャンセルされました。",
+      "failedBody": "支払いに失敗しました。しばらくしてからもう一度お試しください。"
+    },
+    "planChange": {
+      "targetTitle": "サブスクリプションプランの変更",
+      "targetDescription": "プラン変更は現在の支払い方法を引き継ぎます。最終的な金額と適用時期は次のステップで確認します。",
+      "targetDescriptionWithCurrent": "現在のプラン:{{plan}}。変更は現在の支払い方法を引き継ぎ、最終的な金額と適用時期は次のステップで確認します。",
+      "upgradeBadge": "アップグレード",
+      "downgradeBadge": "ダウングレード",
+      "emptyTitle": "切り替え可能なプランがありません",
+      "emptyDescription": "現在の支払い方法で切り替え可能なプランがまだ設定されていません。",
+      "quotingTitle": "プラン変更を準備中",
+      "quotingBody": "サーバーから金額と適用時期を取得しています…",
+      "quoteTitle": "プラン変更の確認",
+      "confirmingTitle": "変更を送信中",
+      "confirmingBody": "プラン変更をサーバーに送信しています…",
+      "pendingProviderTitle": "プラン変更を処理中",
+      "pendingProviderBody": "決済プロバイダーが変更を処理しています。Cindy が結果を確認し続けます…",
+      "awaitingTitle": "差額のお支払い",
+      "scheduledTitle": "ダウングレードを予約しました",
+      "scheduledBody": "新しいプランは {{date}} に適用されます。それまで現在のプランが継続します。",
+      "appliedTitle": "プラン変更が完了しました",
+      "appliedBody": "新しいプランが有効になりました。",
+      "canceledTitle": "変更を取り消しました",
+      "canceledBody": "プラン変更は取り消され、現在のプランは変わりません。",
+      "expiredTitle": "見積もりの期限切れ",
+      "expiredBody": "見積もりの有効期限が切れました。もう一度プラン変更を開始してください。",
+      "failedTitle": "プラン変更に失敗しました",
+      "failedBody": "プラン変更は完了しませんでした。現在のプランは変わりません。",
+      "requestFailed": "リクエストに失敗しました。もう一度お試しください。",
+      "resyncHint": "確認結果を検証できませんでした。サーバーから最新の状態を同期しています…",
+      "upgradeDueNow": "今期の差額 {{amount}} をお支払いください",
+      "upgradeNoAmount": "確認後、アップグレードは即時適用されます。",
+      "upgradeHint": "お支払い完了後にアップグレードが即時適用され、以降は新プランの価格で更新されます。",
+      "downgradeAt": "{{date}} に適用されます",
+      "downgradeHint": "現在のプランは今の請求期間の終了まで維持され、返金は発生しません。",
+      "quoteExpiresIn": "見積もりは {{minutes}}:{{seconds}} 後に失効します",
+      "scanToPay": "スキャンして {{amount}} を支払う",
+      "confirm": "変更を確定",
+      "abandon": "破棄",
+      "targetLabel": "変更先プラン:{{name}}",
+      "pendingDowngrade": "{{name}} へのダウングレードが {{date}} に予約されています。",
+      "pendingPayment": "{{name}} へのアップグレードは差額のお支払い待ちです。",
+      "pendingQuote": "{{name}} へのプラン変更が進行中です。",
+      "resume": "続行",
+      "undo": "ダウングレードを取り消す"
     }
   },
   "fileAccess": {

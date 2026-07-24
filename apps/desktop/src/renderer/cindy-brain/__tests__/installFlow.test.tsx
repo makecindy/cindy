@@ -1,4 +1,4 @@
-/** installFlow.test — Renderer 只展示权限清单，Node 真授权由 Main 原生弹窗负责。 */
+/** installFlow.test — 装入确认卡权限清单确认后直接交给 Main 落盘(无二次弹窗)。 */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,7 +22,7 @@ const baseManifest = {
 
 function setupWindow(
   manifest: object,
-  installResult: { ghost: { manifest: object } } | { canceled: true } = { ghost: { manifest } },
+  installResult: { ghost: { manifest: object } } = { ghost: { manifest } },
 ) {
   const install = vi.fn(async () => installResult);
   const electronAPI = {
@@ -62,31 +62,21 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, 'window');
 });
 
-describe('installFlow · Node 原生确认交接', () => {
-  it('Main 原生风险提示取消时，不显示安装完成提示', async () => {
-    const { install } = setupWindow(baseManifest, { canceled: true });
-    const confirm = vi.fn(async () => true);
-
-    await confirmAndInstallGhost('/tmp/node.cindy', deps(confirm));
-
-    expect(confirm).not.toHaveBeenCalled();
-    expect(install).toHaveBeenCalledTimes(1);
-    expect(toast.success).not.toHaveBeenCalled();
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it('Renderer 权限清单确认后把 Node 安装交给 Main', async () => {
+describe('installFlow · 装入确认', () => {
+  it('Renderer 权限清单确认后把 Node 插件安装交给 Main,并提示装入完成', async () => {
     const { install } = setupWindow(baseManifest);
     const confirm = vi.fn(async () => true);
 
     await confirmAndInstallGhost('/tmp/node.cindy', deps(confirm));
 
-    // confirmWithCheckbox 是第一层权限清单；普通 confirm 不再伪装成安全边界。
+    // confirmWithCheckbox 是唯一确认层(权限清单含 Node 高风险行);
+    // 普通 confirm 不再伪装成安全边界。
     expect(confirm).not.toHaveBeenCalled();
     expect(install).toHaveBeenCalledWith('/tmp/node.cindy', {
       enable: false,
       expectedPackageSha256: 'a'.repeat(64),
     });
+    expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
   it('普通浏览器沙箱插件同样只走现有权限清单', async () => {

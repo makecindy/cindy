@@ -145,6 +145,10 @@ export const router = createHashRouter([
                   },
                   { path: 'settings', element: <SettingsView /> },
                   { path: 'plugins', element: <GhostPluginPage /> },
+                  {
+                    path: 'billing',
+                    element: <Navigate to="/settings?tab=billing" replace />,
+                  },
                   // Maker IPC / agent event 链路诊断页(独立路由,不影响标准 chat)。
                   { path: 'maker-experimental', element: <MakerExperimentalView /> },
                 ],

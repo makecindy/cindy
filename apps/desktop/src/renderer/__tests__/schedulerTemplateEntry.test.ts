@@ -14,7 +14,8 @@ const template: ScheduleTemplate = {
   id: 'review-template',
   name: 'Review Template',
   description: 'Open a prefilled automation form',
-  category: 'code-quality',
+  // 必须是 TEMPLATE_CATEGORIES 里存在的分类,否则 TemplateGallery 不渲染该卡片。
+  category: 'dev-automation',
   source: 'builtin',
   prompt: 'Check open pull requests',
   cronExpr: '30 10 * * 1',
@@ -32,6 +33,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, values?: Record<string, unknown>) =>
       values?.count != null ? `${key}:${String(values.count)}` : key,
+    // useTemplates 走 i18n.getResource 做模板本地化；fixture id 不在 locale 里，
+    // 返回 undefined 让模板原文直通。
+    i18n: { language: 'en', getResource: () => undefined },
   }),
 }));
 

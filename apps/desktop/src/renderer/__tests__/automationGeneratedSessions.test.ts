@@ -946,7 +946,7 @@ describe('automation-generated sessions', () => {
     expect(schedulePageSource).toContain('useScheduleCostSummaries(sorted)');
     expect(taskListPaneSource).toContain('costSummariesLoaded');
     expect(taskListCellSource).toContain('scheduler.cell.totalCost');
-    expect(taskListCellSource).toContain('formatUsd(totalCostUsd)');
+    expect(taskListCellSource).toContain('formatUsd(totalCostUsd ?? 0)');
     expect(runHistoryPaneSource).toContain('groupRunsForHistory');
     expect(runHistoryPaneSource).toContain('PERSISTENT_SESSION_PREVIEW_LIMIT = 3');
     expect(runHistoryPaneSource).toContain('expandRemainingRuns');

@@ -16,6 +16,8 @@ interface RunCostEntry {
   estimatedValueUsd: number;
 }
 
+const MIN_RECORDED_COST_USD = 1e-10;
+
 export interface ScheduleRunCostDelta {
   runId: string;
   costUsdDelta: number;
@@ -23,7 +25,9 @@ export interface ScheduleRunCostDelta {
 }
 
 function finitePositive(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  return typeof value === 'number' && Number.isFinite(value) && value >= MIN_RECORDED_COST_USD
+    ? value
+    : 0;
 }
 
 function runCostEntry(meta: Record<string, unknown>): RunCostEntry | null {
@@ -60,7 +64,9 @@ export function computeScheduleRunCostDeltas(
   apply(runCostEntry(previous), -1);
   apply(runCostEntry(next), 1);
   return [...changes.values()].filter(
-    (change) => Math.abs(change.costUsdDelta) >= 1e-10 || Math.abs(change.estimatedValueUsdDelta) >= 1e-10,
+    (change) =>
+      Math.abs(change.costUsdDelta) >= MIN_RECORDED_COST_USD ||
+      Math.abs(change.estimatedValueUsdDelta) >= MIN_RECORDED_COST_USD,
   );
 }
 
@@ -76,10 +82,83 @@ export async function applyScheduleRunCostMetaChange(
     await db
       .update(scheduleRuns)
       .set({
-        costUsd: sql<number>`MAX(0, ${scheduleRuns.costUsd} + ${change.costUsdDelta})`,
-        estimatedValueUsd: sql<number>`MAX(0, ${scheduleRuns.estimatedValueUsd} + ${change.estimatedValueUsdDelta})`,
-        costAttribution: 'exact',
+        // A direct-only snapshot is an independent ledger. Once it exists,
+        // keep the message ledger in agent_meta and let read paths add it;
+        // otherwise a successful message update would make a later read
+        // unable to tell whether the snapshot already contains that segment.
+        costUsd: sql<number>`CASE
+          WHEN ${scheduleRuns.costAttribution} = 'direct'
+            THEN ${scheduleRuns.costUsd}
+          ELSE MAX(0, ${scheduleRuns.costUsd} + ${change.costUsdDelta})
+        END`,
+        estimatedValueUsd: sql<number>`CASE
+          WHEN ${scheduleRuns.costAttribution} = 'direct'
+            THEN ${scheduleRuns.estimatedValueUsd}
+          ELSE MAX(0, ${scheduleRuns.estimatedValueUsd} + ${change.estimatedValueUsdDelta})
+        END`,
+        costAttribution: sql<string>`CASE
+          WHEN ${scheduleRuns.costAttribution} IN ('direct', 'mixed')
+            THEN ${scheduleRuns.costAttribution}
+          ELSE 'exact'
+        END`,
       })
       .where(eq(scheduleRuns.id, change.runId));
   }
+}
+
+/**
+ * 没有可挂费用的 assistant message 时，按 scheduler runId 直接写聚合快照。
+ *
+ * 这是 Codex 纯 tool turn 等场景的兜底；正常有消息时仍以 agent_meta 账本为主。
+ * 直接路径将每个无法挂载消息的 turn 分段累加到 run 快照。
+ * 返回 scheduleId 供调用方广播 changed，run 已被删除时返回 null。
+ */
+export async function recordScheduleRunCostDirect(args: {
+  runId: string;
+  costUsd: number;
+  isEstimate: boolean;
+}): Promise<string | null> {
+  const { runId, costUsd, isEstimate } = args;
+  if (!runId || typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) {
+    return null;
+  }
+  const amount = finitePositive(costUsd);
+  // Match the message ledger's delta threshold; a tiny positive residue must
+  // not create a direct-only run segment or a misleading changed broadcast.
+  if (costUsd > 0 && amount === 0) return null;
+
+  const db = getDbClient().drizzle;
+  const [run] = await db
+    .select({ scheduleId: scheduleRuns.scheduleId })
+    .from(scheduleRuns)
+    .where(eq(scheduleRuns.id, runId))
+    .limit(1);
+  if (!run) return null;
+
+  const result = await db
+    .update(scheduleRuns)
+    .set({
+      costUsd: sql<number>`MAX(0, ${scheduleRuns.costUsd} + ${isEstimate ? 0 : amount})`,
+      estimatedValueUsd: sql<number>`MAX(0, ${scheduleRuns.estimatedValueUsd} + ${isEstimate ? amount : 0})`,
+      // A confirmed zero-cost segment must not downgrade a run that already
+      // contains an exact segment; otherwise later summary reads lose the
+      // accumulated direct cost.
+      costAttribution:
+        isEstimate || amount > 0
+          ? sql<string>`CASE
+              WHEN ${scheduleRuns.costAttribution} = 'mixed' THEN 'mixed'
+              WHEN ${scheduleRuns.costAttribution} = 'exact' THEN 'mixed'
+              ELSE 'direct'
+            END`
+          : sql<string>`CASE
+              WHEN ${scheduleRuns.costAttribution} IN ('exact', 'direct', 'mixed')
+                THEN ${scheduleRuns.costAttribution}
+              ELSE 'zero'
+            END`,
+    })
+    .where(eq(scheduleRuns.id, runId))
+    .run();
+  const changes = (result as unknown as { changes?: number }).changes;
+  if (typeof changes !== 'number' || changes === 0) return null;
+  return run.scheduleId;
 }

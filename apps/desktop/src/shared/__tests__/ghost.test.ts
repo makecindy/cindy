@@ -5,6 +5,7 @@ import {
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
+  ghostExternalLinkUrls,
   ghostNetworkHostMatches,
   ghostPanelKind,
   ghostPreviewUrlAllowed,
@@ -366,6 +367,154 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     ).toBe(false);
     expect(withNode({ entry: 'node/a.cjs', protocol: 'json-rpc-stdio' }, ['panel']).ok).toBe(false);
     expect(validateGhostManifest({ ...goodChipManifest(), slots: ['panel', 'node'] }).ok).toBe(false);
+  });
+
+  it('node.secretBindings 逐方法声明保险库凭证并生成单独权限项', () => {
+    const result = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: '邮箱授权码',
+            methods: ['account/connect', 'mail/action'],
+            url: 'https://mail.example.com/settings',
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.node?.secretBindings).toEqual([
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['account/connect', 'mail/action'],
+        url: 'https://mail.example.com/settings',
+      },
+    ]);
+    expect(ghostPermissionItems(result.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: expect.stringContaining('node:secret:mail_code'),
+          kind: 'node',
+          labelKey: 'nodeSecret',
+          labelArgs: { name: '邮箱授权码' },
+        }),
+      ]),
+    );
+
+    const reordered = validateGhostManifest({
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: '邮箱授权码',
+            methods: ['mail/action', 'account/connect'],
+            url: 'https://mail.example.com/settings',
+          },
+        ],
+      },
+    });
+    expect(reordered.ok).toBe(true);
+    if (!reordered.ok) return;
+    const permission = ghostPermissionItems(result.manifest).find((item) =>
+      item.key.startsWith('node:secret:mail_code:'),
+    );
+    const reorderedPermission = ghostPermissionItems(reordered.manifest).find((item) =>
+      item.key.startsWith('node:secret:mail_code:'),
+    );
+    expect(reorderedPermission?.key).toBe(permission?.key);
+    expect(reorderedPermission?.detail).toBe('mail/action\naccount/connect');
+
+    expect(ghostExternalLinkUrls(result.manifest)).toContain('https://mail.example.com/settings');
+  });
+
+  it('node.secretBindings 缺设置页、坏方法/入口、重复键或与 network 凭证撞名均拒', () => {
+    const base = {
+      ...goodChipManifest(),
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        entries: ['node/secondary.cjs'],
+        protocol: 'json-rpc-stdio',
+      },
+    };
+    const binding = { key: 'mail_code', label: '邮箱授权码', methods: ['mail/action'] };
+    expect(
+      validateGhostManifest({
+        ...base,
+        settingsHtml: undefined,
+        node: { ...base.node, secretBindings: [binding] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [{ ...binding, methods: ['bad method'] }] },
+      }).ok,
+    ).toBe(false);
+    for (const method of ['initialize', 'notifications/initialized']) {
+      expect(
+        validateGhostManifest({
+          ...base,
+          node: {
+            ...base.node,
+            protocol: 'mcp-stdio',
+            secretBindings: [{ ...binding, methods: [method] }],
+          },
+        }).ok,
+      ).toBe(false);
+    }
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: {
+          ...base.node,
+          protocol: 'json-rpc-stdio',
+          secretBindings: [{ ...binding, methods: ['initialize'] }],
+        },
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [{ ...binding, entry: 'node/other.cjs' }] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        node: { ...base.node, secretBindings: [binding, binding] },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['panel', 'node', 'network'],
+        node: { ...base.node, secretBindings: [binding] },
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [
+            {
+              key: 'mail_code',
+              label: '重复',
+              inject: { header: 'Authorization', format: 'Bearer {value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
   });
 
   it('工具声明(卡槽②)与 tool 槽成对;名/描述/条数校验', () => {

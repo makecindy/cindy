@@ -344,10 +344,13 @@ describe('FORGE_GUIDE', () => {
       'setup 就绪声明',
       'anyOf',
       'secret:brave_api_key',
+      'Node 凭证同样可参与 setup.requires',
       // 2026-07-23 通用能力四件套:会话上下文 / node 多入口 / 目录选择 / 面板预览。
       '会话上下文(session-context 槽)',
       'workdir_is_local',
       'node.entries',
+      'node.secretBindings',
+      'request.cindy.secrets',
       '目录选择(pick 槽)',
       'cindy.pick',
       '面板预览(preview 槽)',

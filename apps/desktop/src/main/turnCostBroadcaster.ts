@@ -25,7 +25,10 @@ import {
 import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
-import { applyScheduleRunCostMetaChange } from './scheduler-host/runCostLedger.js';
+import {
+  applyScheduleRunCostMetaChange,
+  recordScheduleRunCostDirect,
+} from './scheduler-host/runCostLedger.js';
 
 const log = createLogger('turnCostBroadcaster');
 
@@ -98,10 +101,10 @@ export async function recordTurnCostOnMessage(
     turnOrigin?: SendOrigin;
   },
   deps: TurnCostDeps = defaultDeps,
-): Promise<void> {
+): Promise<boolean> {
   const { sessionId, clientId, costUsd, isEstimate, turnUsageDetails, turnOrigin } = args;
-  if (!sessionId || !clientId) return;
-  if (!Number.isFinite(costUsd) || costUsd < 1e-10) return;
+  if (!sessionId || !clientId) return false;
+  if (!Number.isFinite(costUsd) || costUsd < 1e-10) return false;
   try {
     let userTurnCostUsd = costUsd;
     let userTurnCostIsEstimate = isEstimate;
@@ -134,18 +137,78 @@ export async function recordTurnCostOnMessage(
       }
       return result;
     });
-    if (!patched) return;
-    deps.broadcast({
-      sessionId,
-      clientId,
-      turnCostUsd: costUsd,
-      turnCostIsEstimate: isEstimate,
-      userTurnCostUsd,
-      userTurnCostIsEstimate,
-      ...(turnUsageDetails ? { turnUsageDetails } : {}),
-    });
+    if (!patched) return false;
+    try {
+      deps.broadcast({
+        sessionId,
+        clientId,
+        turnCostUsd: costUsd,
+        turnCostIsEstimate: isEstimate,
+        userTurnCostUsd,
+        userTurnCostIsEstimate,
+        ...(turnUsageDetails ? { turnUsageDetails } : {}),
+      });
+    } catch (err) {
+      // The message cost is already durable; a broadcast failure must not
+      // make scheduler fallback record the same segment a second time.
+      log.warn('recordTurnCostOnMessage broadcast failed:', err instanceof Error ? err.message : String(err));
+    }
+    return true;
   } catch (err) {
     log.warn('recordTurnCostOnMessage failed:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
+
+export interface SchedulerTurnCostFallbackDeps {
+  recordOnMessage: typeof recordTurnCostOnMessage;
+  recordDirect: typeof recordScheduleRunCostDirect;
+}
+
+const defaultSchedulerTurnCostFallbackDeps: SchedulerTurnCostFallbackDeps = {
+  recordOnMessage: recordTurnCostOnMessage,
+  recordDirect: recordScheduleRunCostDirect,
+};
+
+/**
+ * 记录一笔 scheduler turn 费用：优先写 assistant message；消息路径无法写入时按 runId
+ * 直接归因，保证会话费用与自动化费用不会因纯 tool turn 分叉。
+ */
+export async function recordSchedulerTurnCost(
+  args: {
+    sessionId: string;
+    clientId?: string;
+    costUsd: number;
+    isEstimate: boolean;
+    turnUsageDetails?: TurnUsageDetails | null;
+    turnOrigin?: SendOrigin;
+  },
+  deps: SchedulerTurnCostFallbackDeps = defaultSchedulerTurnCostFallbackDeps,
+): Promise<string | null> {
+  const { clientId, turnOrigin } = args;
+  if (clientId) {
+    const recorded = await deps.recordOnMessage({
+      ...args,
+      clientId,
+    });
+    if (recorded) return null;
+  }
+  if (
+    turnOrigin?.kind !== 'scheduler' ||
+    typeof turnOrigin.runId !== 'string' ||
+    !turnOrigin.runId
+  ) {
+    return null;
+  }
+  try {
+    return await deps.recordDirect({
+      runId: turnOrigin.runId,
+      costUsd: args.costUsd,
+      isEstimate: args.isEstimate,
+    });
+  } catch (err) {
+    log.warn('recordSchedulerTurnCost fallback failed:', err instanceof Error ? err.message : String(err));
+    return null;
   }
 }
 

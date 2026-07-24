@@ -500,6 +500,8 @@ export class Scheduler extends EventEmitter {
       scheduleId: schedule.id,
       firedAt,
       status: 'running',
+      // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
+      costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
       heartbeatAt: firedAt,
     };
     try {
@@ -609,6 +611,7 @@ export class Scheduler extends EventEmitter {
         status: 'skipped',
         sessionId: sessionId || undefined,
         finishedAt,
+        costAttribution: 'zero',
         resultText,
         readAt: finishedAt,
       });
@@ -725,6 +728,7 @@ export class Scheduler extends EventEmitter {
       scheduleId: schedule.id,
       firedAt,
       status: 'running',
+      costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
       heartbeatAt: firedAt,
     };
     await this.storage.insertRun(initialRun);
@@ -829,6 +833,7 @@ export class Scheduler extends EventEmitter {
         status: 'skipped',
         sessionId: runSessionId || undefined,
         finishedAt,
+        costAttribution: 'zero',
         resultText: runResultText,
         readAt: finishedAt,
       });
@@ -1617,6 +1622,7 @@ export class Scheduler extends EventEmitter {
         firedAt,
         finishedAt: this.clock.now(),
         status: input.status,
+        costAttribution: input.status === 'skipped' ? 'zero' : 'unavailable',
         resultText: input.resultText,
         errorMsg: input.errorMsg,
       };

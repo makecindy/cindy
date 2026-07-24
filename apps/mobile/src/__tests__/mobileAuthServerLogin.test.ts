@@ -19,13 +19,19 @@ describe('mobile auth-server login', () => {
 
     expect(loginSource).toMatch(/type:\s*'native-social',\s*provider/);
     expect(loginSource).toContain('testID: `login.${provider}Button`');
-    expect(loginSource).toContain('<AppleAuthenticationButton');
-    expect(loginSource).toContain(
-      'buttonType={AppleAuthenticationButtonType.SIGN_IN}',
+    // App Store Guideline 4:Apple 入口为圆钮行第一颗(variant='apple',ADR 官方配色圆钮),
+    // 不再用全宽官方 AppleAuthenticationButton;testID login.appleButton 锚点保留。
+    expect(loginSource).not.toContain('<AppleAuthenticationButton');
+    expect(loginSource).not.toContain('expo-apple-authentication');
+    expect(loginSource).toContain('variant="apple"');
+    expect(loginSource).toContain('testID="login.appleButton"');
+    expect(loginSource).toContain('<AppleLogoGlyph');
+    expect(loginSource).toMatch(
+      /type:\s*'native-social',\s*provider:\s*'apple',?\s*\n/,
     );
-    expect(loginSource).toContain('AppleAuthenticationButtonStyle.WHITE');
-    expect(loginSource).toContain('AppleAuthenticationButtonStyle.BLACK');
-    expect(loginSource).toContain('style={styles.appleButton}');
+    // 行 count 计入 apple(iOS 1 + nonAppleProviders + SSO 1)
+    expect(loginSource).toContain("socialProviders.includes('apple') ? 1 : 0");
+    expect(loginSource).toContain('nonAppleProviders.length');
     expect(loginSource).not.toContain('react-native-webview');
     expect(authSource).toContain(
       'client.exchangeNativeSocial(action.provider, credential)',
@@ -55,6 +61,31 @@ describe('mobile auth-server login', () => {
     );
     expect(nativeSource).toContain('!GOOGLE_IOS_URL_SCHEME');
     expect(nativeSource).toMatch(/\|\|\s*!WECHAT_UNIVERSAL_LINK/);
+  });
+
+  it('AppleLogoGlyph path d 与桌面 ADR 官方资产逐字节一致(防手抄/跨端漂移)', () => {
+    const controlsSource = readFileSync(
+      resolve(process.cwd(), 'src/components/LoginSkinControls.tsx'),
+      'utf8',
+    );
+    // AppleLogoGlyph 的 path d 以官方起点 M28.2226562,20.3846154 标识(唯一,区别于其它 icon)
+    const glyphD = (controlsSource.match(/d="([^"]+)"/g) ?? [])
+      .map((s) => s.slice(3, -1))
+      .find((d) => d.startsWith('M28.2226562,20.3846154'));
+    expect(glyphD).toBeDefined();
+    expect(glyphD?.length).toBe(1228);
+    // 桌面 apple.svg 从 ADR「Logo-only」源逐字节导入(见其文件头注释);双端共用同一
+    // 官方 path,以仓库内桌面资产为对比锚,防止任一端被手抄改动后静默漂移。
+    const desktopAdrSvg = readFileSync(
+      resolve(
+        process.cwd(),
+        '../desktop/src/renderer/assets/login/icons/apple.svg',
+      ),
+      'utf8',
+    );
+    const adrD = (desktopAdrSvg.match(/ d="([^"]+)"/) ?? [])[1];
+    expect(adrD).toBeTruthy();
+    expect(glyphD).toBe(adrD);
   });
 
   it('releases timed-out WeChat requests in both native coordinators', () => {

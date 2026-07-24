@@ -89,10 +89,11 @@ export function registerCindyFileAssociation(): void {
       const command = `"${exe}" "%1"`;
       const commandKey = `${KEY_PROG}\\shell\\open\\command`;
       const upToDate =
+        (await regQueryDefault(KEY_EXT)) === PROG_ID &&
         (await regQueryDefault(commandKey)) === command &&
         (await regQueryNamed(KEY_EXT, 'Content Type')) === CINDY_MIME &&
         (await regQueryNamed(KEY_EXT_SHARE, 'Content Type')) === SHARE_MIME;
-      if (upToDate) return; // 已注册且指向当前 exe
+      if (upToDate) return; // 已注册、扩展名归属自己且指向当前 exe
 
       await regSetDefault(KEY_EXT, PROG_ID);
       await regSetNamed(KEY_EXT, 'Content Type', CINDY_MIME);

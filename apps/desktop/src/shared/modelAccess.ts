@@ -35,6 +35,51 @@ export interface ModelAccessStatus {
   endpoint: string | null;
 }
 
+/** 当前登录身份在 AIGateway Credit Ledger 中的同一时点余额快照。 */
+export interface ModelAccessBalance {
+  planCredits: string;
+  purchasedCredits: string;
+  promotionalCredits: string;
+  available: string;
+  scale: 9;
+  observedAt: string;
+}
+
+export interface ModelAccessCreditPoolUsage {
+  remaining: string;
+  used: string | null;
+  total: string | null;
+}
+
+export type ModelAccessPromotionalGrantState = 'active' | 'depleted' | 'expired' | 'voided';
+
+export interface ModelAccessPromotionalGrantUsage {
+  grantId: string;
+  displayName: string | null;
+  originalAmount: string;
+  /** expired / voided 时 Gateway 当前 contract 无法还原真实已用量。 */
+  usedAmount: string | null;
+  remainingAmount: string;
+  expiresAt: string;
+  state: ModelAccessPromotionalGrantState;
+}
+
+/** Gateway 账本的当前额度、三类用量和逐笔赠送只读投影。 */
+export interface ModelAccessCreditUsage {
+  available: string;
+  plan: ModelAccessCreditPoolUsage;
+  purchased: ModelAccessCreditPoolUsage;
+  promotional: ModelAccessCreditPoolUsage;
+  promotionalGrants: ModelAccessPromotionalGrantUsage[];
+  /** false 表示 Gateway 历史超过 Server 的安全分页上限，列表只含最近记录。 */
+  promotionalGrantsComplete: boolean;
+  /** 逐笔 remainingAmount 来自 Gateway 上次持久化结算，不是实时扣减值。 */
+  promotionalGrantConsistency: 'LAST_SETTLED';
+  ledgerUpdatedAt: string | null;
+  scale: 9;
+  observedAt: string;
+}
+
 /** main → renderer 的状态推送通道。 */
 export const MODEL_ACCESS_STATUS_CHANNEL = 'model-access:status-change';
 

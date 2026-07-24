@@ -61,7 +61,12 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
 function itemIcon(item: GhostPermissionItem): LucideIcon {
   if (item.labelKey === 'panelLeft') return PanelLeft;
   // network 槽的凭证条目换钥匙图标(与域名条目区分:一个是"去哪",一个是"带什么")。
-  if (item.labelKey === 'networkSecret' || item.labelKey === 'networkSecretOauth') return KeyRound;
+  if (
+    item.labelKey === 'networkSecret' ||
+    item.labelKey === 'networkSecretOauth' ||
+    item.labelKey === 'nodeSecret'
+  )
+    return KeyRound;
   return KIND_ICON[item.kind];
 }
 

@@ -119,7 +119,7 @@ export interface RemoteScheduleRun {
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;
-  costAttribution?: 'exact' | 'legacy';
+  costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   readAt?: RemoteTimestamp;
 }
 

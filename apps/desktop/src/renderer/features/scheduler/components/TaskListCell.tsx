@@ -45,6 +45,7 @@ interface Props {
   unreadCount?: number;
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
+  hasUnavailableCost?: boolean;
   onSelect: (s: Schedule) => void;
   /** 右键菜单的 Pause/Resume 动作；与 RunHistoryPane ⋯ 菜单同行为。 */
   onTogglePause?: (s: Schedule) => void | Promise<void>;
@@ -81,6 +82,7 @@ export function TaskListCell({
   unreadCount = 0,
   totalCostUsd,
   totalEstimatedValueUsd = 0,
+  hasUnavailableCost = false,
   onSelect,
   onTogglePause,
   onDelete,
@@ -164,15 +166,16 @@ export function TaskListCell({
     subtitle = lastText ?? nextText;
   }
   const costText =
-    totalCostUsd == null
+    totalCostUsd == null && !hasUnavailableCost
       ? null
       : [
-          totalCostUsd > 0
-            ? t('scheduler.cell.totalCost', { cost: formatUsd(totalCostUsd) })
+          (totalCostUsd ?? 0) > 0
+            ? t('scheduler.cell.totalCost', { cost: formatUsd(totalCostUsd ?? 0) })
             : null,
           totalEstimatedValueUsd > 0
             ? t('scheduler.cell.totalValue', { value: formatUsd(totalEstimatedValueUsd) })
             : null,
+          hasUnavailableCost ? t('scheduler.cell.costUnavailable') : null,
         ]
           .filter(Boolean)
           .join(' · ') || t('scheduler.cell.totalCost', { cost: formatUsd(0) });

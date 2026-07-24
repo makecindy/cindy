@@ -213,6 +213,23 @@ describe('Scheduler', () => {
     expect(list).toHaveLength(1);
   });
 
+  it('marks skipped child runs as zero-cost', async () => {
+    const childHarness = makeHarness({
+      runnerImpl: async (_schedule, ctx) => {
+        await ctx.createChildRun?.({ status: 'skipped' });
+        return { sessionId: '' };
+      },
+    });
+    const sch = await childHarness.scheduler.create({ ...baseInput });
+
+    await childHarness.scheduler.runNow(sch.id);
+
+    const skippedRun = (await childHarness.scheduler.listRuns(sch.id)).find(
+      (run) => run.status === 'skipped',
+    );
+    expect(skippedRun?.costAttribution).toBe('zero');
+  });
+
   it('create() preserves dialogue workspace target', async () => {
     const sch = await h.scheduler.create({ ...baseInput, workspaceKind: 'dialogue' });
     expect(sch.workspaceKind).toBe('dialogue');

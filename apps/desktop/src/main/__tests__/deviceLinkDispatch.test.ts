@@ -142,6 +142,26 @@ describe('runInvoke 双层校验', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it('create-session 的网络目录探测超时 → 明确 IPC 错误,不落到 handler', async () => {
+    const handler = vi.fn(() => ({ session: { id: 's-timeout' } }));
+    registry.register('maker:create-session', handler as never);
+    setRemoteWorkingDirGuard(async () => ({ allowed: false, reason: 'timeout' }));
+
+    const result = await runInvoke('ctrl', {
+      channel: 'maker:create-session',
+      args: [{ workingDir: 'Z:\\offline-project' }],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'IPC_ERROR',
+        message: expect.stringContaining('[REMOTE_WORKDIR_UNAVAILABLE]'),
+      },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('未注入 workingDir guard 时不阻断 create-session(生产未就绪态放行)', async () => {
     registry.register('maker:create-session', () => ({ session: { id: 's2' } }));
     const r = await runInvoke('ctrl', {

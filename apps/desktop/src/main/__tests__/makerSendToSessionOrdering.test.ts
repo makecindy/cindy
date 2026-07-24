@@ -251,11 +251,13 @@ describe('sendToSession ordering', () => {
     expect(createBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session create');");
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
-    expect(liveBranch).toContain('{ planMode: false, onAccepted: persistUserMessage },');
+    expect(liveBranch).toContain('onAccepted: persistUserMessage,');
+    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(liveBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session live');");
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
-    expect(resumedBranch).toContain('{ planMode: false, onAccepted: persistUserMessage },');
+    expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
+    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(resumedBranch).toContain("assertDesktopSendDispatched(sendResult, 'send_to_session resumed');");
   });
 
@@ -315,9 +317,10 @@ describe('sendToSession ordering', () => {
     const acceptedBlock = extractBetween(
       createBranch,
       'onAccepted: async () => {',
-      '          },\n        });',
+      '          },\n          onDispatching:',
     );
-    const sendCallEndNeedle = '          },\n        });';
+    const sendCallEndNeedle =
+      '          onDispatching: () => dispatchAgentIslandUserPrompt(session.id),\n        });';
     const afterSendResolves = createBranch.slice(
       createBranch.indexOf(sendCallEndNeedle) + sendCallEndNeedle.length,
     );
@@ -365,6 +368,8 @@ describe('sendToSession ordering', () => {
     expect(makerSendCreateDbMessageBlock).not.toContain('notifyAgentIslandUserPrompt(');
     expect(makerSendPreviewHookBlock).toContain('previewUserPrompt: (session, content, options) => {');
     expect(makerSendPreviewHookBlock).toContain('notifyAgentIslandUserPrompt(session, content, options);');
+    expect(makerSendPreviewHookBlock).toContain('dispatchUserPromptPreview: (sessionId) => {');
+    expect(makerSendPreviewHookBlock).toContain('dispatchAgentIslandUserPrompt(sessionId);');
     expect(makerSendPreviewHookBlock).toContain('commitUserPromptPreview: (sessionId, clientId) => {');
     expect(makerSendPreviewHookBlock).toContain('rollbackUserPromptPreview: (sessionId, clientId, source) => {');
   });
@@ -397,7 +402,8 @@ describe('sendToSession ordering', () => {
 
     expect(liveBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(liveBranch).toContain('live,');
-    expect(liveBranch).toContain('{ planMode: false, onAccepted: persistUserMessage },');
+    expect(liveBranch).toContain('onAccepted: persistUserMessage,');
+    expect(liveBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(liveBranch).not.toContain('await persistUserMessage();');
     expect(liveBranch).toContain('if (isSessionRunningError(err))');
     expect(liveBranch).toContain('await enqueueSendToSessionMessage({');
@@ -414,7 +420,8 @@ describe('sendToSession ordering', () => {
 
     expect(resumedBranch).toContain('const sendResult = await sendUserMessageWithAwaitedGitBaseline(');
     expect(resumedBranch).toContain('session,');
-    expect(resumedBranch).toContain('{ planMode: false, onAccepted: persistUserMessage },');
+    expect(resumedBranch).toContain('onAccepted: persistUserMessage,');
+    expect(resumedBranch).toContain('onDispatching: () => dispatchAgentIslandUserPrompt(targetSessionId),');
     expect(resumedBranch).not.toContain('await persistUserMessage();');
     expect(resumedBranch).toContain('if (isSessionRunningError(err))');
     expect(resumedBranch).toContain('await enqueueSendToSessionMessage({');

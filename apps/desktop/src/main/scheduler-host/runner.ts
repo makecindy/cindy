@@ -178,6 +178,8 @@ export interface MakerScheduleRunnerDeps {
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** heartbeat 直发前落实 deferred agent switch,并 bootstrap 新 live session。 */
   applyPendingAgentSwitch?: (sessionId: string, signal?: AbortSignal) => Promise<void>;
+  /** 新建可见会话落库后通知本机窗口与 device-link 列表订阅者。 */
+  onSessionCreated?: (sessionId: string) => void;
   /** 可选:撞忙排队桥。未注入时心跳撞忙回退为顺延(deferFire)旧行为。 */
   schedulerQueue?: SchedulerQueueDeps;
 }
@@ -900,6 +902,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
             });
           } catch (err) {
             throw new SchedulerOnAcceptedError(err);
+          }
+          // 非 heartbeat 的每次 fire 都创建一条用户可见会话。必须在 source 回填和首条
+          // user message 都 durable 后广播,让本机其它窗口与 device-link 控制端立即重拉；
+          // heartbeat 只是在既有会话上续跑,不重复发 created。
+          if (!isHeartbeat) {
+            try {
+              this.deps.onSessionCreated?.(session.id);
+            } catch (err) {
+              this.deps.logger.warn?.('[runner] session created broadcast failed (non-fatal)', err);
+            }
           }
           if (this.deps.beforeDispatchUserTurn) {
             await this.deps.beforeDispatchUserTurn(session.id);

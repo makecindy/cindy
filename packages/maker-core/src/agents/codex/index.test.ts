@@ -4868,6 +4868,7 @@ describe('CodexAgent turn lifecycle', () => {
       turn: { id: 'turn-1' },
     });
     expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-1');
 
     handlers.error?.({
       threadId: 'start-thread-id',
@@ -4877,6 +4878,7 @@ describe('CodexAgent turn lifecycle', () => {
     });
 
     expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
     const errorEvent = await nextEvent(iterator);
     const statusEvent = await nextEvent(iterator);
     expect(errorEvent).toMatchObject({

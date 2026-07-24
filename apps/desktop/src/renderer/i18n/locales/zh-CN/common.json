@@ -1,7 +1,11 @@
 {
   "ipcError": {
     "SESSION_RUNNING": "当前会话正在执行任务，请稍后再试。",
-    "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（会话仍使用原来源）。等其他任务结束后再试。"
+    "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（会话仍使用原来源）。等其他任务结束后再试。",
+    "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
+    "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
+    "REMOTE_WORKDIR_NOT_DIRECTORY": "远程项目路径不是文件夹，请重新选择项目目录。",
+    "REMOTE_WORKDIR_UNAVAILABLE": "远程项目目录不可访问，请恢复网络盘连接后重试。"
   },
   "providerError": {
     "AUTH_INVALID": "API 密钥无效或已过期（401），请检查密钥后重试",
@@ -78,6 +82,7 @@
     },
     "tabs": {
       "general": "通用",
+      "billing": "使用情况和计费",
       "personalization": "个性化",
       "apiKeys": "工具密钥",
       "voiceInput": "语音输入",
@@ -99,6 +104,7 @@
     },
     "sections": {
       "user": "用户",
+      "billing": "使用情况和计费",
       "appearance": "外观",
       "notifications": "通知",
       "agentIsland": "灵动岛",
@@ -550,6 +556,7 @@
       },
       "copyUserId": {
         "action": "复制用户 ID",
+        "display": "ID：{{id}}",
         "success": "用户 ID 已复制",
         "failed": "复制用户 ID 失败"
       },
@@ -1282,7 +1289,7 @@
         "stepConnect": "连接",
         "stepModels": "选择模型",
         "searchPlaceholder": "搜索供应商…",
-        "groupSubscription": "订阅授权 · 推荐,免 API Key",
+        "groupSubscription": "订阅授权 · 推荐",
         "groupApiKey": "API Key 供应商 · 预设随目录更新",
         "groupCustom": "自定义",
         "metaOAuth": "订阅授权",
@@ -1307,7 +1314,14 @@
         "next": "下一步",
         "back": "← 上一步",
         "finish": "完成添加",
-        "cancel": "取消"
+        "cancel": "取消",
+        "useApiKey": "改用 API Key 接入",
+        "metaOAuthOrApi": "订阅授权 · API Key"
+      },
+      "xdSignin": {
+        "badge": "推荐",
+        "desc": "登录 Cindy 即可开通官方 Cindy AI 服务,全部模型开箱即用,无需管理任何 Key。",
+        "cta": "登录 Cindy"
       }
     },
     "experimental": {
@@ -2195,13 +2209,53 @@
         "installedExpand": "展开另外 {{count}} 个已安装插件",
         "installedCollapse": "收起其他已安装插件",
         "allTitle": "全部插件",
+        "filterAll": "全部",
+        "filtersAria": "按来源筛选插件",
+        "origin": {
+          "public": "公开",
+          "organization": "团队共享",
+          "local": "本地"
+        },
         "emptyFiltered": "没有找到匹配的插件",
         "useAction": "使用",
         "useAria": "使用 {{name}}"
       },
+      "market": {
+        "scopeAria": "筛选插件来源",
+        "scope": {
+          "all": "全部",
+          "public": "公开",
+          "organization": "组织",
+          "personal": "个人",
+          "local": "本地"
+        },
+        "install": "安装",
+        "details": "详情",
+        "update": "从市场更新",
+        "installed": "已安装",
+        "conflict": "插件标识冲突",
+        "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
+        "authenticationRequired": "登录 Cindy 后才能查看插件市场。",
+        "notConfigured": "当前环境未配置插件市场；已安装插件仍可正常管理和使用。",
+        "errors": {
+          "generic": "插件市场操作失败，请重试。",
+          "invalidRequest": "插件请求无效。",
+          "notFound": "该插件已不可用，请刷新市场后重试。",
+          "conflict": "已有本地或市场插件使用相同的插件标识。",
+          "stateChanged": "操作期间账号、插件或版本已发生变化，请确认最新状态后重试。",
+          "accessDenied": "当前插件操作不被允许，或操作已取消。",
+          "notConfigured": "当前环境未提供插件市场。",
+          "invalidPackage": "该插件包无效，或当前 Cindy 版本不支持它。"
+        },
+        "securityTitle": "安装与权限",
+        "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。安装后默认不生效，由你确认权限后再开启。",
+        "noPermissions": "此插件未声明额外能力。",
+        "installConfirmTitle": "安装「{{name}}」？",
+        "installConfirmDescription": "安装包将经过完整性与清单校验，并以未生效状态安装。你可以在安装后查看配置并手动开启。"
+      },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
-      "emptyHint": "点击右上角「安装插件…」选择一个 .cindy 文件",
+      "emptyHint": "可从插件市场安装，或点击右上角导入 .cindy 文件",
       "disabledTag": "未生效",
       "projectDisabledTag": "本项目未生效",
       "projectSwitchLockedTip": "该插件已在全局停用;请先切回「全局」视图开启",
@@ -2253,11 +2307,7 @@
         "metaWithAuthor": "作者 {{author}} · 版本 {{version}}。将安装到本机,可随时卸载。",
         "enableNow": "安装后立即生效",
         "expandDescription": "展开完整介绍",
-        "collapseDescription": "收起介绍",
-        "nodeRiskTitle": "确认运行本机 Node 程序？",
-        "nodeRiskDescription": "这是高风险能力。这个插件里的 Node 程序拥有与你当前账号相同的本机权限:能读写你有权访问的文件、访问网络、启动其它程序。浏览器沙箱挡不住它。只安装你信任来源的插件。",
-        "nodeRiskConfirm": "我明白风险,继续",
-        "nodeRiskCancel": "取消安装"
+        "collapseDescription": "收起介绍"
       },
       "trust": {
         "official": "Cindy 官方插件",
@@ -2288,6 +2338,8 @@
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险:它和你本人一样,可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
+        "nodeSecret": "可将已保存凭证「{{name}}」提供给本机 Node 程序",
+        "nodeSecretDetail": "Cindy 加密保管,仅在下列已声明 Worker 方法执行时临时注入。Node 程序会收到明文,也可以将其回传、记录、保存或暴露给浏览器侧插件代码及 Agent 参数;请只安装可信插件。",
         "nodeResident": "Node 程序可常驻后台",
         "nodeResidentDetail": "插件启用期间会一直运行;停用、更新、卸载或退出 Cindy 时关闭。",
         "tool": "工具「{{name}}」",
@@ -2756,9 +2808,16 @@
     "localModeOpening": "正在打开本地模式...",
     "returnToLocalMode": "返回本地模式",
     "localModeDescription": "无需 Cindy 账号，数据保存在本机。云模型、跨设备与市场服务不可用。",
+    "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
+    "consentDialog": {
+      "title": "服务条款和隐私协议",
+      "body": "请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>",
+      "agree": "同意",
+      "disagree": "暂不同意"
+    },
     "ssoOrgTitle": "企业 SSO 登录",
     "ssoOrgSubtitle": "输入企业 ID、组织 slug 或已验证域名，跳转到企业单点登录",
-    "ssoOrgPlaceholder": "请输入企业 ID、组织 slug 或已验证域名",
+    "ssoOrgPlaceholder": "请输入企业 ID、slug 或域名",
     "ssoOrgHint": "不知道企业登录标识？请联系企业管理员",
     "ssoOrgDetected": "选择企业「{{org}}」的单点登录方式",
     "ssoVerificationTitle": "验证企业联系方式",
@@ -3887,6 +3946,31 @@
       "editTitle": "编辑粘贴的文本",
       "cancelEdit": "取消编辑",
       "saveEdit": "保存文本"
+    }
+  },
+  "onboarding": {
+    "connectProvider": {
+      "title": "连接一个模型供应商,开始对话",
+      "desc": "还没有可用的模型。连接任意一个供应商即可开始对话。",
+      "recommendedLabel": "推荐",
+      "cindy": {
+        "title": "Cindy AI",
+        "desc": "官方服务 · 全部模型 · Claude Code / Codex 通用",
+        "loginTitle": "登录 Cindy",
+        "loginDesc": "登录后自动开通 Cindy AI 官方服务,即可使用全部模型"
+      },
+      "othersToggle": "其他供应商({{count}})",
+      "presetSub": "填入 API Key 即可连接",
+      "dismiss": "稍后再说",
+      "haveApiKey": "我有 API Key",
+      "banner": {
+        "text": "当前没有可用的模型,连接一个供应商后即可对话。",
+        "connectCta": "连接供应商",
+        "loginCta": "登录 Cindy",
+        "dismissAria": "关闭引导"
+      },
+      "detectedLabel": "已检测到",
+      "oauthSub": "在浏览器打开授权页,登录后自动连接"
     }
   },
   "voiceInputOverlay": {
@@ -5218,6 +5302,12 @@
       },
       "gallery": {
         "heading": "从模板开始"
+      },
+      "capability": {
+        "worktree": "隔离工作区",
+        "pr": "PR 自动化",
+        "web": "Web 搜索",
+        "params": "可自定义"
       }
     },
     "projectAutomation": {
@@ -5290,6 +5380,7 @@
       "tagManual": "手动",
       "totalCost": "开销 {{cost}}",
       "totalValue": "价值 {{value}}",
+      "costUnavailable": "费用不可用",
       "menu": {
         "rename": "重命名",
         "resume": "恢复",
@@ -5329,6 +5420,7 @@
       "sessionValue": "会话价值 {{value}}",
       "runCost": "本次开销 {{cost}}",
       "runValue": "本次估算价值 {{value}}",
+      "costUnavailable": "费用不可用",
       "legacyCostUnavailable": "历史费用无法拆分",
       "persistentSessionGroup": "持续会话 {{session}} · {{count}} 次运行",
       "expandRemainingRuns": "展开另外 {{count}} 次",
@@ -5635,6 +5727,57 @@
         "description": "这条运行历史会被移除，操作不可撤销。",
         "confirm": "删除",
         "cancel": "取消"
+      }
+    },
+    "builtinTemplates": {
+      "categories": {
+        "dev-automation": "开发自动化",
+        "info-radar": "信息雷达",
+        "office-docs": "文档与办公"
+      },
+      "items": {
+        "nightly-test-heal": {
+          "name": "夜间自愈测试",
+          "description": "每晚跑测试，失败项在隔离工作区尝试最小修复",
+          "prompt": "运行项目的测试套件，如果有失败项，在隔离工作区尝试给出最小修复。\n约束：\n- 先按仓库文档或 package 脚本确定标准测试命令，再完整运行\n- 只修复有明确失败证据的问题，采用影响面最小的改法，避免顺手重构\n- 修复后重跑相关测试确认通过，并复核完整 diff\n- 按仓库工作流交付修复（如创建分支并开 PR），不要直接改动主分支\n- 无法安全修复的失败项，输出失败原因、疑点文件和建议的排查步骤"
+        },
+        "pr-gatekeeper": {
+          "name": "PR 守门人",
+          "description": "工作日预审开放 PR 的新增改动，按严重程度报告风险",
+          "prompt": "检查仓库当前开放的 PR，对新增改动做一轮预审。\n约束：\n- 逐个查看过去 24 小时内有新提交的开放 PR（周一回看整个周末），引用 PR 编号、文件路径和具体 diff\n- 重点找正确性、安全、数据丢失和兼容性问题，按严重程度分级\n- 只报告有证据支撑的问题，说明失败场景，不要凭风格偏好挑刺\n- 除非用户明确授权，只输出审查结论，不要直接在 PR 上留言或改动代码"
+        },
+        "domain-radar": {
+          "name": "领域雷达",
+          "description": "定期搜集你关注领域的最新动态，输出有观点的摘要",
+          "prompt": "围绕主题「{{topic}}」搜集过去 24 小时的最新动态（周一回看整个周末），输出一份有观点的摘要。\n约束：\n- 用 Web 搜索获取信息，交叉核对多个来源后再采信，标注每条信息的来源链接\n- 优先收录有实质内容的进展（发布、研究、政策、重要讨论），过滤营销软文和重复转载\n- 对每条动态给出一句\"为什么值得关注\"的判断，而不是罗列链接\n- 信息不足或来源存疑时如实说明，不要臆造",
+          "params": {
+            "topic": {
+              "label": "关注主题",
+              "placeholder": "如：AI Agent、新能源、前端框架"
+            }
+          }
+        },
+        "competitor-watch": {
+          "name": "竞品动态追踪",
+          "description": "每周汇总竞品的产品与市场动态，分析对我们的影响",
+          "prompt": "追踪以下竞品最近一周的动态：{{competitors}}。\n约束：\n- 用 Web 搜索覆盖产品更新、版本发布、定价变化、市场动作和用户口碑，标注来源\n- 区分官方信息和第三方转述，未经证实的传闻要明确标注\n- 对每条重要动态给出\"对我们意味着什么\"的分析和建议\n- 没有实质动态时如实说明，不要凑数",
+          "params": {
+            "competitors": {
+              "label": "竞品名单",
+              "placeholder": "如：Notion、Linear、Figma"
+            }
+          }
+        },
+        "weekly-work-draft": {
+          "name": "周报草稿助手",
+          "description": "从工作目录的文档和产出物整理本周工作，生成周报草稿",
+          "prompt": "根据工作目录中本周的文档、笔记和产出物变化，整理一份周报草稿。\n约束：\n- 只使用工作目录内有实际修改痕迹的内容作为证据，注明对应文件\n- 按\"本周完成 / 进行中 / 下周计划 / 需要协调\"组织，语言简洁可直接提交\n- 区分实质进展和例行事务，突出有价值的产出\n- 材料不足以判断的部分留出占位并说明，方便用户补充"
+        },
+        "knowledge-freshness": {
+          "name": "知识库保鲜",
+          "description": "每月体检工作目录文档，找出过期与矛盾内容",
+          "prompt": "体检工作目录中的文档，找出需要更新的内容。\n约束：\n- 检查过期信息（旧日期、失效链接、已废弃的流程或工具）、前后矛盾和重复内容\n- 每个问题都注明文件路径和具体位置，说明判断依据\n- 按\"建议更新 / 建议合并 / 建议删除\"分类，给出修订建议清单\n- 只输出体检报告，不要直接修改文档"
+        }
       }
     }
   },
@@ -6812,6 +6955,229 @@
     "note": {
       "codexStateSkipped": "本机尚未初始化 Codex 环境，会话状态未完全恢复；先运行一次 Codex 会话后即可正常续聊。",
       "workdirKeyInexact": "所选目录路径过长，无法放置历史转录，已降级为仅聊天记录。"
+    }
+  },
+  "billing": {
+    "sidebar": "点数与订阅",
+    "settings": {
+      "title": "使用情况和计费",
+      "subtitle": "查看当前订阅，或按需购买由服务端提供的订阅套餐和点数。",
+      "loading": "正在获取订阅状态…",
+      "subscriptionCard": {
+        "title": "当前套餐",
+        "empty": "当前没有生效中的订阅",
+        "emptyTitle": "无订阅套餐",
+        "unnamedPlan": "订阅套餐",
+        "unavailable": "暂时无法获取订阅状态，请刷新后重试。",
+        "action": "查看套餐",
+        "changeAction": "更改套餐"
+      },
+      "topupCard": {
+        "title": "点数",
+        "description": "购买点数，为按量使用的模型和功能充值。",
+        "cardTitle": "按需购买点数",
+        "cardDescription": "可购买的点数商品由服务端配置。",
+        "action": "购买点数"
+      }
+    },
+    "balance": {
+      "title": "可用额度",
+      "plan": "订阅额度",
+      "purchased": "已购额度",
+      "promotional": "赠送额度",
+      "notProvisioned": "当前账户尚未开通额度。",
+      "notSupported": "当前账户暂不支持额度查询。",
+      "unavailable": "暂时无法获取额度，请刷新后重试。"
+    },
+    "usage": {
+      "observedAt": "额度更新于 {{date}}",
+      "used": "已用",
+      "total": "总额",
+      "remaining": "剩余",
+      "progressLabel": "{{label}}使用进度",
+      "historyUnavailable": "历史记录不完整，暂时仅显示剩余额度。",
+      "percentUsed": "已使用 {{percent}}%",
+      "detailsUnavailable": "用量明细暂时不可用，当前仅显示各类余额。",
+      "promotionalDetails": {
+        "title": "赠送额度明细",
+        "description": "每笔赠送拥有独立有效期和状态。剩余额度来自上次账本结算，可能稍有延迟。",
+        "count": "{{count}} 笔",
+        "empty": "当前没有赠送额度记录。",
+        "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
+        "historicalUsageUnavailable": "已过期或作废记录的真实已用额度当前无法由 Gateway 还原，以“—”显示。",
+        "unnamed": "赠送额度",
+        "original": "原始额度",
+        "used": "已用",
+        "remaining": "剩余",
+        "expiresAt": "有效期至 {{date}}",
+        "states": {
+          "active": "生效中",
+          "depleted": "已用完",
+          "expired": "已过期",
+          "voided": "已作废"
+        }
+      }
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "选择订阅套餐",
+        "description": "仅展示服务端当前配置且可用的订阅套餐。选择套餐后再选择支付方式。"
+      },
+      "topup": {
+        "title": "购买点数",
+        "description": "仅展示服务端当前配置且可用的点数商品。选择商品后再选择支付方式。"
+      }
+    },
+    "eyebrow": "账户与用量",
+    "title": "选择适合你的方案",
+    "subtitle": "套餐和支付方式均由服务端实时下发。先选择方案，再查看该方案当前支持的支付方式。",
+    "steps": {
+      "offer": {
+        "title": "选择套餐",
+        "description": "仅展示当前可购买的充值和订阅方案。"
+      },
+      "channel": {
+        "title": "选择支付方式",
+        "description": "不同套餐支持的支付方式可能不同。",
+        "selectOfferFirst": "选择套餐后，这里会显示该套餐支持的支付方式"
+      },
+      "confirm": {
+        "title": "确认并支付",
+        "description": "核对方案与支付方式后创建支付。",
+        "selectChannelFirst": "选择支付方式后即可确认订单"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "刷新",
+      "retry": "重试",
+      "pay": "确认并支付",
+      "refresh": "刷新状态",
+      "cancelPayment": "取消支付",
+      "close": "关闭"
+    },
+    "catalog": {
+      "errorTitle": "暂时无法获取套餐",
+      "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
+      "emptyTitle": "当前暂无可用套餐",
+      "emptyDescription": "服务端尚未配置可购买的套餐和支付方式。"
+    },
+    "offerKinds": {
+      "topup": "点数充值",
+      "subscription": "订阅套餐"
+    },
+    "amount": {
+      "custom": "自定义金额",
+      "label": "充值金额",
+      "placeholder": "输入金额",
+      "rangeHint": "可输入 {{min}} 至 {{max}}",
+      "rangeError": "金额需在 {{min}} 至 {{max}} 之间",
+      "formatError": "请输入有效金额，最多保留 {{digits}} 位小数"
+    },
+    "intervals": {
+      "MONTH": "月",
+      "YEAR": "年"
+    },
+    "credits": "{{amount}} 点数",
+    "confirm": {
+      "channel": "通过 {{provider}} 支付"
+    },
+    "paymentActions": {
+      "QR_CODE": "扫码支付",
+      "REDIRECT": "跳转支付页面"
+    },
+    "providers": {
+      "alipay": "支付宝",
+      "stripe": "银行卡"
+    },
+    "securityNotice": "支付由所选渠道安全处理，Cindy 不保存你的支付凭证",
+    "currentSubscription": {
+      "title": "当前订阅",
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "等待完成支付",
+      "INCOMPLETE_EXPIRED": "支付已过期",
+      "TRIALING": "试用中",
+      "ACTIVE": "生效中",
+      "PAST_DUE": "付款逾期",
+      "UNPAID": "待付款",
+      "CANCELED": "已取消",
+      "PAUSED": "已暂停"
+    },
+    "recovery": {
+      "title": "发现未完成的支付",
+      "description": "你可以继续上次的支付，状态将从服务端重新确认。",
+      "continueTopup": "继续支付 {{amount}}",
+      "continueSubscription": "继续订阅支付"
+    },
+    "checkout": {
+      "creatingTitle": "正在创建支付",
+      "awaitingTitle": "等待支付",
+      "fulfillingTitle": "正在发放点数",
+      "completedTitle": "支付成功",
+      "failedTitle": "暂时无法完成",
+      "expiredTitle": "支付已过期",
+      "canceledTitle": "支付已取消",
+      "topupSubtitle": "点数充值",
+      "subscriptionSubtitle": "订阅套餐",
+      "creatingBody": "正在向支付服务确认订单…",
+      "qrAlt": "支付二维码",
+      "scanHint": "请使用对应支付应用扫码",
+      "checkingExpiry": "正在确认有效时间…",
+      "expiresIn": "二维码将在 {{minutes}}:{{seconds}} 后过期",
+      "redirectHint": "请在支付页面完成操作，完成后返回 Cindy。",
+      "openPayment": "打开支付页面",
+      "refreshingAction": "正在获取支付方式…",
+      "creditingBody": "支付已完成，正在等待点数到账…",
+      "paymentCompleted": "支付已完成。",
+      "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
+      "expiredBody": "支付链接已过期，请重新创建支付。",
+      "canceledBody": "本次支付已取消。",
+      "failedBody": "支付失败，请稍后重试或联系支持。"
+    },
+    "planChange": {
+      "targetTitle": "更改订阅套餐",
+      "targetDescription": "套餐变更沿用当前支付方式，最终价格与生效时间以下一步确认为准。",
+      "targetDescriptionWithCurrent": "当前套餐：{{plan}}。变更沿用当前支付方式，最终价格与生效时间以下一步确认为准。",
+      "upgradeBadge": "升级",
+      "downgradeBadge": "降级",
+      "emptyTitle": "暂无可切换的套餐",
+      "emptyDescription": "服务端尚未为当前支付方式配置其他可切换套餐。",
+      "quotingTitle": "正在准备套餐变更",
+      "quotingBody": "正在向服务端获取价格与生效时间…",
+      "quoteTitle": "确认套餐变更",
+      "confirmingTitle": "正在提交变更",
+      "confirmingBody": "正在向服务端提交套餐变更…",
+      "pendingProviderTitle": "正在处理套餐变更",
+      "pendingProviderBody": "支付渠道正在处理本次变更，Cindy 会持续确认最新结果…",
+      "awaitingTitle": "支付差价",
+      "scheduledTitle": "降级已排期",
+      "scheduledBody": "新套餐将于 {{date}} 生效,当前套餐在此之前保持不变。",
+      "appliedTitle": "套餐变更已生效",
+      "appliedBody": "新套餐已生效。",
+      "canceledTitle": "变更已撤销",
+      "canceledBody": "套餐变更已撤销，当前套餐保持不变。",
+      "expiredTitle": "报价已过期",
+      "expiredBody": "报价已过期，请重新发起套餐变更获取新报价。",
+      "failedTitle": "套餐变更失败",
+      "failedBody": "套餐变更未完成，当前套餐保持不变。",
+      "requestFailed": "请求失败，请重试。",
+      "resyncHint": "确认结果暂时无法核实，正在从服务端同步最新状态…",
+      "upgradeDueNow": "本期需支付差价 {{amount}}",
+      "upgradeNoAmount": "确认后升级立即生效。",
+      "upgradeHint": "支付完成后升级立即生效，后续按新套餐价格续费。",
+      "downgradeAt": "将于 {{date}} 生效",
+      "downgradeHint": "当前套餐将保留至本计费周期结束，期间不产生退款。",
+      "quoteExpiresIn": "报价将在 {{minutes}}:{{seconds}} 后失效",
+      "scanToPay": "扫码支付 {{amount}}",
+      "confirm": "确认变更",
+      "abandon": "放弃",
+      "targetLabel": "目标套餐：{{name}}",
+      "pendingDowngrade": "已排期降级至 {{name}}，{{date}} 生效。",
+      "pendingPayment": "升级到 {{name}} 的差价待支付。",
+      "pendingQuote": "有一笔切换到 {{name}} 的套餐变更进行中。",
+      "resume": "继续",
+      "undo": "撤销降级"
     }
   },
   "fileAccess": {

@@ -1,4 +1,18 @@
-# 设计系统兼容入口
+# Cindy 设计系统索引
 
-设计 Token 与视觉规范的权威文件是仓库根目录的
-[`DESIGN.md`](../../DESIGN.md)。本文件仅为历史引用保留，不要在这里维护第二份规范。
+> 本文件是 `docs/design-rules/` 全部设计文档的索引与版本台账（2026-07-24 起启用，此前为跳转 stub）。
+> 设计类 `.md` 一律放本目录，并在下表登记；规范正文不要写进本文件。
+
+## 文档索引
+
+| 文档 | 内容 | 角色 |
+|---|---|---|
+| [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
+| [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave5 读取记录 | 权威（登录域逐参数） |
+| [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
+| [`README.md`](./README.md) | 本目录使用规则 | 说明 |
+
+## 版本记录
+
+- **2026-07-24**：目录整编（设计 md 统一归位 `docs/design-rules/`，本文件升级为索引）。同步 Figma 组件库更新：hover 统一「叠白变亮」口径（旧「白底钮 hover 叠黑」作废）、新增协议勾选 `radiobutton` 四态与双色模式小按钮四母版、`SSO 登录_企业` / `back` 扩 Dark 三态、`white_button` 增 loading 五态（`figma-component-spec §11`、`DESIGN.md §16.5`）。`figma-component-spec.md` / `token-decision-table.md` 自迁移前仓库最后版本恢复并更新至 wave5。
+- **2026-07-23**：`DESIGN.md` 新增 §16 登录链路（登录全链路设计规范、`--login-*` 双态 token 表、深色模式落地机制）。

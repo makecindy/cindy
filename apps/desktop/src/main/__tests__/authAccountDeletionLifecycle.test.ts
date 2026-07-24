@@ -78,10 +78,10 @@ describe('desktop auth account-deletion lifecycle', () => {
     expect(body).toContain('if (sessionInvalidationPromise) return sessionInvalidationPromise;');
     expect(body).toContain('await authSessionTeardown(reason);');
     expect(body).toContain('closeLocalDb();');
-    expect(body).toContain('clearAuth({ notify: false });');
+    expect(body).toContain('clearAuth({ notify: false, deferSessionCommit: true });');
     expect(body).toContain('notifyAuthListeners();');
     expect(body).toContain('notifySessionExpired(');
-    expect(body.indexOf('clearAuth({ notify: false });')).toBeLessThan(
+    expect(body.indexOf('clearAuth({ notify: false, deferSessionCommit: true });')).toBeLessThan(
       body.indexOf('notifySessionExpired('),
     );
   });

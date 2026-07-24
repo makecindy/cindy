@@ -14,6 +14,7 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import { ghostFallbackIconKind, type GhostFallbackIconKind } from './lib/ghostPluginViewModel';
@@ -67,7 +68,12 @@ export function GhostPluginIcon({
   iconName: string;
   size?: GhostPluginIconSize;
 }) {
-  const svg = iconDataUrl ? isSvgIconSrc(iconDataUrl) : false;
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  useEffect(() => {
+    setFailedSrc(null);
+  }, [iconDataUrl]);
+  const resolvedIconDataUrl = iconDataUrl && failedSrc !== iconDataUrl ? iconDataUrl : undefined;
+  const svg = resolvedIconDataUrl ? isSvgIconSrc(resolvedIconDataUrl) : false;
   const fallbackKind = ghostFallbackIconKind(iconName, iconId);
   const FallbackIcon = FALLBACK_ICONS[fallbackKind];
 
@@ -75,17 +81,19 @@ export function GhostPluginIcon({
     <span
       className={cn(
         'inline-flex shrink-0 items-center justify-center overflow-hidden border-[0.5px] border-[var(--border-default)]',
-        iconDataUrl
+        resolvedIconDataUrl
           ? 'bg-[var(--plugin-icon-surface)] shadow-[var(--plugin-icon-shadow)]'
           : 'bg-[var(--surface-elevated)] text-[var(--text-secondary)] shadow-none',
         CONTAINER_CLASSES[size],
       )}
     >
-      {iconDataUrl ? (
+      {resolvedIconDataUrl ? (
         <img
-          src={iconDataUrl}
+          src={resolvedIconDataUrl}
           alt=""
           draggable={false}
+          referrerPolicy="no-referrer"
+          onError={() => setFailedSrc(resolvedIconDataUrl)}
           className={cn(
             svg ? SVG_ICON_CLASSES[size] : 'size-full object-cover',
             iconId === 'cindy-github' && 'plugin-icon--github',

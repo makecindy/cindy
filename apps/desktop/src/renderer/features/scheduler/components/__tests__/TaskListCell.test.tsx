@@ -92,3 +92,46 @@ describe('TaskListCell 并发等待提示', () => {
     expect(screen.queryByText(/Next less than 1 min/)).toBeNull();
   });
 });
+
+describe('TaskListCell 费用展示', () => {
+  it('无汇总时不伪造 $0.00', () => {
+    render(
+      createElement(TaskListCell, {
+        schedule,
+        selected: false,
+        onSelect: vi.fn(),
+      }),
+    );
+
+    expect(screen.queryByText('scheduler.cell.totalCost')).toBeNull();
+  });
+
+  it('不可可靠计价时显示费用不可用', () => {
+    render(
+      createElement(TaskListCell, {
+        schedule,
+        selected: false,
+        onSelect: vi.fn(),
+        totalCostUsd: 0,
+        hasUnavailableCost: true,
+      }),
+    );
+
+    expect(screen.getByText('scheduler.cell.costUnavailable')).toBeTruthy();
+    expect(screen.queryByText('scheduler.cell.totalCost')).toBeNull();
+  });
+
+  it('已确认真实零费用时仍显示 $0.00', () => {
+    render(
+      createElement(TaskListCell, {
+        schedule,
+        selected: false,
+        onSelect: vi.fn(),
+        totalCostUsd: 0,
+        hasUnavailableCost: false,
+      }),
+    );
+
+    expect(screen.getByText('scheduler.cell.totalCost')).toBeTruthy();
+  });
+});

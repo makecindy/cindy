@@ -1,3 +1,6 @@
+import { homedir } from 'node:os';
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
@@ -21,8 +24,26 @@ import {
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../displayConfig.js';
 import type { AgentIslandNativeFrame } from '../MacAgentIslandNativeHost.js';
 import { markAppContentWindow } from '../../windowFocusClassifier.js';
+import type { AgentIslandService } from '../service.js';
 
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
+
+// 受保护目录检测按 path.join(homedir(), ...) 的字面量匹配;测试消息必须用同一
+// 拼法,否则在 Windows 开发机上分隔符对不上,darwin mock 下的用例会失真。
+const protectedFolderFile = (kind: 'Desktop' | 'Documents', file: string): string =>
+  path.join(homedir(), kind, file);
+
+function handleInteractionRequestForTest(
+  service: AgentIslandService,
+  meta: Parameters<AgentIslandService['handleInteractionRequest']>[0],
+  request: InteractionRequest,
+): void {
+  service.handleInteractionRequest(
+    meta,
+    request,
+    service.captureInteractionEpoch(meta.sessionId),
+  );
+}
 
 const mocks = vi.hoisted(() => ({
   getSessionRowSnapshot: vi.fn<() => Promise<{
@@ -180,6 +201,18 @@ function doneEvent(): AgentEvent {
     type: 'done',
     source: 'codex',
     data: { result: 'done' },
+  };
+}
+
+function cancelledDoneEvent(turnId?: string): AgentEvent {
+  return {
+    type: 'done',
+    source: 'codex',
+    data: {
+      type: 'codex/event/task_complete',
+      cancelled: true,
+      ...(turnId ? { raw: { id: turnId } } : {}),
+    },
   };
 }
 
@@ -631,7 +664,7 @@ describe('AgentIslandService native publishing', () => {
     // passive 清点),不得向远端发 completed 收尾包 —— 会把手机列表行的等待授权
     // 指示误清成"已完成",且没有后续事件能补回。
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1' },
       {
         kind: 'permission',
@@ -830,7 +863,7 @@ describe('AgentIslandService native publishing', () => {
     const sessionUpdate = { destination: 'session', type: 'addRules' };
 
     service.setPermissionResolver(resolver);
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1' },
       {
         kind: 'permission',
@@ -865,7 +898,7 @@ describe('AgentIslandService native publishing', () => {
 
     syncEnabledForTest(service, publish);
     service.setPermissionResolver(resolver);
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'codex' },
       {
         kind: 'permission',
@@ -907,7 +940,7 @@ describe('AgentIslandService native publishing', () => {
     });
 
     syncEnabledForTest(service, publish);
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'codex' },
       {
         kind: 'permission',
@@ -947,7 +980,7 @@ describe('AgentIslandService native publishing', () => {
 
     syncEnabledForTest(service, publish);
     service.setPermissionResolver(resolver);
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'claude-code' },
       {
         kind: 'permission',
@@ -956,7 +989,7 @@ describe('AgentIslandService native publishing', () => {
         input: { query: 'first' },
       },
     );
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'claude-code' },
       {
         kind: 'permission',
@@ -999,7 +1032,7 @@ describe('AgentIslandService native publishing', () => {
     });
 
     syncEnabledForTest(service, publish);
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'claude-code' },
       {
         kind: 'permission',
@@ -1008,7 +1041,7 @@ describe('AgentIslandService native publishing', () => {
         input: { query: 'first' },
       },
     );
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'claude-code' },
       {
         kind: 'permission',
@@ -1053,7 +1086,7 @@ describe('AgentIslandService native publishing', () => {
     });
 
     syncEnabledForTest(service, publish);
-    service.handleInteractionRequest(
+    handleInteractionRequestForTest(service,
       { sessionId: 's1', agentKind: 'claude-code' },
       {
         kind: 'permission',
@@ -1458,7 +1491,7 @@ describe('AgentIslandService native publishing', () => {
         source: 'claude-code',
         data: {
           toolUseId: 'tool-1',
-          fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Desktop/blocked.txt'`,
+          fullText: `EPERM: operation not permitted, open '${protectedFolderFile('Desktop', 'blocked.txt')}'`,
         },
       };
 
@@ -1498,7 +1531,7 @@ describe('AgentIslandService native publishing', () => {
           source: 'claude-code',
           data: {
             toolUseId: 'tool-1',
-            fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Documents/blocked.txt'`,
+            fullText: `EPERM: operation not permitted, open '${protectedFolderFile('Documents', 'blocked.txt')}'`,
             isError: true,
           },
         },
@@ -1532,7 +1565,7 @@ describe('AgentIslandService native publishing', () => {
           source: 'codex',
           data: {
             toolUseId: 'tool-1',
-            fullText: `Log excerpt: EPERM under '${process.env.HOME}/Desktop/blocked.txt'`,
+            fullText: `Log excerpt: EPERM under '${protectedFolderFile('Desktop', 'blocked.txt')}'`,
             isError: false,
           },
         },
@@ -1562,7 +1595,7 @@ describe('AgentIslandService native publishing', () => {
           source: 'claude-code',
           data: {
             toolUseId: 'tool-1',
-            fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Desktop/blocked.txt'`,
+            fullText: `EPERM: operation not permitted, open '${protectedFolderFile('Desktop', 'blocked.txt')}'`,
             isError: true,
           },
         },
@@ -1855,6 +1888,484 @@ describe('AgentIslandService native publishing', () => {
 
     expect(playSound).toHaveBeenNthCalledWith(1, customSound('start.wav'));
     expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
+  });
+
+  it('removes user-stopped sessions and ignores provider completion tails without playing completion sound', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+
+    service.handleUserPrompt({ sessionId: 'codex-stop', agentKind: 'codex' }, 'run tests');
+    service.handleUserPrompt({ sessionId: 'claude-stop', agentKind: 'claude-code' }, 'run tests');
+    playSound.mockClear();
+
+    service.handleSessionStopped('codex-stop');
+    service.handleAgentEvent(
+      { sessionId: 'codex-stop', agentKind: 'codex' },
+      cancelledDoneEvent(),
+    );
+    service.handleSessionStopped('claude-stop');
+    service.handleAgentEvent(
+      { sessionId: 'claude-stop', agentKind: 'claude-code' },
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+    service.handleAgentEvent(
+      { sessionId: 'claude-stop', agentKind: 'claude-code' },
+      { type: 'done', source: 'claude-code', data: { reason: 'turn_interrupted' } },
+    );
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+
+    service.handleUserPrompt({ sessionId: 'claude-stop', agentKind: 'claude-code' }, 'run again');
+    service.handleAgentEvent(
+      { sessionId: 'claude-stop', agentKind: 'claude-code' },
+      { type: 'status', source: 'claude-code', data: { isRunning: true, status: 'Thinking...' } },
+    );
+    service.handleAgentEvent(
+      { sessionId: 'claude-stop', agentKind: 'claude-code' },
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: 'claude-stop',
+      phase: 'completed',
+    });
+  });
+
+  it('removes a cancelled run that has no explicit Stop boundary', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+    const meta = { sessionId: 'codex-permission-tighten', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'run tests');
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, cancelledDoneEvent());
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+  });
+
+  it('keeps a replacement turn running while ordinary completion tails from the stopped turn drain', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+    const meta = { sessionId: 'claude-replacement', agentKind: 'claude-code' as const };
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleSessionStopped(meta.sessionId);
+    service.handleUserPrompt(meta, 'replacement turn');
+    playSound.mockClear();
+
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+    service.handleAgentEvent(
+      meta,
+      { type: 'done', source: 'claude-code', data: { reason: 'turn_interrupted' } },
+    );
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'running',
+    });
+
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: true, status: 'Thinking...' } },
+    );
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+
+    expect(playSound).toHaveBeenCalledTimes(1);
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'completed',
+    });
+  });
+
+  it('accepts replacement-turn interaction requests before its running status arrives', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    const resolver = vi.fn(() => true);
+    const meta = { sessionId: 'replacement-interaction', agentKind: 'claude-code' as const };
+    syncEnabledForTest(service, publish);
+    service.setPermissionResolver(resolver);
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleSessionStopped(meta.sessionId);
+    service.handleUserPrompt(meta, 'replacement turn');
+    service.handleUserPromptDispatching(meta.sessionId);
+
+    handleInteractionRequestForTest(service,
+      meta,
+      {
+        kind: 'permission',
+        requestId: 'replacement-request',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+      },
+    );
+
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'needs-interaction',
+      permissionAction: { requestId: 'replacement-request' },
+    });
+
+    service.handlePermissionAction({ requestId: 'replacement-request', action: 'allow' });
+
+    expect(resolver).toHaveBeenCalledWith('replacement-request', {
+      kind: 'permission',
+      behavior: 'allow',
+      permissionUpdates: undefined,
+    });
+  });
+
+  it('rejects an interaction captured before the Stop and replacement prompt boundary', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    const resolver = vi.fn(() => true);
+    const meta = { sessionId: 'stale-interaction', agentKind: 'claude-code' as const };
+    syncEnabledForTest(service, publish);
+    service.setPermissionResolver(resolver);
+    service.handleUserPrompt(meta, 'first turn');
+    const staleInteractionEpoch = service.captureInteractionEpoch(meta.sessionId);
+    service.handleSessionStopped(meta.sessionId);
+    service.handleUserPrompt(meta, 'replacement turn');
+
+    service.handleInteractionRequest(
+      meta,
+      {
+        kind: 'permission',
+        requestId: 'stale-request',
+        toolName: 'Bash',
+        input: { command: 'rm -rf build' },
+      },
+      staleInteractionEpoch,
+    );
+
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'running',
+      permissionAction: null,
+    });
+
+    service.handlePermissionAction({ requestId: 'stale-request', action: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('rejects an old interaction that enters after replacement preview but before dispatch', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    const meta = { sessionId: 'preview-race-interaction', agentKind: 'claude-code' as const };
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleSessionStopped(meta.sessionId);
+    service.handleUserPrompt(meta, 'replacement turn');
+
+    const staleEpoch = service.captureInteractionEpoch(meta.sessionId);
+    expect(service.isInteractionCurrent(meta.sessionId, staleEpoch)).toBe(false);
+
+    service.handleUserPromptDispatching(meta.sessionId);
+    expect(service.isInteractionCurrent(meta.sessionId, staleEpoch)).toBe(false);
+    expect(service.isInteractionCurrent(
+      meta.sessionId,
+      service.captureInteractionEpoch(meta.sessionId),
+    )).toBe(true);
+  });
+
+  it('restores stop-tail suppression when a replacement prompt preview rolls back', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+    const meta = { sessionId: 'rollback-stop', agentKind: 'claude-code' as const };
+    service.handleUserPrompt(meta, 'run tests');
+    service.handleSessionStopped(meta.sessionId);
+    const stoppedInteractionEpoch = service.captureInteractionEpoch(meta.sessionId);
+    playSound.mockClear();
+
+    service.handleUserPrompt(meta, 'retry', { clientId: 'retry-client' });
+    service.rollbackUserPrompt(meta.sessionId, 'retry-client');
+    expect(service.captureInteractionEpoch(meta.sessionId)).toBe(stoppedInteractionEpoch);
+    service.handleAgentEvent(
+      meta,
+      { type: 'status', source: 'claude-code', data: { isRunning: false, status: 'Done' } },
+    );
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+  });
+
+  it('ignores a stale cancelled terminal event before a replacement turn dispatches', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+    const meta = { sessionId: 'codex-stop', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'run tests');
+    service.handleAgentEvent(meta, {
+      type: 'status',
+      source: 'codex',
+      data: { isRunning: true, status: 'Generating...', turnId: 'turn-stopped' },
+    });
+    service.handleSessionStopped(meta.sessionId, 'turn-stopped');
+    service.handleUserPrompt(meta, 'replacement turn');
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, cancelledDoneEvent('turn-stopped'));
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'running',
+    });
+  });
+
+  it('ignores an identified stopped-turn cancellation after the replacement is running', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'codex-running-replacement', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleAgentEvent(meta, {
+      type: 'status',
+      source: 'codex',
+      data: { isRunning: true, status: 'Generating...', turnId: 'turn-stopped' },
+    });
+    service.handleSessionStopped(meta.sessionId, 'turn-stopped');
+    service.handleUserPrompt(meta, 'replacement turn');
+    service.handleUserPromptDispatching(meta.sessionId);
+    service.handleAgentEvent(meta, {
+      type: 'status',
+      source: 'codex',
+      data: { isRunning: true, status: 'Generating...', turnId: 'turn-replacement' },
+    });
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, cancelledDoneEvent('turn-stopped'));
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: meta.sessionId,
+      phase: 'running',
+    });
+  });
+
+  it('removes a replacement turn cancelled after its vendor dispatch boundary', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'codex-replacement-cancelled', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleAgentEvent(meta, {
+      type: 'status',
+      source: 'codex',
+      data: { isRunning: true, status: 'Generating...', turnId: 'turn-stopped' },
+    });
+    service.handleSessionStopped(meta.sessionId, 'turn-stopped');
+    service.handleUserPrompt(meta, 'replacement turn');
+    service.handleUserPromptDispatching(meta.sessionId);
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, cancelledDoneEvent('turn-replacement'));
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+  });
+
+  it('clears an older provider turn id when a later stop cannot identify its turn', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'codex-stop-without-turn-id', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'first turn');
+    service.handleSessionStopped(meta.sessionId, 'turn-from-earlier-stop');
+    service.handleSessionStopped(meta.sessionId);
+    service.handleUserPrompt(meta, 'replacement turn');
+    service.handleUserPromptDispatching(meta.sessionId);
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, cancelledDoneEvent('turn-from-earlier-stop'));
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+  });
+
+  it('clears silenced-run bookkeeping when a session is stopped', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+      },
+    });
+    const meta = { sessionId: 'silenced-stop', agentKind: 'claude-code' as const };
+    service.handleScheduleEvent({
+      type: 'silenced',
+      scheduleId: 'schedule-1',
+      runId: 'run-1',
+      sessionId: meta.sessionId,
+    });
+    service.handleUserPrompt(meta, 'scheduled run');
+    service.handleSessionStopped(meta.sessionId);
+    playSound.mockClear();
+
+    service.handleUserPrompt(meta, 'manual replacement');
+
+    expect(playSound).toHaveBeenCalledWith(customSound('start.wav'));
   });
 
   it('plays the completion sound when the completed visible session is smart-suppressed', async () => {
@@ -2782,7 +3293,7 @@ describe('AgentIslandService native publishing', () => {
       input: { command: 'pnpm test' },
       displayName: 'Run command',
     };
-    service.handleInteractionRequest({ sessionId: 's1', agentKind: 'codex' }, request);
+    handleInteractionRequestForTest(service, { sessionId: 's1', agentKind: 'codex' }, request);
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
     expect(latestNativeFrame(publish)).toMatchObject({ width: 800 });
 
@@ -3414,7 +3925,7 @@ describe('AgentIslandService native publishing', () => {
       displayName: 'Run command',
     };
 
-    service.handleInteractionRequest({ sessionId: 's1', agentKind: 'codex' }, request);
+    handleInteractionRequestForTest(service, { sessionId: 's1', agentKind: 'codex' }, request);
 
     const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
     expect(framesById.get(2)).toMatchObject({

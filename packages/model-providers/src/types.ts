@@ -354,6 +354,11 @@ export interface ProviderPreset {
   id: string;
   /** 展示名（如 "OpenRouter" / "DeepSeek"）。 */
   name: string;
+  /**
+   * 国际化展示名（可选）：`name` 为中文的国内厂商预设（如「智谱 GLM（中国大陆）」）
+   * 在非中文 UI 用它展示，缺省回落 `name`。展示选择见 `presetDisplayName`。
+   */
+  nameEn?: string;
   /** 官方接入文档链接（表单里展示可点）。 */
   docsUrl?: string;
   /**

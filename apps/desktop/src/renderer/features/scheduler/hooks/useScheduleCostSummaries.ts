@@ -10,7 +10,9 @@ export interface ScheduleCostSummary {
   scheduleId: string;
   totalCostUsd: number;
   totalEstimatedValueUsd: number;
-  /** 产生过自动化 turn cost 的去重 session 数；legacy 会话兜底同样计入。 */
+  /** 至少一轮自动化无法取得可靠费用。 */
+  hasUnavailableCost?: boolean;
+  /** 产生过自动化 run 的去重 session 数；费用不可用或确认为零的 run 也会计入。 */
   sessionCount: number;
   sessions?: readonly ScheduleSessionCostSummary[];
 }

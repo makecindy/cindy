@@ -764,8 +764,13 @@ export const scheduleRuns = sqliteTable(
     costUsd: real('cost_usd').notNull().default(0),
     /** 单次 run 的订阅 token 估算价值，不计入真实账单。 */
     estimatedValueUsd: real('estimated_value_usd').notNull().default(0),
-    /** legacy 表示迁移前数据缺少 runId，不能精确拆分到单次执行。 */
-    costAttribution: text('cost_attribution', { enum: ['exact', 'legacy'] })
+    /**
+     * zero 表示已确认零费用；unavailable 表示 agent run 尚无可靠计价；legacy
+     * 表示迁移前数据缺少 runId，不能精确拆分。SQLite 无 CHECK，无需 migration。
+     */
+    costAttribution: text('cost_attribution', {
+      enum: ['exact', 'direct', 'mixed', 'zero', 'unavailable', 'legacy'],
+    })
       .notNull()
       .default('legacy'),
     /**

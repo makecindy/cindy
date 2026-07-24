@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { computeScheduleRunCostDeltas } from '../runCostLedger.js';
+import type { DbClient } from '../../localDb/client/DbClient';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
+import { computeScheduleRunCostDeltas, recordScheduleRunCostDirect } from '../runCostLedger.js';
 
 function meta(runId: string, costUsd: number, isEstimate = false): Record<string, unknown> {
   return {
@@ -37,5 +39,56 @@ describe('computeScheduleRunCostDeltas', () => {
       { runId: 'run-old', costUsdDelta: -0.42, estimatedValueUsdDelta: 0 },
       { runId: 'run-new', costUsdDelta: 0.42, estimatedValueUsdDelta: 0 },
     ]);
+  });
+});
+
+describe('recordScheduleRunCostDirect', () => {
+  it('忽略低于消息账本阈值的正费用', async () => {
+    await expect(recordScheduleRunCostDirect({
+      runId: 'run-near-zero',
+      costUsd: 1e-12,
+      isEstimate: false,
+    })).resolves.toBeNull();
+  });
+
+  it('更新竞态下 run 已消失时返回 null', async () => {
+    const selectChain = {
+      from() {
+        return this;
+      },
+      where() {
+        return this;
+      },
+      async limit() {
+        return [{ scheduleId: 'schedule-1' }];
+      },
+    };
+    const updateChain = {
+      set() {
+        return this;
+      },
+      where() {
+        return this;
+      },
+      async run() {
+        return { changes: 0 };
+      },
+    };
+    const dbClient = {
+      drizzle: {
+        select: () => selectChain,
+        update: () => updateChain,
+      },
+    } as unknown as DbClient;
+    setCurrentDbClient(dbClient, 'test-user');
+    try {
+      await expect(recordScheduleRunCostDirect({
+        runId: 'run-raced-delete',
+        costUsd: 0.42,
+        isEstimate: false,
+      })).resolves.toBeNull();
+    } finally {
+      clearCurrentDbClient(dbClient);
+    }
   });
 });

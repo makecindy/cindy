@@ -23,7 +23,7 @@ Settings > **Remote & device control** has two parts: **SSH remote workspaces** 
 **What a controlling device can and can't do:**
 
 - A controlling device (like the phone app, which is control-only — it has no local agent or database of its own) can drive sessions: create / close / fork them, send and steer input, approve interaction prompts, switch model / effort / permission mode, rewind, manage collaboration workers and scheduled tasks, and read session / message lists.
-- It can **not** touch auth or API keys, change global settings, write the database directly, trigger updates, or run local shell / file dialogs on the controlled machine. New remote sessions are also restricted to known local working directories.
+- It can **not** touch auth or API keys, change global settings, write the database directly, trigger updates, or run local shell / file dialogs on the controlled machine. A new remote session's working directory must be currently accessible on the controlled desktop; disconnected network drives are rejected.
 
 **Notes:**
 

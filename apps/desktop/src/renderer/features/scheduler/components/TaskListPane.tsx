@@ -227,12 +227,17 @@ export function TaskListPane({
                         unreadCount={unreadRunCounts.get(s.id) ?? 0}
                         totalCostUsd={
                           costSummariesLoaded
-                            ? (costSummaries.get(s.id)?.totalCostUsd ?? 0)
+                            ? costSummaries.get(s.id)?.totalCostUsd
                             : undefined
                         }
                         totalEstimatedValueUsd={
                           costSummariesLoaded
-                            ? (costSummaries.get(s.id)?.totalEstimatedValueUsd ?? 0)
+                            ? costSummaries.get(s.id)?.totalEstimatedValueUsd
+                            : undefined
+                        }
+                        hasUnavailableCost={
+                          costSummariesLoaded
+                            ? costSummaries.get(s.id)?.hasUnavailableCost
                             : undefined
                         }
                         onSelect={onSelect}

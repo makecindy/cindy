@@ -19,7 +19,11 @@ const SCAN_DIRS = ['src', 'app'];
 /** 不扫描:token 定义本体、测试自身、DEV-only 性能测量脚手架(listperf harness + src/debug,
  * 用 __DEV__ 门控、不进生产;其调试样式如琥珀色统计文字/tabular-nums 本就不走生产 token)。
  * WebView HTML 生成器用的是 CSS 语法(font-size:),天然不命中。 */
-const EXEMPT = [/__tests__/, /\.test\./, /src\/theme\/tokens\.ts$/, /^app\/listperf\.tsx$/, /^src\/debug\//];
+const EXEMPT = [/__tests__/, /\.test\./, /src\/theme\/tokens\.ts$/, /^app\/listperf\.tsx$/, /^src\/debug\//,
+  // loginSkinLayout 是登录皮肤设计 px 常量本体(750 稿坐标系,渲染时 ×groupScale,与物理
+  // pt 排版阶梯不同域,不该也不能映射 typeScale/lineHeight 档位)。地位等同 tokens.ts:
+  // 只许常量定义,消费端(组件)仍被本守护全量扫描——字面量只能进这里,不能进组件。
+  /^src\/auth\/loginSkinLayout\.ts$/];
 /** AppText 是 RN Text / TextInput 的唯一合法包装点。 */
 const APP_TEXT_WRAPPER = /src\/components\/AppText\.tsx$/;
 

@@ -3,11 +3,11 @@
  * ---------------------------------------------------------------------------
  * 把过去要真机验证的**被控端那一半**变成 CI 可跑:驱动**真实** runInvoke(dispatch.ts),
  * 串起真实双层门禁(remoteControlEnabled + allowlist)+ **真实 workingDir guard**
- * (`isRemoteWorkingDirAllowed` 跑在**真实内存 better-sqlite3 + drizzle** 之上 + 真实 fs)
+ * (`checkRemoteWorkingDir` 跑真实异步 fs 探测)
  * + dispatchLocalInvoke 路由到本机 handler + set-* 回流 + throwIpcError `[CODE]` 透传。
  *
  * 真实 vs 忠实替身的边界(诚实声明):
- *   - 真实:runInvoke 全部决策逻辑、guard 的 DB 查询(真 SQL/真表)、guard 的 fs 存在性判定、
+ *   - 真实:runInvoke 全部决策逻辑、guard 的 fs 存在性判定、
  *     allowlist、dispatchLocalInvoke 的 handler 查找与合成 event 调用、错误编码。
  *   - 替身:被控端业务 handler(maker:create-session / set-model / send 等)用忠实假实现
  *     (会拉起真 agent / 真 maker-host,不确定且无法在 node 跑)——这里只验证**dispatch 把请求
@@ -15,16 +15,14 @@
  *
  * 直击 Bug 1(远程浏览的新目录建会话):fresh 真实目录 → 放行到 handler;不存在路径 → 拒。
  */
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── mocks(hoist 前置)──────────────────────────────────────────────────────────
 const h = vi.hoisted(() => ({
-  dbHolder: { db: null as unknown },
   settings: { remoteControlEnabled: true, revokedControllers: [] as string[] },
   // ⚠️ 绝不能回落 process.cwd():TEMP 是 Windows 独有变量,macOS 上回落 cwd 曾让
   // auth-adapters 的 codex-home 骨架(含真实凭证硬链)生成进仓库 apps/desktop/ 下
@@ -53,17 +51,13 @@ vi.mock('../logger', () => ({
 vi.mock('../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => h.settings,
 }));
-// guard 的 DB:真实内存 drizzle(beforeAll 注入 h.dbHolder.db)。
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.dbHolder.db }) }));
-
-import { sessions, recentWorkdirs } from '../localDb/schema';
 import {
   runInvoke,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   __testing as dispatchTesting,
 } from '../device-link/dispatch';
-import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard';
+import { checkRemoteWorkingDir } from '../device-link/remote-workdir-guard';
 import { __testing as registry } from '../device-link/invoke-registry';
 import type { InvokeResultPayload } from '@cindy/device-link';
 
@@ -77,15 +71,10 @@ beforeAll(() => {
   managedWorktreeDir = path.join(managedWorktreeTestRoot, '.cindy-worktrees', 'auto-test');
   mkdirSync(managedWorktreeDir, { recursive: true });
 
-  const sqlite = new Database(':memory:');
-  // 只建 guard 用到的两张表的必要列(SELECT working_dir / path)。
-  sqlite.exec('CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY, last_used_at INTEGER NOT NULL);');
-  sqlite.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT);');
-  sqlite.prepare('INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)').run('/seeded/recent/proj', 1);
-  sqlite.prepare('INSERT INTO sessions (id, working_dir) VALUES (?, ?)').run('s-existing', '/existing/session/dir');
-  h.dbHolder.db = drizzle(sqlite, { schema: { sessions, recentWorkdirs } });
-  // 接入真实 guard(与生产 register.ts:1141 同一函数)。
-  setRemoteWorkingDirGuard(isRemoteWorkingDirAllowed);
+  // 接入与生产相同的结构化 guard。
+  // 此集成测试在纯 Node 中运行，显式注入真实异步 stat；utilityProcess 的
+  // 并发、超时与回收由 workdir-probe-host 专属测试覆盖。
+  setRemoteWorkingDirGuard((dir) => checkRemoteWorkingDir(dir, { stat }));
 });
 
 afterAll(() => {
@@ -115,7 +104,7 @@ function registerHandler(channel: string, impl: (...args: unknown[]) => unknown)
   return fn;
 }
 
-describe('device-link host dispatch (runInvoke) — real gate + guard(real DB) + routing', () => {
+describe('device-link host dispatch (runInvoke) — real gate + async fs guard + routing', () => {
   it('Bug1:create-session 的 workingDir 是真实存在的新目录 → 放行到 handler', async () => {
     const handler = registerHandler('maker:create-session', () => ({ sessionId: 's-new' }));
     const res = (await runInvoke(SRC, {
@@ -138,35 +127,38 @@ describe('device-link host dispatch (runInvoke) — real gate + guard(real DB) +
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('Bug1:create-session 的 workingDir 不存在 → CHANNEL_NOT_ALLOWED,不落到 handler', async () => {
+  it('Bug1:create-session 的 workingDir 不存在 → 结构化拒绝,不落到 handler', async () => {
     const handler = registerHandler('maker:create-session', () => ({ sessionId: 'should-not-happen' }));
     const res = (await runInvoke(SRC, {
       channel: 'maker:create-session',
       args: [{ workingDir: '/definitely/not/a/real/dir/xyz123' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
-    expect(res.error.code).toBe('CHANNEL_NOT_ALLOWED');
+    expect(res.error.code).toBe('IPC_ERROR');
+    expect(res.error.message).toContain('REMOTE_WORKDIR_NOT_FOUND');
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('create-session 的 workingDir 命中被控端 recents → 放行(无需 fs 存在)', async () => {
+  it('create-session 的历史 recent 路径当前不存在 → 拒绝', async () => {
     const handler = registerHandler('maker:create-session', () => ({ sessionId: 's2' }));
     const res = (await runInvoke(SRC, {
       channel: 'maker:create-session',
       args: [{ workingDir: '/seeded/recent/proj' }],
-    })) as Extract<InvokeResultPayload, { ok: true }>;
-    expect(res.ok).toBe(true);
-    expect(handler).toHaveBeenCalledTimes(1);
+    })) as Extract<InvokeResultPayload, { ok: false }>;
+    expect(res.ok).toBe(false);
+    expect(res.error.message).toContain('REMOTE_WORKDIR_NOT_FOUND');
+    expect(handler).not.toHaveBeenCalled();
   });
 
-  it('create-session 的 workingDir 命中已有会话目录 → 放行', async () => {
+  it('create-session 的历史 session 路径当前不存在 → 拒绝', async () => {
     const handler = registerHandler('maker:create-session', () => ({ sessionId: 's3' }));
     const res = (await runInvoke(SRC, {
       channel: 'maker:create-session',
       args: [{ workingDir: '/existing/session/dir' }],
-    })) as Extract<InvokeResultPayload, { ok: true }>;
-    expect(res.ok).toBe(true);
-    expect(handler).toHaveBeenCalledTimes(1);
+    })) as Extract<InvokeResultPayload, { ok: false }>;
+    expect(res.ok).toBe(false);
+    expect(res.error.message).toContain('REMOTE_WORKDIR_NOT_FOUND');
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('create-session 的 workingDir 是文件(存在但非目录)→ 拒', async () => {
@@ -176,7 +168,8 @@ describe('device-link host dispatch (runInvoke) — real gate + guard(real DB) +
       args: [{ workingDir: __filename }], // 真实文件,非目录
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
-    expect(res.error.code).toBe('CHANNEL_NOT_ALLOWED');
+    expect(res.error.code).toBe('IPC_ERROR');
+    expect(res.error.message).toContain('REMOTE_WORKDIR_NOT_DIRECTORY');
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -192,14 +185,15 @@ describe('device-link host dispatch (runInvoke) — real gate + guard(real DB) +
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('worktree:create 的 baseRepo 不存在 → CHANNEL_NOT_ALLOWED,不落到 handler', async () => {
+  it('worktree:create 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async () => {
     const handler = registerHandler('worktree:create', () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
       channel: 'worktree:create',
       args: [{ sessionId: 's-wt', baseRepo: '/definitely/not/a/real/repo/xyz123', name: 'auto-x1', sourceBranch: 'main' }],
     })) as Extract<InvokeResultPayload, { ok: false }>;
     expect(res.ok).toBe(false);
-    expect(res.error.code).toBe('CHANNEL_NOT_ALLOWED');
+    expect(res.error.code).toBe('IPC_ERROR');
+    expect(res.error.message).toContain('REMOTE_WORKDIR_NOT_FOUND');
     expect(handler).not.toHaveBeenCalled();
   });
 

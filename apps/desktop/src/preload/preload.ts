@@ -86,6 +86,7 @@ import type {
   DesktopLoginAction,
   DesktopLoginActionResult,
 } from '../shared/authIpc';
+import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 
 // Codex 元 IPC 全部升级到 maker.* (agentKind 参数化), preload 不再 import vendor/codex/ipcChannels。
 //   auth      → maker:auth:*(agentKind)
@@ -768,12 +769,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     install: (
       lizFilePath: string,
       opts: { enable?: boolean; expectedPackageSha256: string },
-    ): Promise<{ ghost: unknown } | { canceled: true }> =>
+    ): Promise<{ ghost: unknown }> =>
       ipcRenderer.invoke('ghosts:install', lizFilePath, opts),
     update: (
       lizFilePath: string,
       opts: { expectedPackageSha256: string },
-    ): Promise<{ ghost: unknown } | { canceled: true }> =>
+    ): Promise<{ ghost: unknown }> =>
       ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
       id: string,
@@ -854,6 +855,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:dev-runtime', action, id),
   },
 
+  pluginMarket: {
+    snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
+      ipcRenderer.invoke('plugin-market:snapshot'),
+    detail: (
+      pluginId: string,
+    ): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
+      ipcRenderer.invoke('plugin-market:detail', pluginId),
+    install: (
+      pluginId: string,
+      options?: { allowPermissionExpansion?: boolean },
+    ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
+      ipcRenderer.invoke('plugin-market:install', pluginId, options),
+    uninstall: (pluginId: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('plugin-market:uninstall', pluginId),
+  },
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:prewarm', payload),
@@ -1424,6 +1440,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // apiRequest(renderer → main → 主 server 通用代理)与 imageUpload.putToOss
   // (presign 直传桥)已随 2026-07 apiBaseUrl 清理退役:renderer 对业务 server
   // 零请求;头像等上传走 main 侧 profileEdit 链路。
+  billing: {
+    getBalance: () => ipcRenderer.invoke(BILLING_INVOKE.GET_BALANCE),
+    getCreditUsage: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CREDIT_USAGE),
+    getCatalog: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CATALOG),
+    listOrders: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_ORDERS, payload),
+    getOrder: (payload) => ipcRenderer.invoke(BILLING_INVOKE.GET_ORDER, payload),
+    createTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CREATE_TOPUP, payload),
+    refreshTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REFRESH_TOPUP, payload),
+    cancelTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CANCEL_TOPUP, payload),
+    retryTopup: (payload) => ipcRenderer.invoke(BILLING_INVOKE.RETRY_TOPUP, payload),
+    createSubscription: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.CREATE_SUBSCRIPTION, payload),
+    getCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION),
+    refreshSubscriptionPurchase: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE, payload),
+    quotePlanChange: (payload) => ipcRenderer.invoke(BILLING_INVOKE.QUOTE_PLAN_CHANGE, payload),
+    confirmPlanChange: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.CONFIRM_PLAN_CHANGE, payload),
+    refreshPlanChange: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.REFRESH_PLAN_CHANGE, payload),
+    cancelPlanChange: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CANCEL_PLAN_CHANGE, payload),
+    openPaymentRedirect: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
+  } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──
   // All paths in/out are workdir-relative POSIX. Main side blocks traversal.

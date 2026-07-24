@@ -14,7 +14,8 @@
  *  - ✅ oneShot:   走 host 临时 thread (起标题), Phase 4 删 SDK dep 后唯一通路
  *
  * 输出契约:
- *  - 不在 AgentSessionHandle 上加 codex-only 方法
+ *  - AgentSessionHandle 只暴露 provider-neutral 的可选能力，不泄漏 Codex
+ *    thread / app-server 协议类型
  *  - 事件流只 emit 已存在的 AgentEvent type union 成员
  *  - renderer 不感知 thread_id / app-server 任何概念
  */
@@ -4265,6 +4266,10 @@ export class CodexAgent extends BaseAgent {
         } catch (e) {
           log.warn('turn/interrupt threw', { error: String(e) });
         }
+      },
+
+      getCurrentTurnId() {
+        return currentTurnId;
       },
 
       async close() {

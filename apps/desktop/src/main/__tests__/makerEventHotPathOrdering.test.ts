@@ -14,6 +14,8 @@ const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts');
+const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
@@ -130,12 +132,23 @@ describe('maker:event hot path ordering', () => {
     expect(abortContext).toContain('isTerminalTurnErrorEvent(event)');
   });
 
-  it('isolates Agent Island interaction updates after renderer delivery', () => {
+  it('rejects stale Agent Island interactions before renderer delivery', () => {
     const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
+    const epochCaptureIndex = interactionListenerSource.indexOf(
+      'getAgentIslandService()?.captureInteractionEpoch(session.id)',
+    );
+    const currentEpochCheckIndex = interactionListenerSource.indexOf(
+      'getAgentIslandService()?.isInteractionCurrent(',
+    );
+    const flushIndex = interactionListenerSource.indexOf('flushAssistantBlock(session.id);');
     const broadcastIndex = interactionListenerSource.indexOf('broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST');
     const pendingIndex = interactionListenerSource.indexOf('pendingInteractionResolvers.set(req.requestId, entry);');
     const islandIndex = interactionListenerSource.indexOf('handleAgentIslandInteractionAfterBroadcast(');
 
+    expect(epochCaptureIndex).toBeGreaterThanOrEqual(0);
+    expect(currentEpochCheckIndex).toBeGreaterThan(epochCaptureIndex);
+    expect(flushIndex).toBeGreaterThan(currentEpochCheckIndex);
+    expect(broadcastIndex).toBeGreaterThan(flushIndex);
     expect(broadcastIndex).toBeGreaterThanOrEqual(0);
     expect(pendingIndex).toBeGreaterThan(broadcastIndex);
     expect(islandIndex).toBeGreaterThan(pendingIndex);
@@ -171,6 +184,77 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('Agent Island session close cleanup failed after mandatory session cleanup');
     expect(closeSessionHandler).toBeTruthy();
     expect(closeSessionHandler).not.toContain('handleSessionClosed');
+  });
+
+  it('marks Agent Island stopped before provider abort tails can arrive', () => {
+    const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
+    const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
+    const coordinatorAbortSource = source.slice(coordinatorAbortStart, coordinatorAbortEnd);
+    const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
+    const directAbortEnd = source.indexOf(
+      '\n  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION',
+      directAbortStart,
+    );
+    const directAbortSource = source.slice(directAbortStart, directAbortEnd);
+    const hookAbortStart = hookControlSource.indexOf('abortSession: async (sessionId) => {');
+    const hookAbortEnd = hookControlSource.indexOf('\n      // session.archive', hookAbortStart);
+    const hookAbortSource = hookControlSource.slice(hookAbortStart, hookAbortEnd);
+
+    expect(source).toContain('function handleAgentIslandSessionStopped(');
+    expect(coordinatorAbortStart).toBeGreaterThanOrEqual(0);
+    expect(coordinatorAbortEnd).toBeGreaterThan(coordinatorAbortStart);
+    expectOrder(
+      coordinatorAbortSource,
+      'const sess = maker.getSession(sessionId);',
+      'if (!sess) return;',
+    );
+    expectOrder(
+      coordinatorAbortSource,
+      'if (!sess) return;',
+      'handleAgentIslandSessionStopped(sess);',
+    );
+    expectOrder(
+      coordinatorAbortSource,
+      'handleAgentIslandSessionStopped(sess);',
+      'await sess.abort();',
+    );
+    expect(directAbortStart).toBeGreaterThanOrEqual(0);
+    expect(directAbortEnd).toBeGreaterThan(directAbortStart);
+    expectOrder(
+      directAbortSource,
+      'const sess = maker.getSession(sessionId);',
+      'if (!sess) return;',
+    );
+    expectOrder(
+      directAbortSource,
+      'if (!sess) return;',
+      'handleAgentIslandSessionStopped(sess);',
+    );
+    expectOrder(
+      directAbortSource,
+      'handleAgentIslandSessionStopped(sess);',
+      'await sess.abort();',
+    );
+    expect(hookAbortStart).toBeGreaterThanOrEqual(0);
+    expect(hookAbortEnd).toBeGreaterThan(hookAbortStart);
+    expectOrder(
+      hookAbortSource,
+      'const session = getMaker().getSession(sessionId);',
+      'if (!session) return;',
+    );
+    expectOrder(
+      hookAbortSource,
+      'if (!session) return;',
+      'getAgentIslandService()?.handleSessionStopped(',
+    );
+    expect(hookAbortSource).toContain(
+      "log.warn('Agent Island session stop update failed before hook provider abort'",
+    );
+    expectOrder(
+      hookAbortSource,
+      'getAgentIslandService()?.handleSessionStopped(',
+      'await session.abort();',
+    );
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {
@@ -218,11 +302,12 @@ describe('maker:event hot path ordering', () => {
     );
     const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(cost);');
     const modelCostRecordIndex = codexDoneSource.indexOf('costUsdDelta: cost,');
-    const messageCostGuardIndex = codexDoneSource.indexOf('if (turnAssistantPersistId)');
+    const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute'));
-    expect(messageCostGuardIndex).toBeGreaterThan(costRecordIndex);
+    expect(schedulerCostRecordIndex).toBeGreaterThan(costRecordIndex);
+    expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
     expect(codexDoneSource).toContain('isEstimate: isSubscriptionValue');
     expect(codexDoneSource).toContain('if (!isRemoteCodexSession &&');
     expect(codexDoneSource).toContain("!model.startsWith(XAI_MODEL_PREFIX) &&");

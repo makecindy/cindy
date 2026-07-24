@@ -2,12 +2,12 @@
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
  *
  * 两块职责：
- *   1. 目录加载器 `ensureActiveCatalogLoaded`：用 electron net.request 拉 OSS、node fs 读 dev
+ *   1. 目录加载器 `ensureActiveCatalogLoaded`：用 electron net.request 拉公共 Catalog、node fs 读 dev
  *      本地文件，把结果写进 active-catalog 单例（getActiveCatalog 同步读）。
- *        - release：由 manifestService.getBaseUrl() 推 `{base}/cfg/providers.json`（与 notice 同 bucket）。
+ *        - release：优先从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
  *        - dev：关闭联网（与 manifestService 一致），可由 XDT_MODELS_PATH 指向本地文件即时生效。
  *        - env 兜底：XDT_MODELS_URL（完整覆盖 URL）/ XDT_DISABLE_MODELS_FETCH（强制不联网）。
- *      **每进程拉一次、存内存、无 TTL、无磁盘缓存**：OSS 是运行时真源，bundled 是兜底。
+ *      **每进程拉一次、存内存、无 TTL、无磁盘缓存**：远端目录是运行时真源，bundled 是最终兜底。
  *      启动期（splash）由 bootstrap-electron 在构造 Maker 前 await 一次（见 registerMakerIpcsAfterSplash）。
  *   2. `getDesktopProviderService`：把 active-catalog + 连接状态读取器注入 provider-service。
  *      连接状态直接复用现有凭证存储——XD = 托管 gateway key 是否存在、
@@ -21,6 +21,7 @@ import path from 'node:path';
 
 import {
   buildUserProvider,
+  DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   type Catalog,
   type CatalogIO,
@@ -29,6 +30,7 @@ import {
 
 import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
+import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from './active-catalog.js';
 import {
   readCodexDiscoveredModels,
@@ -70,14 +72,11 @@ import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('provider-service');
 
-/** OSS 拉取超时（与 manifest fetch 同量级）。 */
-const FETCH_TIMEOUT_MS = 15_000;
-
 /**
  * electron net.request GET → 文本。非 200 / 超时 / 网络错均 reject，
  * 由 loadCatalog 兜底到内置目录（绝不让目录加载抛穿）。
  */
-function fetchText(url: string): Promise<string> {
+function fetchText(url: string, timeoutMs: number): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     let settled = false;
     const settle = (fn: () => void): void => {
@@ -92,7 +91,7 @@ function fetchText(url: string): Promise<string> {
       const timer = setTimeout(() => {
         request.abort();
         settle(() => reject(new Error(`catalog fetch timeout: ${url}`)));
-      }, FETCH_TIMEOUT_MS);
+      }, timeoutMs);
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
@@ -139,17 +138,19 @@ const io: CatalogIO = {
 };
 
 /**
- * 构建目录源配置。release 取当前内外网探测得到的 OSS base；dev 不联网。
+ * 构建目录源配置。release 使用区域化 Model Access 公共接口，旧 OSS 保留为迁移期回退；dev 不联网。
  *
- * 注：内外网 base 在会话中途切换（办公室↔家）只会让下次进程的远端拉取退化到内置目录——
- * 属安全降级（external CDN 本就公网可达），不影响可用性。
+ * 注：区域 endpoint 或 OSS base 在会话中途切换（办公室↔家）只影响下次进程加载；本进程仍持有
+ * 已校验目录。远端不可用时依次退化到旧 OSS 与 bundled，不影响基础 Provider 可用性。
  */
 function buildSource(): CatalogSourceConfig {
   const dev = isDev();
   return {
     url: process.env.XDT_MODELS_URL,
     localPath: process.env.XDT_MODELS_PATH,
-    baseUrl: dev ? undefined : getBaseUrl(),
+    baseUrl: dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl'),
+    fallbackBaseUrl: dev ? undefined : getBaseUrl(),
+    remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
     disableFetch: dev || process.env.XDT_DISABLE_MODELS_FETCH === '1',
   };
 }
@@ -174,7 +175,7 @@ let activeLoaded = false;
 let activeInflight: Promise<Catalog> | null = null;
 
 /**
- * 启动期（splash）await 一次：拉 OSS 目录写入 active-catalog。幂等 + 并发去重。
+ * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
  * loadCatalog 永不抛（最差回落 bundled），故本函数也不会抛。
  * 调用点：bootstrap-electron 的 registerMakerIpcsAfterSplash，第一次 getMaker() 构造之前。
  */

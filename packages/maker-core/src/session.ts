@@ -146,6 +146,11 @@ export interface SessionSendOptions extends SendOptions {
    * hook 完成后才启动 vendor handle。
    */
   onAccepted?: () => void | Promise<void>;
+  /**
+   * vendor dispatch 前最后一个同步边界。用于让 host 在底层可能产生新 turn
+   * callback 之前，精确切换自己的 turn-scoped 状态。
+   */
+  onDispatching?: () => void;
 }
 
 /**
@@ -223,7 +228,7 @@ export class Session {
     const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
-    const { onAccepted, ...handleOpts } = opts ?? {};
+    const { onAccepted, onDispatching, ...handleOpts } = opts ?? {};
     this.logger.debug('send', summarizeUserMessage(msg));
     this.ensureActive();
     if (this.isTurnRunning()) {
@@ -267,6 +272,7 @@ export class Session {
       originInstalled = true;
       this.startEventLoopIfNeeded();
       try {
+        onDispatching?.();
         await this.handle.send(msg, {
           ...handleOpts,
           signal: reservation.abortController.signal,
@@ -573,6 +579,10 @@ export class Session {
    */
   isTurnRunning(): boolean {
     return this.sendReservation !== null || this.isHandleTurnRunning();
+  }
+
+  getCurrentTurnId(): string | null {
+    return this.handle.getCurrentTurnId?.() ?? null;
   }
 
   /**

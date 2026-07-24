@@ -42,9 +42,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "android.permission.MODIFY_AUDIO_SETTINGS"
-      ]
+      "permissions": ["android.permission.MODIFY_AUDIO_SETTINGS"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -53,7 +51,6 @@
       "./plugins/with-third-party-notices",
       "./plugins/with-google-signin-modular-headers",
       "./plugins/with-wechat-opensdk-modulemap",
-      "./plugins/with-android-splash-no-icon",
       [
         "expo-build-properties",
         {
@@ -68,6 +65,15 @@
           "backgroundColor": "#DF0C27",
           "dark": {
             "backgroundColor": "#DF0C27"
+          },
+          "android": {
+            "backgroundColor": "#DF0C27",
+            "image": "./assets/login/login-hero@2x.png",
+            "imageWidth": 128,
+            "dark": {
+              "backgroundColor": "#DF0C27",
+              "image": "./assets/login/login-hero@2x.png"
+            }
           }
         }
       ],

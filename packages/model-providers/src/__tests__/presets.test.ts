@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG, parseCatalog, sanitizePresets, sortPresetsForLocale } from '../catalog.js';
+import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from '../catalog.js';
 import { mergeWithBundled } from '../source.js';
 import type { Catalog } from '../types.js';
 
@@ -116,6 +116,19 @@ describe('mergeWithBundled presets 兜底', () => {
   });
 });
 
+describe('presetDisplayName', () => {
+  it('中文 locale 用 name;其它 locale 优先 nameEn,缺省回落 name', () => {
+    const p = { name: '智谱 GLM(中国大陆)', nameEn: 'Zhipu GLM (China)' };
+    expect(presetDisplayName(p, 'zh-CN')).toBe('智谱 GLM(中国大陆)');
+    expect(presetDisplayName(p, 'zh')).toBe('智谱 GLM(中国大陆)');
+    expect(presetDisplayName(p, 'en')).toBe('Zhipu GLM (China)');
+    expect(presetDisplayName(p, 'ja')).toBe('Zhipu GLM (China)');
+    // 无 nameEn(全球厂商预设本就是英文名)→ 一律回落 name。
+    expect(presetDisplayName({ name: 'DeepSeek' }, 'en')).toBe('DeepSeek');
+    expect(presetDisplayName({ name: 'DeepSeek' }, 'zh-CN')).toBe('DeepSeek');
+  });
+});
+
 describe('regionHint 归一化与 locale 排序', () => {
   const mk = (id: string, regionHint?: unknown) =>
     ({ ...VALID_PRESET, id, ...(regionHint !== undefined ? { regionHint } : {}) }) as never;
@@ -124,6 +137,19 @@ describe('regionHint 归一化与 locale 排序', () => {
     const out = sanitizePresets([mk('a', 'mars')]);
     expect(out).toHaveLength(1);
     expect(out[0]!.regionHint).toBeUndefined();
+  });
+
+  it('非法 nameEn(非字符串/空白串)剥字段;与非法 regionHint 同现时两者都被清洗(Codex P2 回归)', () => {
+    const out = sanitizePresets([
+      { ...VALID_PRESET, id: 'a', nameEn: 42 } as never,
+      { ...VALID_PRESET, id: 'b', nameEn: '   ' } as never,
+      // 两字段同时非法:早退式清洗会漏掉 nameEn。
+      { ...VALID_PRESET, id: 'c', regionHint: 'mars', nameEn: 42 } as never,
+      { ...VALID_PRESET, id: 'd', nameEn: 'OpenRouter Intl' } as never,
+    ]);
+    expect(out).toHaveLength(4);
+    expect(out.map((p) => p.nameEn)).toEqual([undefined, undefined, undefined, 'OpenRouter Intl']);
+    expect(out[2]!.regionHint).toBeUndefined();
   });
 
   it('厂商按首字母分组排序；同厂商 cn/global 相邻，组内按语言排先后', () => {

@@ -57,13 +57,20 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).toContain('pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]');
     expect(source).not.toContain('pt-[clamp(96px,25.5vh,268px)]');
     // 内容列宽度从死锁 800px 改为跟随 useProportionalWidth 的 inputWidth(与进行中
-    // 对话页同源,封顶 1220px):大屏自适应变宽、发送后同一 ChatInput 无宽度跳变。
+    // 对话页同源,封顶 914+20=934px):大屏留出左右呼吸空间、发送后同一 ChatInput 无宽度跳变。
     expect(source).toContain('relative flex w-full flex-col items-start');
     expect(source).toContain('style={{ maxWidth: inputWidth || 800 }}');
     expect(source).not.toContain('max-w-[800px]');
     expect(source).toContain('absolute right-0 top-[22px]');
-    // 快捷入口只有 4 项,不随内容列铺满全宽——封顶 800px 左对齐,保持卡片紧凑比例。
-    expect(source).toMatch(/data-testid="create-agent-quick-starts"[\s\S]*?style=\{\{ maxWidth: 800 \}\}/);
+    // 快捷入口与输入框同宽(w-full 跟随父列 inputWidth),左右两缘对齐 ChatInput;
+    // 旧 800px 封顶在宽窗口下右缘短一截,2026-07-24 用户反馈后摘除。
+    const quickStartsBlock = source.slice(
+      source.indexOf('data-testid="create-agent-quick-starts"'),
+      source.indexOf('data-testid="create-agent-quick-starts"') + 200,
+    );
+    expect(quickStartsBlock).toContain('w-full');
+    expect(quickStartsBlock).toContain('mt-[42px]');
+    expect(quickStartsBlock).not.toMatch(/maxWidth:\s*800/);
   });
 
   it('preserves New Maker behavior-critical props on ChatInput', () => {

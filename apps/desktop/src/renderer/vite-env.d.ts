@@ -935,6 +935,7 @@ interface ElectronAPI {
   pageZoomReset: () => Promise<{ ok: true; zoomLevel: number }>;
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
+  billing: import('../shared/billing').BillingRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
   // systemNetworkErrorToast.ts 负责节流 + 多语言 toast。
@@ -1016,12 +1017,12 @@ interface ElectronAPI {
       lizFilePath: string,
       /** enable:装入后立即开启(确认框勾选决定;缺省沉睡)。 */
       opts: { enable?: boolean; expectedPackageSha256: string },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost } | { canceled: true }>;
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
       lizFilePath: string,
       opts: { expectedPackageSha256: string },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost } | { canceled: true }>;
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
      * 等能力键;image/video 各一份下拉数据,defaultModel = 目录默认
@@ -1208,6 +1209,18 @@ interface ElectronAPI {
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
   };
 
+  /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
+  pluginMarket: {
+    snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
+    detail: (
+      pluginId: string,
+    ) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    install: (
+      pluginId: string,
+      options?: { allowPermissionExpansion?: boolean },
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+    uninstall: (pluginId: string) => Promise<{ ok: true }>;
+  };
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<{ ok: true; path: string; wav: ArrayBuffer } | { ok: false }>;
@@ -1514,6 +1527,7 @@ interface ElectronAPI {
         status: FeishuBotStatus;
         error?: string;
         botAppId: string | null;
+        ownerOpenId: string | null;
       }) => void,
     ) => () => void;
     onConflict: (callback: (payload: { appId: string }) => void) => () => void;
