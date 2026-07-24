@@ -427,6 +427,7 @@ export function LoginSocialButton({
   children,
   testID,
   busy,
+  variant = 'default',
 }: {
   label: string;
   onPress: () => void;
@@ -439,9 +440,14 @@ export function LoginSocialButton({
    * 与本组件对称的桌面 LoginSocialButton `aria-disabled` 语义一致。
    */
   busy?: boolean;
+  /** 'apple' = ADR 官方配色圆钮(纯黑/白底 appleCircleBg、无描边 borderWidth 0);
+   *  'default' = 常规皮肤圆钮(primaryButtonBg 底 + primaryButtonBorder 描边)。
+   *  apple 变体 pressed 叠层与 default 同款(StateOverlay 黑 50%)。 */
+  variant?: 'default' | 'apple';
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const isApple = variant === 'apple';
   return (
     <Pressable
       accessibilityLabel={label}
@@ -452,9 +458,12 @@ export function LoginSocialButton({
       onPress={onPress}
       style={[
         styles.socialButton,
-        {
-          borderColor: colors.login.primaryButtonBorder,
-        },
+        isApple
+          ? {
+              backgroundColor: colors.login.appleCircleBg,
+              borderWidth: 0,
+            }
+          : { borderColor: colors.login.primaryButtonBorder },
       ]}
       testID={testID}
     >
@@ -827,8 +836,27 @@ function SsoIcon() {
   );
 }
 
+/** Apple logo(ADR 官方 SIWA Logo-only 变体,path d 逐字节原样未改动,脚本提取自
+ *  _tmp/apple-adr/Logo - SIWA - Logo-only - White.svg;黑白两版 path 相同仅 fill 不同,
+ *  这里 fill 随圆钮底反相 = colors.login.appleLogoInk)。
+ *  HIG 允许 logo-only 自定义按钮(圆形),artwork 来自 Apple Design Resources 未改动,
+ *  对齐 App Store Guideline 4(用户标准图 2026-07-24);viewBox 15.7 13.2 24.6 24.6
+ *  按 logo 光学中心裁切,logo≈圆钮 46% 高,与桌面端同口径。供后续苹果审核回复引用。 */
+export function AppleLogoGlyph() {
+  const { colors } = useTheme();
+  return (
+    <Svg width="100%" height="100%" viewBox="15.7 13.2 24.6 24.6" fill="none" aria-hidden>
+      <Path
+        d="M28.2226562,20.3846154 C29.0546875,20.3846154 30.0976562,19.8048315 30.71875,19.0317864 C31.28125,18.3312142 31.6914062,17.352829 31.6914062,16.3744437 C31.6914062,16.2415766 31.6796875,16.1087095 31.65625,16 C30.7304687,16.0362365 29.6171875,16.640178 28.9492187,17.4494596 C28.421875,18.06548 27.9414062,19.0317864 27.9414062,20.0222505 C27.9414062,20.1671964 27.9648438,20.3121424 27.9765625,20.3604577 C28.0351562,20.3725366 28.1289062,20.3846154 28.2226562,20.3846154 Z M25.2929688,35 C26.4296875,35 26.9335938,34.214876 28.3515625,34.214876 C29.7929688,34.214876 30.109375,34.9758423 31.375,34.9758423 C32.6171875,34.9758423 33.4492188,33.792117 34.234375,32.6325493 C35.1132812,31.3038779 35.4765625,29.9993643 35.5,29.9389701 C35.4179688,29.9148125 33.0390625,28.9122695 33.0390625,26.0979021 C33.0390625,23.6579784 34.9140625,22.5588048 35.0195312,22.474253 C33.7773438,20.6382708 31.890625,20.5899555 31.375,20.5899555 C29.9804688,20.5899555 28.84375,21.4596313 28.1289062,21.4596313 C27.3554688,21.4596313 26.3359375,20.6382708 25.1289062,20.6382708 C22.8320312,20.6382708 20.5,22.5950413 20.5,26.2911634 C20.5,28.5861411 21.3671875,31.013986 22.4335938,32.5842339 C23.3476562,33.9129053 24.1445312,35 25.2929688,35 Z"
+        fill={colors.login.appleLogoInk}
+      />
+    </Svg>
+  );
+}
+
 /** 第三方圆钮图标分发(figma §4.5 icon 48;providers.social 驱动显隐,无返回不渲染)。
- *  Apple 走官方 AppleAuthenticationButton(全宽单列),圆钮行只列 Google/微信/SSO。 */
+ *  Apple 走 AppleLogoGlyph(圆钮行第一颗,LoginSocialButton variant='apple'),
+ *  此处只列 Google/微信/SSO。 */
 export function LoginSocialGlyph({
   provider,
 }: {

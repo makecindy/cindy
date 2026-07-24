@@ -2,11 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  AppleAuthenticationButton,
-  AppleAuthenticationButtonStyle,
-  AppleAuthenticationButtonType,
-} from 'expo-apple-authentication';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
 import { useAuth } from '@/auth/AuthContext';
@@ -58,6 +53,7 @@ import {
   LoginSocialRow,
   LoginTextLinkSlot,
   LoginTitleBlock,
+  AppleLogoGlyph,
 } from '@/components/LoginSkinControls';
 import {
   MobileLoginHandoffStage,
@@ -120,8 +116,6 @@ export default function LoginScreen() {
   const [resendDeadline, setResendDeadline] = useState<number | null>(null);
   const [accountDeletionStatus, setAccountDeletionStatus] =
     useState<AccountDeletionStatus | null>(null);
-  const { mode } = useTheme();
-  // 官方 Apple 按钮走 makeStyles 的 appleButton(合规按钮不可皮肤化,复用主干样式)。
   const styles = useThemedStyles(makeStyles);
   const configIssues = getMobileConfigIssues();
   const disabled = auth.isBusy || !auth.initialized || configIssues.length > 0;
@@ -273,7 +267,7 @@ export default function LoginScreen() {
     // 从统一社交圆钮行中拆出、单独全宽渲染;其余(Google/微信/SSO)保留皮肤圆钮。
     const nonAppleProviders = socialProviders.filter(
       // type guard 收窄为 Google/微信(SSO 由行内末位单独渲染),与 LoginSocialGlyph
-      // 收窄后的 provider 类型对齐;Apple 走官方 AppleAuthenticationButton 不进圆钮行。
+      // 收窄后的 provider 类型对齐;Apple 走圆钮行第一颗(AppleLogoGlyph,variant='apple')。
       (provider): provider is Exclude<SocialProvider, 'apple'> =>
         provider !== 'apple',
     );
@@ -414,33 +408,37 @@ export default function LoginScreen() {
           />
           {identifierErrorNode}
         </LoginPanel>
-        {/* App Store 合规:Apple 官方 Sign in with Apple 按钮全宽单列,不可皮肤化
-            (mobileAuthServerLogin 守护测试 + Apple 审核硬要求;socialProviders 已按 iOS
-            过滤,仅 iOS 且可用时渲染)。视觉不完全跟随统一圆钮皮肤是 Apple 硬性规范所致。 */}
-        {socialProviders.includes('apple') ? (
-          <AppleAuthenticationButton
-            accessibilityState={{ disabled }}
-            buttonStyle={
-              mode === 'dark'
-                ? AppleAuthenticationButtonStyle.WHITE
-                : AppleAuthenticationButtonStyle.BLACK
-            }
-            buttonType={AppleAuthenticationButtonType.SIGN_IN}
-            cornerRadius={24}
-            onPress={() => {
-              if (disabled) return;
-              void auth.dispatchLoginAction({
-                type: 'native-social',
-                provider: 'apple',
-              });
-            }}
-            pointerEvents={disabled ? 'none' : 'auto'}
-            style={styles.appleButton}
-            testID="login.appleButton"
-          />
-        ) : null}
-        {/* 第三方圆钮行:Apple 之外的原生方式驱动;企业 SSO = 行内最后一颗(329:243) */}
-        <LoginSocialRow count={nonAppleProviders.length + 1}>
+        {/* App Store 合规(Guideline 4):Apple 入口为圆钮行第一颗(iOS only,沿用
+            socialProviders.includes('apple') 即 isNativeSocialProviderSupported 判定,
+            Android 自动无此钮)。圆钮底色用 ADR 官方 Black/White 配色(appleCircleBg)、
+            logo 用官方 Logo-only artwork(AppleLogoGlyph,path 逐字节原样未改)、无描边。
+            HIG 允许 logo-only 自定义按钮(圆形),artwork 来自 Apple Design Resources。 */}
+        <LoginSocialRow
+          count={
+            (socialProviders.includes('apple') ? 1 : 0) +
+            nonAppleProviders.length +
+            1
+          }
+        >
+          {socialProviders.includes('apple') ? (
+            <LoginSocialButton
+              key="apple"
+              label={loginText('apple')}
+              busy={disabled}
+              variant="apple"
+              onPress={() => {
+                // SC-SOC-7: in-flight 期间 no-op(行为层 guard,无 disabled 视觉回填)。
+                if (disabled) return;
+                void auth.dispatchLoginAction({
+                  type: 'native-social',
+                  provider: 'apple',
+                });
+              }}
+              testID="login.appleButton"
+            >
+              <AppleLogoGlyph />
+            </LoginSocialButton>
+          ) : null}
           {nonAppleProviders.map((provider) => (
             <LoginSocialButton
               key={provider}
@@ -1370,7 +1368,6 @@ const makeStyles = (colors: ThemeColors) =>
       letterSpacing: spacing.sm,
       textAlign: 'center',
     },
-    appleButton: { height: 48, width: '100%' },
     fullButton: { minHeight: 48, minWidth: 0 },
     helper: {
       color: colors.textSecondary,
