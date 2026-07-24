@@ -111,6 +111,8 @@ export interface LocalAdoptionFsDeps extends MoveFsDeps {
    * 文件系统退化为「检查 + rename」。
    */
   renameNoReplace(source: string, target: string): Promise<void>;
+  /** 允许覆盖目标的原子改名(marker 的 tmp+rename 原子落盘用)。 */
+  replaceFile(source: string, target: string): Promise<void>;
 }
 
 /** UI 桥:main→renderer 弹窗阶段推送 + 等待用户裁决。 */
@@ -208,7 +210,11 @@ async function writeAdoptionMarker(
   markerPath: string,
   marker: AdoptionMarker,
 ): Promise<void> {
-  await deps.fs.writeFile(markerPath, JSON.stringify(marker, null, 2));
+  // tmp + 原子改名入位:直接截断重写在中途崩溃时会留下半份 JSON,读取端把
+  // 损坏 marker 当缺失,pending 凭据一丢,占位库让位路径就被永久关闭。
+  const tmpPath = `${markerPath}.tmp`;
+  await deps.fs.writeFile(tmpPath, JSON.stringify(marker, null, 2));
+  await deps.fs.replaceFile(tmpPath, markerPath);
 }
 
 /**
@@ -583,6 +589,9 @@ const realFsDeps: LocalAdoptionFsDeps = {
   },
   rename: (source, target) => fsp.rename(source, target),
   rmdir: (dir) => fsp.rmdir(dir),
+  // Node 的 fs.rename 在 POSIX 与 Windows(libuv MOVEFILE_REPLACE_EXISTING)上
+  // 都覆盖已存在的目标文件,正是 marker 原子落盘要的语义。
+  replaceFile: (source, target) => fsp.rename(source, target),
   renameNoReplace: async (source, target) => {
     try {
       await fsp.link(source, target);
@@ -644,39 +653,58 @@ async function countSessionsInClosedDb(dbPath: string): Promise<number> {
 }
 
 /**
- * 账号库「被使用过」的保守探测面:任一表有行即算使用过。sessions 不过滤软删除
- * ——用户删光会话不等于库空置,消息/定时任务/IM 绑定/自定义供应商仍在
- * (Greptile review);表不存在(更老 schema)= 不可能有数据,跳过该表。
+ * 账号库「被使用过」探测采用**反转清单**:枚举库内全部表,除下方 denylist
+ * (仅登录/启动会自动写入、或内容可由其它表推导的基建/影子表)外,任何表有行
+ * 即算使用过。方向性:未来新增的业务表默认「使用过」(不让位,fail-safe),
+ * 「探针漏了某张表导致数据被让位」这一类问题就此关闭(Greptile review);
+ * denylist 只含纯自动写入项,占位库不会因启动噪音行堵死 pending 重试。
  */
-const ACCOUNT_USAGE_TABLES = [
-  'sessions',
-  'schedules',
-  'custom_providers',
-  'custom_mcp_servers',
-  'im_bindings',
-  'project_aliases',
-  'recent_workdirs',
-  'project_automation_consents',
-] as const;
+const ACCOUNT_DB_AUTO_WRITTEN_TABLES = new Set([
+  // schema/迁移簿记(ensureReady 建库即写)。
+  'migration_meta',
+  'migration_history',
+  // 登录/启动期自动落库:账号用量快照、device-link 单持有者仲裁行。
+  'account_usage_snapshots',
+  'device_link_ownership',
+  // 嵌入/向量基建簿记与派生任务(内容源于其它表;源表有数据自然判使用过)。
+  'embedding_meta',
+  'embedding_jobs',
+  'vec_table_meta',
+  // 派生用量统计(有真实用量必有 sessions/messages,源表兜底)。
+  'daily_spend',
+  'daily_model_usage',
+  // 会话/定时任务的派生子状态(源表兜底)。
+  'schedule_runs',
+  'agent_input_queue_snapshots',
+  'skill_usage_sources',
+  'skill_usage_exposures',
+]);
+
+/** 基建/影子表名模式:SQLite 内部、drizzle 簿记、FTS 与 sqlite-vec 影子表。 */
+function isAccountDbInfraTable(name: string): boolean {
+  return (
+    name.startsWith('sqlite_') ||
+    name.startsWith('__drizzle') ||
+    // FTS5 影子表(<base>_fts_data/_config 等)空索引也带结构行,必须排除;
+    // fts 主虚表行数与源表同步,排除它不损失信号(源表自身兜底)。
+    name.includes('_fts') ||
+    name.startsWith('vec_') ||
+    ACCOUNT_DB_AUTO_WRITTEN_TABLES.has(name)
+  );
+}
 
 async function accountDbLooksUsedInClosedDb(dbPath: string): Promise<boolean> {
   const db = new Database(dbPath, { fileMustExist: true });
   try {
-    for (const table of ACCOUNT_USAGE_TABLES) {
-      let count = 0;
-      try {
-        const row = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as
-          | { c?: number | bigint }
-          | undefined;
-        count = Number(row?.c ?? 0);
-      } catch (err) {
-        // fail-closed:只有「表不存在」(更老 schema,不可能有数据)可跳过;
-        // SQLITE_CORRUPT/BUSY 等一律上抛,调用方按不可读跳过认领,绝不让位。
-        const message = err instanceof Error ? err.message : String(err);
-        if (/no such table/i.test(message)) continue;
-        throw err;
-      }
-      if (count > 0) return true;
+    // fail-closed:枚举或取行失败(SQLITE_CORRUPT/BUSY 等)一律上抛,调用方按
+    // 不可读跳过认领,绝不让位。表名取自 sqlite_master 并按标识符转义,无注入面。
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    for (const { name } of tables) {
+      if (isAccountDbInfraTable(name)) continue;
+      const row = db.prepare(`SELECT 1 FROM "${name.replaceAll('"', '""')}" LIMIT 1`).get();
+      if (row !== undefined) return true;
     }
     return false;
   } finally {

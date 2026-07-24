@@ -125,6 +125,10 @@ function createMemFs() {
     },
     // mem fs 的 rename 本就是「目标存在即 EEXIST」语义,与 renameNoReplace 一致。
     renameNoReplace: async (src, dest) => fsDeps.rename(src, dest),
+    replaceFile: async (src, dest) => {
+      files.delete(norm(dest));
+      await fsDeps.rename(src, dest);
+    },
   };
 
   return { files, dirs, addDir, addFile, fsDeps, exists };
@@ -585,7 +589,7 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     deps.fs = {
       ...deps.fs,
       writeFile: async (p, content) => {
-        if (path.normalize(p) === path.normalize(MARKER)) throw errnoError('ENOSPC', p);
+        if (path.normalize(p).startsWith(path.normalize(MARKER))) throw errnoError('ENOSPC', p);
         return realWrite(p, content);
       },
     };
@@ -602,7 +606,7 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     deps.fs = {
       ...deps.fs,
       writeFile: async (p, content) => {
-        if (path.normalize(p) === path.normalize(MARKER)) throw errnoError('ENOSPC', p);
+        if (path.normalize(p).startsWith(path.normalize(MARKER))) throw errnoError('ENOSPC', p);
         return realWrite(p, content);
       },
     };
