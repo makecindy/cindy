@@ -526,6 +526,30 @@ describe('Electron Computer Use permission guide window', () => {
     });
   });
 
+  it('fully tears down the lifecycle when the Electron fallback closes normally', async () => {
+    harness.nativeShow.mockResolvedValueOnce(false);
+    const guide = await import('../window');
+    const initialStatus = harness.computerStatus();
+
+    await guide.showComputerPermissionGuideWindow(null, initialStatus);
+    await vi.waitFor(() => {
+      expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
+    });
+    harness.resumeComputerDriverPermissionProbe.mockClear();
+    harness.closeComputerUseSwitchLocator.mockClear();
+    harness.openExternal.mockClear();
+
+    harness.windows[1].close();
+
+    expect(harness.resumeComputerDriverPermissionProbe).toHaveBeenCalledOnce();
+    expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
+    expect(harness.windows[0].close).toHaveBeenCalledOnce();
+    expect(harness.nativeDismiss).not.toHaveBeenCalled();
+
+    await guide.openComputerPermissionPaneForStatus(initialStatus);
+    expect(harness.openExternal).toHaveBeenCalledOnce();
+  });
+
   it('shows the Electron fallback when the native guide exits before attaching', async () => {
     const nativeStarted = createDeferred<boolean>();
     harness.nativeShow.mockReturnValueOnce(nativeStarted.promise);

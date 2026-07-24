@@ -945,11 +945,11 @@ export async function showComputerPermissionGuideWindow(
     ) {
       return;
     }
-    guideWindow = null;
     if (!nativeHost) {
-      stopSwitchObserver();
-      resetPermissionProbeBypassThrottle();
+      closeComputerPermissionGuideWindow();
+      return;
     }
+    guideWindow = null;
     restoreGuideAfterDrag();
     if (backdropWindow === backdrop) {
       backdropWindow = null;
@@ -1098,6 +1098,7 @@ export async function showComputerPermissionGuideWindow(
         startSwitchObserver();
         return;
       }
+      nativeHost = null;
       fallbackRequested = true;
       showElectronFallback();
       log.warn('native Computer Use permission coach unavailable; showing Electron fallback');
