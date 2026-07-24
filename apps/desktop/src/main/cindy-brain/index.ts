@@ -1754,6 +1754,111 @@ export async function installAndDock(
 }
 
 /**
+ * Plugin 市场专用装入入口。市场包已由 plugin-server 绑定到稳定 Plugin ID，
+ * 因而允许官方保留前缀；本地文件入口仍继续走 rejectReservedGhostId。
+ * tokenBroker 门控、原子换目录、布局停靠与运行时重启保持和本地安装一致。
+ */
+export async function installOrUpdateMarketGhostPackage(
+  cindyFilePath: string,
+  expected: { ghostId: string; version: string },
+): Promise<InstalledGhost> {
+  const manager = getGhostManager();
+  const inspected = await manager.inspect(cindyFilePath);
+  if ('rejection' in inspected) throwInstallError(inspected.rejection);
+  if (
+    inspected.manifest.id !== expected.ghostId ||
+    inspected.manifest.version !== expected.version
+  ) {
+    throwIpcError(
+      'GHOST_FILE_INVALID',
+      '下载包清单与市场 Release 不一致',
+    );
+  }
+  requireGhostAvailableForActiveSession(expected.ghostId);
+  rejectUnauthorizedTokenBroker(inspected.manifest);
+
+  const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
+  if (!installed) {
+    // 市场默认装入也保持沉睡；defaultInstall 不是运行授权。
+    return installAndDock(manager, cindyFilePath, { enable: false });
+  }
+
+  const runtime = getGhostRuntime();
+  runtime.stop(expected.ghostId);
+  const result = await manager.update(cindyFilePath);
+  if ('rejection' in result) throwInstallError(result.rejection);
+  runtime.resetFuse(expected.ghostId);
+  const store = getLayoutStore();
+  const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+  if (docked) {
+    const applied = store.setLayout(docked);
+    if ('rejection' in applied) {
+      log.warn('market ghost panel dock rejected', {
+        id: result.ghost.manifest.id,
+        reason: applied.rejection,
+      });
+    }
+  }
+  spawnIfResident(result.ghost);
+  return result.ghost;
+}
+
+/**
+ * 卸载一张意识并清理其宿主侧凭证、KV、私有文件与最近使用记录。
+ * Plugin 市场和本地插件页共用，避免市场账本更新后只删了包目录。
+ */
+export async function uninstallGhostAndCleanup(id: string): Promise<void> {
+  requireGhostAvailableForActiveSession(id);
+  const manager = getGhostManager();
+  const runtime = getGhostRuntime();
+  runtime.stop(id);
+  getGhostSubscriptionGateway().dropGhost(id);
+  const result = await manager.uninstall(id, { notify: false });
+  if ('rejection' in result) throwUninstallError(result.rejection);
+  removeGhostSecrets(id);
+  removeGhostKvBestEffort(
+    createGhostKvStore({
+      getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
+      log,
+    }),
+    id,
+    log,
+  );
+  if (isValidGhostId(id)) {
+    try {
+      await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', id), {
+        recursive: true,
+        force: true,
+      });
+    } catch (err) {
+      log.warn('ghost-fs 私有目录回收失败', {
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
+    recordBuiltinTombstone(brainRootDir(), id, log);
+  }
+  let recentIds: string[] | null = null;
+  try {
+    recentIds = forgetGhostRecentUsage(id);
+  } catch (error) {
+    log.warn('ghost recent usage 清理失败', {
+      id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  broadcastGhostsChanged(manager.list());
+  if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
+}
+
+/** 市场默认安装必须尊重用户对内置插件的显式卸载选择。 */
+export function isBuiltinGhostRemovedByUser(id: string): boolean {
+  return readBuiltinTombstones(brainRootDir()).includes(id);
+}
+
+/**
  * launch: 'resident' 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
  * "该在场了"时机的统一入口(应用启动扫描 / 装入即开 / 唤醒 / 更新换代后)。
  * spawn 幂等,重复调用零成本;失败走熔断记账,不抛出(fire-and-forget)。
@@ -2613,48 +2718,7 @@ export function registerGhostIpc(): void {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
-    requireGhostAvailableForActiveSession(id);
-    runtime.stop(id); // 抽离先熄灯,再删目录
-    getGhostNodeRuntimeBroker().stop(id); // Node 同步停掉,不留安装目录使用者
-    getGhostAgentSlot().clearGhost(id); // 会话关联随抽离清零,防止重装后权限残留
-    getGhostSubscriptionGateway().dropGhost(id); // 订阅态随抽离清零
-    // GhostManager 先只删目录；内置 tombstone 与 host 清理完成后再
-    // 只广播一次一致快照，避免详情页中途掉回列表且无恢复入口。
-    const result = await manager.uninstall(id, { notify: false });
-    if ('rejection' in result) throwUninstallError(result.rejection);
-    // network 槽凭证随抽离清空(按前缀扫,含旧版本声明过的孤儿键;幂等)。
-    removeGhostSecrets(id);
-    // 自定义参数 KV 同点位清除(卸下即清、沉睡保留;幂等)。
-    removeGhostKvBestEffort(ghostKv, id, log);
-    // fs 槽私有数据目录随抽离整体回收(卸下即清、沉睡保留;best-effort,
-    // 失败只 warn——目录被占用不该卡死卸载流程)。id 先过形状闸,防拼路径。
-    if (isValidGhostId(id)) {
-      try {
-        await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', id), {
-          recursive: true,
-          force: true,
-        });
-      } catch (err) {
-        log.warn('ghost-fs 私有目录回收失败', { id, error: err instanceof Error ? err.message : String(err) });
-      }
-    }
-    // 内置意识被用户主动卸载 → 记墓碑,启动播种永远跳过(不然重启就弹回来)。
-    if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
-      recordBuiltinTombstone(brainRootDir(), id, log);
-    }
-    let recentIds: string[] | null = null;
-    try {
-      recentIds = forgetGhostRecentUsage(id);
-    } catch (error) {
-      // 插件目录已删，MRU 是非关键附属数据；清理失败只记录，
-      // 不能让 renderer 把已完成的卸载误报为失败。
-      log.warn('ghost recent usage 清理失败', {
-        id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    broadcastGhostsChanged(manager.list());
-    if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
+    await uninstallGhostAndCleanup(id);
     return { ok: true };
   });
 

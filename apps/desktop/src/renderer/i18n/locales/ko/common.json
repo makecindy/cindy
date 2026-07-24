@@ -2187,13 +2187,40 @@
         "installedExpand": "설치된 플러그인 {{count}}개 더 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
         "allTitle": "모든 플러그인",
+        "filterAll": "전체",
+        "filtersAria": "출처별 플러그인 필터",
+        "origin": {
+          "public": "공개",
+          "organization": "팀 공유",
+          "local": "로컬"
+        },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
         "useAction": "사용",
         "useAria": "{{name}} 사용"
       },
+      "market": {
+        "scopeAria": "플러그인 출처 필터",
+        "scope": {
+          "all": "전체",
+          "public": "공개",
+          "organization": "조직",
+          "personal": "개인",
+          "local": "로컬"
+        },
+        "install": "설치",
+        "update": "마켓에서 업데이트",
+        "installed": "설치됨",
+        "conflict": "플러그인 ID 충돌",
+        "unavailable": "플러그인 마켓을 일시적으로 사용할 수 없습니다. 설치된 플러그인은 계속 사용할 수 있습니다.",
+        "securityTitle": "설치 및 권한",
+        "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 권한을 확인하고 활성화할 때까지 새 플러그인은 비활성 상태로 유지됩니다.",
+        "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
+        "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
+        "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 비활성 상태로 설치합니다. 설정을 검토한 후 직접 활성화할 수 있습니다."
+      },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
-      "emptyHint": "오른쪽 위 \"플러그인 설치…\"에서 .cindy 파일을 선택하세요",
+      "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
       "disabledTag": "비활성",
       "projectDisabledTag": "이 프로젝트에서 꺼짐",
       "projectSwitchLockedTip": "이 플러그인은 전역에서 비활성 상태입니다. 먼저 '전역' 보기에서 활성화해 주세요",

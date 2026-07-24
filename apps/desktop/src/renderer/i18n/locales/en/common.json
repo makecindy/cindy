@@ -2188,13 +2188,40 @@
         "installedExpand": "Show {{count}} more installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "allTitle": "All plugins",
+        "filterAll": "All",
+        "filtersAria": "Filter plugins by source",
+        "origin": {
+          "public": "Public",
+          "organization": "Team shared",
+          "local": "Local"
+        },
         "emptyFiltered": "No matching plugins",
         "useAction": "Use",
         "useAria": "Use {{name}}"
       },
+      "market": {
+        "scopeAria": "Filter plugin sources",
+        "scope": {
+          "all": "All",
+          "public": "Public",
+          "organization": "Organization",
+          "personal": "Personal",
+          "local": "Local"
+        },
+        "install": "Install",
+        "update": "Update from market",
+        "installed": "Installed",
+        "conflict": "Plugin ID conflict",
+        "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
+        "securityTitle": "Install and permissions",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. New installs stay disabled until you review permissions and enable them.",
+        "noPermissions": "This plugin declares no additional capabilities.",
+        "installConfirmTitle": "Install “{{name}}”?",
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility, then installed disabled. Review its setup and enable it when ready."
+      },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
-      "emptyHint": "Click \"Install Plugin…\" above and pick a .cindy file",
+      "emptyHint": "Install from the market, or import a .cindy file from the menu above",
       "disabledTag": "Disabled",
       "projectDisabledTag": "Off in this project",
       "projectSwitchLockedTip": "This plugin is disabled globally; enable it in the Global view first",

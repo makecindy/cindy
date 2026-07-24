@@ -2187,13 +2187,40 @@
         "installedExpand": "インストール済みプラグインをさらに {{count}} 件表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "allTitle": "すべてのプラグイン",
+        "filterAll": "すべて",
+        "filtersAria": "提供元でプラグインを絞り込む",
+        "origin": {
+          "public": "公開",
+          "organization": "チーム共有",
+          "local": "ローカル"
+        },
         "emptyFiltered": "一致するプラグインがありません",
         "useAction": "使用",
         "useAria": "{{name}} を使用"
       },
+      "market": {
+        "scopeAria": "プラグインの提供元を絞り込む",
+        "scope": {
+          "all": "すべて",
+          "public": "公開",
+          "organization": "組織",
+          "personal": "個人",
+          "local": "ローカル"
+        },
+        "install": "インストール",
+        "update": "マーケットから更新",
+        "installed": "インストール済み",
+        "conflict": "プラグイン ID の競合",
+        "unavailable": "プラグインマーケットを一時的に利用できません。インストール済みプラグインは引き続き利用できます。",
+        "securityTitle": "インストールと権限",
+        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。権限を確認して有効にするまで、新規プラグインは無効のままです。",
+        "noPermissions": "このプラグインは追加機能を宣言していません。",
+        "installConfirmTitle": "「{{name}}」をインストールしますか？",
+        "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認し、無効の状態でインストールします。設定を確認してから有効にできます。"
+      },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
-      "emptyHint": "右上の「プラグインをインストール…」から .cindy ファイルを選択してください",
+      "emptyHint": "マーケットからインストールするか、上のメニューから .cindy ファイルを読み込めます",
       "disabledTag": "無効",
       "projectDisabledTag": "このプロジェクトでは無効",
       "projectSwitchLockedTip": "このプラグインはグローバルで無効です。先に「グローバル」ビューで有効にしてください",

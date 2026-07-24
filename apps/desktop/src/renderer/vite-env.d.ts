@@ -1208,6 +1208,19 @@ interface ElectronAPI {
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
   };
 
+  /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
+  pluginMarket: {
+    snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
+    detail: (
+      pluginId: string,
+    ) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    install: (
+      pluginId: string,
+      options?: { allowPermissionExpansion?: boolean },
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+    uninstall: (pluginId: string) => Promise<{ ok: true }>;
+  };
+
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<{ ok: true; path: string; wav: ArrayBuffer } | { ok: false }>;

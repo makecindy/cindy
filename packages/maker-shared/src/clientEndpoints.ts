@@ -90,6 +90,8 @@ export const CLIENT_ENDPOINT_KEYS = [
   'githubApiBaseUrl',
   // skillhub-server(SkillHub 技能市场/发布 → XD hub 的 S2S 代理)的 API 基址。
   'skillhubApiBaseUrl',
+  // plugin-server(Plugin/Skill 市场、组织管理与发布)的 API 基址。
+  'pluginApiBaseUrl',
   // 更新/hotfix 链的 CDN base(manifest-*.json / hotfix 包 / agent 二进制)。
   'cdnBaseUrl',
   // 自建线手机整包发现的 mobile-update-server 基址(`${base}/latest`)。仅
@@ -142,6 +144,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   voiceApiBaseUrl: ['https:'],
   githubApiBaseUrl: ['https:'],
   skillhubApiBaseUrl: ['https:'],
+  pluginApiBaseUrl: ['https:'],
   cdnBaseUrl: ['https:'],
   mobileUpdateBaseUrl: ['https:'],
 };
