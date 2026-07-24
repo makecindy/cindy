@@ -714,6 +714,9 @@ private final class PermissionGuideCoordinator {
     private var switchTarget: NSPoint?
     private var switchWindowSize: NSSize?
     private var authSheetVisible = false
+    private var didEstablishFallbackWindowBaseline = false
+    private var knownFallbackWindowIDs = Set<CGWindowID>()
+    private var fallbackModalWindowIDs = Set<CGWindowID>()
 
     init(appURL: URL, locale: GuideLocale) {
         panel = PermissionAccessoryPanel(
@@ -858,6 +861,9 @@ private final class PermissionGuideCoordinator {
               let settingsInfo = systemSettingsWindowInfo(pid: settingsApp.processIdentifier)
         else {
             if !isDragging {
+                didEstablishFallbackWindowBaseline = false
+                knownFallbackWindowIDs.removeAll()
+                fallbackModalWindowIDs.removeAll()
                 if settingsMissingSince == nil {
                     settingsMissingSince = Date()
                 }
@@ -881,6 +887,7 @@ private final class PermissionGuideCoordinator {
         let settingsFrame = settingsInfo.frame
         settingsMissingSince = nil
         didNotifySettingsClosed = false
+        let hasModalSheet = resolveModalSheetState(settingsInfo)
 
         if !hasActivatedSettings {
             hasActivatedSettings = true
@@ -897,16 +904,16 @@ private final class PermissionGuideCoordinator {
 
         // When the auth sheet dismisses (fingerprint/password completed),
         // tell Electron so it can re-probe the permission state immediately.
-        if authSheetVisible && !settingsInfo.hasModalSheet {
+        if authSheetVisible && !hasModalSheet {
             authSheetVisible = false
             emit(["type": "auth-sheet-dismissed"])
-        } else if !authSheetVisible && settingsInfo.hasModalSheet {
+        } else if !authSheetVisible && hasModalSheet {
             authSheetVisible = true
         }
 
         // Hide while System Settings shows a modal sheet (auth dialog).
         // The panel reappears automatically on the next tick after dismissal.
-        if settingsInfo.hasModalSheet && !isDragging {
+        if hasModalSheet && !isDragging {
             panel.orderOut(nil)
             switchGuideController.prepareForDismissal()
             switchPanel.orderOut(nil)
@@ -966,6 +973,38 @@ private final class PermissionGuideCoordinator {
         }
     }
 
+    /**
+     * Prefer explicit AX modal relationships. When AX is unavailable, baseline
+     * every existing Settings window and only treat a newly appearing,
+     * top-attached sheet candidate during the switch step as modal.
+     */
+    private func resolveModalSheetState(_ info: SystemSettingsWindowInfo) -> Bool {
+        if let hasModalSheet = info.axHasModalSheet {
+            knownFallbackWindowIDs.formUnion(info.layerZeroWindowIDs)
+            fallbackModalWindowIDs.removeAll()
+            return hasModalSheet
+        }
+        if !didEstablishFallbackWindowBaseline {
+            didEstablishFallbackWindowBaseline = true
+            knownFallbackWindowIDs = info.layerZeroWindowIDs
+            fallbackModalWindowIDs.removeAll()
+            return false
+        }
+        guard presentation == .switchGuide, !isDragging else {
+            knownFallbackWindowIDs.formUnion(info.layerZeroWindowIDs)
+            fallbackModalWindowIDs.removeAll()
+            return false
+        }
+        fallbackModalWindowIDs.formUnion(
+            info.attachedSheetCandidateWindowIDs.subtracting(knownFallbackWindowIDs)
+        )
+        fallbackModalWindowIDs.formIntersection(info.layerZeroWindowIDs)
+        if fallbackModalWindowIDs.isEmpty {
+            knownFallbackWindowIDs.formUnion(info.layerZeroWindowIDs)
+        }
+        return !fallbackModalWindowIDs.isEmpty
+    }
+
     private func attachedPanelFrame(settingsFrame: NSRect) -> NSRect {
         var origin = NSPoint(
             x: settingsFrame.maxX - hostSize.width,
@@ -1023,7 +1062,9 @@ private final class PermissionGuideCoordinator {
 private struct SystemSettingsWindowInfo {
     let frame: NSRect
     let windowNumber: Int
-    let hasModalSheet: Bool
+    let axHasModalSheet: Bool?
+    let layerZeroWindowIDs: Set<CGWindowID>
+    let attachedSheetCandidateWindowIDs: Set<CGWindowID>
 }
 
 /** Read an AX array without treating an unavailable accessibility tree as modal. */
@@ -1080,30 +1121,36 @@ private func systemSettingsHasModalPresentation(pid: pid_t) -> Bool? {
 
 /**
  * AX is normally unavailable to this accessory helper because the user grants
- * Accessibility to CuaDriver, not to the helper. In that case, recognize only
- * a smaller layer-zero window geometrically attached to the main Settings
- * window. Independent Settings windows are not mistaken for modal sheets.
+ * Accessibility to CuaDriver, not to the helper. Return only strict AppKit
+ * sheet-shaped candidates here; the coordinator separately requires that the
+ * candidate is new and appears during the switch step.
  */
-private func systemSettingsHasModalFallback(
+private func systemSettingsAttachedSheetCandidates(
     windows: [(id: CGWindowID, frame: CGRect)],
     mainWindowID: CGWindowID,
     mainFrame: CGRect
-) -> Bool {
+) -> Set<CGWindowID> {
     let mainArea = mainFrame.width * mainFrame.height
-    guard mainArea > 0 else { return false }
-    return windows.contains { candidate in
-        guard candidate.id != mainWindowID else { return false }
+    guard mainArea > 0 else { return [] }
+    return Set(windows.compactMap { candidate -> CGWindowID? in
+        guard candidate.id != mainWindowID else { return nil }
         let frame = candidate.frame
         let area = frame.width * frame.height
         guard frame.width >= 180,
               frame.height >= 100,
-              area < mainArea * 0.9 else { return false }
+              area < mainArea * 0.9 else { return nil }
         let intersection = frame.intersection(mainFrame)
-        guard !intersection.isNull else { return false }
+        guard !intersection.isNull else { return nil }
         let intersectionArea = intersection.width * intersection.height
         let center = CGPoint(x: frame.midX, y: frame.midY)
-        return mainFrame.contains(center) && intersectionArea >= area * 0.8
-    }
+        let topAttachmentLimit = mainFrame.minY + min(140, mainFrame.height * 0.25)
+        guard mainFrame.contains(center),
+              intersectionArea >= area * 0.9,
+              abs(frame.midX - mainFrame.midX) <= mainFrame.width * 0.18,
+              frame.minY >= mainFrame.minY - 8,
+              frame.minY <= topAttachmentLimit else { return nil }
+        return candidate.id
+    })
 }
 
 /** Finds the largest visible layer-zero window owned by System Settings. */
@@ -1132,16 +1179,16 @@ private func systemSettingsWindowInfo(pid: pid_t) -> SystemSettingsWindowInfo? {
         bestWindowID = cgWindowID
     }
     guard let cgFrame = bestRect else { return nil }
-    let hasModalSheet = systemSettingsHasModalPresentation(pid: pid)
-        ?? systemSettingsHasModalFallback(
+    return SystemSettingsWindowInfo(
+        frame: appKitRect(fromQuartz: cgFrame),
+        windowNumber: Int(bestWindowID),
+        axHasModalSheet: systemSettingsHasModalPresentation(pid: pid),
+        layerZeroWindowIDs: Set(layerZeroWindows.map(\.id)),
+        attachedSheetCandidateWindowIDs: systemSettingsAttachedSheetCandidates(
             windows: layerZeroWindows,
             mainWindowID: bestWindowID,
             mainFrame: cgFrame
         )
-    return SystemSettingsWindowInfo(
-        frame: appKitRect(fromQuartz: cgFrame),
-        windowNumber: Int(bestWindowID),
-        hasModalSheet: hasModalSheet
     )
 }
 

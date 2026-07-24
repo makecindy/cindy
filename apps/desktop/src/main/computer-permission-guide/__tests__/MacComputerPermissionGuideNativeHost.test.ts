@@ -90,8 +90,10 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('kAXSheetRole');
     expect(source).toContain('kAXModalAttribute');
     expect(source).toContain('AXIsProcessTrusted()');
-    expect(source).toContain('systemSettingsHasModalFallback');
-    expect(source).toContain('intersectionArea >= area * 0.8');
+    expect(source).toContain('systemSettingsAttachedSheetCandidates');
+    expect(source).toContain('didEstablishFallbackWindowBaseline');
+    expect(source).toContain('presentation == .switchGuide');
+    expect(source).toContain('intersectionArea >= area * 0.9');
     expect(source).not.toContain('layerZeroCount');
   });
 

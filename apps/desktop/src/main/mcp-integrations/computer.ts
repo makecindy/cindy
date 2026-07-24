@@ -1980,7 +1980,7 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
     args: invocation.args,
     env: {
       ...inheritedProcessEnv(),
-      ...invocation.env,
+      ...(invocation.env ?? {}),
     },
     stderr: 'pipe',
   });
