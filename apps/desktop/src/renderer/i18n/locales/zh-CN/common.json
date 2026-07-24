@@ -1,4 +1,7 @@
 {
+  "contentModeration": {
+    "blocked": "抱歉，当前问题暂时无法为您解答，请调整提问表述。"
+  },
   "ipcError": {
     "SESSION_RUNNING": "当前会话正在执行任务，请稍后再试。",
     "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（会话仍使用原来源）。等其他任务结束后再试。"
@@ -1139,6 +1142,7 @@
           "name": "显示名称",
           "namePlaceholder": "我的 AI 提供商",
           "protocols": "Runtime",
+          "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API 密钥",
@@ -1156,11 +1160,17 @@
           "addHeader": "添加请求头",
           "removeRow": "删除该行"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses（原生）",
+          "chat": "Chat Completions（Cindy 桥接）",
+          "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
+          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型,留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 遵循 OpenAI 协议(用 Bearer 鉴权),需要提供支持 Responses API 的模型。填该来源用于 Codex 的 baseURL、密钥与模型,留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接仅支持 Chat Completions 的供应商。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1290,6 +1300,7 @@
         "authorizeFailed": "「{{name}}」授权失败,请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
+        "bridgedNote": "Cindy 桥接（Chat Completions）",
         "docsLink": "查看接入文档",
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加,稍后在详情里刷新",
@@ -1548,7 +1559,8 @@
       "save": "保存",
       "overLimit": " — 已超出长度限制",
       "toast": {
-        "saved": "自定义指令已保存"
+        "saved": "自定义指令已保存",
+        "saveFailed": "自定义指令保存失败"
       }
     },
     "chipMetrics": {
@@ -2062,12 +2074,14 @@
       },
       "tips": {
         "cindy": "Cindy 是官方提供的共享机器人:无需申请任何凭证,连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人机器人用你自己申请的凭证接入飞书 / Discord:机器人完全归你,需要自行创建应用并填写配置。"
+        "personal": "个人机器人用你自己申请的凭证接入飞书 / Discord:机器人完全归你,需要自行创建应用并填写配置。",
+        "personalFeishuOnly": "个人机器人用你自己申请的凭证接入飞书:机器人完全归你,需要自行创建应用并填写配置。"
       },
       "defaults": {
         "title": "新会话配置",
         "description": "从飞书、Slack 或 Discord 发起新会话时，会使用这里的 Agent 和模型配置。修改后只影响新会话；已有 Discord 私聊请发送 /new 才会应用新配置。",
         "localDescription": "从飞书或 Discord 发起新会话时，会使用这里的 Agent 和模型配置。修改后只影响新会话；已有 Discord 私聊请发送 /new 才会应用新配置。",
+        "feishuOnlyDescription": "从飞书发起新会话时，会使用这里的 Agent 和模型配置。修改后只影响新会话。",
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
         "loading": "正在读取新会话配置…",
@@ -2841,11 +2855,10 @@
   "legacyMigration": {
     "title": "迁移旧版本数据",
     "description": "检测到本机存有旧版本的数据。历史会话和媒体文件将迁移到新的数据位置。若旧版应用正在运行，请先完全退出它；迁移期间请保持 {{appName}} 打开。注意：已授权的第三方密钥与凭证无法随数据迁移，迁移完成后需要在设置中重新授权或重新填写。",
-    "confirm": "确定",
+    "confirm": "继续",
     "migrating": "正在迁移数据，请稍候…",
     "failedTitle": "迁移未完成",
-    "failedDescription": "本次数据迁移未能完成。你可以继续使用 {{appName}}，下次登录时会自动重试。",
-    "continue": "继续"
+    "failedDescription": "本次数据迁移未能完成。你可以继续使用 {{appName}}，下次登录时会自动重试。"
   },
   "splash": {
     "tips": {
@@ -3987,7 +4000,8 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
-        "workflow": "Workflow"
+        "workflow": "Workflow",
+        "shell": "后台命令"
       },
       "status": {
         "running": "运行中",
@@ -3995,6 +4009,7 @@
         "failed": "失败",
         "stopped": "已停止"
       },
+      "stop": "停止该任务",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} 次工具调用",
       "toolUses_other": "{{count}} 次工具调用",
@@ -4078,8 +4093,11 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
+      "bashStatus_one": "后台任务运行中（{{count}} 个）…",
+      "bashStatus_other": "后台任务运行中（{{count}} 个）…",
       "stopAll": "全部停止",
       "stopAllTitle": "关闭该会话的后台进程，停止全部后台子任务（会话可继续使用）",
+      "stopBashTitle": "停止该会话仍在运行的后台任务（不关闭会话进程）",
       "stopping": "停止中…"
     },
     "interruptedBanner": {

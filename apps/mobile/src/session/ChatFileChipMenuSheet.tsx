@@ -16,6 +16,7 @@
 
 import { Copy, Eye, FolderOpen, MessageSquarePlus, Share as ShareIcon } from 'lucide-react-native';
 import { useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { ContextSheet, ContextSheetGroup, ContextSheetRow } from '@/session/ContextSheet';
 import {
@@ -44,6 +45,7 @@ export function ChatFileChipMenuSheet({
   shareBusy,
   onAction,
 }: ChatFileChipMenuSheetProps) {
+  const { t } = useTranslation();
   const { colors } = useTheme();
   // target 变 null 时不能立即卸载 Modal(会丢下拉收起动画,规则 7 视觉连续性)。
   // 与 ModelPickerSheet 同模式:visible 布尔驱动开/关动画,关闭动画期间用
@@ -75,7 +77,7 @@ export function ChatFileChipMenuSheet({
       title={chatFileChipMenuTitle(renderTarget)}
       visible={target != null}
     >
-      <ContextSheetGroup label={renderTarget.kind === 'directory' ? '文件夹' : '文件'}>
+      <ContextSheetGroup label={renderTarget.kind === 'directory' ? t('composer.attachments.fileMenu.folder') : t('composer.attachments.fileMenu.file')}>
         {chatFileChipMenuRows(renderTarget).map((row) => (
           <ContextSheetRow
             busy={row.key === 'share' && shareBusy}

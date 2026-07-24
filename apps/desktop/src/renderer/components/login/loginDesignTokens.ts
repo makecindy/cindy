@@ -37,6 +37,19 @@ export const LOGIN_GROUP = {
   height: 560,
 } as const;
 
+/**
+ * 登录面板下方的本地模式操作区。
+ *
+ * 这块区域不再脱离登录 stage 固定在窗口底部：stage 会为它预留空间，避免小窗口
+ * 中与第三方登录圆钮重叠。reservedHeight 包含 stage 与操作区间距、两行文案的
+ * 最大高度，以及窗口底部安全边距。
+ */
+export const LOGIN_LOCAL_MODE = {
+  gap: 16,
+  reservedHeight: 124,
+  descriptionLineHeight: 18,
+} as const;
+
 /** 面板与面板内组件几何(figma §5.1/§4;wave4 面板描边 1px inside 368:1383)。 */
 export const PANEL = { width: 680, height: 440, radius: 36 } as const;
 export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
@@ -103,6 +116,10 @@ export const LOGIN_COLORS = {
   panelBg: 'var(--login-panel-bg)',
   panelBorder: 'var(--login-panel-border)',
   controlBg: 'var(--login-control-bg)',
+  /** 方式行/返回钮底(暗色与输入框底分化,figma 549:850/549:897;色值见 themes/colors.ts) */
+  actionControlBg: 'var(--login-action-control-bg)',
+  /** 返回钮描边(亮白/暗深灰,figma 549:897;色值见 themes/colors.ts) */
+  backBorder: 'var(--login-back-border)',
   controlBorder: 'var(--login-control-border)',
   controlBorderActive: 'var(--login-control-border-active)',
   controlBorderDisabled: 'var(--login-control-border-disabled)',
@@ -114,6 +131,9 @@ export const LOGIN_COLORS = {
   primaryButtonBorder: 'var(--login-primary-button-border)',
   primaryButtonText: 'var(--login-primary-button-text)',
   disabledOverlay: 'var(--login-disabled-button-overlay)',
+  /** disabled 主按钮底/字(两模式同构深底浅字,暗色不反相;figma Disable 态) */
+  disabledButtonBg: 'var(--login-disabled-button-bg)',
+  disabledButtonText: 'var(--login-disabled-button-text)',
   invertedButtonBorder: 'var(--login-inverted-button-border)',
   errorFg: 'var(--login-error-fg)',
   brandAccent: 'var(--login-brand-accent)',

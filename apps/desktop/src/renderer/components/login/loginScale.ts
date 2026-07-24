@@ -15,9 +15,9 @@
 export const LOGIN_STAGE_WIDTH = 1819;
 export const LOGIN_STAGE_HEIGHT = 2098;
 
-/** demo desktopScale 逐字移植:min(1, h/2098, (w-24)/680)。 */
+/** demo desktopScale 逐字移植:min(1, h/LOGIN_STAGE_HEIGHT, (w-24)/680)。 */
 export function desktopScale(w: number, h: number): { scale: number } {
-  const heightFit = h / 2098;
+  const heightFit = h / LOGIN_STAGE_HEIGHT;
   const panelGuard = (w - 24) / 680; // 唯一宽度介入:极端窄高组合下保障 680 宽功能面板不被裁
   return { scale: Math.min(1, heightFit, panelGuard) };
 }
@@ -32,4 +32,86 @@ export function sloganShiftX(viewportWidth: number, scale: number): number {
   const visibleHalf = viewportWidth / 2 / scale;
   const overflow = 1647.22 - 909.5 + 20 - visibleHalf;
   return overflow > 0 ? -Math.ceil(overflow) : 0;
+}
+
+/**
+ * 面板恒定缩放(用户拍板 2026-07-23,design.md §11):1819×2098 为 2x 稿,
+ * 0.5 = 标准 1:1 逻辑尺寸——输入框/文字在任何窗口下保持设计标准大小,
+ * 不再随窗口高度线性缩小(desktopScale 仅品牌层继续使用)。
+ */
+export const PANEL_FIXED_SCALE = 0.5;
+
+export interface PanelPlacement {
+  /** 恒定 PANEL_FIXED_SCALE。 */
+  scale: number;
+  /** 面板水平中心(屏幕 px,配合 translateX(-50%))。 */
+  centerX: number;
+  /** 面板顶边(屏幕 px,已含品牌避让与视口 clamp)。 */
+  topY: number;
+}
+
+/**
+ * 面板定位(用户拍板 2026-07-23,design.md §11):
+ *   - 尺寸恒定 0.5(登录整体组 680×560 设计px → 340×280 逻辑px);
+ *   - 垂直锚点跟随品牌层 desktopScale 画布(组中心 y=groupY+280 映射到屏幕),
+ *     再依次 clamp:① 品牌避让——面板顶 ≥ 立绘底(设计 y=1209,figma §4.11)+24;
+ *     ② 功能优先——面板底 ≤ 视口底-24(压过品牌避让,小窗允许叠上立绘渐隐区,
+ *     面板层 z-[9990] 本就盖品牌层 z-[9980]);额外底部内容通过 bottomReserve
+ *     参与此 clamp;③ 顶部保底 24。
+ *   - 水平:组中心 x=910 与画布中线 909.5 的 0.5 设计px 偏移按恒定缩放折算。
+ */
+export function panelPlacement(
+  w: number,
+  h: number,
+  groupY: number,
+  bottomReserve = 0,
+): PanelPlacement {
+  const { scale: brandScale } = desktopScale(w, h);
+  const panelHeight = 560 * PANEL_FIXED_SCALE; // 登录整体组高 560(figma §5.1)
+  const anchorCenterY = h / 2 + (groupY + 280 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
+  const brandBottomY = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
+  let topY = anchorCenterY - panelHeight / 2;
+  topY = Math.max(topY, brandBottomY + 24);
+  // 额外底部内容(例如本地模式入口)属于登录组的一部分，必须在这里预留空间；
+  // 否则视口底 clamp 会把它和 social row 压到同一条垂直区域。
+  topY = Math.min(topY, h - 24 - panelHeight - bottomReserve);
+  topY = Math.max(topY, 24);
+  return {
+    scale: PANEL_FIXED_SCALE,
+    centerX: w / 2 + (910 - LOGIN_STAGE_WIDTH / 2) * PANEL_FIXED_SCALE,
+    topY,
+  };
+}
+
+export interface BrandPlacement {
+  /** 品牌画布缩放(常态 = desktopScale;压缩档小于它)。 */
+  scale: number;
+  /** 画布垂直位移(屏幕 px,负值上移;常态 0)。 */
+  translateY: number;
+}
+
+/**
+ * 品牌块整体让位(用户拍板 2026-07-23 第二轮,design.md §11):
+ * 字标任何窗口必须完整可见,且绝不遮挡立绘脸部/黑猫——后者由「构图冻结」保证:
+ * 品牌块(立绘 275..1209,字标底 1191 / Slogan 底 995 均在其内)只作为整体
+ * 移动/缩放,字标与立绘的设计相对位(压胸口渐隐区)永不改变。三级规则:
+ *   ① 常态:v3.1 desktopScale + 画布居中(translateY=0),大窗零变化;
+ *   ② 面板上侵:块底越过面板顶-12 → 整块上移补偿,至块顶触及视口顶 12 为止;
+ *   ③ 极矮窗:上移仍不够 → 整块等比压缩至恰好塞进 [12, 面板顶-12]。
+ * 面板锚点取 yDefault(sso 态差 2 设计px,由 12px gap 吸收)。
+ */
+export function brandPlacement(w: number, h: number, bottomReserve = 0): BrandPlacement {
+  const { scale: base } = desktopScale(w, h);
+  const { topY: panelTop } = panelPlacement(w, h, 1229, bottomReserve);
+  const blockTop = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * base;
+  const blockBottom = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * base;
+  const limit = panelTop - 12;
+  const overflow = blockBottom - limit;
+  if (overflow <= 0) return { scale: base, translateY: 0 };
+  const maxShift = blockTop - 12;
+  if (overflow <= maxShift) return { scale: base, translateY: -overflow };
+  // 压缩档:块高(934 设计px)恰好塞进 [12, limit];画布仍中心缩放,位移把块顶放到 12。
+  const scale2 = Math.max(limit - 12, 0) / 934;
+  const blockTop2 = h / 2 + (275 - LOGIN_STAGE_HEIGHT / 2) * scale2;
+  return { scale: scale2, translateY: 12 - blockTop2 };
 }

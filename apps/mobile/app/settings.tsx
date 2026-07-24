@@ -16,10 +16,13 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronDown, ChevronRight, X } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, X } from 'lucide-react-native';
+import { useTranslation } from 'react-i18next';
 import type { DeviceView } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { loginText } from '@/auth/loginMessages';
+import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
+import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
 import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import {
@@ -56,6 +59,8 @@ type SelfDeviceNameQueuedWrite =
   | { kind: 'rename'; name: string; options: SelfDeviceNameSaveOptions }
   | { kind: 'reset' };
 const SETTINGS_DEVICE_TIMEOUT_MS = 12_000;
+// 显示语言选项:「跟随系统」在前,4 种具体语言在后(与 desktop LanguageSection 同序)。
+const LANGUAGE_OPTIONS: readonly LocalePreference[] = ['system', ...SUPPORTED_LOCALES];
 const PRIVACY_POLICY_URL = AUTH_REGION === 'cn'
   ? 'https://cindy.cn/privacy/'
   : 'https://cindy.app/privacy/';
@@ -65,6 +70,8 @@ export default function SettingsScreen() {
   const { colors } = useTheme();
   const router = useRouter();
   const auth = useAuth();
+  const { t } = useTranslation();
+  const { locale, setLocale } = useLocale();
   const { status } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -106,15 +113,17 @@ export default function SettingsScreen() {
       userId: auth.user?.id,
       userName: auth.user?.name,
     }),
-    [auth.deviceId, auth.user?.email, auth.user?.id, auth.user?.name, deviceName, status],
+    // t 依赖:buildMobileSettingsOverview 内部走 i18n.t,语言切换时(t 身份变化)重建展示模型。
+    [auth.deviceId, auth.user?.email, auth.user?.id, auth.user?.name, deviceName, status, t],
   );
 
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const updatesEnabled = Updates.isEnabled;
   // 当前运行的 OTA bundle 信息(只读),折进「调试」分组,用于核验热更是否生效。
   const { currentlyRunning } = useUpdates();
-  const updateInfoRows = useMemo(() => buildMobileUpdateInfoRows(currentlyRunning), [currentlyRunning]);
-  const otaVersion = useMemo(() => currentMobileOtaVersion(currentlyRunning), [currentlyRunning]);
+  // t 依赖同 overview:行构造走 i18n.t,语言切换时重算。
+  const updateInfoRows = useMemo(() => buildMobileUpdateInfoRows(currentlyRunning), [currentlyRunning, t]);
+  const otaVersion = useMemo(() => currentMobileOtaVersion(currentlyRunning), [currentlyRunning, t]);
   const canaryChannel = useCanaryChannelGate(IS_OTA_SELFHOST);
   // 自建变体的统一入口先查整包;无整包时再由 checkForUpdate 继续查 JS OTA。
   const { checkNow: checkBundleUpdate } = useBundleUpdatePrompt({
@@ -199,16 +208,16 @@ export default function SettingsScreen() {
       });
       if (outcome.kind === 'bundle-update-available') {
         setUpdatePhase('idle');
-        setUpdateMessage('发现整包更新');
+        setUpdateMessage(t('settings.version.bundleUpdateFound'));
       } else if (outcome.kind === 'up-to-date') {
         setUpdatePhase('uptodate');
-        setUpdateMessage('已是最新版本');
+        setUpdateMessage(t('settings.version.upToDate'));
       } else if (outcome.kind === 'ota-unavailable') {
         setUpdatePhase('uptodate');
-        setUpdateMessage('整包已是最新，当前版本不支持热更新');
+        setUpdateMessage(t('settings.version.bundleUpToDateNoOta'));
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
-        setUpdateMessage('更新已下载，正在重启');
+        setUpdateMessage(t('settings.version.downloadedRestarting'));
       } else if (outcome.kind === 'busy') {
         setUpdatePhase('idle');
       } else {
@@ -218,7 +227,7 @@ export default function SettingsScreen() {
     } finally {
       updateCheckInFlightRef.current = false;
     }
-  }, [checkBundleUpdate, updateCheckEnabled, updatesEnabled]);
+  }, [checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
 
   const updateSelfDeviceNameDraft = useCallback((value: string) => {
     selfDeviceNameDraftRef.current = value;
@@ -229,11 +238,11 @@ export default function SettingsScreen() {
   const saveSelfDeviceNameDraft = useCallback(async (rawName: string, options: SelfDeviceNameSaveOptions = {}) => {
     const name = rawName.trim();
     if (name.length === 0) {
-      setSelfDeviceNameMessage('设备名称不能为空。');
+      setSelfDeviceNameMessage(t('settings.deviceNameEditor.emptyError'));
       return;
     }
     if (!auth.deviceId) {
-      setSelfDeviceNameMessage('设备还在初始化，请稍后再试。');
+      setSelfDeviceNameMessage(t('settings.deviceNameEditor.deviceInitializing'));
       return;
     }
     if (selfDeviceNameWriteInFlightRef.current) {
@@ -251,7 +260,7 @@ export default function SettingsScreen() {
         return;
       }
       selfDeviceNameQueuedWriteRef.current = { kind: 'rename', name, options };
-      setSelfDeviceNameMessage('保存中…');
+      setSelfDeviceNameMessage(t('settings.deviceNameEditor.saving'));
       return;
     }
     if (name === deviceName.trim()) {
@@ -264,7 +273,7 @@ export default function SettingsScreen() {
     selfDeviceNameWriteInFlightRef.current = true;
     selfDeviceNameCurrentWriteRef.current = { kind: 'rename', name, options };
     setSelfDeviceNameSaving(true);
-    setSelfDeviceNameMessage('保存中…');
+    setSelfDeviceNameMessage(t('settings.deviceNameEditor.saving'));
     try {
       const res = await auth.apiFetch<{ deviceId: string; name: string }>(
         `/api/device-link/devices/${encodeURIComponent(auth.deviceId)}`,
@@ -278,7 +287,7 @@ export default function SettingsScreen() {
       const draftStillCurrent = options.acceptClosedDraft === true || selfDeviceNameDraftRef.current.trim() === name;
       if (selfDeviceNameSaveSeqRef.current === seq && draftStillCurrent) {
         setSelfDeviceName(res.name);
-        setSelfDeviceNameMessage('已保存。');
+        setSelfDeviceNameMessage(t('settings.deviceNameEditor.saved'));
       }
     } catch (err) {
       if (selfDeviceNameSaveSeqRef.current === seq) setSelfDeviceNameMessage(formatRemoteError(err));
@@ -290,16 +299,16 @@ export default function SettingsScreen() {
         selfDeviceNameRunQueuedWriteRef.current();
       }
     }
-  }, [auth, deviceName, systemDeviceName]);
+  }, [auth, deviceName, systemDeviceName, t]);
 
   const resetSelfDeviceName = useCallback(async () => {
     if (!auth.deviceId) {
-      setSelfDeviceNameMessage('设备还在初始化，请稍后再试。');
+      setSelfDeviceNameMessage(t('settings.deviceNameEditor.deviceInitializing'));
       return;
     }
     if (selfDeviceNameWriteInFlightRef.current) {
       selfDeviceNameQueuedWriteRef.current = { kind: 'reset' };
-      setSelfDeviceNameMessage('正在恢复默认名称…');
+      setSelfDeviceNameMessage(t('settings.deviceNameEditor.restoringDefault'));
       return;
     }
 
@@ -308,7 +317,7 @@ export default function SettingsScreen() {
     selfDeviceNameWriteInFlightRef.current = true;
     selfDeviceNameCurrentWriteRef.current = { kind: 'reset' };
     setSelfDeviceNameSaving(true);
-    setSelfDeviceNameMessage('正在恢复默认名称…');
+    setSelfDeviceNameMessage(t('settings.deviceNameEditor.restoringDefault'));
     try {
       const res = await auth.apiFetch<{ deviceId: string; name: string; manualName?: string | null }>(
         `/api/device-link/devices/${encodeURIComponent(auth.deviceId)}`,
@@ -322,7 +331,7 @@ export default function SettingsScreen() {
       if (selfDeviceNameSaveSeqRef.current === seq) {
         setSelfDeviceName(res.name);
         updateSelfDeviceNameDraft(res.name);
-        setSelfDeviceNameMessage('已恢复默认名称。');
+        setSelfDeviceNameMessage(t('settings.deviceNameEditor.restoredDefault'));
       }
     } catch (err) {
       if (selfDeviceNameSaveSeqRef.current === seq) setSelfDeviceNameMessage(formatRemoteError(err));
@@ -334,7 +343,7 @@ export default function SettingsScreen() {
         selfDeviceNameRunQueuedWriteRef.current();
       }
     }
-  }, [auth, updateSelfDeviceNameDraft]);
+  }, [auth, t, updateSelfDeviceNameDraft]);
 
   selfDeviceNameRunQueuedWriteRef.current = () => {
     const queued = selfDeviceNameQueuedWriteRef.current;
@@ -351,7 +360,7 @@ export default function SettingsScreen() {
     if (!selfDeviceNameEditing) return;
     const name = selfDeviceNameDraft.trim();
     if (name.length === 0) {
-      setSelfDeviceNameMessage('设备名称不能为空。');
+      setSelfDeviceNameMessage(t('settings.deviceNameEditor.emptyError'));
       return;
     }
     if (name === deviceName.trim()) {
@@ -362,7 +371,7 @@ export default function SettingsScreen() {
       void saveSelfDeviceNameDraft(name);
     }, 650);
     return () => clearTimeout(timer);
-  }, [deviceName, saveSelfDeviceNameDraft, selfDeviceNameDraft, selfDeviceNameEditing, selfDeviceNameSaving]);
+  }, [deviceName, saveSelfDeviceNameDraft, selfDeviceNameDraft, selfDeviceNameEditing, selfDeviceNameSaving, t]);
 
   const openSelfDeviceNameEditor = useCallback(() => {
     updateSelfDeviceNameDraft(deviceName);
@@ -426,13 +435,13 @@ export default function SettingsScreen() {
           await syncPushRegistration({ enabled: false, apiFetch: auth.apiFetch });
         } catch {
           await markPendingUnregister().catch(() => undefined);
-          setPushMessage('已关闭。当前网络下注销未完成,将在下次联网时自动补上。');
+          setPushMessage(t('settings.notifications.unregisterQueued'));
         }
         return;
       }
       const result = await syncPushRegistration({ enabled: true, apiFetch: auth.apiFetch });
       if (result === 'permission-denied') {
-        setPushMessage('系统通知权限未开启。请到 iOS「设置 → 通知 → Cindy」允许通知后重试。');
+        setPushMessage(t('settings.notifications.permissionDenied'));
         return; // 权限被拒:开关保持关闭,不落盘
       }
       await writePushEnabled(true);
@@ -442,7 +451,7 @@ export default function SettingsScreen() {
     } finally {
       setPushBusy(false);
     }
-  }, [auth.apiFetch, pushBusy, pushEnabled]);
+  }, [auth.apiFetch, pushBusy, pushEnabled, t]);
 
   const toggleDebug = useCallback(() => {
     configureCollapseAnimation();
@@ -451,9 +460,9 @@ export default function SettingsScreen() {
 
   const avatarLabel = (overview.header.name.trim()[0] ?? '?').toUpperCase();
   const updateBusy = updatePhase === 'checking' || updatePhase === 'downloading';
-  const updateButtonLabel = updatePhase === 'checking' ? '检查中'
-    : updatePhase === 'downloading' ? '更新中'
-    : '检查更新';
+  const updateButtonLabel = updatePhase === 'checking' ? t('settings.version.checking')
+    : updatePhase === 'downloading' ? t('settings.version.updating')
+    : t('settings.version.checkAction');
 
   if (selfDeviceNameEditing) {
     return (
@@ -472,7 +481,7 @@ export default function SettingsScreen() {
       <ScreenHeader
         backTestID="settings.backButton"
         onBack={() => goBackGuarded(router)}
-        title="设置"
+        title={t('settings.title')}
         titleTestID="settings.title"
       />
 
@@ -501,28 +510,28 @@ export default function SettingsScreen() {
         </View>
 
         {/* 版本:只保留统一检查入口,自建线严格先查整包、无整包再查热更。 */}
-        <SettingsGroup title="版本">
+        <SettingsGroup title={t('settings.version.sectionTitle')}>
           {[
             <View key="version" style={styles.versionRow} testID="settings.version">
               <View style={styles.versionTexts}>
-                <Text style={styles.rowLabel}>当前版本</Text>
-                <Text style={styles.versionValue} numberOfLines={1}>整包版本 {appVersion}</Text>
-                <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">热更版本 {otaVersion}</Text>
+                <Text style={styles.rowLabel}>{t('settings.version.currentLabel')}</Text>
+                <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
+                <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">{t('settings.version.otaVersion', { version: otaVersion })}</Text>
                 {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x);仅自建线且已注入时显示 */}
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
-                  <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">桌面版 {DESKTOP_PACKAGE_VERSION}</Text>
+                  <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.desktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
                 ) : null}
                 {updateMessage ? (
                   <Text style={styles.rowDetail} numberOfLines={2} testID="settings.updateMessage">{updateMessage}</Text>
                 ) : !REVIEW_MODE && !updatesEnabled ? (
-                  <Text style={styles.rowDetail} numberOfLines={1}>开发版，热更不可用</Text>
+                  <Text style={styles.rowDetail} numberOfLines={1}>{t('settings.version.devNoOta')}</Text>
                 ) : null}
               </View>
               {/* 审核模式(清单 review 命中当前二进制版本):隐藏检查更新入口,版本号照常展示 */}
               {!REVIEW_MODE ? (
                 <MainWindowActionButton
                   action={{
-                    accessibilityLabel: updateBusy ? '正在检查更新' : '检查更新',
+                    accessibilityLabel: updateBusy ? t('settings.version.checkingAccessibility') : t('settings.version.checkAction'),
                     busy: updateBusy,
                     disabled: !updateCheckEnabled,
                     label: updateButtonLabel,
@@ -540,20 +549,20 @@ export default function SettingsScreen() {
 
         {/* 通知:任务完成推送(仅 iOS;Android 待 FCM/厂商通道) */}
         {isPushSupported() ? (
-          <SettingsGroup title="通知">
+          <SettingsGroup title={t('settings.notifications.sectionTitle')}>
             {[
               <View key="push-toggle" style={styles.switchRow} testID="settings.pushToggleRow">
                 <View style={styles.switchTexts}>
-                  <Text style={styles.rowLabel}>任务完成通知</Text>
+                  <Text style={styles.rowLabel}>{t('settings.notifications.taskDone')}</Text>
                   <Text style={styles.hint}>
-                    电脑上的任务完成、出错或需要你回复时,推送到这台手机;完成或需要回复时附带最新回复内容。
+                    {t('settings.notifications.taskDoneHint')}
                   </Text>
                   {pushMessage ? (
                     <Text style={styles.hint} testID="settings.pushMessage">{pushMessage}</Text>
                   ) : null}
                 </View>
                 <Switch
-                  accessibilityLabel="任务完成通知"
+                  accessibilityLabel={t('settings.notifications.taskDone')}
                   disabled={pushBusy}
                   onValueChange={() => void togglePushNotifications()}
                   testID="settings.pushToggle"
@@ -565,13 +574,29 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
+        {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
+        <SettingsGroup
+          footer={t('settings.language.hint')}
+          title={t('settings.language.title')}
+        >
+          {LANGUAGE_OPTIONS.map((option) => (
+            <LanguageOptionRow
+              key={option}
+              label={t(`settings.language.options.${option}`)}
+              onPress={() => setLocale(option)}
+              selected={locale === option}
+              testID={`settings.language.${option}`}
+            />
+          ))}
+        </SettingsGroup>
+
         {/* 关于这台手机 */}
         {aboutSection ? (
           <SettingsGroup title={aboutSection.title}>
             {aboutSection.rows.map((row) => (
               row.id === 'about.deviceName' ? (
                 <ActionInfoRow
-                  accessibilityLabel={`修改${row.label}`}
+                  accessibilityLabel={t('settings.about.editAccessibility', { label: row.label })}
                   detail={selfDeviceNameMessage ?? row.detail}
                   key={row.id}
                   label={row.label}
@@ -611,20 +636,20 @@ export default function SettingsScreen() {
         ) : null}
 
         {/* 法律信息:隐私政策始终显示;App 备案号仅国内版显示。 */}
-        <SettingsGroup title="备案信息">
+        <SettingsGroup title={t('settings.legal.sectionTitle')}>
           <ActionInfoRow
-            accessibilityLabel="打开隐私政策"
+            accessibilityLabel={t('settings.legal.openPrivacyPolicy')}
             accessibilityRole="link"
             key="privacy-policy"
-            label="隐私政策"
+            label={t('settings.legal.privacyPolicy')}
             onPress={openPrivacyPolicy}
             testID="settings.privacyPolicy"
-            value="查看"
+            value={t('settings.legal.view')}
           />
           {AUTH_REGION === 'cn' ? (
             <InfoRow
               key="app-filing-number"
-              label="App 备案号"
+              label={t('settings.legal.appFilingNumber')}
               testID="settings.appFilingNumber"
               value="沪ICP备11033765号-89A"
             />
@@ -634,15 +659,15 @@ export default function SettingsScreen() {
         {/* 账号操作:退出保持明确；注销账号仅保留低调的次要文字入口。 */}
         <View style={styles.dangerArea} testID="settings.accountActions">
           <Text style={styles.dangerHint}>
-            退出只会清除这台手机上的登录态和本地远程镜像，不会影响电脑端会话。
+            {t('settings.account.logoutHint')}
           </Text>
           <MainWindowActionGroup
             dangerActions={[
               {
-                accessibilityLabel: loggingOut ? '正在退出登录' : '退出登录',
+                accessibilityLabel: loggingOut ? t('settings.account.loggingOutAccessibility') : t('settings.account.logout'),
                 busy: loggingOut,
                 disabled: loggingOut,
-                label: loggingOut ? '退出中' : '退出登录',
+                label: loggingOut ? t('settings.account.loggingOut') : t('settings.account.logout'),
                 onPress: () => void logout(),
                 testID: 'settings.logoutButton',
                 tone: 'danger',
@@ -682,14 +707,17 @@ function groupChevron(expanded: boolean, colors: ThemeColors): ReactNode {
 /**
  * iOS 风格分组:组标题在外侧 gutter,组内一块统一卡片,行间用 inset 分隔线。
  * 标题可点(onToggle)时承担折叠开关。rows 为空则不渲染卡片(折叠态)。
+ * footer 为卡片下方 gutter 里的弱说明文字(iOS 分组 footer 惯例)。
  */
 function SettingsGroup({
   children,
+  footer,
   onToggle,
   title,
   titleAccessory,
 }: {
   children: ReactNode;
+  footer?: string;
   onToggle?: () => void;
   title: string;
   titleAccessory?: ReactNode;
@@ -725,7 +753,43 @@ function SettingsGroup({
           ))}
         </View>
       ) : null}
+      {footer && rows.length > 0 ? (
+        <Text style={styles.groupFooter}>{footer}</Text>
+      ) : null}
     </View>
+  );
+}
+
+/** 显示语言单选行:标签左、选中勾右;selected 即当前偏好(含「跟随系统」)。 */
+function LanguageOptionRow({
+  label,
+  onPress,
+  selected,
+  testID,
+}: {
+  label: string;
+  onPress(): void;
+  selected: boolean;
+  testID?: string;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: selected }}
+      onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      testID={testID}
+    >
+      <View style={styles.rowLine}>
+        <Text style={styles.languageOptionLabel}>{label}</Text>
+        {selected ? (
+          <Check color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+        ) : null}
+      </View>
+    </Pressable>
   );
 }
 
@@ -806,12 +870,13 @@ function RenameSelfDeviceScreen({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   return (
     <SafeAreaView style={styles.safeArea} testID="settings.renameSelfDevice.screen">
       <ScreenHeader
         backTestID="settings.renameSelfDevice.backButton"
         onBack={onDone}
-        title="设备名称"
+        title={t('settings.deviceNameEditor.screenTitle')}
       />
       <View style={styles.nameEditorContent}>
         <View style={styles.nameEditorInputRow}>
@@ -820,7 +885,7 @@ function RenameSelfDeviceScreen({
             maxLength={64}
             onChangeText={onChangeDraft}
             onSubmitEditing={onDone}
-            placeholder="本机名称"
+            placeholder={t('settings.deviceNameEditor.placeholder')}
             placeholderTextColor={colors.textTertiary}
             returnKeyType="done"
             selectTextOnFocus
@@ -830,7 +895,7 @@ function RenameSelfDeviceScreen({
           />
           {draft.length > 0 ? (
             <Pressable
-              accessibilityLabel="恢复默认本机名称"
+              accessibilityLabel={t('settings.deviceNameEditor.resetAccessibility')}
               accessibilityRole="button"
               hitSlop={8}
               onPress={onResetDefault}
@@ -858,6 +923,7 @@ function CopyRow({
   row: MobileSettingsRow;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <View style={styles.copyRow} testID={`settings.row.${row.id}`}>
       <View style={styles.copyText}>
@@ -869,8 +935,8 @@ function CopyRow({
         // (调用方虽已先判断,但组件自身也要自洽)。
         <MainWindowActionButton
           action={{
-            accessibilityLabel: `复制${row.label}`,
-            label: copied ? '已复制' : '复制',
+            accessibilityLabel: t('settings.copyRow.accessibility', { label: row.label }),
+            label: copied ? t('settings.copyRow.done') : t('settings.copyRow.action'),
             onPress: () => onCopy(row),
             testID: `settings.copy.${row.id}`,
           }}
@@ -926,6 +992,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   groupTitle: { color: colors.textTertiary, flex: 1, fontSize: typeScale.footnote, fontWeight: fontWeight.medium },
+  groupFooter: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    paddingHorizontal: spacing.md,
+  },
   card: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
@@ -940,6 +1012,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowLabel: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.code },
   rowValue: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code, textAlign: 'right' },
   rowDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  languageOptionLabel: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code },
   switchRow: {
     alignItems: 'center',
     flexDirection: 'row',

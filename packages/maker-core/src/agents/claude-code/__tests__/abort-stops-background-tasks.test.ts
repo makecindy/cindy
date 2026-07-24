@@ -301,6 +301,55 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
+  it('stopBackgroundTask stops a single running task (including local_bash) without interrupting the turn', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-bash', 'local_bash'));
+    stream.emit(taskStarted('task-agent', 'local_agent'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task_started events observed');
+
+    await handle.stopBackgroundTask!('task-bash');
+
+    // 精确停单个任务:只停被点名的 bash,不碰其他任务、不 interrupt 当前 turn。
+    expect(fakeQuery.stopTask!.mock.calls.map((c) => c[0])).toEqual(['task-bash']);
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('stopBackgroundTask is idempotent for terminal / unknown tasks', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-1', 'local_bash'));
+    stream.emit(taskNotification('task-1', 'completed'));
+    await waitFor(() => taskEvents(events).length >= 2, 'task terminal event observed');
+
+    // 已终态与从未存在的任务都静默成功(UI 点击与 task_notification 天然竞态)。
+    await expect(handle.stopBackgroundTask!('task-1')).resolves.toBeUndefined();
+    await expect(handle.stopBackgroundTask!('task-unknown')).resolves.toBeUndefined();
+    expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('stopBackgroundTask rejects when the query has no stopTask (old SDK / old remote daemon)', async () => {
+    const { handle, stream, events } = await startSessionWithStream({ omitStopTask: true });
+
+    await handle.send({ type: 'user', content: 'spawn background work' });
+    stream.emit(taskStarted('task-1', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+
+    // 不支持时明确失败,按钮不能假装成功(与 abort 的降级容忍语义不同)。
+    await expect(handle.stopBackgroundTask!('task-1')).rejects.toThrow(/not supported/);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('degrades to interrupt-only when the query has no stopTask (old SDK / old remote daemon)', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream({ omitStopTask: true });
 

@@ -4,6 +4,7 @@ import {
   type PendingInteractionLike,
   type PermissionReviewPresentation,
 } from '@cindy/maker-shared/interaction';
+import { i18n } from '@/i18n';
 
 export {
   answerKey,
@@ -56,9 +57,9 @@ export function buildMobilePermissionCardState(input: {
     canShowAlwaysAllow: input.presentation.canAlwaysAllow && !isHighRisk,
     isHighRisk,
     riskWarningText: input.presentation.riskSummary
-      ? (armed ? '确认允许后才会把决定回传到电脑端。' : input.presentation.riskSummary)
+      ? (armed ? i18n.t('interaction.permission.armedRiskWarning') : input.presentation.riskSummary)
       : null,
-    title: isHighRisk && armed ? '确认高风险操作' : input.presentation.title,
+    title: isHighRisk && armed ? i18n.t('interaction.permission.armedHighRiskTitle') : input.presentation.title,
   };
 }
 

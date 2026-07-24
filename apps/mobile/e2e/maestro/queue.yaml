@@ -20,6 +20,55 @@ appId: ${APP_ID}
       id: "session.queueEditBar"
     timeout: 10000
 - tapOn:
+    id: "session.composerInput"
+- eraseText
+- inputText: "First queue edit"
+- hideKeyboard
+- tapOn:
+    id: "session.sendButton"
+- extendedWaitUntil:
+    notVisible:
+      id: "session.queueEditBar"
+    timeout: 10000
+- tapOn:
+    id: "queue.inline.bubble.1"
+- extendedWaitUntil:
+    visible:
+      id: "queue.inline.actions.1"
+    timeout: 10000
+- tapOn:
+    id: "queue.inline.edit.1"
+- extendedWaitUntil:
+    visible:
+      id: "session.queueEditBar"
+    timeout: 10000
+- tapOn:
+    id: "session.composerInput"
+- eraseText
+- inputText: "Second queue edit"
+- hideKeyboard
+- tapOn:
+    id: "session.sendButton"
+- extendedWaitUntil:
+    visible: "Second queue edit"
+    timeout: 10000
+- extendedWaitUntil:
+    notVisible:
+      id: "session.queueEditBar"
+    timeout: 10000
+- tapOn:
+    id: "queue.inline.bubble.1"
+- extendedWaitUntil:
+    visible:
+      id: "queue.inline.actions.1"
+    timeout: 10000
+- tapOn:
+    id: "queue.inline.edit.1"
+- extendedWaitUntil:
+    visible:
+      id: "session.queueEditBar"
+    timeout: 10000
+- tapOn:
     id: "session.queueEditCancel"
 - extendedWaitUntil:
     notVisible:

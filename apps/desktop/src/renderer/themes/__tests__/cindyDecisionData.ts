@@ -266,7 +266,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'perm-code-bg': { light: '#F5F5F5', dark: '#2B2929' },
   'perm-item-selected-bg': { light: '#F1F1F1', dark: '#2F2D2D' },
   'plan-outline-active-bg': { light: '#F1F1F1', dark: '#2F2D2D' },
-  'plan-toolbar-btn-hover-bg': { light: '#F1F1F1', dark: '#2F2D2D' },
+  'plan-toolbar-btn-hover-bg': { light: '#E2E2E2', dark: '#444242' }, // 用户改稿 2026-07-23(ask 卡整改):原值贴着卡底(#F8F8F8/#312F2F)不可见,借 settings-menu-bg-hover(light)/send-btn-disabled-bg(dark)同档
   popover: { light: '0.0 0.0% 97.3%', dark: '0.0 2.1% 18.8%' },
   'primary-foreground': { light: '0.0 0.0% 100.0%', dark: '0.0 0.0% 100.0%' },
   'search-match-fg': { light: '214.3 5.5% 24.9%', dark: '0.0 0.0% 83.1%' },

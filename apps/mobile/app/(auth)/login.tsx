@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -64,7 +65,7 @@ import {
 } from '@/components/MobileLoginHandoffStage';
 import { AUTH_REGION, getMobileConfigIssues } from '@/config/env';
 import { resolveIdentifierMethod } from '@/auth/loginIdentifierMethod';
-import { fontWeight, lineHeight, loginColors, loginSizes, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, loginPalettes, loginSizes, radius, spacing, typeScale } from '@/theme/tokens';
 
 /**
  * Auth-server login presentation(PR4a 全登录态皮肤化,implementation-plan Step 5 WHAT3)。
@@ -74,6 +75,9 @@ import { fontWeight, lineHeight, loginColors, loginSizes, radius, spacing, typeS
  * (x=35,loginY,680×560,figma §5.1 移动帧;键盘位移归 PR4b)。
  */
 export default function LoginScreen() {
+  // 订阅语言变化:本屏文案走 loginText()(非响应式),useTranslation 保证
+  // 手动语言 override 恢复/切换时本屏跟着重渲(P2-a:不依赖 auth 重渲兜底)。
+  useTranslation();
   const auth = useAuth();
   const { markInteractive } = useObserve();
   const stage = useLoginSurface();
@@ -1226,7 +1230,8 @@ const configIssueStyles = {
     width: LOGIN_SUBTITLE.width,
   },
   line: {
-    color: loginColors.loginError,
+    // loginError 语义豁免跨模式同值(#D91F37),静态样式取 light 侧即可
+    color: loginPalettes.light.loginError,
     fontSize: LOGIN_ERROR_TEXT.font,
     fontWeight: fontWeight.regular,
     textAlign: 'center' as const,

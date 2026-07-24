@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { extractIpcError } from '@/utils/ipcError';
 
 /**
  * ProfileEditDialog — 设置页用户卡片的「编辑名字 / 头像」弹窗。
@@ -94,10 +95,15 @@ export function ProfileEditDialog({ open, onOpenChange }: ProfileEditDialogProps
       savingRef.current = false;
       setSaving(false);
       onOpenChange(false);
-    } catch {
+    } catch (error) {
       savingRef.current = false;
       setSaving(false);
-      toast.error(t('settings.userProfile.edit.saveFailed'));
+      const ipcError = extractIpcError(error);
+      toast.error(
+        ipcError?.code === 'CONTENT_MODERATION_REJECTED'
+          ? t('contentModeration.blocked')
+          : t('settings.userProfile.edit.saveFailed'),
+      );
     }
   }, [state, name, avatarDraft, onOpenChange, t]);
 

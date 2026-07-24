@@ -3,6 +3,7 @@
  * 切段只改变正在浏览的模型目录；选中目标模型后才登记切换意图。
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/AppText';
@@ -69,6 +70,7 @@ export interface MobileAgentSwitcherProps {
 export function MobileAgentSwitcher({ disabled = false, onChange, value }: MobileAgentSwitcherProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const interactionDisabled = disabled || busy;
 
@@ -89,7 +91,7 @@ export function MobileAgentSwitcher({ disabled = false, onChange, value }: Mobil
         const color = active ? colors.ctaText : colors.textTertiary;
         return (
           <Pressable
-            accessibilityLabel={`浏览 ${agent.label} 模型`}
+            accessibilityLabel={t('models.agentSwitch.browseAccessibility', { agent: agent.label })}
             accessibilityRole="tab"
             accessibilityState={{ disabled: interactionDisabled, selected: active }}
             disabled={interactionDisabled}

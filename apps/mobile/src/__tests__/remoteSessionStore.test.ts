@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { remoteSessionStore, sessionPendingWrites } from '@/session/remoteSessionStore';
+import {
+  clearComposerDraft,
+  readComposerDraftSync,
+  saveComposerDraft,
+} from '@/session/composerDraftStore';
+import { drainComposerAttachments } from '@/session/composerAttachmentInbox';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
@@ -1975,5 +1981,108 @@ describe('引用调和(2026-07-18 首页重渲染风暴修复)', () => {
       ]);
     }
     expect(remoteSessionStore.getSessions()).toBe(snapshot);
+  });
+
+  it('仅当前查看的会话消费输出审核阻断临时通知', () => {
+    remoteSessionStore.setViewedSessionId('s1');
+    remoteSessionStore.applyRemotePush('dev-1', 'content-moderation:output-blocked', {
+      sessionId: 's2',
+      turnId: 'turn-2',
+      kind: 'blocked',
+      i18nKey: 'contentModeration.blocked',
+    });
+    expect(remoteSessionStore.getContentModerationNotice('s1')).toBeNull();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'content-moderation:output-blocked', {
+      sessionId: 's1',
+      turnId: 'turn-1',
+      kind: 'blocked',
+      i18nKey: 'contentModeration.blocked',
+    });
+    const notice = remoteSessionStore.getContentModerationNotice('s1');
+    expect(notice).toMatchObject({ sessionId: 's1', turnId: 'turn-1' });
+    remoteSessionStore.consumeContentModerationNotice(notice!.revision);
+    expect(remoteSessionStore.getContentModerationNotice('s1')).toBeNull();
+  });
+
+  it('恢复远程输入审核拦截的文本和附件，并移除乐观消息', () => {
+    const sessionId = 's-moderation-input';
+    remoteSessionStore.setViewedSessionId(sessionId);
+    remoteSessionStore.appendMessage(sessionId, {
+      ...message('client-blocked', sessionId),
+      role: 'user',
+      content: 'blocked input',
+    });
+    saveComposerDraft(sessionId, 'newer draft');
+
+    remoteSessionStore.applyRemotePush('dev-1', 'content-moderation:input-blocked', {
+      sessionId,
+      clientId: 'client-blocked',
+      text: 'blocked input',
+      reason: 'rejected',
+      files: [{
+        id: 'image-1',
+        name: 'image.png',
+        path: 'xd-attachment://image-1',
+        ext: '.png',
+        size: 3,
+        category: 'image',
+        mimeType: 'image/png',
+      }],
+    });
+
+    expect(remoteSessionStore.getMessages(sessionId)).toEqual([]);
+    expect(readComposerDraftSync(sessionId)).toBe('blocked input\n\nnewer draft');
+    expect(drainComposerAttachments(sessionId)).toEqual([
+      expect.objectContaining({ id: 'image-1', category: 'image' }),
+    ]);
+    expect(remoteSessionStore.getContentModerationNotice(sessionId)).toMatchObject({
+      kind: 'input',
+      clientId: 'client-blocked',
+      reason: 'rejected',
+    });
+    clearComposerDraft(sessionId);
+  });
+
+  it('过滤 desktop-only clipboard:// 附件，不放入 mobile composer', () => {
+    const sessionId = 's-moderation-clipboard';
+    remoteSessionStore.setViewedSessionId(sessionId);
+    remoteSessionStore.appendMessage(sessionId, {
+      ...message('client-clip', sessionId),
+      role: 'user',
+      content: 'pasted input',
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'content-moderation:input-blocked', {
+      sessionId,
+      clientId: 'client-clip',
+      text: 'pasted input',
+      reason: 'rejected',
+      files: [
+        {
+          id: 'clip-1',
+          name: 'clipboard.png',
+          path: 'clipboard://tmp/paste-001.png',
+          ext: '.png',
+          size: 100,
+          category: 'image',
+          mimeType: 'image/png',
+        },
+        {
+          id: 'real-1',
+          name: 'photo.jpg',
+          path: 'xd-attachment://real-1',
+          ext: '.jpg',
+          size: 200,
+          category: 'image',
+          mimeType: 'image/jpeg',
+        },
+      ],
+    });
+
+    const attachments = drainComposerAttachments(sessionId);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({ id: 'real-1' });
+    clearComposerDraft(sessionId);
   });
 });

@@ -27,6 +27,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import * as ExpoCrypto from 'expo-crypto';
+import { i18n } from '@/i18n';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -377,12 +378,12 @@ async function createSessionIdempotent(task: InternalTask): Promise<{ workDir: s
     try {
       const created = await maker.createSession(createOpts);
       const result = normalizeCreateSessionResult(created);
-      if (!result) throw new Error('被控端没有返回新会话 id。');
+      if (!result) throw new Error(i18n.t('session.new.noSessionIdReturned'));
       if (result.sessionId !== task.sessionId) {
         // 被控端没有采用预生成 id(真实桌面全版本都会透传,这是防御 mock / 异常
         // 宿主):乐观行、路由、订阅全 keyed by 预生成 id,继续走会把首条消息发进
         // 错误会话。按确定性失败收敛到重试面(不自动重试,避免再建一个空会话)。
-        throw new Error('被控端未采用预生成会话 id（电脑端版本异常），请更新电脑端后重试。');
+        throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
       }
       return { workDir: result.workDir ?? null };
     } catch (err) {
@@ -546,8 +547,8 @@ async function runPipeline(task: InternalTask): Promise<void> {
           task,
           'enqueue-failed',
           confirmedMissing >= 2
-            ? '首条消息没有发出，内容已还原到输入框；发送前请确认会话里没有这条消息。'
-            : '首条消息发送状态未确认，内容已还原到输入框，请先确认会话里是否已有这条消息再发送。',
+            ? i18n.t('session.new.firstMessageMissingConfirm')
+            : i18n.t('session.new.firstMessageUnconfirmed'),
         );
         return;
       }

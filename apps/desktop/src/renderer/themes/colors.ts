@@ -452,8 +452,8 @@ registerColor('welcome-text', {
 // #2A2828,登录页背景变深且与 slogan #2A2828 同色隐形(沙盒手测 MT-1/2/5)。
 registerColor('login-bg-base', {
   light: '#EDEDED',
-  dark: '#EDEDED',
-}, 'Login wave4 — 白底体系底色(固定白,登录页独立于编辑器主题;design.md §8 拍板"白底全设备一致"+ token-decision-table §5.2"登录不随主题";覆盖 §8.1 var(--surface) 改判——该改判系主题耦合源,致暗色下背景#2A2828与slogan#2A2828同色隐形)');
+  dark: '#1F1F1E',
+}, 'Login — 画布底(亮色 #EDEDED / 暗色 #1F1F1E,figma 532:585 暗色帧实测;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
 // 两层品牌红渐变(379:518 径向 / 379:520 线性,代码复现非资产)。图层 opacity
 // 已合入色标 alpha(6%/5%)。CSS 取值为 figma 参数的最近似翻译;PR1 落码时以
 // wave4 帧(368:1375)截图对照为准,允许微调本 token 值,名称与语义冻结。
@@ -471,8 +471,8 @@ registerColor('login-bg-gradient-linear', {
 // 对齐 PR #104:PR104 无窗框描边)删除,不再注册。
 registerColor('login-panel-border', {
   light: '#D4D4D4',
-  dark: '#D4D4D4',
-}, 'Login wave4 — 全部登录 UI 面板 1px inside 描边(368:1383)');
+  dark: '#434343',
+}, 'Login — 面板 1px inside 描边(亮色 #D4D4D4 / 暗色 #434343;DESIGN.md §16.1)');
 // 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(Global pill/字标
 // 红元素等品牌点缀),禁止表达页面/画板背景——命名刻意不含 bg/background
 // (token-decision-table.md 原案名 login-brand-bg 已随改判弃用)。
@@ -488,8 +488,8 @@ registerColor('login-brand-accent-pressed', {
 // lead 受托定值;wave3 实测节点落地后以实测替换 token 值)。
 registerColor('login-link-pressed', {
   light: '#1A1818',
-  dark: '#1A1818',
-}, 'Login — Text_link pressed 态(U-9 裁决值,双端通用)');
+  dark: '#C0BEBE',
+}, 'Login — Text_link pressed 态(亮色 U-9 #1A1818 / 暗色 #C0BEBE 推导,待 Figma 精确)');
 // ── 回调卡 component alias(PR3,LegacyMigrationDialog 消费——design §7.4 唯一
 // App 内表情包例外,弹窗用回调卡形式)。参数权威:callback-pages-classification.md
 // 「卡片共用参数」(figma §6.1:White #FBFBFB/#D4D4D4/#252222/#2A2828 CTA;
@@ -527,90 +527,139 @@ registerColor('login-callback-cta-text', {
   dark: '#2A2828',
 }, 'Login callback card — CTA 文字(反相)');
 
-// ── Login 组件色 alias(PR1,lead 裁决 2026-07-20 方案 A)──
-// 命名/色值严格照 token-decision-table.md §3;语义 = 跨主题恒定品牌豁免色
-// (规则 16 豁免族,同上方 wave4 组):登录入口 100% 还原设计稿,任何 builtin/
-// 扩展主题都不应 override。error 色按 lead 裁决新增 login-error-fg(旧 login-error-text 已于 PR5 全族退役,
-// 见文件首部退役注释;error 文案/描边现由 login-error-fg 承载)。
+// ── Login 组件色 alias(暗色实现 PR:light/dark 二态,DESIGN.md §16.1)──
+// 语义 = 登录入口 100% 还原设计稿;随基础 light/dark 二态切换,不跟具体扩展主题
+// (规则 16 豁免族:扩展主题不 override)。色值经 Figma 组件库 Dark symbol 核验。
+// disabled 态两模式同构(深底#2A2828+白70%叠层+边#B4B4B4+字#D4D4D4 opacity0.8,不反相,§16.5)。
 registerColor('login-panel-bg', {
   light: '#FBFBFB',
-  dark: '#FBFBFB',
-}, 'Login — 白面板底(§5.1 面板 fill #FBFBFB 固定;登录页独立于编辑器主题;回调 Dark 卡 #312F2F 由 oauthResultPage 内联常量+login-callback-card-bg 承载,不在此 token)');
+  dark: '#312F2F',
+}, 'Login — 面板底(亮色 #FBFBFB / 暗色 #312F2F;DESIGN.md §16.1)');
 registerColor('login-control-bg', {
   light: '#EEEEEE',
-  dark: '#EEEEEE',
-}, 'Login — 输入框/返回钮/方式行底(figma §4.1/§4.6/§4.9)');
+  dark: '#2C2A2A',
+}, 'Login — 输入框底(亮色 #EEEEEE / 暗色 #2C2A2A,figma Dark_normal 输入 symbol。暗色下与方式行/返回钮底分化,后者走 login-action-control-bg)');
+registerColor('login-action-control-bg', {
+  light: '#EEEEEE',
+  dark: '#2A2828',
+}, 'Login — 方式行/返回钮底(亮色与输入框同 #EEEEEE;暗色 #2A2828 与输入框分化;figma 549:850/549:897,组件库更新 2026-07-23)');
+registerColor('login-back-border', {
+  light: '#FFFFFF',
+  dark: '#434343',
+}, 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。Global pill 白字仍走 login-inverted-button-border)');
 registerColor('login-control-border', {
   light: '#D4D4D4',
-  dark: '#D4D4D4',
-}, 'Login — 控件 default 描边(figma §4.1)');
+  dark: '#434343',
+}, 'Login — 控件 default 描边(亮色 #D4D4D4 / 暗色 #434343)');
 registerColor('login-control-border-active', {
   light: '#2A2828',
-  dark: '#2A2828',
-}, 'Login — 控件 focus/filled 描边(figma §4.1 focus)');
+  dark: '#EEEEEE',
+}, 'Login — 控件 focus/filled 描边(亮色 #2A2828 / 暗色 #EEEEEE 反相)');
 registerColor('login-control-border-disabled', {
   light: '#B4B4B4',
   dark: '#B4B4B4',
-}, 'Login — disabled 控件描边(figma §4.3 disabled 329:1226)');
+}, 'Login — disabled 控件描边(两模式同构,§16.5 disabled 特例)');
 registerColor('login-control-text', {
   light: '#252222',
-  dark: '#252222',
-}, 'Login — 控件已填文本/标题墨色(figma §2 排版)');
+  dark: '#EEEEEE',
+}, 'Login — 控件已填文本/标题(亮色 #252222 / 暗色 #EEEEEE)');
 registerColor('login-control-placeholder', {
   light: '#D4D4D4',
-  dark: '#D4D4D4',
-}, 'Login — 控件 placeholder(figma §4.1 default 文本)');
+  dark: '#6F6F6F',
+}, 'Login — 控件 placeholder/countdown(亮色 #D4D4D4 / 暗色 #6F6F6F;figma 539:754 dark_倒计时重发)');
 registerColor('login-title-text', {
   light: '#252222',
-  dark: '#252222',
-}, 'Login — 面板标题 32 Bold(figma §5.1)');
+  dark: '#D4D4D4',
+}, 'Login — 面板标题 32 Bold(亮色 #252222 / 暗色 #D4D4D4)');
 registerColor('login-secondary-text', {
   light: '#6F6F6F',
   dark: '#6F6F6F',
-}, 'Login — 副标题/说明文字(figma §5.1 副标题)');
+}, 'Login — 副标题/说明文字(两模式同值 #6F6F6F)');
 registerColor('login-primary-button-bg', {
   light: '#2A2828',
-  dark: '#2A2828',
-}, 'Login — 主按钮/第三方圆钮底(figma §4.3/§4.5)');
+  dark: '#EEEEEE',
+}, 'Login — 主按钮/第三方圆钮底(亮色深 #2A2828 / 暗色白 #EEEEEE 反相;社交圆图标保品牌色)');
 registerColor('login-primary-button-border', {
   light: '#434343',
-  dark: '#434343',
-}, 'Login — 主按钮/圆钮描边(figma §4.3)');
+  dark: '#FFFFFF',
+}, 'Login — 主按钮/圆钮描边(亮色 #434343 / 暗色 #FFFFFF)');
 registerColor('login-primary-button-text', {
   light: '#D4D4D4',
-  dark: '#D4D4D4',
-}, 'Login — 主按钮文字(figma §4.3 Bold 24)');
+  dark: '#2A2828',
+}, 'Login — 主按钮文字(亮色 #D4D4D4 / 暗色 #2A2828 反相)');
 registerColor('login-disabled-button-overlay', {
   light: 'rgba(255, 255, 255, 0.7)',
   dark: 'rgba(255, 255, 255, 0.7)',
-}, 'Login — disabled 按钮白 70% 叠层(figma §4.3 disabled;决策表 §3 唯一叠层 token)');
+}, 'Login — disabled 按钮白 70% 叠层(两模式同构,§16.5 disabled 特例)');
+registerColor('login-disabled-button-bg', {
+  light: '#2A2828',
+  dark: '#2A2828',
+}, 'Login — disabled 主按钮底(两模式同构深底;暗色不随 primary-button-bg 反相为白,figma white_button Disable)');
+registerColor('login-disabled-button-text', {
+  light: '#D4D4D4',
+  dark: '#D4D4D4',
+}, 'Login — disabled 主按钮文字(两模式同构,配合 opacity 0.8;figma white_button Disable)');
 registerColor('login-inverted-button-border', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
-}, 'Login — 浅底钮白描边/Global pill 白字(figma §4.6/§4.10,决策表 §3)');
+}, 'Login — 浅底钮白描边/Global pill 白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
 registerColor('login-link-text', {
   light: '#2A2828',
-  dark: '#2A2828',
-}, 'Login — Text_link default 墨色(figma §4.7 resend 247:1612,决策表 §3)');
+  dark: '#EEEEEE',
+}, 'Login — Text_link default 重发链接(亮色墨黑 #2A2828 / 暗色浅色 #EEEEEE 下划线;figma 539:752 dark_重新发送)');
 registerColor('login-link-hover', {
   light: '#4A4848',
-  dark: '#4A4848',
-}, 'Login — Text_link hover(figma §4.7 wave3 实测 358:792;lead 裁决 2026-07-20 决策表滞后修订追加,仅桌面 hover 消费)');
+  dark: '#A8A8A8',
+}, 'Login — Text_link hover(亮色 #4A4848 / 暗色 #A8A8A8 推导,待 Figma;仅桌面 hover)');
 registerColor('login-error-fg', {
   light: '#D91F37',
   dark: '#D91F37',
-}, 'Login — 错误文本/error 描边(figma §4.8;lead 裁决新增,取代旧 login-error-text——已于 PR5 退役)');
-// Splash 统一面板进度条(PR2b 新增 component alias;权威来源 = design.md §8.1 条 5 +
-// figma-component-spec.md §10.3 wave4 帧 379:525:轨 501×16 r12 #D9D9D9 @(90,346) +
-// 填充 #252222。语义 = 跨主题恒定品牌豁免色,与上方 login 组同口径,非默认主题不 override)。
+}, 'Login — 错误文本/error 描边(语义豁免,跨模式不变 #D91F37)');
+// Splash 统一面板进度条(亮色 track #D9D9D9/fill #252222;暗色推导 track #434343/fill #D4D4D4,待 Figma 精确)。
 registerColor('login-splash-progress-track', {
   light: '#D9D9D9',
-  dark: '#D9D9D9',
-}, 'Login splash — 更新/下载进度条轨(wave4 379:525,design.md §8.1)');
+  dark: '#434343',
+}, 'Login splash — 进度条轨(亮色 #D9D9D9 / 暗色 #434343 推导,待 Figma)');
 registerColor('login-splash-progress-fill', {
   light: '#252222',
-  dark: '#252222',
-}, 'Login splash — 更新/下载进度条填充(wave4 379:525,design.md §8.1)');
+  dark: '#D4D4D4',
+}, 'Login splash — 进度条填充(亮色 #252222 / 暗色 #D4D4D4 推导,待 Figma)');
+
+// ── Login overlay 叠层 token(暗色实现 PR;hover/pressed 叠层 light/dark 二态,
+// 组件 hardcode rgba → var(--login-overlay-*);DESIGN.md §16.5)──
+// 暗色叠层方向反转(亮色深底叠白 / 暗色白底叠黑),无法用单一 token 值切换,故二态。
+registerColor('login-overlay-button-hover', {
+  light: 'rgba(255, 255, 255, 0.08)',
+  dark: 'rgba(0, 0, 0, 0.05)',
+}, 'Login — 主按钮/圆钮 hover 叠层(亮色白8% / 暗色黑5%;figma §1.4)');
+registerColor('login-overlay-button-pressed', {
+  light: 'rgba(0, 0, 0, 0.5)',
+  dark: 'rgba(0, 0, 0, 0.1)',
+}, 'Login — 主按钮/圆钮 pressed 叠层(亮色黑50% / 暗色黑10%;figma §1.4;暗色 pressed 边 #E5E5E5 待组件层裁决)');
+registerColor('login-overlay-back-hover', {
+  light: 'rgba(255, 255, 255, 0.7)',
+  dark: 'rgba(255, 255, 255, 0.08)',
+}, 'Login — 返回钮 hover 叠层(亮色白70% / 暗色白8% 变浅;figma 549:904)');
+registerColor('login-overlay-back-pressed', {
+  light: 'rgba(0, 0, 0, 0.08)',
+  dark: 'rgba(0, 0, 0, 0.08)',
+}, 'Login — 返回钮 pressed 叠层(两模式黑8%)');
+registerColor('login-overlay-row-hover', {
+  light: 'rgba(255, 255, 255, 0.08)',
+  dark: 'rgba(255, 255, 255, 0.08)',
+}, 'Login — 方式行 hover 叠层(两模式白8% 变浅;figma 549:865)');
+registerColor('login-overlay-row-pressed', {
+  light: 'rgba(0, 0, 0, 0.08)',
+  dark: 'rgba(0, 0, 0, 0.08)',
+}, 'Login — 方式行 pressed 叠层(两模式黑8%)');
+registerColor('login-overlay-input-hover', {
+  light: 'rgba(0, 0, 0, 0.05)',
+  dark: 'rgba(255, 255, 255, 0.05)',
+}, 'Login — 输入框 hover 叠层(亮色黑5% / 暗色白5% 推导,待 Figma)');
+registerColor('login-loading-ring-track', {
+  light: 'rgba(42, 40, 40, 0.18)',
+  dark: 'rgba(212, 212, 212, 0.18)',
+}, 'Login — loading 环轨(亮色深半透 / 暗色浅半透 推导,待 Figma)');
 
 registerColor('lightbox-cta-bg', {
   light: 'var(--accent-cta-bg-pure)',
@@ -1490,17 +1539,17 @@ registerColor('ask-badge-bg', {
   dark: 'var(--surface-chip)',
 }, 'Light Gray');
 registerColor('ask-badge-text', {
-  light: 'var(--text-primary-on-dark)',
-  dark: 'var(--text-primary-on-dark)',
-}, 'Near Black');
-registerColor('ask-skip-bg', {
+  light: 'var(--text-primary)',
+  dark: 'var(--text-primary)',
+}, '主文字 — chip/角标文字随主题(勿接 on-dark 槽位,light 会白字压浅底)');
+registerColor('ask-header-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',
-}, 'Light Gray');
-registerColor('ask-skip-text', {
-  light: 'var(--text-primary-on-dark)',
-  dark: 'var(--text-primary-on-dark)',
-}, 'Near Black');
+}, 'header chip 底 — 落在卡底上,与选项行上的序号角标(ask-badge-bg)分家,皮肤可各自调档');
+registerColor('ask-option-list-bg', {
+  light: 'var(--surface-elevated)',
+  dark: 'var(--surface-elevated)',
+}, '选项列表面 — 原透明露卡底在 dark 下成一坨深色(2026-07-23 用户实测),给独立列表面');
 registerColor('ask-input-bg', {
   light: 'var(--surface-elevated)',
   dark: 'var(--surface-elevated)',
@@ -1559,16 +1608,6 @@ registerColor('ask-checkbox-checked-icon', {
   light: 'var(--surface-on-card)',
   dark: 'var(--surface-on-card)',
 }, 'Pure White — checkmark');
-
-// Next button — inverted/反色: Light mode = dark bg + white text
-registerColor('ask-next-bg', {
-  light: 'var(--accent-cta-bg)',
-  dark: 'var(--accent-cta-bg)',
-}, 'Near Black');
-registerColor('ask-next-text', {
-  light: 'var(--surface-on-card)',
-  dark: 'var(--surface-on-card)',
-}, 'Pure White');
 
 // Plan Viewer / Plan Action cards (FP-5/FP-6) — Light
 registerColor('plan-card-bg', {
@@ -1698,9 +1737,9 @@ registerColor('plan-bubble-badge-bg', {
   dark: 'var(--surface-chip)',
 }, 'Light Gray chip');
 registerColor('plan-bubble-badge-text', {
-  light: 'var(--text-primary-on-dark)',
-  dark: 'var(--text-primary-on-dark)',
-}, 'Near Black');
+  light: 'var(--text-primary)',
+  dark: 'var(--text-primary)',
+}, '主文字 — badge 文字随主题(勿接 on-dark 槽位)');
 registerColor('plan-bubble-body-text', {
   light: 'var(--text-primary-body-strong)',
   dark: 'var(--text-primary-body-strong)',

@@ -11,6 +11,7 @@ import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_INFLIGHT_LIMIT,
+  GHOST_FETCH_MEDIA_MAX_BYTES,
   GHOST_FETCH_RESPONSE_MAX_BYTES,
   GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE,
   type GhostNetworkNeeds,
@@ -70,6 +71,24 @@ function fakeResponse(params: {
     headers: new Headers(headers),
     arrayBuffer: async () => buf,
   } as unknown as Response;
+}
+
+function mp3WithId3(tagSize = 0): Uint8Array {
+  return new Uint8Array([
+    0x49, 0x44, 0x33, 0x04, 0x00, 0x00,
+    (tagSize >>> 21) & 0x7f,
+    (tagSize >>> 14) & 0x7f,
+    (tagSize >>> 7) & 0x7f,
+    tagSize & 0x7f,
+    ...new Uint8Array(tagSize),
+    0xff, 0xfb, 0x90, 0x64,
+  ]);
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
 }
 
 function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
@@ -413,7 +432,7 @@ describe('networkSlot · 响应收敛', () => {
       fetchImpl: (async (url: string) => {
         if (String(url).includes('/big')) return bigTextResponse();
         if (String(url).includes('brave')) {
-          return fakeResponse({ headers: { 'content-type': 'image/png' }, body: new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer });
+          return fakeResponse({ headers: { 'content-type': 'image/png' }, body: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer });
         }
         return fakeResponse();
       }) as unknown as NetworkSlotDeps['fetchImpl'],
@@ -455,7 +474,7 @@ describe('networkSlot · 响应收敛', () => {
 });
 
 describe('networkSlot · 媒体模式(as:media,字节不进沙箱)', () => {
-  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
   const pngResponse = (headers: Record<string, string> = {}) =>
     fakeResponse({ headers: { 'content-type': 'image/png', ...headers }, body: pngBytes.buffer.slice(0) });
 
@@ -478,9 +497,454 @@ describe('networkSlot · 媒体模式(as:media,字节不进沙箱)', () => {
     expect(Array.from(buf.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
   });
 
+  it('text/plain 误报的 MP3 按 ID3 / MPEG frame 魔数恢复为 audio/mpeg', async () => {
+    for (const bytes of [
+      mp3WithId3(),
+      new Uint8Array([0xff, 0xfb, 0x90, 0x64]),
+    ]) {
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'text/plain' }, body: toArrayBuffer(bytes) }),
+      });
+      const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+      expect(r.ok && 'media' in r).toBe(true);
+      expect((saveGhostMedia.mock.calls[0][0] as { mimeType: string }).mimeType).toBe('audio/mpeg');
+    }
+  });
+
+  it('text/plain 流式 MP3 在探针边界后仍按魔数恢复', async () => {
+    for (const chunks of [
+      [mp3WithId3(8192)],
+      [mp3WithId3(8192).subarray(0, 4096), mp3WithId3(8192).subarray(4096)],
+    ]) {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk);
+          controller.close();
+        },
+      });
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => ({
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/plain' }),
+          body: stream,
+        }) as unknown as Response,
+      });
+      const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+      expect(r.ok && 'media' in r).toBe(true);
+      expect((saveGhostMedia.mock.calls[0][0] as { mimeType: string }).mimeType).toBe('audio/mpeg');
+      const savedBytes = (saveGhostMedia.mock.calls[0][0] as { buffer: Uint8Array }).buffer;
+      expect(savedBytes.byteLength).toBe(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+    }
+  });
+
+  it('泛化 MIME 的媒体按魔数落仓；真实 text/plain / 缺头文本仍回落 body', async () => {
+    for (const contentType of ['application/octet-stream', '']) {
+      const bytes = mp3WithId3();
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => fakeResponse({ headers: contentType ? { 'content-type': contentType } : {}, body: toArrayBuffer(bytes) }),
+      });
+      const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+      expect(r.ok && 'media' in r, contentType || '(empty)').toBe(true);
+      expect((saveGhostMedia.mock.calls[0][0] as { mimeType: string }).mimeType).toBe('audio/mpeg');
+    }
+
+    for (const contentType of ['text/plain', '']) {
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => fakeResponse({ headers: contentType ? { 'content-type': contentType } : {}, body: '{"status":"processing"}' }),
+      });
+      const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+      expect(r.ok && 'body' in r, contentType || '(empty)').toBe(true);
+      if (r.ok && 'body' in r) expect(r.body).toBe('{"status":"processing"}');
+      expect(saveGhostMedia).not.toHaveBeenCalled();
+    }
+  });
+
+  it('UTF-8 文本跨 4 KiB 探针边界时仍可回落', async () => {
+    const prefix = new Uint8Array(4095).fill(97);
+    const suffix = new TextEncoder().encode('中文');
+    const bytes = new Uint8Array(prefix.byteLength + suffix.byteLength);
+    bytes.set(prefix);
+    bytes.set(suffix, prefix.byteLength);
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => fakeResponse({
+        headers: { 'content-type': 'application/octet-stream' },
+        body: bytes.buffer,
+      }),
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok && 'body' in r).toBe(true);
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('application/octet-stream 的未知二进制识别失败后拒绝且不回流 body', async () => {
+    const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'application/octet-stream' }, body: zip.buffer.slice(0) }),
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toContain('不受总仓支持');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('application/octet-stream 的 JSON 回落文本；未知二进制、NUL 与非法 UTF-8 拒绝', async () => {
+    const json = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'application/octet-stream' }, body: '{"status":"processing"}' }),
+    });
+    const text = await json.slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(text.ok && 'body' in text).toBe(true);
+
+    for (const bytes of [
+      new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+      new Uint8Array([0x7b, 0x00, 0x7d]),
+      new Uint8Array([0xc3, 0x28]),
+      new Uint8Array([0xc3]),
+    ]) {
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'application/octet-stream' }, body: bytes.buffer.slice(0) }),
+      });
+      expect((await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' })).ok).toBe(false);
+      expect(saveGhostMedia).not.toHaveBeenCalled();
+    }
+  });
+
+  it('流式短响应以截断 UTF-8 结尾时拒绝回落', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0x61, 0xc3]));
+        controller.close();
+      },
+    });
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/octet-stream' }),
+        body: stream,
+      }) as unknown as Response,
+    });
+    expect((await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' })).ok).toBe(false);
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('流式文本探针后的 NUL / 非法 UTF-8 尾部拒绝回落', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(4096).fill(0x61));
+        controller.enqueue(new Uint8Array([0x00]));
+        controller.close();
+      },
+    });
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => ({
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/plain' }),
+        body: stream,
+      }) as unknown as Response,
+    });
+    expect((await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' })).ok).toBe(false);
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('媒体模式下空文本响应回落为空 body', async () => {
+    const cases: Array<Record<string, string>> = [
+      { 'content-type': 'text/plain' },
+      {},
+    ];
+    for (const headers of cases) {
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => fakeResponse({ headers, body: new ArrayBuffer(0) }),
+      });
+      const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+      expect(r.ok && 'body' in r).toBe(true);
+      if (r.ok && 'body' in r) expect(r.body).toBe('');
+      expect(saveGhostMedia).not.toHaveBeenCalled();
+    }
+  });
+
+  it('流式 sniff 文本在首次小 chunk 后跨过大文本门槛时先申请全局闸', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let cancelled = false;
+    const { slot } = makeSlot({
+      fetchImpl: async (url: string) => {
+        if (url.includes('/large-text')) {
+          return {
+            status: 200,
+            headers: new Headers({ 'content-type': 'text/plain' }),
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"status":"processing"}'));
+                controller.enqueue(new Uint8Array(2 * 1024 * 1024).fill(0x61));
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+          } as unknown as Response;
+        }
+        return pngResponse();
+      },
+      saveGhostMedia: (async () => {
+        await gate;
+        return { url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png' };
+      }) as unknown as NetworkSlotDeps['saveGhostMedia'],
+    });
+    const media = slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const text = await slot.handleFetchRequest('web-search', {
+      url: 'https://api.tavily.com/large-text',
+      as: 'media',
+    });
+    expect(text.ok).toBe(false);
+    if (!text.ok) expect(text.message).toContain('正忙');
+    expect(cancelled).toBe(true);
+    release();
+    expect((await media).ok).toBe(true);
+  });
+
+  it('声明 video/quicktime 时接受无 ftyp 的合法首 atom', async () => {
+    const mov = new Uint8Array([0, 0, 0, 8, 0x6d, 0x6f, 0x6f, 0x76]);
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => fakeResponse({
+        headers: { 'content-type': 'video/quicktime' },
+        body: toArrayBuffer(mov),
+      }),
+      isSupportedMediaMime: (mime) => mime === 'video/quicktime',
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok && 'media' in r).toBe(true);
+    expect((saveGhostMedia.mock.calls[0][0] as { mimeType: string }).mimeType).toBe('video/quicktime');
+  });
+
+  it('流式 sniff 文本在保留大 chunk 前先申请全局闸', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let cancelled = false;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes('/large-text')) {
+        return {
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/plain' }),
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"status":"processing"}'));
+              controller.enqueue(new Uint8Array(2 * 1024 * 1024).fill(0x61));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+        } as unknown as Response;
+      }
+      return pngResponse();
+    });
+    const { slot } = makeSlot({
+      fetchImpl: fetchImpl as unknown as NetworkSlotDeps['fetchImpl'],
+      saveGhostMedia: (async () => {
+        await gate;
+        return { url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png' };
+      }) as unknown as NetworkSlotDeps['saveGhostMedia'],
+    });
+    const media = slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const text = await slot.handleFetchRequest('web-search', {
+      url: 'https://api.tavily.com/large-text',
+      as: 'media',
+    });
+    expect(text.ok).toBe(false);
+    if (!text.ok) expect(text.message).toContain('正忙');
+    expect(cancelled).toBe(true);
+    release();
+    expect((await media).ok).toBe(true);
+  });
+  it('声明媒体但字节不是媒体时拒绝；声明 MIME 错误时按字节类型入仓', async () => {
+    const html = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'image/png' }, body: '<html>bad</html>' }),
+    });
+    expect((await html.slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' })).ok).toBe(false);
+    expect(html.saveGhostMedia).not.toHaveBeenCalled();
+
+    const mismatch = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'image/png' }, body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer }),
+    });
+    expect((await mismatch.slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' })).ok).toBe(true);
+    expect((mismatch.saveGhostMedia.mock.calls[0][0] as { mimeType: string }).mimeType).toBe('image/jpeg');
+  });
+
+  it('正确声明的 audio/mpeg 继续走原媒体路径', async () => {
+    const bytes = mp3WithId3();
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'audio/mpeg' }, body: toArrayBuffer(bytes) }),
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok && 'media' in r).toBe(true);
+    expect((saveGhostMedia.mock.calls[0][0] as { mimeType: string }).mimeType).toBe('audio/mpeg');
+  });
+
+  it('text/plain 与缺头的未知二进制不回落 body', async () => {
+    for (const contentType of ['text/plain', '']) {
+      const { slot, saveGhostMedia } = makeSlot({
+        fetchImpl: async () => fakeResponse({
+          headers: contentType ? { 'content-type': contentType } : {},
+          body: new Uint8Array([0x50, 0x4b, 0x03, 0x04]).buffer,
+        }),
+      });
+      const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+      expect(r.ok, contentType || '(empty)').toBe(false);
+      expect(saveGhostMedia).not.toHaveBeenCalled();
+    }
+  });
+
+  it('流式声明媒体会占用全局媒体读闸', async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const streamResponse = () => ({
+      status: 200,
+      headers: new Headers({ 'content-type': 'image/png' }),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+          controller.close();
+        },
+      }),
+    }) as unknown as Response;
+    const { slot } = makeSlot({
+      fetchImpl: async () => streamResponse(),
+      saveGhostMedia: async () => {
+        await blocked;
+        return { url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png' };
+      },
+    });
+    const first = slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.message).toContain('正忙');
+    release();
+    expect((await first).ok).toBe(true);
+  });
+
+  it('非流式泛化媒体在 arrayBuffer 前获取读闸', async () => {
+    let arrayBufferRead = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const response = {
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/plain' }),
+      body: null,
+      arrayBuffer: async () => {
+        arrayBufferRead = true;
+        await blocked;
+        return mp3WithId3().buffer;
+      },
+    } as unknown as Response;
+    const { slot } = makeSlot({ fetchImpl: async () => response });
+    const first = slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(arrayBufferRead).toBe(true);
+    const second = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(second.ok).toBe(false);
+    release();
+    expect((await first).ok).toBe(true);
+  });
+
+  it('text/plain 小轮询响应不占媒体闸，媒体闸忙时仍正常回落文本', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes('/poll')) {
+        return {
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/plain' }),
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"status":"processing"}'));
+              controller.close();
+            },
+          }),
+        } as unknown as Response;
+      }
+      return pngResponse();
+    });
+    const { slot } = makeSlot({
+      fetchImpl: fetchImpl as unknown as NetworkSlotDeps['fetchImpl'],
+      saveGhostMedia: (async () => {
+        await gate;
+        return { url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png' };
+      }) as unknown as NetworkSlotDeps['saveGhostMedia'],
+    });
+    const media = slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const text = await slot.handleFetchRequest('web-search', {
+      url: 'https://api.tavily.com/poll',
+      as: 'media',
+    });
+    expect(text.ok && 'body' in text).toBe(true);
+    if (text.ok && 'body' in text) expect(text.body).toBe('{"status":"processing"}');
+
+    release();
+    expect((await media).ok).toBe(true);
+  });
+
+  it('text/plain 大文本 sniff miss 仍按 50MB 文本上限截断并标记 truncated', async () => {
+    const chunk = new Uint8Array(GHOST_FETCH_RESPONSE_MAX_BYTES + 17).fill(97);
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'text/plain' }, body: chunk.buffer }),
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok && 'body' in r).toBe(true);
+    if (r.ok && 'body' in r) {
+      expect(r.body.length).toBe(GHOST_FETCH_RESPONSE_MAX_BYTES);
+      expect(r.truncated).toBe(true);
+    }
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('泛化 MIME 非流式媒体超 256MB 时拒绝，不保存截断文件', async () => {
+    const size = GHOST_FETCH_MEDIA_MAX_BYTES + 1;
+    const raw = new Uint8Array(size);
+    raw.set(mp3WithId3(), 0);
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'text/plain' }, body: raw.buffer }),
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toContain('媒体过大');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it('content-length 预检对泛化 MIME 的超大响应也在读体前拒绝', async () => {
+    let bodyRead = false;
+    const response = {
+      status: 200,
+      headers: new Headers({
+        'content-type': 'application/octet-stream',
+        'content-length': String(GHOST_FETCH_MEDIA_MAX_BYTES + 1),
+      }),
+      arrayBuffer: async () => {
+        bodyRead = true;
+        return new ArrayBuffer(0);
+      },
+    };
+    Object.defineProperty(response, 'body', {
+      get() {
+        bodyRead = true;
+        return null;
+      },
+    });
+    const { slot, saveGhostMedia } = makeSlot({
+      fetchImpl: async () => response as unknown as Response,
+    });
+    const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(r.ok).toBe(false);
+    expect(bodyRead).toBe(false);
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
   it('content-type 带参数/别名归一化后再判(image/jpg; charset=binary → image/jpeg)', async () => {
     const { slot, saveGhostMedia } = makeSlot({
-      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'image/jpg; charset=binary' }, body: pngBytes.buffer.slice(0) }),
+      fetchImpl: async () => fakeResponse({ headers: { 'content-type': 'image/jpg; charset=binary' }, body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer }),
     });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
     expect(r.ok && 'media' in r).toBe(true);
@@ -519,6 +983,7 @@ describe('networkSlot · 媒体模式(as:media,字节不进沙箱)', () => {
 
   it('媒体超硬顶整单拒(不截断——截断的媒体是坏文件),不落仓', async () => {
     const chunk = new Uint8Array(1024 * 1024).fill(1);
+    chunk.set([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         controller.enqueue(chunk);
@@ -542,14 +1007,14 @@ describe('networkSlot · 媒体模式(as:media,字节不进沙箱)', () => {
   }, 30_000);
 
   it('音频/模型的常见非标 mime 归一化(audio/mp3 → audio/mpeg 等)', async () => {
-    for (const [wire, canonical] of [
-      ['audio/mp3', 'audio/mpeg'],
-      ['audio/x-wav', 'audio/wav'],
-      ['audio/wave', 'audio/wav'],
-      ['audio/x-m4a', 'audio/mp4'],
+    for (const [wire, canonical, body] of [
+      ['audio/mp3', 'audio/mpeg', new Uint8Array([0xff, 0xfb, 0x90, 0x64])],
+      ['audio/x-wav', 'audio/wav', new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x64, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0])],
+      ['audio/wave', 'audio/wav', new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x64, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0])],
+      ['audio/x-m4a', 'audio/mp4', new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20, 0, 0, 0, 0, 0])],
     ] as const) {
       const { slot, saveGhostMedia } = makeSlot({
-        fetchImpl: async () => fakeResponse({ headers: { 'content-type': wire }, body: pngBytes.buffer.slice(0) }),
+        fetchImpl: async () => fakeResponse({ headers: { 'content-type': wire }, body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) }),
         isSupportedMediaMime: (m) => ['audio/mpeg', 'audio/wav', 'audio/mp4'].includes(m),
       });
       const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });

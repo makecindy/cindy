@@ -12,6 +12,7 @@
  * lightbox 是常黑沉浸语境,黑白系颜色为刻意豁免(对齐桌面 docs/design-rules/cindy-design-system.md overlay/lightbox 语义豁免),不走主题 token。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
   FlatList,
@@ -157,6 +158,7 @@ export const ImageLightbox = memo(function ImageLightbox({
   showFileHeader,
   annotation,
 }: ImageLightboxProps) {
+  const { t } = useTranslation();
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const urls = useMemo(() => images.map((image) => image.url), [images]);
@@ -476,7 +478,7 @@ export const ImageLightbox = memo(function ImageLightbox({
             <View pointerEvents="box-none" style={[styles.actionBar, { bottom: insets.bottom + 12 }]}>
               <View style={styles.actionBarPill}>
                 <Pressable
-                  accessibilityLabel="取消标注"
+                  accessibilityLabel={t('message.lightbox.cancelAnnotation')}
                   disabled={annotationSubmitting}
                   hitSlop={8}
                   onPress={exitAnnotationMode}
@@ -484,10 +486,10 @@ export const ImageLightbox = memo(function ImageLightbox({
                   testID="message.imageLightboxAnnotationCancel"
                 >
                   <X color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                  <Text style={styles.actionLabel}>取消</Text>
+                  <Text style={styles.actionLabel}>{t('message.lightbox.cancel')}</Text>
                 </Pressable>
                 <Pressable
-                  accessibilityLabel="撤销上一笔"
+                  accessibilityLabel={t('message.lightbox.undoLastStroke')}
                   disabled={strokes.length === 0 || annotationSubmitting}
                   hitSlop={8}
                   onPress={undoLastStroke}
@@ -499,10 +501,10 @@ export const ImageLightbox = memo(function ImageLightbox({
                     size={iconSize.action}
                     strokeWidth={iconStroke.regular}
                   />
-                  <Text style={[styles.actionLabel, strokes.length === 0 && styles.actionLabelDisabled]}>撤销</Text>
+                  <Text style={[styles.actionLabel, strokes.length === 0 && styles.actionLabelDisabled]}>{t('message.lightbox.undo')}</Text>
                 </Pressable>
                 <Pressable
-                  accessibilityLabel={annotation?.submitLabel ?? '完成'}
+                  accessibilityLabel={annotation?.submitLabel ?? t('message.lightbox.done')}
                   disabled={annotationSubmitting}
                   hitSlop={8}
                   onPress={handleSubmitAnnotation}
@@ -514,14 +516,14 @@ export const ImageLightbox = memo(function ImageLightbox({
                   ) : (
                     <MessageSquarePlus color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
                   )}
-                  <Text style={styles.actionLabel}>{annotation?.submitLabel ?? '完成'}</Text>
+                  <Text style={styles.actionLabel}>{annotation?.submitLabel ?? t('message.lightbox.done')}</Text>
                 </Pressable>
               </View>
             </View>
           ) : showFileHeader ? (
             <View pointerEvents="box-none" style={styles.fileHeader}>
-              <Pressable accessibilityLabel="完成" hitSlop={10} onPress={onClose} testID="message.imageLightboxDone">
-                <Text style={styles.fileHeaderDone}>完成</Text>
+              <Pressable accessibilityLabel={t('message.lightbox.done')} hitSlop={10} onPress={onClose} testID="message.imageLightboxDone">
+                <Text style={styles.fileHeaderDone}>{t('message.lightbox.done')}</Text>
               </Pressable>
               <View pointerEvents="none" style={styles.fileHeaderTitleCol}>
                 <Text numberOfLines={1} style={styles.fileHeaderTitle} testID="message.imageLightboxTitle">
@@ -533,7 +535,7 @@ export const ImageLightbox = memo(function ImageLightbox({
               </View>
               {shareVisible ? (
                 <Pressable
-                  accessibilityLabel="分享图片"
+                  accessibilityLabel={t('message.lightbox.shareImage')}
                   hitSlop={10}
                   onPress={handleShare}
                   testID="message.imageLightboxShareButton"
@@ -552,14 +554,14 @@ export const ImageLightbox = memo(function ImageLightbox({
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
-                    accessibilityLabel="标注图片"
+                    accessibilityLabel={t('message.lightbox.annotateImage')}
                     hitSlop={8}
                     onPress={() => setIsAnnotating(true)}
                     style={styles.actionItem}
                     testID="message.imageLightboxAnnotateButton"
                   >
                     <Pen color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>标注</Text>
+                    <Text style={styles.actionLabel}>{t('message.lightbox.annotate')}</Text>
                   </Pressable>
                 ) : null}
                 {extraActions.map((action) => (
@@ -577,14 +579,14 @@ export const ImageLightbox = memo(function ImageLightbox({
                 ))}
                 {shareVisible && !showFileHeader ? (
                   <Pressable
-                    accessibilityLabel="分享图片"
+                    accessibilityLabel={t('message.lightbox.shareImage')}
                     hitSlop={8}
                     onPress={handleShare}
                     style={styles.actionItem}
                     testID="message.imageLightboxShareButton"
                   >
                     <ShareIcon color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>导出 / 分享</Text>
+                    <Text style={styles.actionLabel}>{t('message.lightbox.exportShare')}</Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -597,19 +599,19 @@ export const ImageLightbox = memo(function ImageLightbox({
               <View style={styles.actionBarPill}>
                 {annotateVisible ? (
                   <Pressable
-                    accessibilityLabel="标注图片"
+                    accessibilityLabel={t('message.lightbox.annotateImage')}
                     hitSlop={8}
                     onPress={() => setIsAnnotating(true)}
                     style={styles.actionItem}
                     testID="message.imageLightboxAnnotateButton"
                   >
                     <Pen color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>标注</Text>
+                    <Text style={styles.actionLabel}>{t('message.lightbox.annotate')}</Text>
                   </Pressable>
                 ) : null}
                 {directSubmitVisible ? (
                   <Pressable
-                    accessibilityLabel={annotation?.submitLabel ?? '发送到对话'}
+                    accessibilityLabel={annotation?.submitLabel ?? t('message.lightbox.sendToChat')}
                     disabled={annotationSubmitting}
                     hitSlop={8}
                     onPress={handleSubmitAnnotation}
@@ -621,7 +623,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                     ) : (
                       <MessageSquarePlus color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
                     )}
-                    <Text style={styles.actionLabel}>{annotation?.submitLabel ?? '发送到对话'}</Text>
+                    <Text style={styles.actionLabel}>{annotation?.submitLabel ?? t('message.lightbox.sendToChat')}</Text>
                   </Pressable>
                 ) : null}
                 {shareVisible && (annotateVisible || directSubmitVisible) ? (
@@ -629,14 +631,14 @@ export const ImageLightbox = memo(function ImageLightbox({
                 ) : null}
                 {shareVisible ? (
                   <Pressable
-                    accessibilityLabel="分享图片"
+                    accessibilityLabel={t('message.lightbox.shareImage')}
                     hitSlop={8}
                     onPress={handleShare}
                     style={styles.actionItem}
                     testID="message.imageLightboxShareButton"
                   >
                     <ShareIcon color="#ffffff" size={iconSize.action} strokeWidth={iconStroke.regular} />
-                    <Text style={styles.actionLabel}>导出 / 分享</Text>
+                    <Text style={styles.actionLabel}>{t('message.lightbox.exportShare')}</Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -703,6 +705,7 @@ const LightboxPage = memo(function LightboxPage({
   uri: string | null;
   width: number;
 }) {
+  const { t } = useTranslation();
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -929,21 +932,21 @@ const LightboxPage = memo(function LightboxPage({
         // 取件中 / 失败分支没有图片手势层,必须自带关闭途径(单击空白处关闭),
         // 否则 iOS 上打开离线图会困在全屏 Modal 里;重试按钮自己消费点击不受影响。
         <Pressable
-          accessibilityLabel="关闭图片"
+          accessibilityLabel={t('message.lightbox.closeImage')}
           onPress={onRequestClose}
           style={[styles.pageFill, styles.pageCenter]}
         >
           {resolveState?.status === 'error' || resolvedUnsupported || (!retryable && !media.previewable) ? (
             <>
-              <Text style={styles.stateText}>图片加载失败</Text>
+              <Text style={styles.stateText}>{t('message.lightbox.loadFailed')}</Text>
               {retryable ? (
                 <Pressable
-                  accessibilityLabel="重试加载图片"
+                  accessibilityLabel={t('message.lightbox.retryLoadImage')}
                   onPress={() => onRetry(image)}
                   style={styles.retryButton}
                   testID="message.imageLightboxRetryButton"
                 >
-                  <Text style={styles.retryText}>重试</Text>
+                  <Text style={styles.retryText}>{t('message.lightbox.retry')}</Text>
                 </Pressable>
               ) : null}
             </>

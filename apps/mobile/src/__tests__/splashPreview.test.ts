@@ -47,7 +47,7 @@ describe('mobile splash preview route', () => {
     // 红底主题族不再被 splash 渲染链消费(白底体系 = 主题 surface + 双红渐变)
     expect(splashSource).not.toContain('colors.brandSplashBackground');
     expect(stageSource).not.toContain('brandSplash');
-    expect(stageSource).toContain('backgroundColor: colors.surface');
+    expect(stageSource).toContain('backgroundColor: colors.login.bgBase');
     expect(layoutSource).not.toContain('subtitle="正在检查更新" variant="splash"');
     expect(layoutSource).not.toContain('subtitle="正在启动" variant="splash"');
     expect(indexSource).not.toContain('subtitle="正在恢复登录状态" variant="splash"');

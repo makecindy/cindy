@@ -261,6 +261,14 @@ export function AddProviderWizard({
     setStep(2);
   }, []);
 
+  /**
+   * 本向导内是否发起过 OpenAI 登录。codexAuth 反映的是整机 ChatGPT 凭证,不含
+   * 「凭证归哪个账号」的 native binding —— 换账号后本机可能已有别人绑定的登录,
+   * 此时 codexAuth 一挂载就是 connected;若不加此限定,检测建议直达打开的向导会
+   * 挂载即自关,既不弹任何 UI 也不给当前账号补绑定,「去授权」永远点不出效果。
+   */
+  const openaiLoginStartedRef = useRef(false);
+
   // ── OAuth 授权(复用既有鉴权流;成功即完成,无第 3 步)────────────────────
   const handleAuthorize = useCallback(async () => {
     if (!sel || sel.kind !== 'oauth') return;
@@ -277,6 +285,7 @@ export function AddProviderWizard({
         }
         if (!r.ok && r.reason === 'login_cancelled') return;
       } else if (id === 'openai') {
+        openaiLoginStartedRef.current = true;
         const outcome = await codexAuth.triggerLogin();
         ok = outcome === 'authenticated';
         if (outcome === 'cancelled') return;
@@ -323,10 +332,11 @@ export function AddProviderWizard({
   }, [loggingIn, cancelAuthorize, onClose]);
 
   // OpenAI 走 useCodexAuth:hook 状态翻 connected 时视为完成(triggerLogin 也会返回,
-  // oneshot ref 保证只收口一次)。
+  // oneshot ref 保证只收口一次)。只收口本向导内发起的登录(openaiLoginStartedRef),
+  // 不把「本机已有凭证」误当成完成 —— 见 openaiLoginStartedRef 的注释。
   const openaiDoneRef = useRef(false);
   useEffect(() => {
-    if (openaiDoneRef.current) return;
+    if (openaiDoneRef.current || !openaiLoginStartedRef.current) return;
     if (
       sel?.kind === 'oauth' &&
       sel.provider.id === 'openai' &&
@@ -440,6 +450,7 @@ export function AddProviderWizard({
         if (agentModels.length === 0) continue;
         runtimes[agent] = {
           baseUrl: rt.baseUrl,
+          ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
           models: agentModels,
           ...(rt.headers ? { headers: rt.headers } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
@@ -717,13 +728,19 @@ export function AddProviderWizard({
                   }}
                 />
               </div>
-              {/* baseUrl 由预设携带,只读展示(要改走保存后的编辑表单)。 */}
+              {/* baseUrl 由预设携带,只读展示(要改走保存后的编辑表单)。
+                  codex + openai-chat 上游标注「Cindy 桥接」,让用户明确该通道是协议转换而非原生。 */}
               <div className="flex flex-col gap-1">
-                {presetAgents.map((agent) => (
-                  <span key={agent} className="truncate text-12" style={{ color: 'var(--text-tertiary)' }}>
-                    {AGENT_LABEL[agent]} · {sel.preset.runtimes[agent]?.baseUrl}
-                  </span>
-                ))}
+                {presetAgents.map((agent) => {
+                  const rt = sel.preset.runtimes[agent];
+                  const bridged = agent === 'codex' && rt?.wireProtocol === 'openai-chat';
+                  return (
+                    <span key={agent} className="truncate text-12" style={{ color: 'var(--text-tertiary)' }}>
+                      {AGENT_LABEL[agent]} · {rt?.baseUrl}
+                      {bridged ? ` · ${t('settings.providers.wizard.bridgedNote')}` : ''}
+                    </span>
+                  );
+                })}
               </div>
               {presetSingleAgentNote && <InfoLine text={presetSingleAgentNote} />}
               {sel.preset.docsUrl && (

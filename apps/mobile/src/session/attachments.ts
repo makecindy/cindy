@@ -1,4 +1,5 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
+import { i18n } from '@/i18n';
 import type { RemoteFileRef, RemoteImageRef, RemoteSerializedAttachment } from '@/session/types';
 import { buildLegacyAttachmentOssRef } from '@/session/attachmentOssRef';
 
@@ -57,10 +58,10 @@ const KNOWN_TEXT_FILENAMES = new Set([
 /** 本机文件附件的体积校验(乐观上传后台任务里执行,超限 throw 由失败回调呈现)。 */
 export function assertMobileDocumentSize(size: number): void {
   if (!Number.isFinite(size) || size <= 0) {
-    throw new Error('这个文件为空，不能作为附件发送。');
+    throw new Error(i18n.t('composer.upload.emptyFile'));
   }
   if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-    throw new Error(`文件超过 ${Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB，暂不能作为附件发送。`);
+    throw new Error(i18n.t('composer.upload.fileTooLarge', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
   }
 }
 

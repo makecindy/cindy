@@ -1,4 +1,7 @@
 {
+  "contentModeration": {
+    "blocked": "申し訳ありませんが、現在この質問には回答できません。質問の表現を変えてください。"
+  },
   "ipcError": {
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
     "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回の提供元切り替えは適用されませんでした（セッションは元の提供元のままです）。他のタスクが終わってからもう一度お試しください。"
@@ -1139,6 +1142,7 @@
           "name": "表示名",
           "namePlaceholder": "マイ AI プロバイダー",
           "protocols": "Runtime",
+          "wireProtocol": "上流プロトコル",
           "baseUrl": "ベース URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API キー",
@@ -1156,11 +1160,17 @@
           "addHeader": "ヘッダーを追加",
           "removeRow": "この行を削除"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses（ネイティブ）",
+          "chat": "Chat Completions（Cindy ブリッジ）",
+          "responsesHelp": "プロバイダーが Responses API をネイティブ対応しているため、Cindy はイベントストリームをそのまま転送します。",
+          "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
           "codex": "Codex",
-          "codexDesc": "Codex は OpenAI プロトコルに従います（Bearer で認証）、Responses API に対応するモデルが必要です。この提供元の Codex 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Codex を提供しません。"
+          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブの上流、または Chat Completions のみを提供するプロバイダーを Cindy でブリッジする方式を選べます。この提供元の Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",
@@ -1290,6 +1300,7 @@
         "authorizeFailed": "「{{name}}」の認証に失敗しました。もう一度お試しください",
         "nameLabel": "表示名",
         "onlyAgentNote": "このプロバイダーは {{agent}} のみ対応です",
+        "bridgedNote": "Cindy ブリッジ（Chat Completions）",
         "docsLink": "接続ドキュメントを見る",
         "fetching": "接続を確認してモデル一覧を取得しています…",
         "fetchFailed": "モデル一覧を取得できませんでした。プリセットの推奨モデルで追加を完了し、あとで詳細から更新できます",
@@ -1523,7 +1534,8 @@
       "save": "保存",
       "overLimit": " — 文字数制限を超過",
       "toast": {
-        "saved": "カスタム指示を保存しました"
+        "saved": "カスタム指示を保存しました",
+        "saveFailed": "カスタム指示を保存できませんでした"
       }
     },
     "chipMetrics": {
@@ -2062,12 +2074,14 @@
       },
       "tips": {
         "cindy": "Cindy は公式提供の共有ボットです。認証情報の申請は不要で、Slack を連携して @Cindy にメンションするだけでタスクを任せられます。",
-        "personal": "個人ボットは自分で申請した認証情報で Feishu / Discord に接続します。ボットは完全に自分専用ですが、アプリの作成と設定の入力が必要です。"
+        "personal": "個人ボットは自分で申請した認証情報で Feishu / Discord に接続します。ボットは完全に自分専用ですが、アプリの作成と設定の入力が必要です。",
+        "personalFeishuOnly": "個人ボットは自分で申請した認証情報で Feishu に接続します。ボットは完全に自分専用ですが、アプリの作成と設定の入力が必要です。"
       },
       "defaults": {
         "title": "新規会話設定",
         "description": "Feishu、Slack、または Discord から開始する新規会話では、この Agent とモデル設定を使用します。変更は新規会話にのみ適用されます。既存の Discord DM に適用するには /new を送信してください。",
         "localDescription": "Feishu または Discord から開始する新規会話では、この Agent とモデル設定を使用します。変更は新規会話にのみ適用されます。既存の Discord DM に適用するには /new を送信してください。",
+        "feishuOnlyDescription": "Feishu から開始する新規会話では、この Agent とモデル設定を使用します。変更は新規会話にのみ適用されます。",
         "agentLabel": "Agent",
         "modelLabel": "モデル設定",
         "loading": "新規会話設定を読み込み中…",
@@ -2841,11 +2855,10 @@
   "legacyMigration": {
     "title": "旧バージョンのデータを移行",
     "description": "このデバイスに旧バージョンのデータが見つかりました。チャット履歴とメディアファイルを新しいデータ保存先に移行します。旧バージョンのアプリが起動中の場合は、先に完全に終了してください。移行中は {{appName}} を閉じないでください。ご注意:認証済みのサードパーティのキーや資格情報は移行できません。移行完了後、設定で再認証または再入力が必要です。",
-    "confirm": "OK",
+    "confirm": "続行",
     "migrating": "データを移行しています。しばらくお待ちください…",
     "failedTitle": "移行が完了しませんでした",
-    "failedDescription": "今回はデータ移行を完了できませんでした。{{appName}} はそのまま利用できます。次回のログイン時に自動的に再試行されます。",
-    "continue": "続行"
+    "failedDescription": "今回はデータ移行を完了できませんでした。{{appName}} はそのまま利用できます。次回のログイン時に自動的に再試行されます。"
   },
   "splash": {
     "tips": {
@@ -3987,7 +4000,8 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
-        "workflow": "Workflow"
+        "workflow": "Workflow",
+        "shell": "バックグラウンドコマンド"
       },
       "status": {
         "running": "実行中",
@@ -3995,6 +4009,7 @@
         "failed": "失敗",
         "stopped": "停止済み"
       },
+      "stop": "このタスクを停止",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} 回のツール使用",
       "toolUses_other": "{{count}} 回のツール使用",
@@ -4078,8 +4093,11 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
+      "bashStatus_one": "バックグラウンドタスク実行中（{{count}} 件）…",
+      "bashStatus_other": "バックグラウンドタスク実行中（{{count}} 件）…",
       "stopAll": "すべて停止",
       "stopAllTitle": "このセッションのバックグラウンドプロセスを終了し、すべてのサブタスクを停止します（セッションは引き続き使用できます）",
+      "stopBashTitle": "このセッションで実行中のバックグラウンドタスクを停止します（セッションのプロセスは終了しません）",
       "stopping": "停止中…"
     },
     "interruptedBanner": {

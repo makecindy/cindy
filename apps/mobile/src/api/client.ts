@@ -1,3 +1,5 @@
+import { i18n } from '@/i18n';
+
 export class ApiError extends Error {
   constructor(
     public readonly code: string,
@@ -70,7 +72,7 @@ export async function apiFetchRaw<T>(
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => {
             void requestPromise.catch(() => undefined);
-            reject(new ApiError('REQUEST_TIMEOUT', 0, '请求超时，请稍后重试'));
+            reject(new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout')));
             controller?.abort();
           }, timeoutMs);
         }),
@@ -81,16 +83,16 @@ export async function apiFetchRaw<T>(
   } catch (err) {
     if (err instanceof ApiError) throw err;
     if (isAbortError(err)) {
-      throw new ApiError('REQUEST_TIMEOUT', 0, '请求超时，请稍后重试');
+      throw new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout'));
     }
     if (err instanceof TypeError) {
       // fetch 的网络层失败统一走类型化离线错误:RN 离线抛 "Network request failed"
       // (不含 "fetch" 子串,旧分支匹配不到,英文原文会一路透传到 UI);浏览器
       // (Web 预览)抛 "Failed to fetch",还可能是 CORS——只在 web 环境附加提示。
       const webHint = typeof document !== 'undefined'
-        ? '。Web 预览可能被浏览器 CORS 拦截，请用 Expo Go/模拟器测试'
+        ? i18n.t('apiErrors.networkUnavailableWebHint')
         : '';
-      throw new ApiError('NETWORK_UNAVAILABLE', 0, `网络连接不可用，请检查网络后重试${webHint}`);
+      throw new ApiError('NETWORK_UNAVAILABLE', 0, i18n.t('apiErrors.networkUnavailable', { webHint }));
     }
     throw err;
   } finally {
@@ -107,7 +109,7 @@ export async function apiFetchRaw<T>(
         // Preserve the original typed API error even if local cleanup fails.
       }
     }
-    throw new ApiError(code, response.status, error.message ?? '请求失败');
+    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'));
   }
 
   return data as T;

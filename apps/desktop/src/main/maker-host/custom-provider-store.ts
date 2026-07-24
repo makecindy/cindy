@@ -79,6 +79,14 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
       return invalid(`runtime '${agent}' model.defaultEnabled must be a boolean`);
     }
   }
+  if (r.wireProtocol !== undefined) {
+    const allowed = agent === 'claude-code'
+      ? ['anthropic-messages']
+      : ['openai-responses', 'openai-chat'];
+    if (typeof r.wireProtocol !== 'string' || !allowed.includes(r.wireProtocol)) {
+      return invalid(`runtime '${agent}' wireProtocol invalid`);
+    }
+  }
   if (r.headers !== undefined) {
     if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) {
       return invalid(`runtime '${agent}' headers must be an object`);
@@ -194,6 +202,7 @@ function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntim
   const headers =
     rt.headers && Object.keys(rt.headers).length > 0 ? { ...rt.headers } : undefined;
   const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
+  if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
   if (headers) out.headers = headers;
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
   return out;
@@ -300,6 +309,12 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : '',
       models,
     };
+    if (
+      typeof r.wireProtocol === 'string' &&
+      (r.wireProtocol === 'anthropic-messages' || r.wireProtocol === 'openai-responses' || r.wireProtocol === 'openai-chat')
+    ) {
+      entry.wireProtocol = r.wireProtocol;
+    }
     if (r.headers && typeof r.headers === 'object' && !Array.isArray(r.headers)) {
       entry.headers = r.headers as Record<string, string>;
     }

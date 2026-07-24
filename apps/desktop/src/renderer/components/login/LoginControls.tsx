@@ -231,8 +231,11 @@ export function LoginInput({
         className={cn(
           'absolute box-border appearance-none overflow-hidden whitespace-nowrap outline-none',
           'login-skin-input transition-none',
+          // placeholder 接 token(figma §4.1 定稿值);漏接时被 Tailwind preflight
+          // 默认 placeholder 灰顶替(2026-07-23 用户实测发现)。
+          'placeholder:text-[var(--login-control-placeholder)]',
           // hover 黑 5% 叠层(§2.2 照抄 347:2529;input 无法用伪元素,叠 background-image)
-          'hover:enabled:[background-image:linear-gradient(rgba(0,0,0,0.05),rgba(0,0,0,0.05))]',
+          'hover:enabled:[background-image:linear-gradient(var(--login-overlay-input-hover),var(--login-overlay-input-hover))]',
           'disabled:cursor-not-allowed',
           center ? 'text-center' : 'text-left',
         )}
@@ -318,7 +321,7 @@ export function LoginPrimaryButton({
         'absolute box-border flex items-center justify-center overflow-hidden font-bold',
         overlayBase,
         !inert &&
-          'hover:after:opacity-100 hover:after:bg-[rgba(255,255,255,0.08)] active:after:bg-[rgba(0,0,0,0.5)] active:after:opacity-100',
+          'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-button-hover)] active:after:bg-[var(--login-overlay-button-pressed)] active:after:opacity-100',
         loading && 'cursor-default',
         disabled &&
           'cursor-not-allowed after:opacity-100 after:[background:var(--login-disabled-button-overlay)]',
@@ -329,9 +332,11 @@ export function LoginPrimaryButton({
         width: CONTROL.width,
         height: CONTROL.height,
         borderRadius: CONTROL.radius,
-        background: LOGIN_COLORS.primaryButtonBg,
+        // disabled 底/字两模式同构(深底浅字,暗色不随 primaryButtonBg 反相为白;
+        // figma white_button Disable:深底 + 白 70% 叠层 + disabled 边 + 字 80%)
+        background: disabled ? LOGIN_COLORS.disabledButtonBg : LOGIN_COLORS.primaryButtonBg,
         border: `1px solid ${disabled ? LOGIN_COLORS.controlBorderDisabled : LOGIN_COLORS.primaryButtonBorder}`,
-        color: LOGIN_COLORS.primaryButtonText,
+        color: disabled ? LOGIN_COLORS.disabledButtonText : LOGIN_COLORS.primaryButtonText,
         fontSize: CONTROL.fontSize,
         opacity: 1,
       }}
@@ -435,7 +440,7 @@ export function LoginSocialButton({
         'relative grid place-items-center overflow-hidden',
         overlayBase,
         // hover(仅桌面)/pressed(双端)照抄主按钮(§2.2;白 8% / 黑 50% rgba 叠层)。
-        'hover:after:opacity-100 hover:after:bg-[rgba(255,255,255,0.08)] active:after:bg-[rgba(0,0,0,0.5)] active:after:opacity-100',
+        'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-button-hover)] active:after:bg-[var(--login-overlay-button-pressed)] active:after:opacity-100',
       )}
       style={{
         width: SOCIAL.size,
@@ -479,7 +484,7 @@ export function LoginBackButton({
       className={cn(
         'absolute z-[2] grid place-items-center overflow-hidden',
         overlayBase,
-        'hover:after:opacity-100 hover:after:bg-[rgba(255,255,255,0.7)] active:after:bg-[rgba(0,0,0,0.08)] active:after:opacity-100',
+        'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-back-hover)] active:after:bg-[var(--login-overlay-back-pressed)] active:after:opacity-100',
         'disabled:cursor-not-allowed',
       )}
       style={{
@@ -488,8 +493,8 @@ export function LoginBackButton({
         width: BACK.size,
         height: BACK.size,
         borderRadius: BACK.radius,
-        background: LOGIN_COLORS.controlBg,
-        border: `1px solid ${LOGIN_COLORS.invertedButtonBorder}`,
+        background: LOGIN_COLORS.actionControlBg,
+        border: `1px solid ${LOGIN_COLORS.backBorder}`,
       }}
     >
       {/* 24 box 内左向 chevron(247:1635 icon 语义;矢量重绘,静态) */}
@@ -629,7 +634,7 @@ export function LoginMethodRow({
       className={cn(
         'absolute overflow-hidden',
         overlayBase,
-        'hover:after:opacity-100 hover:after:bg-[rgba(255,255,255,0.08)] active:after:bg-[rgba(0,0,0,0.08)] active:after:opacity-100',
+        'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-row-hover)] active:after:bg-[var(--login-overlay-row-pressed)] active:after:opacity-100',
         'disabled:cursor-not-allowed',
       )}
       style={{
@@ -639,7 +644,7 @@ export function LoginMethodRow({
         height: METHOD_ROW.height,
         borderRadius: METHOD_ROW.radius,
         border: `1px solid ${LOGIN_COLORS.controlBorder}`,
-        background: LOGIN_COLORS.controlBg,
+        background: LOGIN_COLORS.actionControlBg,
       }}
     >
       <span
@@ -728,7 +733,7 @@ export function LoginLoadingRing({ y, label }: { y: number; label: string }) {
         top: y,
         width: LOADING_RING.size,
         height: LOADING_RING.size,
-        border: '6px solid rgba(42,40,40,0.18)',
+        border: '6px solid var(--login-loading-ring-track)',
         borderTopColor: LOGIN_COLORS.primaryButtonBg,
       }}
     />

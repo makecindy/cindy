@@ -47,6 +47,10 @@ const PLATFORMS = [
   // Verified 2026-06-17 by HEAD request against downloads.claude.ai for the
   // latest npm version: linux-x64 uses the same plain `claude` binary name.
   { key: 'linux-x64', file: 'claude' },
+  // Verified 2026-07-24 against the official release manifest
+  // (claude-code-releases/<version>/manifest.json): linux-arm64 (glibc) is
+  // published with the same plain `claude` binary name and a checksum entry.
+  { key: 'linux-arm64', file: 'claude' },
   { key: 'win32-x64', file: 'claude.exe' },
 ];
 

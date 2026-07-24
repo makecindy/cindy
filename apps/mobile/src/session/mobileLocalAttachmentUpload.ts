@@ -17,6 +17,7 @@
  *
  * 纯逻辑模块,依赖注入(preprocess / upload / discard / 校验),node 可单测。
  */
+import { i18n } from '@/i18n';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { MobileImagePreprocessInput, MobileImagePreprocessOutput } from '@/session/mobileImagePreprocess';
 import type { AnnotationStroke } from '@/session/imageAnnotationModel';
@@ -275,8 +276,8 @@ export function createMobileLocalAttachmentUploadController(
       const token = await task.token;
       if (!token) {
         throw new Error(task.candidate.kind === 'image'
-          ? '登录已过期，请重新登录后再上传图片。'
-          : '登录已过期，请重新登录后再上传附件。');
+          ? i18n.t('composer.upload.sessionExpiredImage')
+          : i18n.t('composer.upload.sessionExpiredFile'));
       }
       // 取消检查点 1:token 等待期间被 X 掉的任务在这里短路,跳过后面的换址/转码/降采样。
       if (task.discarded) {

@@ -1,5 +1,7 @@
 import type { CurrentlyRunningInfo } from 'expo-updates';
 
+import { i18n } from '@/i18n';
+
 // 热更验证标记:纯 JS 常量,发 OTA 后在设备设置页看到该值即证明热更 bundle 已生效。
 // 每次要验证热更时改这个值(建议带日期),验证完可保留或删除,对功能无影响。
 export const OTA_VERIFY_MARKER = 'ota-check-20260707-2';
@@ -21,8 +23,8 @@ type MobileUpdateInfoInput = Pick<
 export function currentMobileOtaVersion(
   currentlyRunning: Pick<CurrentlyRunningInfo, 'updateId' | 'isEmbeddedLaunch'>,
 ): string {
-  if (currentlyRunning.isEmbeddedLaunch) return '随整包';
-  return currentlyRunning.updateId?.trim().slice(0, 8) || '未知';
+  if (currentlyRunning.isEmbeddedLaunch) return i18n.t('settings.updateInfo.embedded');
+  return currentlyRunning.updateId?.trim().slice(0, 8) || i18n.t('settings.updateInfo.unknown');
 }
 
 /**
@@ -37,12 +39,18 @@ export function buildMobileUpdateInfoRows(currentlyRunning: MobileUpdateInfoInpu
   const updateId = currentlyRunning.updateId;
   const createdAt = currentlyRunning.createdAt;
   return [
-    { id: 'source', label: '运行来源', value: currentlyRunning.isEmbeddedLaunch ? '内置版本(随包)' : 'OTA 热更新' },
-    { id: 'updateId', label: '更新 ID', value: updateId ? updateId.slice(0, 8) : '—' },
-    { id: 'updatedAt', label: '更新时间', value: createdAt ? formatMobileUpdateTime(createdAt) : '—' },
-    { id: 'channel', label: 'Channel', value: currentlyRunning.channel?.trim() || '—' },
-    { id: 'runtimeVersion', label: 'Runtime', value: currentlyRunning.runtimeVersion?.trim() || '—' },
-    { id: 'otaMarker', label: '热更标记', value: OTA_VERIFY_MARKER },
+    {
+      id: 'source',
+      label: i18n.t('settings.updateInfo.source'),
+      value: currentlyRunning.isEmbeddedLaunch
+        ? i18n.t('settings.updateInfo.sourceEmbedded')
+        : i18n.t('settings.updateInfo.sourceOta'),
+    },
+    { id: 'updateId', label: i18n.t('settings.updateInfo.updateId'), value: updateId ? updateId.slice(0, 8) : '—' },
+    { id: 'updatedAt', label: i18n.t('settings.updateInfo.updatedAt'), value: createdAt ? formatMobileUpdateTime(createdAt) : '—' },
+    { id: 'channel', label: i18n.t('settings.updateInfo.channel'), value: currentlyRunning.channel?.trim() || '—' },
+    { id: 'runtimeVersion', label: i18n.t('settings.updateInfo.runtime'), value: currentlyRunning.runtimeVersion?.trim() || '—' },
+    { id: 'otaMarker', label: i18n.t('settings.updateInfo.otaMarker'), value: OTA_VERIFY_MARKER },
   ];
 }
 

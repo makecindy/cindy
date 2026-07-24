@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', () => ({ Alert: { alert: vi.fn() } }));
 
+import { i18n } from '@/i18n';
 import { confirmMobileSessionAgentSwitch } from '@/session/sessionAgentSwitchConfirmation';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('confirmMobileSessionAgentSwitch', () => {
   it('skips repeated confirmation when a pending intent already exists', async () => {

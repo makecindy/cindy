@@ -1,4 +1,5 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
+import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
@@ -151,10 +152,10 @@ export function validateNewSessionDraft(
   content: NewSessionDraftContentState = {},
 ): string | null {
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) {
-    return '请输入电脑端项目路径。';
+    return i18n.t('session.new.enterProjectPath');
   }
-  if (!draft.model.trim()) return '请输入模型。';
-  if (!hasFirstMessagePayload(draft, content)) return '请输入首条消息或添加附件。';
+  if (!draft.model.trim()) return i18n.t('session.new.enterModel');
+  if (!hasFirstMessagePayload(draft, content)) return i18n.t('session.new.enterFirstMessageOrAttachment');
   return null;
 }
 
@@ -164,9 +165,11 @@ export function summarizeNewSessionDraft(
 ): NewSessionDraftSummary {
   const validationMessage = validateNewSessionDraft(draft, content);
   const agentLabel = draft.agentKind === 'codex' ? 'Codex' : 'Claude';
-  const model = draft.model.trim() || '未选择模型';
+  const model = draft.model.trim() || i18n.t('session.new.noModelSelected');
   const effort = draft.effort.trim();
-  const workspaceLabel = draft.workspaceKind === 'dialogue' ? '对话' : '项目';
+  const workspaceLabel = draft.workspaceKind === 'dialogue'
+    ? i18n.t('session.new.workspaceDialogue')
+    : i18n.t('session.new.workspaceProject');
   const trimmedWorkingDir = draft.workingDir.trim();
   const extraDirs = normalizeExtraDirs(draft.extraDirs);
   return {
@@ -174,10 +177,10 @@ export function summarizeNewSessionDraft(
     canCreate: validationMessage === null,
     runtimeLabel: [agentLabel, model, effort || null, draft.fastMode ? 'Fast' : null].filter(Boolean).join(' · '),
     scopeLabel: draft.workspaceKind === 'dialogue'
-      ? '电脑端分配对话目录'
+      ? i18n.t('session.new.assignedDialogueDir')
       : trimmedWorkingDir
-        ? [projectTitle(trimmedWorkingDir), extraDirs.length > 0 ? `+${extraDirs.length} 附加目录` : null].filter(Boolean).join(' · ')
-        : '未选择项目路径',
+        ? [projectTitle(trimmedWorkingDir), extraDirs.length > 0 ? i18n.t('session.new.extraDirsSuffix', { num: extraDirs.length }) : null].filter(Boolean).join(' · ')
+        : i18n.t('session.new.noProjectPath'),
     validationMessage,
     workspaceLabel,
   };
@@ -192,18 +195,22 @@ export function buildNewSessionCreatePreview(
   const message = draft.firstMessage.trim();
   const attachmentCount = normalizeAttachmentCount(content.attachmentCount);
   const target = draft.workspaceKind === 'dialogue'
-    ? '对话工作区'
-    : draft.workingDir.trim() || '未选择项目路径';
+    ? i18n.t('session.new.dialogueWorkspace')
+    : draft.workingDir.trim() || i18n.t('session.new.noProjectPath');
   const details = [
-    `电脑: ${deviceName || '未知设备'}`,
-    `位置: ${target}`,
-    `运行: ${summary.runtimeLabel}`,
-    message ? `首条: ${clipPreview(message, 64)}` : attachmentCount > 0 ? '首条: 仅发送附件' : '首条: 未填写',
-    ...(attachmentCount > 0 ? [`附件: ${attachmentCount} 个`] : []),
+    i18n.t('session.new.previewDevice', { name: deviceName || i18n.t('session.new.unknownDevice') }),
+    i18n.t('session.new.previewLocation', { target }),
+    i18n.t('session.new.previewRuntime', { runtime: summary.runtimeLabel }),
+    message
+      ? i18n.t('session.new.previewFirstMessage', { preview: clipPreview(message, 64) })
+      : attachmentCount > 0
+        ? i18n.t('session.new.previewFirstAttachmentOnly')
+        : i18n.t('session.new.previewFirstEmpty'),
+    ...(attachmentCount > 0 ? [i18n.t('session.new.previewAttachments', { num: attachmentCount })] : []),
   ];
   return {
-    title: summary.canCreate ? '准备创建并发送' : '还不能创建',
-    subtitle: summary.validationMessage ?? '确认后会在被控电脑创建会话，并把首条消息加入队列。',
+    title: summary.canCreate ? i18n.t('session.new.previewReadyTitle') : i18n.t('session.new.previewNotReadyTitle'),
+    subtitle: summary.validationMessage ?? i18n.t('session.new.previewReadySubtitle'),
     details,
   };
 }

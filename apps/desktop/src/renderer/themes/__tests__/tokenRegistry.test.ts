@@ -55,3 +55,16 @@ describe('主题注册表 · Plan 操作卡文字语义', () => {
     },
   );
 });
+
+// 2026-07-23 ask 卡整改防回潮:浅灰 chip/badge 上的文字必须接主文字槽位。
+// 换肤层把 --text-primary-on-dark 定义为「深底/红底前景白」双模式恒白,
+// chip 文字一旦回接该槽位,light 下即白字压浅底隐形(当日用户实测事故)。
+describe('主题注册表 · Ask/Plan badge 文字语义', () => {
+  it.each(['ask-badge-text', 'plan-bubble-badge-text'])(
+    '"%s" 使用主文字而非 on-dark 前景(防 light 白字压浅底回潮)',
+    (id) => {
+      expect(colorRegistry.resolveDefault(id, 'light')).toBe('var(--text-primary)');
+      expect(colorRegistry.resolveDefault(id, 'dark')).toBe('var(--text-primary)');
+    },
+  );
+});

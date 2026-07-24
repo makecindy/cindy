@@ -14,10 +14,11 @@
  *     provider-route.setCustomProviderKeyReader，host 在 register 时接通）。
  */
 
-import type { AgentKind } from '@cindy/model-providers';
+import type { AgentKind, ProviderWireProtocol } from '@cindy/model-providers';
 
 import {
   classifyProviderError,
+  type ProviderErrorClassification,
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -32,6 +33,8 @@ export interface ProviderProbeSpec {
   agent: AgentKind;
   baseUrl: string;
   modelId: string;
+  /** 缺省按 agent 保持历史行为。 */
+  wireProtocol?: ProviderWireProtocol;
   /** 用户 API key；缺省 = 不注入鉴权头（端点可能靠自定义 headers 鉴权）。 */
   apiKey?: string | null;
   /** 附加请求头（自定义供应商的 headers 配置）。 */
@@ -95,8 +98,28 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       },
     };
   }
-  // codex → OpenAI Responses wire。
+  // codex：原生 Responses 或 Cindy 将承载的 Chat Completions 上游。
   if (spec.apiKey) headers['authorization'] = `Bearer ${spec.apiKey}`;
+  if (spec.wireProtocol === 'openai-chat') {
+    // 「测试连接」= 验证 endpoint + key + Chat 协议 + 流式可达,**不强制 tool_choice**:
+    // 部分供应商的思考模型(如 DeepSeek deepseek-v4-pro)明确拒绝强制工具调用
+    // (“Thinking mode does not support this tool_choice”),会把可达的端点误报成失败。
+    // 工具调用能力交给真实会话验证(Codex 用 tool_choice:'auto',不强制)。
+    return {
+      url: joinUrl(spec.baseUrl, '/chat/completions'),
+      init: {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: spec.modelId,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 16,
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+      },
+    };
+  }
   return {
     url: joinUrl(spec.baseUrl, '/responses'),
     init: {
@@ -111,6 +134,58 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       }),
     },
   };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Read the first non-empty SSE data frame so 200-streamed provider errors do not pass the probe. */
+async function readFirstSsePayload(res: Response): Promise<string | null> {
+  if (!res.body) return null;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: !done });
+      let start = 0;
+      let newline: number;
+      while ((newline = buffer.indexOf('\n', start)) >= 0) {
+        const line = buffer.slice(start, newline).replace(/\r$/, '');
+        start = newline + 1;
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload) return payload;
+      }
+      if (start > 0) buffer = buffer.slice(start);
+      if (buffer.length > MAX_ERROR_BODY_BYTES) return null;
+      if (done) {
+        buffer += decoder.decode();
+        const line = buffer.replace(/\r$/, '');
+        if (!line.startsWith('data:')) return null;
+        return line.slice(5).trim() || null;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* no-op */
+    }
+  }
+}
+
+function classifyStreamedError(error: Record<string, unknown>): ProviderErrorClassification {
+  const bodyText = JSON.stringify(error).slice(0, MAX_ERROR_BODY_BYTES);
+  const explicitStatus = typeof error.status === 'number' ? error.status
+    : typeof error.status_code === 'number' ? error.status_code
+      : typeof error.code === 'number' ? error.code
+        : undefined;
+  const type = typeof error.type === 'string' ? error.type.toLowerCase() : '';
+  const inferredStatus = explicitStatus ?? (type.includes('server') || type.includes('overload') ? 503 : 400);
+  return classifyProviderError({ status: inferredStatus, bodyText });
 }
 
 /** 从 Error（fetch 抛出）提取网络层错误码。 */
@@ -140,7 +215,55 @@ export async function runProviderProbe(
   }
   const latencyMs = Date.now() - start;
   if (res.ok) {
-    // 探测响应体不消费（1 token 响应极小；显式取消防句柄泄漏）。
+    // openai-chat 探测发的是 `stream: true`,真实 Chat 桥现在会拒绝非 SSE 的 2xx 响应
+    // (返回 200 application/json 的伪流式端点)。探测必须同口径校验 content-type,否则
+    // 这类端点会「测试连接」通过、首个真实 Codex 会话却被桥拒 —— 结论自相矛盾。
+    if (spec.wireProtocol === 'openai-chat') {
+      const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
+      if (!contentType.startsWith('text/event-stream')) {
+        try {
+          await res.body?.cancel();
+        } catch {
+          /* no-op */
+        }
+        return {
+          ok: false,
+          code: 'WIRE_INCOMPATIBLE',
+          status: res.status,
+          latencyMs,
+          detail: `expected text/event-stream, got ${contentType || 'no content-type'}`,
+        };
+      }
+      const firstPayload = await readFirstSsePayload(res);
+      if (!firstPayload) {
+        return {
+          ok: false,
+          code: 'WIRE_INCOMPATIBLE',
+          status: res.status,
+          latencyMs,
+          detail: 'stream ended before the first SSE data frame',
+        };
+      }
+      if (firstPayload !== '[DONE]') {
+        try {
+          const event: unknown = JSON.parse(firstPayload);
+          if (isPlainObject(event) && isPlainObject(event.error)) {
+            const cls = classifyStreamedError(event.error);
+            return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail };
+          }
+        } catch {
+          return {
+            ok: false,
+            code: 'WIRE_INCOMPATIBLE',
+            status: res.status,
+            latencyMs,
+            detail: 'first SSE data frame is not valid JSON',
+          };
+        }
+      }
+      return { ok: true, latencyMs };
+    }
+    // Non-streaming probes do not need the response body; cancel it to release the connection.
     try {
       await res.body?.cancel();
     } catch {
@@ -181,6 +304,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
       agent,
       baseUrl: routing.upstream,
       modelId: model.id,
+      wireProtocol: routing.wireProtocol,
       apiKey: null,
       headers: {
         ...(routing.headerOverride ?? {}),
@@ -192,6 +316,10 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     agent,
     baseUrl: routing.upstream,
     modelId: model.id,
+    // 与 oauth-token 分支对齐：Chat 桥接供应商（api-key-header + openai-chat）的 saved 探测
+    // 必须带上 wireProtocol，否则 buildProbeRequest 回落到原生 /responses，对 Chat-only 上游
+    // 误报连接失败（真实会话走 resolveSessionRoute 不受影响，探测结论会与真实会话相反）。
+    wireProtocol: routing.wireProtocol,
     apiKey: keyReader(providerId, agent),
     headers: routing.headerOverride,
   };

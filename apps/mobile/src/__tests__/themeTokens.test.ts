@@ -43,11 +43,21 @@ describe('theme tokens', () => {
     expect(palettes.dark).toBe(darkColors);
   });
 
-  it('每个颜色 token 都是非空字符串', () => {
+  it('每个颜色 token 都是非空字符串(login 登录皮嵌套组下钻)', () => {
     for (const palette of [lightColors, darkColors]) {
       for (const [key, value] of Object.entries(palette)) {
+        if (key === 'login') {
+          // 登录皮双态色板(暗色实现 PR):嵌套组逐 key 校验
+          for (const [loginKey, loginValue] of Object.entries(
+            value as Record<string, string>,
+          )) {
+            expect(typeof loginValue, `login.${loginKey}`).toBe('string');
+            expect(loginValue.length, `login.${loginKey}`).toBeGreaterThan(0);
+          }
+          continue;
+        }
         expect(typeof value, key).toBe('string');
-        expect(value.length, key).toBeGreaterThan(0);
+        expect((value as string).length, key).toBeGreaterThan(0);
       }
     }
   });

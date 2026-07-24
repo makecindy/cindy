@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import {
@@ -64,6 +65,7 @@ export function SessionActionSheet({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
@@ -112,7 +114,7 @@ export function SessionActionSheet({
         <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress }]}>
           <BlurBackdrop />
           <Pressable
-            accessibilityLabel="关闭会话操作菜单"
+            accessibilityLabel={t('session.row.closeActionMenu')}
             onPress={onClose}
             style={styles.backdrop}
             testID="home.sessionActions.backdrop"
@@ -148,14 +150,14 @@ export function SessionActionSheet({
             })}
           </View>
           <Pressable
-            accessibilityLabel="取消"
+            accessibilityLabel={t('session.common.cancel')}
             accessibilityRole="button"
             onPress={onClose}
             style={({ pressed }) => [styles.cancelCard, pressed && styles.pressed]}
             testID="home.sessionActions.cancel"
           >
             <BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />
-            <Text style={styles.cancelText}>取消</Text>
+            <Text style={styles.cancelText}>{t('session.common.cancel')}</Text>
           </Pressable>
         </Animated.View>
       </View>

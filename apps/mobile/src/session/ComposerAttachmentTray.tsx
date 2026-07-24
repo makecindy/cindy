@@ -11,6 +11,7 @@
  */
 import { Pen, RefreshCw, X } from 'lucide-react-native';
 import { Image } from 'expo-image';
+import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import type { RemoteSerializedAttachment } from '@/session/types';
@@ -59,6 +60,7 @@ export function ComposerAttachmentTray({
   removeDisabledReason,
   testIDPrefix,
 }: ComposerAttachmentTrayProps) {
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeTrayStyles);
   const { colors } = useTheme();
   if (attachments.length === 0 && pendingUploads.length === 0 && pastePlaceholderCount === 0) return null;
@@ -70,7 +72,7 @@ export function ComposerAttachmentTray({
           return (
             <View key={attachment.id} style={styles.thumbCard} testID={`${testIDPrefix}.attachmentThumb`}>
               <Pressable
-                accessibilityLabel={`查看图片 ${attachment.name}`}
+                accessibilityLabel={t('composer.attachments.viewImage', { name: attachment.name })}
                 accessibilityRole="button"
                 onPress={() => onPreview(attachment.id)}
                 style={({ pressed }) => [styles.thumbPressable, pressed && styles.pressed]}
@@ -88,7 +90,7 @@ export function ComposerAttachmentTray({
               </Pressable>
               <Pressable
                 accessibilityHint={removeDisabledReason}
-                accessibilityLabel={`移除附件 ${attachment.name}`}
+                accessibilityLabel={t('composer.attachments.removeAttachment', { name: attachment.name })}
                 accessibilityRole="button"
                 disabled={removeDisabled}
                 hitSlop={6}
@@ -108,7 +110,7 @@ export function ComposerAttachmentTray({
             </Text>
             <Pressable
               accessibilityHint={removeDisabledReason}
-              accessibilityLabel={`移除附件 ${attachment.name}`}
+              accessibilityLabel={t('composer.attachments.removeAttachment', { name: attachment.name })}
               accessibilityRole="button"
               disabled={removeDisabled}
               hitSlop={8}
@@ -128,14 +130,14 @@ export function ComposerAttachmentTray({
             {pending.failed ? (
               // 失败态:遮罩变为可点的「重试」——弱网下让用户原地重试,不用重新找图。
               <Pressable
-                accessibilityLabel={`重试上传 ${pending.name}`}
+                accessibilityLabel={t('composer.attachments.retryUpload', { name: pending.name })}
                 accessibilityRole="button"
                 onPress={() => onRetryPending?.(pending.localId)}
                 style={({ pressed }) => [styles.thumbBusyOverlay, pressed && styles.pressed]}
                 testID={`${testIDPrefix}.attachmentPendingRetryButton`}
               >
                 <RefreshCw color={colors.ctaText} size={iconSize.md} strokeWidth={iconStroke.bold} />
-                <Text style={styles.thumbFailedText}>重试</Text>
+                <Text style={styles.thumbFailedText}>{t('composer.attachments.retry')}</Text>
               </Pressable>
             ) : (
               <View style={styles.thumbBusyOverlay}>
@@ -145,7 +147,7 @@ export function ComposerAttachmentTray({
           </View>
           <Pressable
             accessibilityHint={removeDisabledReason}
-            accessibilityLabel={pending.failed ? `移除失败的附件 ${pending.name}` : `取消上传 ${pending.name}`}
+            accessibilityLabel={pending.failed ? t('composer.attachments.removeFailed', { name: pending.name }) : t('composer.attachments.cancelUpload', { name: pending.name })}
             accessibilityRole="button"
             disabled={removeDisabled}
             hitSlop={6}
@@ -160,7 +162,7 @@ export function ComposerAttachmentTray({
         <View key={pending.localId} style={styles.chip} testID={`${testIDPrefix}.attachmentPendingChip`}>
           {pending.failed ? (
             <Pressable
-              accessibilityLabel={`重试上传 ${pending.name}`}
+              accessibilityLabel={t('composer.attachments.retryUpload', { name: pending.name })}
               accessibilityRole="button"
               hitSlop={8}
               onPress={() => onRetryPending?.(pending.localId)}
@@ -173,11 +175,11 @@ export function ComposerAttachmentTray({
             <ActivityIndicator color={colors.textSecondary} size="small" />
           )}
           <Text numberOfLines={1} style={styles.chipText}>
-            {pending.failed ? `${pending.name} · 上传失败` : pendingUploadDisplayLabel(pending)}
+            {pending.failed ? t('composer.attachments.uploadFailed', { name: pending.name }) : pendingUploadDisplayLabel(pending)}
           </Text>
           <Pressable
             accessibilityHint={removeDisabledReason}
-            accessibilityLabel={pending.failed ? `移除失败的附件 ${pending.name}` : `取消上传 ${pending.name}`}
+            accessibilityLabel={pending.failed ? t('composer.attachments.removeFailed', { name: pending.name }) : t('composer.attachments.cancelUpload', { name: pending.name })}
             accessibilityRole="button"
             disabled={removeDisabled}
             hitSlop={8}
@@ -233,6 +235,7 @@ export function ComposerAttachmentCollapsedBadge({
   onPress,
   testID,
 }: ComposerAttachmentCollapsedBadgeProps) {
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeTrayStyles);
   const count = attachments.length + pendingUploads.length + pastePlaceholderCount;
   if (count === 0) return null;
@@ -249,7 +252,7 @@ export function ComposerAttachmentCollapsedBadge({
   const extra = count - 1;
   return (
     <Pressable
-      accessibilityLabel={`${count} 个附件，点击展开`}
+      accessibilityLabel={t('composer.attachments.collapsedBadge', { count })}
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [styles.collapsedBadge, pressed && styles.pressed]}

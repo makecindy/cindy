@@ -20,6 +20,7 @@ function makeDeps(overrides: Partial<AssistantReplyHookDeps> = {}) {
     hasHook: () => true,
     isEligible: async () => true,
     screen: async (): Promise<GhostAssistantScreenResult> => ({ action: 'allow' }),
+    approveReplacement: async () => true,
     persistRewrite: calls.persistRewrite,
     applyRenderCard: calls.applyRenderCard,
     broadcastRewritten: calls.broadcastRewritten,
@@ -83,6 +84,16 @@ describe('runAssistantReplyHook', () => {
     expect(calls.setPending).toHaveBeenLastCalledWith('s1', 'c1', false);
   });
 
+  it('rewrite 二次审核不通过时保留已审核原文', async () => {
+    const { deps, calls } = makeDeps({
+      screen: async () => ({ action: 'rewrite', ghostId: 'g', ghostName: '意识', text: '未通过' }),
+      approveReplacement: async () => false,
+    });
+    await runAssistantReplyHook(deps, 's1', 'c1', '原文');
+    expect(calls.persistRewrite).not.toHaveBeenCalled();
+    expect(calls.broadcastRewritten).not.toHaveBeenCalled();
+  });
+
   it('render:落自绘卡(净化/广播在 applyRenderCard 内),pending 收尾', async () => {
     const { deps, calls } = makeDeps({
       screen: async () => ({
@@ -103,6 +114,21 @@ describe('runAssistantReplyHook', () => {
     });
     expect(calls.persistRewrite).not.toHaveBeenCalled();
     expect(calls.setPending).toHaveBeenLastCalledWith('s1', 'c1', false);
+  });
+
+  it('render 二次审核不通过时不落自绘卡', async () => {
+    const { deps, calls } = makeDeps({
+      screen: async () => ({
+        action: 'render',
+        ghostId: 'g',
+        ghostName: '意识',
+        html: '<div>未通过</div>',
+        text: '原文',
+      }),
+      approveReplacement: async () => false,
+    });
+    await runAssistantReplyHook(deps, 's1', 'c1', '原文');
+    expect(calls.applyRenderCard).not.toHaveBeenCalled();
   });
 
   it('screen 抛错:吞掉,pending 仍被关闭(finally)', async () => {

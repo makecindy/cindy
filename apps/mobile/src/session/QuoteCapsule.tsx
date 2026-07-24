@@ -12,6 +12,7 @@
  * 截 3 行;文件来源条目附 FileText 图标 + basename/行号。
  */
 import { useCallback, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FileText, MessageSquareQuote, X } from 'lucide-react-native';
 import { Modal, Pressable, ScrollView, View, useWindowDimensions } from 'react-native';
 import { Text } from '@/components/AppText';
@@ -41,6 +42,7 @@ export interface QuoteCapsuleProps {
 export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCapsule' }: QuoteCapsuleProps) {
   const styles = useThemedStyles(makeQuoteCapsuleStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const capsuleRef = useRef<View>(null);
   // 非空 = 预览浮窗开启(记录胶囊的 window 坐标供浮窗锚定)。
@@ -83,7 +85,7 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
   return (
     <View style={variant === 'bubble' ? styles.containerBubble : styles.containerComposer} testID={testIDPrefix}>
       <Pressable
-        accessibilityLabel={`${quotes.length} 处引用，点击预览`}
+        accessibilityLabel={t('message.quote.countPreviewHint', { n: quotes.length })}
         accessibilityRole="button"
         onPress={openPreview}
         ref={capsuleRef}
@@ -91,10 +93,10 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
         testID={`${testIDPrefix}.pill`}
       >
         <MessageSquareQuote color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-        <Text style={styles.capsuleText}>{`${quotes.length} 处引用`}</Text>
+        <Text style={styles.capsuleText}>{t('message.quote.count', { n: quotes.length })}</Text>
         {variant === 'composer' && onClear ? (
           <Pressable
-            accessibilityLabel="移除引用"
+            accessibilityLabel={t('message.quote.remove')}
             accessibilityRole="button"
             hitSlop={8}
             onPress={onClear}
@@ -115,7 +117,7 @@ export function QuoteCapsule({ quotes, variant, onClear, testIDPrefix = 'quoteCa
         >
           {/* 全屏透明背板:点任意处关闭;浮窗卡片自身拦截点击不透传。 */}
           <Pressable
-            accessibilityLabel="关闭引用预览"
+            accessibilityLabel={t('message.quote.closePreview')}
             onPress={closePreview}
             style={styles.previewBackdrop}
             testID={`${testIDPrefix}.previewBackdrop`}

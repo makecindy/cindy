@@ -8,6 +8,7 @@
  * lightbox 经 onResolveRemoteMedia 走「取件上传 OSS → presign」既有管线拿到
  * 可显示 URL,对老版本被控端同样生效,零新协议。
  */
+import { i18n } from '@/i18n';
 import { buildMediaPayload } from '@/session/messagePayload';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import {
@@ -61,7 +62,7 @@ export function createFileBrowserMediaResolver(deps: MobileRemoteMediaResolverDe
     if (cached && !opts?.forceRefresh && isResolvedRemoteMediaFresh(cached)) return cached;
     // cachedOnly(lightbox 垫底预取):只吃缓存,未命中不触发取件——本 resolver 不区分
     // 缩略图变体,放行会变成一次装饰性的整图导出+下载,与主取件叠成双下载。
-    if (opts?.cachedOnly) throw new Error('远程媒体缓存未命中(cachedOnly)');
+    if (opts?.cachedOnly) throw new Error(i18n.t('files.gallery.cacheMiss'));
     // forceRefresh(Image 加载失败自愈)映射为被控端 skipCache,穿透上传去重缓存。
     const resolved = await resolveMobileRemoteMedia(media, deps, opts?.forceRefresh ? { skipCache: true } : undefined);
     cache.set(media.url, resolved);

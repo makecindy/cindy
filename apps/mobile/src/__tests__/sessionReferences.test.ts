@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DeviceLinkError,
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   estimateMobileReferenceTokens,
@@ -19,6 +20,11 @@ import {
   type MobileSessionReference,
   type MobileSessionReferenceContext,
 } from '@/session/sessionReferences';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function message(
   sessionId: string,

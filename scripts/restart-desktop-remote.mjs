@@ -149,11 +149,27 @@ function ensureDesktopEnv() {
   } else {
     console.log(`==> Checked desktop env: ${path.relative(rootDir, envPath)}`);
   }
+  return content;
 }
 
 function readEnvValue(content, key) {
   const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(.*?)\\s*$`, 'm');
   return content.match(pattern)?.[1]?.trim() ?? '';
+}
+
+/**
+ * Remote dev intentionally does not load the whole desktop .env. These two
+ * dev-only overrides are allowlisted so local moderation can be tested while
+ * auth and the rest of the client continue to use the selected endpoint
+ * manifest. Explicit process/CLI values keep precedence.
+ */
+export function applyDesktopDevEnvOverrides(content, env = process.env) {
+  for (const key of ['XDT_CONTENT_MODERATION', 'XDT_ENDPOINT_MANIFEST_FILE']) {
+    if (key in env) continue;
+    const value = readEnvValue(content, key);
+    if (value) env[key] = value;
+  }
+  return env;
 }
 
 function upsertEnvValue(content, key, value, options = {}) {
@@ -457,6 +473,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
     ['XDT_ISOLATED_NAME', env.XDT_ISOLATED_NAME],
+    ['XDT_CONTENT_MODERATION', env.XDT_CONTENT_MODERATION],
     // 端点清单来源覆写:--endpoints-cdn(dev 走线上 CDN)/ local 模式的
     // endpoint.local.json 文件路径,均由主进程 clientEndpointsService 消费。
     ['XDT_ENDPOINTS_CDN', env.XDT_ENDPOINTS_CDN],
@@ -647,6 +664,10 @@ async function main() {
     );
   }
   console.log(`==> Desktop region: ${startupConfig.region}`);
+  if (argv.includes('--content-moderation')) {
+    process.env.XDT_CONTENT_MODERATION = '1';
+    console.log('==> Content moderation test mode: enabled.');
+  }
   // --passive: 定时任务被动模式 —— 本实例不参与自动触发(交给同机 primary,
   // 典型场景多个 dev preview 与 release/primary 共享数据时 preview 让位)。
   // 实现方式是置 XDT_SCHEDULER_PASSIVE=1,经 devEnvPrefix 白名单透传进新开的
@@ -699,7 +720,10 @@ async function main() {
     fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
     console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
   }
-  if (!killOnly) ensureDesktopEnv();
+  if (!killOnly) {
+    const desktopEnv = ensureDesktopEnv();
+    applyDesktopDevEnvOverrides(desktopEnv);
+  }
 
   const devAncestor = findDevAncestor();
   if (devAncestor && !preserveRunning) {

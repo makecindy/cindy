@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -11,6 +11,9 @@ export function UserPromptSection() {
   const { t } = useTranslation();
 
   const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
   // 外部 storage 变化（其他 window 实例 setValue 触发的 storage event）时刷新草稿。
   // 单 Electron 窗口里几乎不会触发，留作兜底。
@@ -21,12 +24,35 @@ export function UserPromptSection() {
   const length = draft.length;
   const overLimit = length > USER_PROMPT_MAX_LENGTH;
   const dirty = draft !== value;
-  const canSave = dirty && !overLimit;
+  const canSave = dirty && !overLimit && !saving;
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     if (!canSave) return;
-    setValue(draft);
-    toast.success(t('settings.personalization.toast.saved'));
+    const snapshot = draft;
+    setSaving(true);
+    try {
+      const reviewFn = window.electronAPI.contentModeration?.reviewUserPrompt;
+      if (!reviewFn) {
+        toast.error(t('settings.personalization.toast.saveFailed'));
+        return;
+      }
+      const decision = await reviewFn(snapshot);
+      if (decision === 'reject') {
+        toast.error(t('contentModeration.blocked'));
+        return;
+      }
+      if (decision === 'cancelled') {
+        toast.error(t('settings.personalization.toast.saveFailed'));
+        return;
+      }
+      if (draftRef.current !== snapshot) return;
+      setValue(snapshot);
+      toast.success(t('settings.personalization.toast.saved'));
+    } catch {
+      toast.error(t('settings.personalization.toast.saveFailed'));
+    } finally {
+      setSaving(false);
+    }
   }, [canSave, draft, setValue, t]);
 
   const counter = useMemo(

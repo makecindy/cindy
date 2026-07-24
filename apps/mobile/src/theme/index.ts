@@ -20,4 +20,4 @@ export {
   type ThemeMode,
 } from './tokens';
 export { monoFont } from './monoFont';
-export { ThemeProvider, useTheme, useThemedStyles } from './ThemeProvider';
+export { ThemeOverrideProvider, ThemeProvider, useTheme, useThemedStyles } from './ThemeProvider';

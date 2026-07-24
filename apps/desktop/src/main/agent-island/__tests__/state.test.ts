@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent, InteractionRequest } from '@cindy/maker-core';
+import { DEFAULT_TOOL_ROW_WORDING } from '@cindy/maker-shared/message-presentation';
 import { DEFAULT_AGENT_ISLAND_STRINGS } from '../../../shared/agentIsland.js';
 
 import {
@@ -21,6 +22,7 @@ import {
   requestAgentIslandSessionFocus,
   setAgentIslandAppFocused,
   setAgentIslandStrings,
+  setAgentIslandToolWording,
   setAgentIslandHovered,
   setAgentIslandLayoutDragActive,
   setAgentIslandPointerZones,
@@ -338,7 +340,7 @@ describe('Agent Island display state', () => {
     expect(afterPreviewDwell.sessions[0]?.compactDetail).toBe('我会继续看输出');
   });
 
-  it('shows the currently running shell command instead of only the tool name', () => {
+  it('humanizes intent-classified shell commands with panel wording', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(
       state,
@@ -358,9 +360,30 @@ describe('Agent Island display state', () => {
     const display = buildAgentIslandDisplayState(state, 1_050);
 
     expect(display.sessions[0]).toMatchObject({
-      detail: '$ pnpm --dir apps/desktop test',
+      detail: '运行测试',
       phase: 'running',
     });
+  });
+
+  it('keeps the raw shell command when no intent rule classifies it', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(
+      state,
+      { sessionId: 's1', title: 'Task', agentKind: 'codex', workingDir: '/repo/xdt-maker' },
+      {
+        type: 'tool_use',
+        source: 'codex',
+        data: {
+          toolUseId: 'tool-1',
+          toolName: 'exec',
+          // rm 系破坏性命令刻意不进意图规则表:显示原文。
+          input: { command: 'rm -rf dist', cwd: '/repo/xdt-maker' },
+        },
+      },
+      1_000,
+    );
+
+    expect(buildAgentIslandDisplayState(state, 1_050).sessions[0]?.detail).toBe('$ rm -rf dist');
   });
 
   it('uses displayCommand for Codex command summaries when raw command is a wrapper', () => {
@@ -387,14 +410,15 @@ describe('Agent Island display state', () => {
 
     const display = buildAgentIslandDisplayState(state, 1_050);
 
-    expect(display.sessions[0]?.detail).toBe('$ pnpm build');
+    // displayCommand 解包 wrapper 后作为意图解析输入源:pnpm build → 构建。
+    expect(display.sessions[0]?.detail).toBe('构建');
   });
 
-  it('localizes task update tool detail', () => {
+  it('localizes task update tool detail through the injected wording', () => {
     const state = createAgentIslandState();
-    setAgentIslandStrings(state, {
-      ...DEFAULT_AGENT_ISLAND_STRINGS,
-      updatingTasks: '正在更新任务',
+    setAgentIslandToolWording(state, {
+      ...DEFAULT_TOOL_ROW_WORDING,
+      verb: (key) => (key === 'updateTodos' ? '正在更新任务' : DEFAULT_TOOL_ROW_WORDING.verb(key)),
     });
 
     applyAgentIslandEvent(
@@ -459,7 +483,7 @@ describe('Agent Island display state', () => {
     applyAgentIslandEvent(state, { sessionId: 's1' }, toolResultEvent('tool-1'), 1_500);
     applyAgentIslandEvent(state, { sessionId: 's1' }, statusEvent(true, 'Thinking'), 1_700);
 
-    expect(buildAgentIslandDisplayState(state, 2_000).sessions[0]?.detail).toBe('$ pnpm test');
+    expect(buildAgentIslandDisplayState(state, 2_000).sessions[0]?.detail).toBe('运行测试');
     expect(buildAgentIslandDisplayState(state, 3_600).sessions[0]?.detail).toBe('');
 
     applyAgentIslandEvent(state, { sessionId: 's1' }, statusEvent(true, 'Thinking'), 3_700);
@@ -631,7 +655,7 @@ describe('Agent Island display state', () => {
       start + AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS * 2 + 200,
     );
     expect(afterAssistantDwell.sessions[0]?.messagePreview).toBeNull();
-    expect(afterAssistantDwell.sessions[0]?.compactDetail).toBe('$ pnpm test');
+    expect(afterAssistantDwell.sessions[0]?.compactDetail).toBe('运行测试');
   });
 
   it('does not display managed dialogue workspace folders as projects', () => {
@@ -1733,14 +1757,15 @@ describe('Agent Island display state', () => {
       input: { command: 'pnpm lint' },
     }, 1_200);
 
-    expect(buildAgentIslandDisplayState(state, 1_250).sessions[0]?.detail).toBe('$ pnpm test');
+    // 权限确认:人话意图作语境,真实命令保持可见。
+    expect(buildAgentIslandDisplayState(state, 1_250).sessions[0]?.detail).toBe('运行测试 · $ pnpm test');
 
     applyAgentIslandInteractionDismissed(state, 'ask', 'r1', 1_300);
     const display = buildAgentIslandDisplayState(state, 1_350);
 
     expect(display.sessions[0]).toMatchObject({
       permissionAction: { requestId: 'r2' },
-      detail: '$ pnpm lint',
+      detail: '代码检查 · $ pnpm lint',
     });
   });
 
@@ -1761,7 +1786,7 @@ describe('Agent Island display state', () => {
 
     expect(display.sessions[0]).toMatchObject({
       permissionAction: { requestId: 'r2' },
-      detail: '$ pnpm lint',
+      detail: '代码检查 · $ pnpm lint',
     });
   });
 

@@ -7,6 +7,8 @@
  */
 import type { ProviderView } from '@cindy/model-providers/registry';
 
+import { i18n } from '@/i18n';
+
 import type { MobileModelOption } from './agentCapabilities';
 import type { PickerRowModel } from './modelPickerRows';
 import type { ProviderModelRow } from './providerModelSections';
@@ -78,11 +80,11 @@ export function modelPickerSheetTitle(
   rows: readonly ProviderModelRow[],
   flatOptions: readonly MobileModelOption[],
 ): string {
-  if (view.kind === 'permission') return '权限';
+  if (view.kind === 'permission') return i18n.t('models.picker.permissionTitle');
   if (view.kind === 'options') {
     return findOptionsTarget(view, rows, flatOptions)?.displayName ?? view.modelId;
   }
-  return '模型';
+  return i18n.t('models.picker.title');
 }
 
 /** flat 回退列表的 query 过滤(label / id 大小写不敏感包含,与供应商分段的共享 builder 同口径)。 */

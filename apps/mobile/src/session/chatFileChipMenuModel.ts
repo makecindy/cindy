@@ -4,6 +4,7 @@
  * 「打开」直接就是文件浏览器定位),渲染层只按 key 映射图标与回调。
  */
 
+import { i18n } from '@/i18n';
 import type { ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
 
@@ -36,18 +37,18 @@ export function chatFileChipMenuTitle(target: ChatFilePathTarget): string {
 export function chatFileChipMenuRows(target: ChatFilePathTarget): ChatFileChipMenuRow[] {
   if (target.kind === 'directory') {
     return [
-      { key: 'open', label: '打开文件浏览器' },
-      { key: 'sendToSession', label: '发送到会话' },
-      { key: 'copyPath', label: '复制路径' },
+      { key: 'open', label: i18n.t('composer.attachments.fileMenu.openBrowser') },
+      { key: 'sendToSession', label: i18n.t('composer.attachments.fileMenu.sendToSession') },
+      { key: 'copyPath', label: i18n.t('composer.attachments.fileMenu.copyPath') },
     ];
   }
   return [
-    { key: 'open', label: '快速预览' },
+    { key: 'open', label: i18n.t('composer.attachments.fileMenu.quickPreview') },
     ...(target.relPath !== null
-      ? [{ key: 'revealInBrowser', label: '在文件浏览器中查看' } as const]
+      ? [{ key: 'revealInBrowser', label: i18n.t('composer.attachments.fileMenu.revealInBrowser') } as const]
       : []),
-    { key: 'sendToSession', label: '发送到会话' },
-    { key: 'copyPath', label: '复制路径' },
-    { key: 'share', label: '导出 / 分享' },
+    { key: 'sendToSession', label: i18n.t('composer.attachments.fileMenu.sendToSession') },
+    { key: 'copyPath', label: i18n.t('composer.attachments.fileMenu.copyPath') },
+    { key: 'share', label: i18n.t('composer.attachments.fileMenu.share') },
   ];
 }

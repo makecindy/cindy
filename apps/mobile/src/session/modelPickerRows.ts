@@ -3,7 +3,8 @@
  *
  * 全部口径对齐桌面 ModelSelector.tsx 的同名函数(rowEffortOf / fastOnOf / fastEditable /
  * budgetDisabledOf / tooltipFor / formatContextWindow),文案对齐桌面 zh-CN common.json
- * (手机无 i18n 体系,硬编码简体中文,与桌面中文逐字一致)。组件只做渲染,这里可 node 单测。
+ * (mobile i18n 化后由 models.json catalog 供文案,在使用点求值 i18n.t)。组件只做渲染,
+ * 这里可 node 单测。
  */
 import { modelSupportsFastMode, type ProviderView } from '@cindy/model-providers/registry';
 import type { SectionModel } from '@cindy/model-providers/sections';
@@ -11,13 +12,20 @@ import type { AgentKind } from '@cindy/model-providers/types';
 
 import { MOBILE_EFFORT_LABELS } from '@cindy/maker-shared/agent-capabilities';
 
+import { i18n } from '@/i18n';
+
 import type { MobileAgentCapabilities } from './agentCapabilities';
 import type { MobileModelMemoryAccessors } from './draftModelMemory';
 import type { DeviceApiKeyStatus } from '@/device-link/deviceModelMetaCache';
 import type { MobileModelPricingMap } from '@/device-link/mobileMakerTransport';
 
-/** budget 档置灰时的行内提示(对位桌面 budgetNeedsApiKey,按远程语境改「被控电脑」)。 */
-export const BUDGET_DISABLED_HINT = '该模型需先在被控电脑配置 API key 才能使用';
+/**
+ * budget 档置灰时的行内提示(对位桌面 budgetNeedsApiKey,按远程语境改「被控电脑」)。
+ * 函数而非常量:在使用点求值 i18n.t,避免模块顶层冻结语言。
+ */
+export function budgetDisabledHint(): string {
+  return i18n.t('models.picker.budgetDisabledHint');
+}
 
 /** 行/展开区消费的最小模型形状(SectionModel 与 capabilities MobileModelOption 都满足)。 */
 export interface PickerRowModel {
@@ -59,7 +67,10 @@ export function formatPriceLine(
 ): string | null {
   if (!price) return null;
   const fmt = (v: number) => `$${Number(v.toFixed(2))}`;
-  return `输入 ${fmt(price.inputUsdPerMtok)} · 输出 ${fmt(price.outputUsdPerMtok)} / 百万 token`;
+  return i18n.t('models.picker.priceLine', {
+    input: fmt(price.inputUsdPerMtok),
+    output: fmt(price.outputUsdPerMtok),
+  });
 }
 
 /**
@@ -73,10 +84,12 @@ export function buildRowMetaLine(args: {
 }): string | null {
   const parts: string[] = [];
   if (args.provider) parts.push(providerDisplayTitle(args.provider));
-  if (args.model.contextWindow > 0) parts.push(`${formatContextWindow(args.model.contextWindow)} 上下文`);
+  if (args.model.contextWindow > 0) {
+    parts.push(i18n.t('models.picker.contextSuffix', { size: formatContextWindow(args.model.contextWindow) }));
+  }
   const price = formatPriceLine(args.pricing?.[args.model.id]);
   if (price) parts.push(price);
-  if (args.model.supportsFastMode) parts.push('快速');
+  if (args.model.supportsFastMode) parts.push(i18n.t('models.picker.fastTag'));
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 

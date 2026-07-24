@@ -1,0 +1,18 @@
+{
+  "syncFailed": "동기화 실패",
+  "resync": "다시 동기화",
+  "resyncing": "다시 동기화하는 중",
+  "syncShort": "동기화",
+  "connectStep1": "컴퓨터에 {{appName}}을(를) 설치하고 실행하세요",
+  "connectStep2": "휴대폰과 동일한 계정으로 로그인하세요",
+  "connectStep3": "'설정 → 원격 연결'에서 '동일 계정 기기의 이 컴퓨터 제어 허용'을 켜세요",
+  "brandEyebrow": "Cindy 모바일",
+  "cloudTeaserTitle": "클라우드 {{appName}} 준비 중",
+  "cloudTeaserCopy": "출시되면 컴퓨터 없이 모바일 앱만으로 바로 사용할 수 있습니다.",
+  "sectionFirstRun": "시작하기",
+  "sectionOffline": "연결한 컴퓨터",
+  "sectionRemoteDisabled": "컴퓨터에서 조작",
+  "sectionAccessRevoked": "다시 허용 필요",
+  "retryAccess": "액세스 재시도",
+  "recheck": "다시 확인"
+}

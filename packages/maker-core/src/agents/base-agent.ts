@@ -592,6 +592,19 @@ export interface SendOptions {
 }
 
 /**
+ * 会话内仍在运行的单个后台任务快照(listBackgroundTasks 的元素)。字段与
+ * agent_task_update 事件同源:taskId 是 SDK task_id;toolUseId 是派生该任务的
+ * 工具调用 id(renderer 用它对回消息流里的工具行);title 是 SDK description。
+ */
+export interface BackgroundTaskSnapshot {
+  taskId: string;
+  /** SDK task_type(local_bash / local_agent / local_workflow 等),缺失表示未知。 */
+  taskType?: string;
+  toolUseId?: string;
+  title?: string;
+}
+
+/**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
@@ -627,6 +640,23 @@ export interface AgentSessionHandle {
 
   /** 中断当前 turn */
   abort(): Promise<void>;
+
+  /**
+   * 停止会话内单个后台任务(SDK Query.stopTask 透传)。
+   * 与 abort() 的区别:abort 是"用户 Stop"的全停语义(只连带 wake 型任务、并
+   * 中断当前 turn);本方法精确停一个后台任务(含 local_bash —— 用户在 UI 上
+   * 对着具体任务点停,不存在 abort 那种误杀 dev server 的顾虑),不碰当前 turn。
+   * 幂等:任务已到终态时静默成功。不支持的 agent 留空(Session 层抛
+   * NotSupportedError)。
+   */
+  stopBackgroundTask?(taskId: string): Promise<void>;
+
+  /**
+   * 当前仍在运行的后台任务快照(含 local_bash)。事件流(agent_task_update)是
+   * 唯一实时源;本方法只服务「订阅者挂载/重载晚于任务启动」的存量补齐场景。
+   * 不支持的 agent 留空(Session 层回退为空数组)。
+   */
+  listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /** 关闭会话，清理子进程 */
   close(): Promise<void>;

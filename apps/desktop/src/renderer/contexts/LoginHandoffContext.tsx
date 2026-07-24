@@ -73,6 +73,11 @@ export type LoginHandoffBranch = 'unauthenticated' | 'authenticated' | null;
 export interface LoginHandoffContextValue {
   phase: LoginHandoffPhase;
   branch: LoginHandoffBranch;
+  /**
+   * 登录面板下方内容需要预留的高度；null 表示 LoginPage 尚未上报，
+   * 品牌层应使用常态本地模式 footer 的预留值。
+   */
+  panelBottomReserve: number | null;
   /** 播放中(boot 之后、done 之前)——面板/Slogan 的入场 transition 只在此期挂。 */
   isPlaying: boolean;
   /** 品牌 overlay 是否应挂载(startup 期恒挂;done 后跟随 login 面板存在;authenticated 淡出后卸载)。 */
@@ -87,6 +92,7 @@ export interface LoginHandoffContextValue {
   reportSplashExited: () => void;
   reportLoginPanelMounted: () => void;
   reportLoginPanelUnmounted: () => void;
+  reportPanelBottomReserve: (reserve: number | null) => void;
 }
 
 const LoginHandoffContext = createContext<LoginHandoffContextValue | null>(null);
@@ -98,6 +104,7 @@ const LoginHandoffContext = createContext<LoginHandoffContextValue | null>(null)
 const FALLBACK_VALUE: LoginHandoffContextValue = Object.freeze({
   phase: 'done',
   branch: null,
+  panelBottomReserve: null,
   isPlaying: false,
   brandStageMounted: true,
   brandExiting: false,
@@ -107,6 +114,7 @@ const FALLBACK_VALUE: LoginHandoffContextValue = Object.freeze({
   reportSplashExited: () => {},
   reportLoginPanelMounted: () => {},
   reportLoginPanelUnmounted: () => {},
+  reportPanelBottomReserve: () => {},
 });
 
 function prefersReducedMotion(): boolean {
@@ -133,6 +141,7 @@ export function LoginHandoffProvider({
   const [brandReady, setBrandReady] = useState(false);
   const [splashExited, setSplashExited] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
+  const [panelBottomReserve, setPanelBottomReserve] = useState<number | null>(null);
 
   // 冷启动只播一次:进程生命周期内 resize/reset/登出重回 /login 均不重播。
   const playedRef = useRef(false);
@@ -163,6 +172,10 @@ export function LoginHandoffProvider({
     panelMountedRef.current = false;
     setPanelMounted(false);
   }, []);
+  const reportPanelBottomReserve = useCallback(
+    (reserve: number | null) => setPanelBottomReserve(reserve),
+    [],
+  );
 
   // ── 推进锚:品牌资产 onload ∧ auth 初始化完成 ∧ Splash 退场 → 起播(一次) ──
   useEffect(() => {
@@ -219,6 +232,7 @@ export function LoginHandoffProvider({
     return {
       phase,
       branch,
+      panelBottomReserve,
       isPlaying,
       // startup 期(含 boot/播放中/brand-exit)恒挂以维持不透明白底全盖;done 后
       // 一律跟随登录面板存在:authenticated 淡出完成且无面板 → 卸载;之后登出
@@ -234,15 +248,18 @@ export function LoginHandoffProvider({
       reportSplashExited,
       reportLoginPanelMounted,
       reportLoginPanelUnmounted,
+      reportPanelBottomReserve,
     };
   }, [
     phase,
     branch,
     panelMounted,
+    panelBottomReserve,
     reportBrandAssetsReady,
     reportSplashExited,
     reportLoginPanelMounted,
     reportLoginPanelUnmounted,
+    reportPanelBottomReserve,
   ]);
 
   return <LoginHandoffContext.Provider value={value}>{children}</LoginHandoffContext.Provider>;

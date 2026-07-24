@@ -13,6 +13,7 @@ import {
   type VoiceInputState,
   type VoiceTimelineEvent,
 } from '@cindy/voice-input-core';
+import { i18n } from '@/i18n';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
@@ -22,7 +23,7 @@ import {
   buildMobileVoiceRefinementContext,
   makeMobileRefinerPromptCacheKey,
   MobileLiteLlmTextModelClient,
-  MOBILE_VOICE_EMPTY_TRANSCRIPT_ERROR,
+  mobileVoiceEmptyTranscriptError,
   type MobileVoiceDraftInsertion,
 } from '@/session/mobileVoiceInput';
 import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
@@ -386,7 +387,7 @@ export function createMobileVoiceControllerSession(
       },
       onError(message, code: VoiceInputErrorCode | undefined) {
         const localizedMessage = code === 'empty_transcript'
-          ? MOBILE_VOICE_EMPTY_TRANSCRIPT_ERROR
+          ? mobileVoiceEmptyTranscriptError()
           : redactMobileVoiceCredentialText(message, options.credential);
         controllerError = new Error(localizedMessage);
         options.onError?.(localizedMessage);
@@ -520,7 +521,7 @@ export function createMobileVoiceControllerSession(
       await controller.stop();
       if (state === 'error' || controllerError) {
         runPhase = 'failed';
-        throw controllerError ?? new Error('语音输入未完成，请重试。');
+        throw controllerError ?? new Error(i18n.t('composer.voice.incomplete'));
       }
       if (state === 'submitting' || state === 'refining') await waitForDone(doneWaiters);
       if (runPhase === 'stopping') runPhase = 'idle';
@@ -655,7 +656,7 @@ function createMobileRefiner(
   if (credential.settings?.refinementEnabled === false) return undefined;
   const refinerTargetProvider = options.refinerTargetProvider;
   if (!refinerTargetProvider) {
-    throw new Error('手机版语音润色需要 Cindy 语音会话(缺少 refinerTargetProvider)。');
+    throw new Error(i18n.t('composer.voice.missingRefinerTargetProvider'));
   }
   // 托管单请求:模型选择与 failover 在 voice-server(provider/model 都传 'auto',
   // 服务端按自己配置的模型链覆盖),客户端不再做多 provider fallback。

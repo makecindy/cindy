@@ -147,8 +147,15 @@ import matter from 'gray-matter';
 import type { Maker } from '@cindy/maker-core';
 import { im, feishuIm, startImOrchestrators, startImConnection, stopImConnection } from './im';
 import * as authManager from './authManager';
+import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
+import { moderateProfileUpdate } from './content-moderation/profile.js';
+import {
+  moderateUserPrompt,
+  validateUserPromptReviewValue,
+} from './content-moderation/userPrompt.js';
+import { cancelAllReleasedOutputs } from './content-moderation/outputHub.js';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import { installWebviewHardener } from './webview-security';
@@ -2293,6 +2300,7 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
+let disposeContentModerationAuthListener: (() => void) | null = null;
 
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
@@ -2373,6 +2381,14 @@ const registerIpcHandlers = () => {
 
   ipcMain.on('get-os-release', (event) => {
     event.returnValue = os.release();
+  });
+
+  // 首启亮色门的同步会话线索(见 authSessionHint.ts):renderer bootstrap 在
+  // 任何渲染前判定「真首启」,localStorage 为空但主进程持有存量会话(持久化
+  // refresh token / local 模式)时不得激活亮色门,否则已登录暗色用户会先看到
+  // 亮色首帧。必须 sendSync——判定发生在首帧之前,异步 IPC 赶不上。
+  ipcMain.on('auth:has-persisted-session-hint-sync', (event) => {
+    event.returnValue = hasPersistedSessionHint({ userDataPath: app.getPath('userData') });
   });
 
   ipcMain.on('get-app-display-version-info', (event) => {
@@ -3334,6 +3350,12 @@ const registerIpcHandlers = () => {
     accountDeletionHandlers.consumeRestoredNotice(),
   );
 
+  ipcMain.handle('content-moderation:review-user-prompt', async (event, value: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    validateUserPromptReviewValue(value);
+    return moderateUserPrompt(value);
+  });
+
   // ── Profile 编辑 IPC(设置 → 用户卡片编辑;业务体在 profileEdit.ts,
   //    资料直写 auth-server,头像经 oss-server 预签名直传) ──
 
@@ -3363,6 +3385,7 @@ const registerIpcHandlers = () => {
       }
       return result;
     },
+    moderateProfile: (input) => moderateProfileUpdate(input),
     patchProfile: (patch) => authManager.updateServerProfile(patch),
     logWarn: (message, err) => profileEditLog.warn(message, err),
   };
@@ -4026,6 +4049,13 @@ const registerIpcHandlers = () => {
   });
   disposeProviderAccessAuthListener = authManager.onAuthStateChange(() => {
     refreshProviderAccessAfterAuthChange();
+  });
+  let moderationAuthEpoch = authManager.getAuthIdentityEpoch();
+  disposeContentModerationAuthListener = authManager.onAuthStateChange(() => {
+    const nextEpoch = authManager.getAuthIdentityEpoch();
+    if (nextEpoch === moderationAuthEpoch) return;
+    moderationAuthEpoch = nextEpoch;
+    cancelAllReleasedOutputs();
   });
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
@@ -5515,6 +5545,8 @@ onQuit(
   () => {
     disposeProviderAccessAuthListener?.();
     disposeProviderAccessAuthListener = null;
+    disposeContentModerationAuthListener?.();
+    disposeContentModerationAuthListener = null;
   },
   'sync',
 );

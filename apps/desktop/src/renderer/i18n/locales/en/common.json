@@ -1,4 +1,7 @@
 {
+  "contentModeration": {
+    "blocked": "Sorry, we can't answer this question right now. Please rephrase your question."
+  },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
@@ -1139,6 +1142,7 @@
           "name": "Display name",
           "namePlaceholder": "My AI provider",
           "protocols": "Runtime",
+          "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API key",
@@ -1156,11 +1160,17 @@
           "addHeader": "Add header",
           "removeRow": "Remove row"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses (native)",
+          "chat": "Chat Completions (Cindy bridge)",
+          "responsesHelp": "The provider supports the Responses API natively, so Cindy forwards its event stream unchanged.",
+          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable."
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
           "codex": "Codex",
-          "codexDesc": "Codex follows the OpenAI protocol (auth via Bearer). Requires models that support the Responses API. Enter this source's baseURL, key, and models for Codex; leave blank to skip Codex for this source."
+          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose a native Responses upstream or let Cindy bridge a provider that only supports Chat Completions. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
         },
         "errors": {
           "nameRequired": "Display name is required",
@@ -1291,6 +1301,7 @@
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
+        "bridgedNote": "Cindy bridge (Chat Completions)",
         "docsLink": "View setup docs",
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
@@ -1524,7 +1535,8 @@
       "save": "Save",
       "overLimit": " — over limit",
       "toast": {
-        "saved": "Custom instructions saved"
+        "saved": "Custom instructions saved",
+        "saveFailed": "Failed to save custom instructions"
       }
     },
     "chipMetrics": {
@@ -2063,12 +2075,14 @@
       },
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal bots connect to Feishu / Discord with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself."
+        "personal": "Personal bots connect to Feishu / Discord with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself.",
+        "personalFeishuOnly": "Personal bots connect to Feishu with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself."
       },
       "defaults": {
         "title": "New Conversation Configuration",
         "description": "New conversations started from Feishu, Slack, or Discord use this agent and model configuration. Changes apply only to new conversations; send /new in an existing Discord DM to apply them.",
         "localDescription": "New conversations started from Feishu or Discord use this agent and model configuration. Changes apply only to new conversations; send /new in an existing Discord DM to apply them.",
+        "feishuOnlyDescription": "New conversations started from Feishu use this agent and model configuration. Changes apply only to new conversations.",
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
         "loading": "Loading new conversation configuration…",
@@ -2842,11 +2856,10 @@
   "legacyMigration": {
     "title": "Migrate data from the previous version",
     "description": "Data from a previous version was found on this device. Your chat history and media files will be migrated to the new data location. If the old app is still running, please quit it completely first, and keep {{appName}} open during the migration. Note: authorized third-party keys and credentials cannot be migrated — after the migration you will need to re-authorize or re-enter them in Settings.",
-    "confirm": "OK",
+    "confirm": "Continue",
     "migrating": "Migrating data, please wait…",
     "failedTitle": "Migration incomplete",
-    "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in.",
-    "continue": "Continue"
+    "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in."
   },
   "splash": {
     "tips": {
@@ -3988,7 +4001,8 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
-        "workflow": "Workflow"
+        "workflow": "Workflow",
+        "shell": "Background command"
       },
       "status": {
         "running": "Running",
@@ -3996,6 +4010,7 @@
         "failed": "Failed",
         "stopped": "Stopped"
       },
+      "stop": "Stop this task",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} tool use",
       "toolUses_other": "{{count}} tool uses",
@@ -4079,8 +4094,11 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
+      "bashStatus_one": "{{count}} background task running…",
+      "bashStatus_other": "{{count}} background tasks running…",
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
+      "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
       "stopping": "Stopping…"
     },
     "interruptedBanner": {

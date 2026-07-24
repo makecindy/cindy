@@ -24,6 +24,27 @@ export function useTheme(): ThemeValue {
   return useContext(ThemeContext);
 }
 
+/**
+ * 子树级主题覆盖。为「登录首启亮色门」(DESIGN.md §16.5 主题跟随:首次打开
+ * Cindy → 亮色登录;第二次起跟随)提供作用域强制 mode 的通道——只覆盖包裹的
+ * 子树(登录界面),不影响全局 ThemeProvider 与其它界面。mode 传 null 时透传
+ * 外层主题(等价不覆盖)。
+ */
+export function ThemeOverrideProvider({
+  mode,
+  children,
+}: {
+  mode: ThemeMode | null;
+  children: ReactNode;
+}) {
+  const parent = useContext(ThemeContext);
+  const value = useMemo<ThemeValue>(
+    () => (mode == null ? parent : { mode, colors: palettes[mode] }),
+    [mode, parent],
+  );
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
 type StyleFactory<T> = (colors: ThemeColors) => T;
 
 /**

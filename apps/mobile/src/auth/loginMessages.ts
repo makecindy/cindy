@@ -1,8 +1,11 @@
 import { getLocales } from 'expo-localization';
 
+import { getManualLocaleOverride } from '@/i18n/appLanguage';
+
 /**
  * 登录域 4 语文案 catalog(zh-CN/en/ja/ko,中文全并进 zh-CN)。
- * 系统 locale 解析规则:zh 系(含 Hans/Hant/TW/HK/MO)一律 → zh-CN;
+ * 生效语言 = 设置里手动选择的语言(appLanguage override)优先,否则按系统
+ * locale 解析:zh 系(含 Hans/Hant/TW/HK/MO)一律 → zh-CN;
  * ja → ja,ko → ko,兜底 en。
  * catalog 必须保持单一 messages 常量、locale 块内联的普通对象字面量形态——
  * check-login-i18n-parity.mjs 靠结构化 tokenizer 静态提取 locale/key 集合,
@@ -446,9 +449,9 @@ export function resolveLoginLocale(
   return 'en';
 }
 
-/** Login follows the system language across the 4 supported locales. */
+/** 生效语言:设置里的手动选择优先,未选择时跟随系统语言(4 语主干)。 */
 export function getLoginLanguage(): LoginLocale {
-  return resolveLoginLocale(getLocales()[0]?.languageTag);
+  return getManualLocaleOverride() ?? resolveLoginLocale(getLocales()[0]?.languageTag);
 }
 
 /**

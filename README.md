@@ -136,6 +136,44 @@ Cindy 服务发送在线心跳（仅账号 ID、平台与版本号）。崩溃�
 - 桌面端可移除 `apps/desktop/src/renderer/index.tsx` 中的 `initTapdb()` 调用
   （实现见 `apps/desktop/src/renderer/analytics/`），即可完全剥离。
 
+## 内容合规审查（仅中国区发布版）
+
+为满足中国大陆对面向公众提供生成式 AI 服务的内容安全合规要求，客户端内置了
+内容审查接口（实现见
+[`apps/desktop/src/main/content-moderation/`](apps/desktop/src/main/content-moderation/)）。
+在此如实向用户与开发者披露它的行为和边界。
+
+**什么情况下不启用（如何不启用）：**
+
+- **海外（global）发布版**：永不启用；
+- **dev / 源码运行：默认不启用** —— 只有显式传入 `--content-moderation`
+  启动参数（或未打包运行时设置环境变量 `XDT_CONTENT_MODERATION=1`），且端点
+  配置了 `moderationSignTestApiBaseUrl`，才会进入测试环境审查；两者仓库内默认
+  都没有，所以不做任何设置即为关闭；
+- **本地模式（未登录）或组织账号登录**：不启用；
+- **自行从源码构建**：注意——按 cn 区**打包**的产物启动时同样会拉取官方 cn
+  端点清单，用个人账号登录后审查**会启用**，这一点与官方发布版一致。想保持
+  关闭，请以 dev（未打包）方式运行、按 global 区打包，或在构建时把
+  `cdnBaseUrl` 指向你自己的端点清单且不下发 `moderationSignApiBaseUrl`。
+
+**什么情况下会启用（必须同时满足，判定入口
+[`eligibility.ts`](apps/desktop/src/main/content-moderation/eligibility.ts)）：**
+
+1. 官方**打包发布**的**中国区（cn）构建** —— 区域在构建期由
+   `VITE_CINDY_AUTH_REGION` 烘焙，运行期不可切换；
+2. 以**个人云端账号**登录（组织账号不经由该接口）；
+3. 启动时从区域 CDN 拉取的端点清单中 `moderationSignApiBaseUrl` 非空 ——
+   打包构建的端点清单一律在运行时从官方 CDN 下发（解析逻辑见
+   `apps/desktop/src/main/clientEndpointsService.ts`），官方中国区清单会下发该
+   地址；仓库内 [`config/endpoint.json`](config/endpoint.json) 仅供 dev（未打包）
+   运行使用，该字段为空。
+
+**启用时审查什么：** 你发送给助手的消息（文本与图片附件）、助手的流式回复、
+自定义提示词、昵称与头像。这些内容会经 Cindy 的审查签名服务提交给内容安全服务
+判定放行或拦截：输入被拦截时消息不会发出并退回输入框；回复被拦截时本轮输出中止，
+已展示的内容保留，并追加一条固定提示语。定时任务与多 agent 协同的内部消息不送审；
+审查服务不可用或超时按放行处理（fail-open），不会阻断正常使用。
+
 ## 许可证 / License
 
 除非另有说明，本仓库的源代码依据 [Apache License 2.0](LICENSE) 授权。

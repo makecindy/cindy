@@ -15,8 +15,15 @@
  */
 import { createContext } from 'react';
 
-/** 系统选择菜单里自定义项的文案(与桌面 chat.quote.addToChat 对齐)。 */
-export const SELECTION_QUOTE_MENU_LABEL = '添加到对话';
+import { i18n } from '@/i18n';
+
+/**
+ * 系统选择菜单里自定义项的文案(与桌面 chat.quote.addToChat 对齐)。
+ * 用函数在调用点求值,避免模块顶层把 i18n.t 结果冻结成常量(冻结语言)。
+ */
+export function selectionQuoteMenuLabel(): string {
+  return i18n.t('message.quote.menuLabel');
+}
 
 /** 采集提交接口:MarkdownSelectableText 经 context 调用。null = 宿主未启用采集。 */
 export interface SelectionQuoteContextValue {

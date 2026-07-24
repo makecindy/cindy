@@ -2,6 +2,7 @@ import {
   DL_HISTORY_MESSAGES_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   createSessionLinkPattern,
@@ -115,14 +116,16 @@ export function mobileSessionReferenceMetadataKey(
   return `${sessionId}\u0000${messageClientId ?? ''}`;
 }
 
-/** 移动端当前会话界面统一使用中文文案；这里只格式化展示安全的范围摘要。 */
+/** 格式化展示安全的范围摘要（文案经 i18n 本地化）。 */
 export function formatMobileSessionReferenceMetadata(
   metadata: MobilePersistedSessionReferenceMetadata,
 ): string {
   return [
-    metadata.range === 'around-anchor' ? '链接附近' : '最近消息',
-    `${metadata.messageCount} 条`,
-    ...(metadata.truncated ? ['已截断'] : []),
+    metadata.range === 'around-anchor'
+      ? i18n.t('session.row.referenceAroundAnchor')
+      : i18n.t('session.row.referenceRecent'),
+    i18n.t('session.row.referenceCount', { num: metadata.messageCount }),
+    ...(metadata.truncated ? [i18n.t('session.row.referenceTruncated')] : []),
   ].join(' · ');
 }
 

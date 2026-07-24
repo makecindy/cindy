@@ -295,6 +295,29 @@ const INTENT_VERB_ZH: Record<CommandIntentAction, string> = {
   ghApiCall: '调用 GitHub API',
 };
 
+/** 行级动词槽位(TOOL_ROW_VERB_ZH 的 key 空间,供措辞注入方实现)。 */
+export type ToolRowVerbKey = keyof typeof TOOL_ROW_VERB_ZH;
+
+/**
+ * 工具行措辞注入点——默认是本文件的中文硬编码表(mobile / IM 卡片继续走默认,
+ * 字节级不变);desktop main(灵动岛)注入经 i18n 解析的本地化实现。做成函数式
+ * 接口而非数据表:locale 可运行时切换,惰性求值免缓存失效。
+ */
+export interface ToolRowWording {
+  /** 行级工具动词("读取"/"编辑"…)。 */
+  verb(key: ToolRowVerbKey): string;
+  /** 命令意图动词(CommandIntentAction 全覆盖)。 */
+  intentVerb(action: CommandIntentAction): string;
+  /** fileChange 多文件复合短语("更新 3 个文件");量词与语序语言相关,整短语粒度,count 恒 >= 2。 */
+  updateFilesLabel(count: number): string;
+}
+
+export const DEFAULT_TOOL_ROW_WORDING: ToolRowWording = {
+  verb: (key) => TOOL_ROW_VERB_ZH[key],
+  intentVerb: (action) => INTENT_VERB_ZH[action],
+  updateFilesLabel: (count) => `${TOOL_ROW_VERB_ZH.update} ${count} 个文件`,
+};
+
 const TOOL_ROW_TEXT_MAX_CHARS = 60;
 
 /** 次行命令原文的截断上限(与桌面 hover 展示完整命令的意图对齐,手机放宽到 200 字)。 */
@@ -407,13 +430,13 @@ export function summarizeToolRowPresentation<
 export function summarizeToolUseText(
   toolName: string,
   input: unknown,
-  options: Pick<ToolRowPresentationOptions, 'intentOverride'> = {},
+  options: Pick<ToolRowPresentationOptions, 'intentOverride'> & { wording?: ToolRowWording } = {},
 ): ToolUseTextPresentation {
   const sourceDescriptor = describeToolUse(toolName, input);
   const descriptor = sourceDescriptor.kind === 'command' && options.intentOverride
     ? { ...sourceDescriptor, intent: options.intentOverride }
     : sourceDescriptor;
-  return formatToolRowText(descriptor);
+  return formatToolRowText(descriptor, options.wording);
 }
 
 /**
@@ -433,13 +456,19 @@ function toolRowDescriptor(tool: MessagePresentationToolLike): ToolUseDescriptor
 }
 
 /**
- * 描述符 → 手机版中文行文案（对齐桌面 AgentActionRow 的展示决策，issue #450）：
+ * 描述符 → 行级人话文案（对齐桌面 AgentActionRow 的展示决策，issue #450）：
  * - Bash 有模型 description → 独立成句，命令原文降为次要细节；
  * - command intent（codex commandActions / 本地规则）命中 → 意图动词 + 目标；
  * - MCP / dynamic / collab → `调用 server · tool`；
  * - 无法分类的命令显示「运行命令」，真实命令保留在 detail；其它工具按类型回退。
+ *
+ * 措辞经 wording 注入(默认中文表);export 供灵动岛在拿到 descriptor 后按
+ * kind 决定单行拼接策略。
  */
-function formatToolRowText(descriptor: ToolUseDescriptor): ToolUseTextPresentation {
+export function formatToolRowText(
+  descriptor: ToolUseDescriptor,
+  wording: ToolRowWording = DEFAULT_TOOL_ROW_WORDING,
+): ToolUseTextPresentation {
   switch (descriptor.kind) {
     case 'command': {
       if (descriptor.description) {
@@ -451,8 +480,8 @@ function formatToolRowText(descriptor: ToolUseDescriptor): ToolUseTextPresentati
       const intent = descriptor.intent;
       if (intent) {
         const label = intent.target
-          ? joinVerb(INTENT_VERB_ZH[intent.action], truncateToolText(intent.target, TOOL_ROW_TEXT_MAX_CHARS))
-          : INTENT_VERB_ZH[intent.action];
+          ? joinVerb(wording.intentVerb(intent.action), truncateToolText(intent.target, TOOL_ROW_TEXT_MAX_CHARS))
+          : wording.intentVerb(intent.action);
         return {
           label,
           // 友好标题负责扫读，真实命令固定留在次行负责准确性与审计。
@@ -461,16 +490,16 @@ function formatToolRowText(descriptor: ToolUseDescriptor): ToolUseTextPresentati
       }
       if (!descriptor.command) return { label: descriptor.toolName };
       return {
-        label: TOOL_ROW_VERB_ZH.runCommand,
+        label: wording.verb('runCommand'),
         ...commandDetail(descriptor.command),
       };
     }
     case 'file': {
       const verb = descriptor.action === 'read'
-        ? TOOL_ROW_VERB_ZH.read
+        ? wording.verb('read')
         : descriptor.action === 'edit'
-          ? TOOL_ROW_VERB_ZH.edit
-          : TOOL_ROW_VERB_ZH.create;
+          ? wording.verb('edit')
+          : wording.verb('create');
       return {
         label: joinVerb(verb, descriptor.fileName),
         ...(descriptor.filePath !== descriptor.fileName ? { detail: descriptor.filePath } : {}),
@@ -478,18 +507,18 @@ function formatToolRowText(descriptor: ToolUseDescriptor): ToolUseTextPresentati
     }
     case 'fileChange': {
       if (descriptor.changes.length > 1) {
-        return { label: `${TOOL_ROW_VERB_ZH.update} ${descriptor.changes.length} 个文件` };
+        return { label: wording.updateFilesLabel(descriptor.changes.length) };
       }
       const change = descriptor.changes[0];
       const verb = change.action === 'add'
-        ? TOOL_ROW_VERB_ZH.create
+        ? wording.verb('create')
         : change.action === 'delete'
-          ? TOOL_ROW_VERB_ZH.delete
+          ? wording.verb('delete')
           : change.action === 'move'
-            ? TOOL_ROW_VERB_ZH.rename
+            ? wording.verb('rename')
             : change.action === 'update'
-              ? TOOL_ROW_VERB_ZH.edit
-              : TOOL_ROW_VERB_ZH.update;
+              ? wording.verb('edit')
+              : wording.verb('update');
       const target = change.action === 'move' && change.moveFileName
         ? `${change.fileName} → ${change.moveFileName}`
         : change.fileName;
@@ -503,18 +532,18 @@ function formatToolRowText(descriptor: ToolUseDescriptor): ToolUseTextPresentati
     }
     case 'search':
       return {
-        label: joinVerb(TOOL_ROW_VERB_ZH.search, truncateToolText(descriptor.pattern, TOOL_ROW_TEXT_MAX_CHARS)),
+        label: joinVerb(wording.verb('search'), truncateToolText(descriptor.pattern, TOOL_ROW_TEXT_MAX_CHARS)),
         ...(descriptor.path ? { detail: descriptor.path } : {}),
       };
     case 'web':
       return {
         label: joinVerb(
-          descriptor.mode === 'fetch' ? TOOL_ROW_VERB_ZH.fetch : TOOL_ROW_VERB_ZH.search,
+          descriptor.mode === 'fetch' ? wording.verb('fetch') : wording.verb('search'),
           truncateToolText(descriptor.target, TOOL_ROW_TEXT_MAX_CHARS),
         ),
       };
     case 'todo':
-      return { label: TOOL_ROW_VERB_ZH.updateTodos };
+      return { label: wording.verb('updateTodos') };
     case 'task':
       return {
         label: descriptor.description ?? descriptor.toolName,
@@ -522,25 +551,25 @@ function formatToolRowText(descriptor: ToolUseDescriptor): ToolUseTextPresentati
       };
     case 'mcp':
       return {
-        label: joinVerb(TOOL_ROW_VERB_ZH.use, `${descriptor.serverLabel} · ${descriptor.toolLabel}`),
+        label: joinVerb(wording.verb('use'), `${descriptor.serverLabel} · ${descriptor.toolLabel}`),
         ...(descriptor.detail ? { detail: descriptor.detail } : {}),
       };
     case 'dynamic':
       return {
         label: joinVerb(
-          TOOL_ROW_VERB_ZH.use,
+          wording.verb('use'),
           descriptor.namespace ? `${descriptor.namespace} · ${descriptor.toolLabel}` : descriptor.toolLabel,
         ),
         ...(descriptor.detail ? { detail: descriptor.detail } : {}),
       };
     case 'collab':
       return {
-        label: joinVerb(TOOL_ROW_VERB_ZH.use, descriptor.toolLabel),
+        label: joinVerb(wording.verb('use'), descriptor.toolLabel),
         ...(descriptor.detail ? { detail: descriptor.detail } : {}),
       };
     default:
       return {
-        label: joinVerb(TOOL_ROW_VERB_ZH.use, descriptor.toolName),
+        label: joinVerb(wording.verb('use'), descriptor.toolName),
         ...(descriptor.detail ? { detail: descriptor.detail } : {}),
       };
   }

@@ -50,6 +50,12 @@ import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
+import {
+  cancelReleasedOutput,
+  onReleasedAgentEvent,
+  waitForReleasedOutput,
+} from '../../content-moderation/outputHub.js';
+import { CONTENT_MODERATION_BLOCKED_MESSAGE } from '../../content-moderation/constants.js';
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import type {
@@ -761,7 +767,7 @@ export function createTurnRunner(
       previous.setInteractionListener(null);
       state.makerSession = current;
       wireSessionToIpcExternal(current);
-      state.unsubscribers.push(current.onEvent(handleEventFor(sessionId, userId)));
+      state.unsubscribers.push(onReleasedAgentEvent(current, handleEventFor(sessionId, userId)));
       current.setInteractionListener(handleInteractionFor(sessionId, userId, state.scopeKey));
       sessionStates.set(sessionId, state);
     } finally {
@@ -982,7 +988,7 @@ export function createTurnRunner(
 
     // 注册本渠道自己的 onEvent listener — multi-listener 语义, 跟 desktop 那个
     // (如果存在) 并存。事件 fan-out 给 streamingHandle / 渠道卡片。
-    state.unsubscribers.push(makerSession.onEvent(handleEventFor(row.id, userId)));
+    state.unsubscribers.push(onReleasedAgentEvent(makerSession, handleEventFor(row.id, userId)));
 
     // setInteractionListener 是 single-listener: 这一调会覆盖上方
     // wireSessionToIpcExternal 装上的 desktop 版 — 渠道会话(含接管期间)的
@@ -1286,6 +1292,16 @@ export function createTurnRunner(
         case 'tool_result_full':
           return handleToolResultFullEvent(turn, event);
         case 'done':
+          if (
+            event.data
+            && typeof event.data === 'object'
+            && (event.data as { contentModerationBlocked?: unknown }).contentModerationBlocked === true
+          ) {
+            turn.buffer = turn.buffer
+              ? `${turn.buffer}\n\n${CONTENT_MODERATION_BLOCKED_MESSAGE}`
+              : CONTENT_MODERATION_BLOCKED_MESSAGE;
+            turn.streamingHandle?.replace(composeStreamingView(turn));
+          }
           // silent-stop done(上游用空内容静默收尾): 不当普通 done 收口 —
           // 守卫可能自动续跑,续跑轮事件要继续流进本 turn 的卡片,
           // 见 handleSilentStopDone。
@@ -1990,6 +2006,7 @@ export function createTurnRunner(
       // (eventually resolved) interaction card — not into the pre-existing card
       // that sits above it. Without this, the user sees the conclusion stream
       // into a card chronologically older than the "✅ 已选择" patch.
+      await waitForReleasedOutput(localSessionId);
       await finalizeActiveStream(localSessionId);
 
       let messageId: string;
@@ -2148,6 +2165,7 @@ export function createTurnRunner(
       cleanupSessionState(state);
       settleDetachDrain(state, 'cancelled');
       if (hasImTurnInFlight) {
+        cancelReleasedOutput(state.makerSession.id);
         aborts.push(
           state.makerSession.abort().catch((err) => {
             const msg = err instanceof Error ? err.message : String(err);
@@ -2190,6 +2208,7 @@ export function createTurnRunner(
     // 不产生任何事件,不重置的话守卫照样自动续跑,用户喊停后 agent 原地复活。
     // 重置后守卫判 superseded → settle('skip') → 挂起 turn 经现有订阅按 done 收口。
     noteSilentStopSessionReset(state.makerSession.id);
+    cancelReleasedOutput(state.makerSession.id);
     await state.makerSession.abort();
     log.info(
       `!stop aborted turn for session=...${state.makerSession.id.slice(-8)} droppedQueued=${droppedQueued}`,

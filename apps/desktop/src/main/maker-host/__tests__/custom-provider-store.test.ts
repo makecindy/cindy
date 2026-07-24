@@ -191,6 +191,33 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.headers).toEqual({ 'X-Org': 'acme' });
   });
 
+  it('round-trips an explicit Chat Completions protocol', async () => {
+    mountDb();
+    await createCustomProvider({
+      ...valid,
+      runtimes: {
+        codex: {
+          ...valid.runtimes.codex!,
+          wireProtocol: 'openai-chat',
+        },
+      },
+    });
+    expect((await getCustomProvider('openrouter'))?.runtimes.codex?.wireProtocol).toBe('openai-chat');
+  });
+
+  it('rejects unsupported protocol/runtime combinations', () => {
+    expect(validateCustomProviderConfig({
+      ...valid,
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://v.ai/chat',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    }).ok).toBe(false);
+  });
+
   it('update returns null when row absent', async () => {
     mountDb();
     expect(await updateCustomProvider('ghost', valid)).toBeNull();

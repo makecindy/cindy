@@ -152,7 +152,9 @@ export function SplashScreen() {
     }
   }, [realPhase, handoff]);
 
-  if (realPhase === 'splash_done' || realPhase === 'splash_skipped') return null;
+  // dev fixture 激活时冻结停留:真实生命周期跑完也不退场,供状态遍历/视觉走查
+  // (readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
+  if (!fixture && (realPhase === 'splash_done' || realPhase === 'splash_skipped')) return null;
 
   const isMac = window.electronAPI?.platform === 'darwin';
 
@@ -161,6 +163,13 @@ export function SplashScreen() {
   const isDownloading = fixture
     ? displayPhase === 'splash_updating' || displayPhase === 'splash_downloading'
     : realIsDownloading;
+  // fixture 冻结走查没有真实下载遥测,给进度行一组演示数据看排版
+  // (dev-only:readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
+  const statsProgress = fixture && !realIsDownloading ? 31 : downloadProgress;
+  const statsInfo =
+    fixture && !realIsDownloading
+      ? { speed: '11.5 MB/s', downloaded: '29.7 MB', total: '97.1 MB' }
+      : downloadInfo;
   // 三失败弹窗 → 统一面板形态(fixture 模式按显示 phase 遍历)。
   const dialogKind = fixture
     ? displayPhase === 'splash_manifest_failed'
@@ -184,7 +193,7 @@ export function SplashScreen() {
     <div
       className={cn(
         'fixed inset-0 z-[9999] overflow-hidden',
-        realPhase === 'fading_out' ? 'opacity-0' : 'opacity-100',
+        realPhase === 'fading_out' && !fixture ? 'opacity-0' : 'opacity-100',
       )}
       style={
         {
@@ -259,7 +268,9 @@ export function SplashScreen() {
                   top: SPLASH_PANEL.spinner.y,
                   width: SPLASH_PANEL.spinner.size,
                   height: SPLASH_PANEL.spinner.size,
-                  border: '6px solid rgba(111,111,111,0.18)',
+                  // 轨道走 --login-loading-ring-track(与登录页 LoginLoadingRing 同构,
+                  // 暗色 rgba(212,212,212,.18) 才可见;内弧仍按 wave4 帧 #6F6F6F)
+                  border: '6px solid var(--login-loading-ring-track)',
                   borderTopColor: LOGIN_COLORS.secondaryText,
                 }}
               />
@@ -287,7 +298,7 @@ export function SplashScreen() {
                       skipTransition ? '' : 'transition-[width] duration-300',
                     )}
                     style={{
-                      width: `${downloadProgress}%`,
+                      width: `${statsProgress}%`,
                       borderRadius: SPLASH_PANEL.progress.radius,
                       background: LOGIN_COLORS.splashProgressFill,
                     }}
@@ -305,18 +316,18 @@ export function SplashScreen() {
                     color: LOGIN_COLORS.secondaryText,
                   }}
                 >
-                  <span>{downloadProgress}%</span>
-                  {downloadInfo.speed && (
+                  <span>{statsProgress}%</span>
+                  {statsInfo.speed && (
                     <>
                       <span>·</span>
-                      <span>{downloadInfo.speed}</span>
+                      <span>{statsInfo.speed}</span>
                     </>
                   )}
-                  {downloadInfo.downloaded && downloadInfo.total && (
+                  {statsInfo.downloaded && statsInfo.total && (
                     <>
                       <span>·</span>
                       <span>
-                        {downloadInfo.downloaded} / {downloadInfo.total}
+                        {statsInfo.downloaded} / {statsInfo.total}
                       </span>
                     </>
                   )}

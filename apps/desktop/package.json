@@ -45,6 +45,7 @@
   "dependencies": {
     "@cindy/auth-client": "workspace:*",
     "@cindy/plugin-protocol": "workspace:*",
+    "@cindy/content-moderation-protocol": "workspace:*",
     "@cindy/slack-hook-protocol": "workspace:*",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",
@@ -73,6 +74,7 @@
     "@lezer/highlight": "^1.2.3",
     "@cindy/anthropic-compat-proxy": "workspace:*",
     "@cindy/anthropic-responses-bridge": "workspace:*",
+    "@cindy/responses-chat-bridge": "workspace:*",
     "@cindy/browser-control-runtime": "workspace:*",
     "@cindy/device-link": "workspace:*",
     "@cindy/embedding-client": "workspace:*",

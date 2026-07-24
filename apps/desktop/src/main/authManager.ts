@@ -1078,6 +1078,14 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+/**
+ * Monotonic identity boundary for account-scoped asynchronous work.
+ * Callers must compare the value again before committing a reviewed mutation.
+ */
+export function getAuthIdentityEpoch(): number {
+  return authStateEpoch;
+}
+
 /** SkillHub v0.2.1: 返回当前登录用户 id（cuid），未登录时返回 null */
 export function getCurrentUserId(): string | null {
   return currentUser?.id ?? null;

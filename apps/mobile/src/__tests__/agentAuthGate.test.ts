@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers/registry';
+import { i18n } from '@/i18n';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function provider(patch: Partial<ProviderView> & Pick<ProviderView, 'id' | 'agents' | 'connected'>): ProviderView {
   return {

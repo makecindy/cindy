@@ -62,14 +62,24 @@ function toCatalogModel(
   };
 }
 
+function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' {
+  return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+}
+
 /** baseUrl + 自定义 headers → 路由描述符（**不含密钥**；OAuth 形态用 oauth-token 策略）。 */
 function toRouting(
+  agent: AgentKind,
   baseUrl: string,
   headers: Record<string, string> | undefined,
   strategy: 'api-key-header' | 'oauth-token',
   modelsUrl?: string,
+  wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
 ): RoutingDescriptor {
-  const r: RoutingDescriptor = { upstream: baseUrl, authStrategy: strategy };
+  const r: RoutingDescriptor = {
+    upstream: baseUrl,
+    authStrategy: strategy,
+    ...(wireProtocol && wireProtocol !== defaultWireProtocol(agent) ? { wireProtocol } : {}),
+  };
   if (headers && Object.keys(headers).length > 0) r.headerOverride = { ...headers };
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
@@ -92,10 +102,12 @@ export function buildUserProvider(config: CustomProviderConfig): Provider {
     if (!rt) continue;
     agents.push(agent);
     routing[agent] = toRouting(
+      agent,
       rt.baseUrl,
       rt.headers,
       isOAuth ? 'oauth-token' : 'api-key-header',
       rt.modelsUrl,
+      rt.wireProtocol,
     );
     models[agent] = rt.models.map((m) => toCatalogModel(m, config.id, agent));
   }
