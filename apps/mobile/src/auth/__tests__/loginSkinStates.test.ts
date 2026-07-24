@@ -93,12 +93,12 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     ).getProviders();
     expect(providers.social).toEqual(['apple', 'google']);
     expect(controlsSource).toContain('const active = focused || filled;');
-    expect(controlsSource).toContain('loginColors.controlBorderActive');
+    expect(controlsSource).toContain('colors.login.controlBorderActive');
     expect(controlsSource).toContain(
       'active ? fontWeight.bold : fontWeight.regular',
     );
-    expect(controlsSource).toContain('loginColors.controlPlaceholder');
-    expect(controlsSource).toContain('loginColors.loginError');
+    expect(controlsSource).toContain('colors.login.controlPlaceholder');
+    expect(controlsSource).toContain('colors.login.loginError');
   });
 
   it('method-choice:sso:single 真链→企业/个人双行,dispatch 措辞 verbatim', async () => {

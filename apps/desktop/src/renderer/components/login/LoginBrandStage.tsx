@@ -2,14 +2,19 @@ import { useCallback, useRef, type CSSProperties } from 'react';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
+import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 
 import heroPng from '@/assets/login/hero.png';
 import heroPng2x from '@/assets/login/hero@2x.png';
 import heroMask from '@/assets/login/hero-mask.svg';
 import wordmarkPng from '@/assets/login/wordmark.png';
 import wordmarkPng2x from '@/assets/login/wordmark@2x.png';
+import wordmarkDarkPng from '@/assets/login/wordmark-dark.png';
+import wordmarkDarkPng2x from '@/assets/login/wordmark-dark@2x.png';
 import sloganPng from '@/assets/login/slogan.png';
 import sloganPng2x from '@/assets/login/slogan@2x.png';
+import sloganDarkPng from '@/assets/login/slogan-dark.png';
+import sloganDarkPng2x from '@/assets/login/slogan-dark@2x.png';
 
 import { brandPlacement, sloganShiftX } from './loginScale';
 import { HERO, LOGIN_COLORS, SLOGAN, STAGE, WORDMARK } from './loginDesignTokens';
@@ -18,10 +23,11 @@ import { useViewportSize } from './LoginStage';
 /**
  * LoginBrandStage — 品牌视觉层唯一渲染者(implementation-plan Step 3b WHAT2)。
  *
- * 所有权契约(v6.12 冻结):
- * - 唯一渲染白底体系背景(不透明固定纯平白底 #EDEDED,2026-07-22 用户拍板对齐 PR #104
- *   撤 wave4 双红渐变;design §8.1:登录页与编辑器主题解耦)
- *   与品牌三要素(立绘/字标/Slogan);白色输入面板与圆钮行归 LoginPage,绝不在此重复。
+ * 所有权契约(v6.12 冻结;暗色实现 PR 起画布随 light/dark 二态):
+ * - 唯一渲染登录画布背景(不透明纯平底,亮 #EDEDED / 暗 #1F1F1E 经 --login-bg-base
+ *   二态;2026-07-22 用户拍板对齐 PR #104 撤 wave4 双红渐变,暗色沿用纯平口径)
+ *   与品牌三要素(立绘/字标/Slogan);输入面板与圆钮行归 LoginPage,绝不在此重复。
+ *   暗色画布用白字版字标/SLOGAN 资产(figma 532:585),立绘两模式同资产。
  * - overlay `pointer-events: none`,不拦截 hit-test;仅主窗挂载(App.tsx 与 Splash
  *   同源 gating),z-[9980] 盖住主界面、低于 LoginPage 面板层(z-[9990])与
  *   SplashScreen(z-[9999])。
@@ -42,6 +48,17 @@ export function LoginBrandStage() {
   // 品牌块整体让位(scale+translateY,构图冻结;用户拍板 2026-07-23,design.md §11)
   const { scale, translateY } = brandPlacement(width, height);
   const sloganShift = sloganShiftX(width, scale);
+  // 暗色画布用白字版字标/SLOGAN(figma 532:585 CINDY_Standard_White / SLOGAN #FBFBFB;
+  // 深浅判定同 useBrandLogo:跟随 theme-service 挂的 dark class)。立绘两模式同资产。
+  const isDark = useIsDarkMode();
+  const wordmarkSrc = isDark ? wordmarkDarkPng : wordmarkPng;
+  const wordmarkSrcSet = isDark
+    ? `${wordmarkDarkPng} 1x, ${wordmarkDarkPng2x} 2x`
+    : `${wordmarkPng} 1x, ${wordmarkPng2x} 2x`;
+  const sloganSrc = isDark ? sloganDarkPng : sloganPng;
+  const sloganSrcSet = isDark
+    ? `${sloganDarkPng} 1x, ${sloganDarkPng2x} 2x`
+    : `${sloganPng} 1x, ${sloganPng2x} 2x`;
 
   // 品牌资产推进锚:立绘/字标/Slogan 三图全部 settle(load 或 error 均计,防死锁)。
   const settledRef = useRef<Set<string>>(new Set());
@@ -94,8 +111,8 @@ export function LoginBrandStage() {
       className="pointer-events-none fixed inset-0 z-[9980] overflow-hidden"
       style={rootStyle}
     >
-      {/* 静态背景子层:纯平白底(2026-07-22 用户拍板对齐 PR #104,撤 wave4 双红渐变),
-          viewport 锚定铺满,不参与 handoff 变换(v6.12 分层冻结) */}
+      {/* 静态背景子层:纯平底(--login-bg-base 二态,亮 #EDEDED / 暗 #1F1F1E;
+          PR #104 撤渐变口径),viewport 锚定铺满,不参与 handoff 变换(v6.12 分层冻结) */}
       <div
         aria-hidden
         data-testid="login-brand-bg"
@@ -156,8 +173,8 @@ export function LoginBrandStage() {
             onLoad={() => handleAssetSettled('wordmark')}
             onError={() => handleAssetSettled('wordmark')}
             className="pointer-events-none absolute select-none object-contain"
-            src={wordmarkPng}
-            srcSet={`${wordmarkPng} 1x, ${wordmarkPng2x} 2x`}
+            src={wordmarkSrc}
+            srcSet={wordmarkSrcSet}
             style={{
               left: WORDMARK.inner.x,
               top: WORDMARK.inner.y,
@@ -174,8 +191,8 @@ export function LoginBrandStage() {
             onLoad={() => handleAssetSettled('slogan')}
             onError={() => handleAssetSettled('slogan')}
             className="pointer-events-none absolute select-none object-contain"
-            src={sloganPng}
-            srcSet={`${sloganPng} 1x, ${sloganPng2x} 2x`}
+            src={sloganSrc}
+            srcSet={sloganSrcSet}
             style={sloganStyle}
           />
         </div>

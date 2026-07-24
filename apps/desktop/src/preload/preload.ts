@@ -1141,6 +1141,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ── Auth (delegated to main process authManager) ──
+  /** 首启亮色门会话线索:主进程是否持有存量会话(持久化 refresh token / local
+   * 模式)。sendSync——renderer bootstrap 在首帧前判定「真首启」用,异步赶不上。 */
+  authHasPersistedSessionHintSync: (): boolean =>
+    ipcRenderer.sendSync('auth:has-persisted-session-hint-sync') === true,
   authInitialize: (): Promise<{
     user: unknown;
     mode: 'signed-out' | 'local' | 'cloud';

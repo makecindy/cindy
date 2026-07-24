@@ -53,6 +53,14 @@ const PLATFORMS = [
     binFile: 'rg',
   },
   {
+    key: 'linux-arm64',
+    // Verified 2026-07-24 from the official BurntSushi/ripgrep release asset
+    // list: aarch64 Linux only ships a gnu/glibc tarball (no musl variant).
+    triple: 'aarch64-unknown-linux-gnu',
+    archiveExt: 'tar.gz',
+    binFile: 'rg',
+  },
+  {
     key: 'win32-x64',
     triple: 'x86_64-pc-windows-msvc',
     archiveExt: 'zip',

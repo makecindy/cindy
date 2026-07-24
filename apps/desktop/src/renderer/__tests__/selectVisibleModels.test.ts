@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModelDescriptor } from '@/hooks/useAgentCapabilities';
-import { selectVisibleModels } from '@/lib/providerModels';
+import { filterChatBridgedCodexProviders, selectVisibleModels } from '@/lib/providerModels';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
 /** 被控端 capabilities.availableModels 形态(renderer ModelDescriptor)。 */
@@ -29,6 +29,25 @@ function provider(id: string, agent: AgentKind, modelIds: string[]): ProviderVie
     agents: [agent],
     models: {
       [agent]: modelIds.map((mid) => ({
+        id: mid,
+        name: mid,
+        contextWindow: 100,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      })),
+    },
+  } as unknown as ProviderView;
+}
+
+/** codex 供应商 + 指定 wireProtocol(SSH 远程排除 openai-chat 桥接来源用)。 */
+function codexProvider(id: string, modelIds: string[], wireProtocol: 'openai-responses' | 'openai-chat'): ProviderView {
+  return {
+    id,
+    name: id,
+    agents: ['codex'],
+    routing: { codex: { wireProtocol } },
+    models: {
+      codex: modelIds.map((mid) => ({
         id: mid,
         name: mid,
         contextWindow: 100,
@@ -139,5 +158,82 @@ describe('selectVisibleModels — excludeSubscriptionDirect(SSH 远程隐藏订�
       excludeSubscriptionDirect: true,
     });
     expect(ids(out)).toEqual(['claude-opus-4-8', 'gpt-5.5']);
+  });
+});
+
+describe('selectVisibleModels — excludeChatBridgedCodex(SSH 远程隐藏 Chat 桥接的 Codex 供应商)', () => {
+  it('true:剔除 wireProtocol=openai-chat 的 codex 供应商模型,保留原生 Responses 供应商', () => {
+    const out = selectVisibleModels({
+      agentKind: 'codex',
+      deviceId: undefined,
+      providers: [
+        codexProvider('deepseek', ['deepseek-chat'], 'openai-chat'),
+        codexProvider('openai', ['gpt-5.5'], 'openai-responses'),
+      ],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      excludeChatBridgedCodex: true,
+    });
+    // Chat 桥接的 DeepSeek 在 SSH 远程不可用(桥只在本地),原生 Responses 的 gpt-5.5 保留。
+    expect(ids(out)).toEqual(['gpt-5.5']);
+  });
+
+  it('同一 model id 另有原生 Responses 供应商时仍可见(仅剔除桥接来源)', () => {
+    const out = selectVisibleModels({
+      agentKind: 'codex',
+      deviceId: undefined,
+      // 桥接来源在前(first-wins),但被跳过后原生来源仍补上同名模型。
+      providers: [
+        codexProvider('bridged', ['shared'], 'openai-chat'),
+        codexProvider('native', ['shared'], 'openai-responses'),
+      ],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      excludeChatBridgedCodex: true,
+    });
+    expect(ids(out)).toEqual(['shared']);
+  });
+
+  it('未传(默认)不过滤:Chat 桥接的 codex 模型正常列出', () => {
+    const out = selectVisibleModels({
+      agentKind: 'codex',
+      deviceId: undefined,
+      providers: [codexProvider('deepseek', ['deepseek-chat'], 'openai-chat')],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+    });
+    expect(ids(out)).toEqual(['deepseek-chat']);
+  });
+
+  it('claude-code 列表不受影响(仅作用于 codex 派生)', () => {
+    const out = selectVisibleModels({
+      agentKind: 'claude-code',
+      deviceId: undefined,
+      providers: [provider('anthropic', 'claude-code', ['claude-opus-4-8'])],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+      excludeChatBridgedCodex: true,
+    });
+    expect(ids(out)).toEqual(['claude-opus-4-8']);
+  });
+});
+
+describe('filterChatBridgedCodexProviders — provider source sections', () => {
+  const bridged = { ...codexProvider('bridged', ['deepseek-chat'], 'openai-chat'), connected: true };
+  const native = { ...codexProvider('native', ['gpt-5.5'], 'openai-responses'), connected: true };
+
+  it('SSH exclusion removes bridged Codex sources from section inputs', () => {
+    expect(filterChatBridgedCodexProviders([bridged, native], 'codex', true).map((p) => p.id)).toEqual(['native']);
+  });
+
+  it('does not filter Claude sources or normal local Codex sources', () => {
+    expect(filterChatBridgedCodexProviders([bridged, native], 'codex', false).map((p) => p.id)).toEqual([
+      'bridged',
+      'native',
+    ]);
+    expect(filterChatBridgedCodexProviders([bridged, native], 'claude-code', true).map((p) => p.id)).toEqual([
+      'bridged',
+      'native',
+    ]);
   });
 });

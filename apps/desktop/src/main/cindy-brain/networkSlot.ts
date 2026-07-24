@@ -23,6 +23,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
+
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
   GHOST_FETCH_INFLIGHT_LIMIT,
@@ -216,6 +218,35 @@ function isTextualContentType(ct: string): boolean {
 }
 
 /**
+ * Generic octet-stream is not automatically text: only a bounded, valid UTF-8
+ * prefix without NUL/control bytes may use the polling/text fallback.
+ */
+function isProbablyUtf8Text(bytes: Uint8Array, complete: boolean): boolean {
+  if (bytes.byteLength === 0) return true;
+  for (const byte of bytes) {
+    if (byte === 0x00 || (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d)) {
+      return false;
+    }
+  }
+  try {
+    // An open probe may end in the middle of a valid multi-byte sequence. A
+    // complete body must flush the decoder so a dangling sequence is rejected.
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: !complete });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An empty Content-Type is historically text-compatible; octet-stream falls
+ * back only after the bytes themselves pass the conservative text check.
+ */
+function allowsSniffedTextFallback(probe: Uint8Array, complete: boolean): boolean {
+  return isProbablyUtf8Text(probe, complete);
+}
+
+/**
  * 常见非标 mime → 总仓白名单正名(blobStore EXT_BY_MIME 只认正名)。
  * 音频三兄弟的别名野得很(audio/mp3 / x-wav / wave / x-m4a 满天飞),
  * 漏归一 = 该文件在媒体模式整单拒、文本模式也拒,两头都取不回。
@@ -233,6 +264,22 @@ const MIME_ALIASES: Record<string, string> = {
 function normalizeMime(ct: string): string {
   const mime = ct.split(';')[0]?.trim().toLowerCase() ?? '';
   return MIME_ALIASES[mime] ?? mime;
+}
+
+/**
+ * These response types are frequently omitted or misconfigured by object stores/CDNs.
+ * Only this narrow set is eligible for byte-signature recovery in as:'media' mode;
+ * specific unsupported types such as application/zip remain rejected without sniffing.
+ */
+const SNIFFABLE_GENERIC_MEDIA_MIMES = new Set([
+  '',
+  'text/plain',
+  'application/octet-stream',
+  'binary/octet-stream',
+]);
+
+function shouldSniffMediaMime(mime: string): boolean {
+  return SNIFFABLE_GENERIC_MEDIA_MIMES.has(mime);
 }
 
 /**
@@ -334,6 +381,267 @@ async function readBodyCapped(
     offset += chunk.byteLength;
   }
   return { bytes, truncated };
+}
+
+const MEDIA_SNIFF_PROBE_BYTES = 4096;
+
+type SniffableBodyResult =
+  | { kind: 'media'; bytes: Uint8Array; mime: string; overLimit: boolean }
+  | { kind: 'text'; bytes: Uint8Array; truncated: boolean }
+  | { kind: 'unsupported' }
+  | { kind: 'mediaTooLarge' }
+  | { kind: 'gateBusy' };
+
+function joinChunks(chunks: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+function inferredMediaMime(
+  bytes: Uint8Array,
+  isSupportedMediaMime: (mime: string) => boolean,
+  declaredMime: string,
+): string | null {
+  const sniffed = sniffMediaMime(bytes, declaredMime);
+  return sniffed && isSupportedMediaMime(sniffed) ? sniffed : null;
+}
+
+function pendingMp3Bytes(bytes: Uint8Array): number | null {
+  return additionalMp3BytesNeeded(bytes);
+}
+
+/**
+ * Read a response whose declared MIME is missing/generic without penalizing real text:
+ * inspect at most the first 4 KiB, then commit to either the media cap+global gate,
+ * the existing text cap+size-gated gate, or an immediate unsupported-binary reject.
+ */
+async function readSniffableBody(
+  response: Response,
+  declaredMime: string,
+  tryAcquireGate: () => boolean,
+  releaseGate: () => void,
+  allowTextFallback: boolean,
+  isSupportedMediaMime: (mime: string) => boolean,
+  expectedMedia = false,
+): Promise<SniffableBodyResult> {
+  const body = (response as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body) {
+    // Without a stream there is no bounded way to inspect the body before
+    // arrayBuffer(). Hold the gate first so an unknown-length generic response
+    // cannot fill memory before being rejected or classified.
+    if (!tryAcquireGate()) return { kind: 'gateBusy' };
+    let retainGate = false;
+    try {
+      const raw = new Uint8Array(await response.arrayBuffer());
+      const initialProbe = raw.subarray(0, MEDIA_SNIFF_PROBE_BYTES);
+      const mp3BytesNeeded = pendingMp3Bytes(initialProbe);
+      const probe = raw.subarray(
+        0,
+        Math.min(raw.byteLength, mp3BytesNeeded ?? MEDIA_SNIFF_PROBE_BYTES),
+      );
+      const mime = inferredMediaMime(probe, isSupportedMediaMime, declaredMime);
+      if (mime) {
+        retainGate = true;
+        return {
+          kind: 'media',
+          bytes: raw.subarray(0, GHOST_FETCH_MEDIA_MAX_BYTES),
+          mime,
+          overLimit: raw.byteLength > GHOST_FETCH_MEDIA_MAX_BYTES,
+        };
+      }
+      if (
+        !allowTextFallback ||
+        !allowsSniffedTextFallback(probe, raw.byteLength <= MEDIA_SNIFF_PROBE_BYTES)
+      ) {
+        return { kind: 'unsupported' };
+      }
+      const textBytes = raw.subarray(0, GHOST_FETCH_RESPONSE_MAX_BYTES);
+      if (!isProbablyUtf8Text(textBytes, true)) return { kind: 'unsupported' };
+      return {
+        kind: 'text',
+        bytes: textBytes,
+        truncated: raw.byteLength > GHOST_FETCH_RESPONSE_MAX_BYTES,
+      };
+    } finally {
+      if (!retainGate) releaseGate();
+    }
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let kind: 'media' | 'text' | null = null;
+  let mediaMime = '';
+  let gateAcquired = false;
+  let truncated = false;
+  let retainedTotal = 0;
+  let readerDone = false;
+  let readerCancelled = false;
+
+  const cancelReader = async (): Promise<void> => {
+    if (readerDone || readerCancelled) return;
+    readerCancelled = true;
+    await reader.cancel().catch(() => {});
+  };
+
+  let undecidedCap = MEDIA_SNIFF_PROBE_BYTES;
+  let pendingMp3 = false;
+  const acquireGate = (): boolean => {
+    if (gateAcquired) return true;
+    if (!tryAcquireGate()) return false;
+    gateAcquired = true;
+    return true;
+  };
+  if (expectedMedia && !acquireGate()) {
+    await cancelReader();
+    return { kind: 'gateBusy' };
+  }
+  const classify = async (complete: boolean): Promise<'ok' | 'unsupported' | 'pending' | 'gateBusy'> => {
+    const joined = joinChunks(chunks, retainedTotal);
+    const sniffed = inferredMediaMime(joined, isSupportedMediaMime, declaredMime);
+    if (sniffed) {
+      if (!acquireGate()) return 'gateBusy';
+      kind = 'media';
+      mediaMime = sniffed;
+      return 'ok';
+    }
+    const mp3BytesNeeded = pendingMp3Bytes(joined);
+    if (!complete && mp3BytesNeeded !== null && mp3BytesNeeded > retainedTotal) {
+      if (mp3BytesNeeded > GHOST_FETCH_MEDIA_MAX_BYTES) return 'unsupported';
+      undecidedCap = mp3BytesNeeded;
+      pendingMp3 = true;
+      return 'pending';
+    }
+    const textProbe = joined.subarray(0, MEDIA_SNIFF_PROBE_BYTES);
+    if (!allowTextFallback || !allowsSniffedTextFallback(textProbe, complete)) return 'unsupported';
+    kind = 'text';
+    if (total > LARGE_TEXT_GATE_BYTES && !acquireGate()) return 'gateBusy';
+    return 'ok';
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        readerDone = true;
+        if (kind === null) {
+          const classified = await classify(true);
+          if (classified !== 'ok') return { kind: classified === 'pending' ? 'unsupported' : classified };
+        }
+        break;
+      }
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      const activeCap = kind === 'media'
+        ? GHOST_FETCH_MEDIA_MAX_BYTES
+        : kind === 'text'
+          ? GHOST_FETCH_RESPONSE_MAX_BYTES
+          : undecidedCap;
+      if (
+        kind === 'text' &&
+        !gateAcquired &&
+        retainedTotal + value.byteLength > LARGE_TEXT_GATE_BYTES &&
+        !acquireGate()
+      ) {
+        await cancelReader();
+        return { kind: 'gateBusy' };
+      }
+      let keptFromValue = 0;
+      if (retainedTotal < activeCap) {
+        const keep = Math.min(value.byteLength, activeCap - retainedTotal);
+        if (keep > 0) {
+          chunks.push(keep === value.byteLength ? value : value.slice(0, keep));
+          retainedTotal += keep;
+          keptFromValue = keep;
+        }
+      }
+
+      if (kind === null && retainedTotal >= undecidedCap) {
+        const classified = await classify(false);
+        if (classified === 'pending') {
+          if (!acquireGate()) {
+            await cancelReader();
+            return { kind: 'gateBusy' };
+          }
+          // A valid ID3 tag may put the first MPEG frame after the initial
+          // probe. Keep reading until that frame can be inspected.
+          if (keptFromValue < value.byteLength && retainedTotal < undecidedCap) {
+            const keepRemainder = Math.min(value.byteLength - keptFromValue, undecidedCap - retainedTotal);
+            if (keepRemainder > 0) {
+              chunks.push(value.slice(keptFromValue, keptFromValue + keepRemainder));
+              retainedTotal += keepRemainder;
+              keptFromValue += keepRemainder;
+            }
+          }
+          if (retainedTotal >= undecidedCap) {
+            const resolved = await classify(false);
+            if (resolved !== 'ok') {
+              await cancelReader();
+              return { kind: resolved === 'pending' ? 'unsupported' : resolved };
+            }
+          }
+        } else if (classified !== 'ok') {
+          await cancelReader();
+          return { kind: classified };
+        }
+        if (kind !== null) {
+          // Keep the remainder of the current chunk now that the final
+          // text/media cap is known.
+          const decidedCap = kind === 'media' ? GHOST_FETCH_MEDIA_MAX_BYTES : GHOST_FETCH_RESPONSE_MAX_BYTES;
+          if (
+            kind === 'text' &&
+            !gateAcquired &&
+            retainedTotal < LARGE_TEXT_GATE_BYTES &&
+            retainedTotal + (value.byteLength - keptFromValue) > LARGE_TEXT_GATE_BYTES &&
+            !acquireGate()
+          ) {
+            await cancelReader();
+            return { kind: 'gateBusy' };
+          }
+          if (keptFromValue < value.byteLength && retainedTotal < decidedCap) {
+            const keepRemainder = Math.min(value.byteLength - keptFromValue, decidedCap - retainedTotal);
+            if (keepRemainder > 0) {
+              chunks.push(value.slice(keptFromValue, keptFromValue + keepRemainder));
+              retainedTotal += keepRemainder;
+            }
+          }
+        }
+      }
+      if (kind === 'text' && total > LARGE_TEXT_GATE_BYTES && !acquireGate()) {
+        await cancelReader();
+        return { kind: 'gateBusy' };
+      }
+      const maxBytes = kind === 'media'
+        ? GHOST_FETCH_MEDIA_MAX_BYTES
+        : kind === 'text'
+          ? GHOST_FETCH_RESPONSE_MAX_BYTES
+          : pendingMp3
+            ? undecidedCap
+            : GHOST_FETCH_RESPONSE_MAX_BYTES;
+      if (kind !== null && total > maxBytes) {
+        truncated = true;
+        await cancelReader();
+        break;
+      }
+    }
+  } finally {
+    await cancelReader();
+  }
+
+  const maxBytes = kind === 'media' ? GHOST_FETCH_MEDIA_MAX_BYTES : GHOST_FETCH_RESPONSE_MAX_BYTES;
+  const joined = joinChunks(chunks, retainedTotal);
+  const bytes = joined.subarray(0, maxBytes);
+  if (kind === 'media') {
+    if (truncated || total > maxBytes) return { kind: 'mediaTooLarge' };
+    return { kind: 'media', bytes, mime: mediaMime, overLimit: false };
+  }
+  if (!isProbablyUtf8Text(bytes, true)) return { kind: 'unsupported' };
+  return { kind: 'text', bytes, truncated: truncated || total > maxBytes };
 }
 
 /** 解析并硬校验目标 URL:仅 https、默认端口、无内嵌凭证。失败返回人话原因。 */
@@ -913,49 +1221,88 @@ export class GhostNetworkSlot {
       }
 
       if (asMode === 'media' && response.status >= 200 && response.status < 300) {
-        const mime = normalizeMime(contentType);
-        if (this.deps.isSupportedMediaMime(mime)) {
+        const declaredMime = normalizeMime(contentType);
+        const sniffGeneric = shouldSniffMediaMime(declaredMime);
+        if (this.deps.isSupportedMediaMime(declaredMime) || sniffGeneric) {
           // 诚实服务器的超大文件在读之前就拒掉,不白读 256MB;撒谎/缺头的
           // 由下面的流式硬顶兜底。
           const declaredLength = Number(response.headers.get('content-length') ?? Number.NaN);
-          if (Number.isFinite(declaredLength) && declaredLength > GHOST_FETCH_MEDIA_MAX_BYTES) {
+          if (
+            Number.isFinite(declaredLength) &&
+            declaredLength > GHOST_FETCH_MEDIA_MAX_BYTES
+          ) {
             return { ok: false, message: `媒体过大(声明 ${declaredLength} 字节,上限 ${GHOST_FETCH_MEDIA_MAX_BYTES})` };
           }
-          // 全局串行闸:读体 + 落仓期间独占,防聚合内存峰值(见常量注释)。
-          if (this.mediaReadsInflight >= MEDIA_READ_GLOBAL_LIMIT) {
-            return { ok: false, message: '媒体通道正忙(全局同时只取一单),请稍后重试' };
+          const sniffed = await readSniffableBody(
+            response,
+            declaredMime,
+            () => {
+              if (holdingMediaGate) return true;
+              if (this.mediaReadsInflight >= MEDIA_READ_GLOBAL_LIMIT) return false;
+              this.mediaReadsInflight += 1;
+              holdingMediaGate = true;
+              return true;
+            },
+            () => {
+              if (!holdingMediaGate) return;
+              this.mediaReadsInflight -= 1;
+              holdingMediaGate = false;
+            },
+            sniffGeneric,
+            this.deps.isSupportedMediaMime,
+            !sniffGeneric,
+          );
+          if (sniffed.kind === 'gateBusy') {
+            return { ok: false, message: '媒体/大响应通道正忙(全局同时只处理一单),请稍后重试' };
           }
-          this.mediaReadsInflight += 1;
-          try {
-            const { bytes: mediaBytes, truncated: overLimit } = await readBodyCapped(response, GHOST_FETCH_MEDIA_MAX_BYTES);
-            if (overLimit) {
-              return { ok: false, message: `媒体过大(上限 ${GHOST_FETCH_MEDIA_MAX_BYTES} 字节)——截断的媒体是坏文件,整单拒` };
-            }
-            const saved = await this.deps.saveGhostMedia({
-              ghostId,
-              buffer: mediaBytes,
-              mimeType: mime,
-              ...(label !== undefined ? { label } : {}),
-              // 署名调用记账(ghostMediaLedger):产物随 ghost_call 收口带回,
-              // IM/hook 出站兜底送达;未署名不记(避免并发误配)。
-              ...(callId !== 'unattributed' ? { callId } : {}),
-            });
-            this.deps.log?.info('ghost fetch-request done (media)', {
+          if (sniffed.kind === 'unsupported') {
+            return { ok: false, message: `该媒体类型不受总仓支持(${declaredMime || 'unknown'}),无法取回` };
+          }
+          if (sniffed.kind === 'mediaTooLarge') {
+            return { ok: false, message: `媒体过大(上限 ${GHOST_FETCH_MEDIA_MAX_BYTES} 字节)——截断的媒体是坏文件,整单拒` };
+          }
+          if (sniffed.kind === 'text') {
+            const bodyText = new TextDecoder('utf-8', { fatal: false }).decode(sniffed.bytes);
+            this.deps.log?.info('ghost fetch-request done', {
               ghostId, callId, method, host: url.hostname, status: response.status,
-              bytes: mediaBytes.byteLength, hash: saved.hash,
+              bytes: sniffed.bytes.byteLength, mediaSniffMiss: true,
+              ...(sniffed.truncated ? { truncated: true } : {}),
             });
             return {
               ok: true,
               status: response.status,
               headers: responseHeaders,
-              media: { ...saved, bytes: mediaBytes.byteLength },
+              body: bodyText,
+              ...(sniffed.truncated ? { truncated: true } : {}),
             };
-          } finally {
-            this.mediaReadsInflight -= 1;
           }
+          if (sniffed.overLimit) {
+            return { ok: false, message: `媒体过大(上限 ${GHOST_FETCH_MEDIA_MAX_BYTES} 字节)——截断的媒体是坏文件,整单拒` };
+          }
+          const saved = await this.deps.saveGhostMedia({
+            ghostId,
+            buffer: sniffed.bytes,
+            // Always persist the MIME recovered from bytes, never the external
+            // declaration. This also corrects a valid but misdeclared response.
+            mimeType: sniffed.mime,
+            ...(label !== undefined ? { label } : {}),
+            ...(callId !== 'unattributed' ? { callId } : {}),
+          });
+          this.deps.log?.info('ghost fetch-request done (media)', {
+            ghostId, callId, method, host: url.hostname, status: response.status,
+            bytes: sniffed.bytes.byteLength, hash: saved.hash, mime: sniffed.mime,
+            ...(sniffGeneric ? { recoveredBySniff: true } : {}),
+            declaredMime,
+          });
+          return {
+            ok: true,
+            status: response.status,
+            headers: responseHeaders,
+            media: { ...saved, bytes: sniffed.bytes.byteLength },
+          };
         }
         if (!isTextualContentType(contentType)) {
-          return { ok: false, message: `该媒体类型不受总仓支持(${normalizeMime(contentType)}),无法取回` };
+          return { ok: false, message: `该媒体类型不受总仓支持(${declaredMime || 'unknown'}),无法取回` };
         }
         // 2xx 但内容是文本(如返回 JSON 的"生成中"状态):回落文本形态。
       }

@@ -147,6 +147,7 @@ import matter from 'gray-matter';
 import type { Maker } from '@cindy/maker-core';
 import { im, feishuIm, startImOrchestrators, startImConnection, stopImConnection } from './im';
 import * as authManager from './authManager';
+import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -2371,6 +2372,14 @@ const registerIpcHandlers = () => {
 
   ipcMain.on('get-os-release', (event) => {
     event.returnValue = os.release();
+  });
+
+  // 首启亮色门的同步会话线索(见 authSessionHint.ts):renderer bootstrap 在
+  // 任何渲染前判定「真首启」,localStorage 为空但主进程持有存量会话(持久化
+  // refresh token / local 模式)时不得激活亮色门,否则已登录暗色用户会先看到
+  // 亮色首帧。必须 sendSync——判定发生在首帧之前,异步 IPC 赶不上。
+  ipcMain.on('auth:has-persisted-session-hint-sync', (event) => {
+    event.returnValue = hasPersistedSessionHint({ userDataPath: app.getPath('userData') });
   });
 
   ipcMain.on('get-app-display-version-info', (event) => {

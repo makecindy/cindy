@@ -20,7 +20,8 @@
             "teamId": "",
             "profileName": "",
             "signIdentity": "",
-            "profilePath": ""
+            "profilePath": "",
+            "exportMethod": ""
         },
         "androidSigning": {
             "keyAlias": "",
@@ -53,7 +54,8 @@
             "teamId": "",
             "profileName": "",
             "signIdentity": "",
-            "profilePath": ""
+            "profilePath": "",
+            "exportMethod": ""
         },
         "androidSigning": {
             "keyAlias": "",
@@ -81,7 +83,8 @@
             "teamId": "",
             "profileName": "",
             "signIdentity": "",
-            "profilePath": ""
+            "profilePath": "",
+            "exportMethod": ""
         },
         "androidSigning": {
             "keyAlias": "",

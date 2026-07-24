@@ -8,6 +8,8 @@
  * 交互契约:
  *   - 运行中动作组默认露出 latest-five preview;点组头在最近 5 条与全部明细
  *     之间切换,不会把活动完全隐藏。完成态默认 collapsed。
+ *   - 运行中若展开也不会露出更多内容(全部活动 ≤ 5 条且没有 preview 之外的
+ *     子项),组头不提供折叠交互也不显示箭头,避免"点了闪一下又弹回来"。
  *   - 完成态外组展开后直接显示 assistant 文字,动作仍是内层「已工作 Xs」。
  *   - 运行态或完成态的动作组展开后直接显示 thinking 内容和工具行;长 thinking
  *     可再点行展开全文,工具行沿用 AgentActionRow 的详情交互。
@@ -278,16 +280,43 @@ export function WorkGroupBlock({
     return () => window.clearInterval(id);
   }, [isStreaming, startedAtMs]);
 
-  const liveActivities = useMemo(
-    () => projectRecentWorkActivities(childItems, isStreaming, MAX_LIVE_WORK_ACTIVITIES),
+  // 多取一条即可判断展开是否能露出更多活动，显示仍只取最近 5 条。
+  const recentActivities = useMemo(
+    () => projectRecentWorkActivities(childItems, isStreaming, MAX_LIVE_WORK_ACTIVITIES + 1),
     [childItems, isStreaming],
   );
-  const isLivePreviewVisible = isStreaming && !expanded && liveActivities.length > 0;
+  const liveActivities = useMemo(
+    () => recentActivities.slice(-MAX_LIVE_WORK_ACTIVITIES),
+    [recentActivities],
+  );
+  // preview 只投影 tools / thinking；嵌套组、rendered 文字和 redacted thinking
+  // 只在展开态可见，存在它们时展开仍有意义。
+  const hasBeyondPreviewChild = useMemo(
+    () =>
+      childItems.some(
+        (child) =>
+          child.kind === 'group'
+          || child.kind === 'rendered'
+          || (child.kind === 'thinking' && child.message.thinkingRedacted === true),
+      ),
+    [childItems],
+  );
+  // 运行中预览已经等于全部内容时，折叠/展开是视觉空操作 — 组头不提供交互。
+  const canToggle =
+    !isStreaming
+    || hasBeyondPreviewChild
+    || recentActivities.length > MAX_LIVE_WORK_ACTIVITIES;
+  const effectiveExpanded = expanded && canToggle;
+  const isLivePreviewVisible =
+    isStreaming && !effectiveExpanded && liveActivities.length > 0;
   // 完成态只计算一次完整摘要；运行态保持折叠时走上面的反向 latest-five
   // 热路径，用户主动展开后才投影全部历史。
   const activityProjection = useMemo(
-    () => (expanded || !isStreaming ? projectWorkActivities(childItems, isStreaming) : null),
-    [childItems, expanded, isStreaming],
+    () =>
+      effectiveExpanded || !isStreaming
+        ? projectWorkActivities(childItems, isStreaming)
+        : null,
+    [childItems, effectiveExpanded, isStreaming],
   );
 
   // 外层完成态组展开成文字 + 内层动作组;内层动作组与运行态组复用本组件,
@@ -333,14 +362,18 @@ export function WorkGroupBlock({
       <div className="w-full">
         <button
           type="button"
-          onClick={onToggle}
+          onClick={canToggle ? onToggle : undefined}
+          disabled={!canToggle}
           className={cn(
             'flex w-full items-center gap-[6px] py-[2px]',
-            'select-none cursor-pointer',
-            'hover:opacity-80 transition-opacity',
+            'select-none',
             'text-left',
+            canToggle && 'cursor-pointer hover:opacity-80 transition-opacity',
+            !canToggle && 'cursor-default',
           )}
-          aria-expanded={expanded || isLivePreviewVisible}
+          aria-expanded={
+            canToggle ? effectiveExpanded || isLivePreviewVisible : undefined
+          }
         >
           <span className="inline-flex h-[1lh] items-center shrink-0">
             {isStreaming ? (
@@ -358,14 +391,16 @@ export function WorkGroupBlock({
               {formatDuration(elapsedMs)}
             </span>
           )}
-          <ChevronRight
-            size={14}
-            className={cn(
-              'shrink-0 text-[var(--msg-tool-card-chevron)]',
-              'transition-transform duration-[var(--motion-fast,150ms)]',
-              expanded && 'rotate-90',
-            )}
-          />
+          {canToggle && (
+            <ChevronRight
+              size={14}
+              className={cn(
+                'shrink-0 text-[var(--msg-tool-card-chevron)]',
+                'transition-transform duration-[var(--motion-fast,150ms)]',
+                effectiveExpanded && 'rotate-90',
+              )}
+            />
+          )}
         </button>
 
         {isLivePreviewVisible && (
@@ -386,7 +421,7 @@ export function WorkGroupBlock({
           </div>
         )}
 
-        <Collapse open={expanded}>
+        <Collapse open={effectiveExpanded}>
           <div
             className={cn(
               'mt-1 pl-3 py-[2px]',

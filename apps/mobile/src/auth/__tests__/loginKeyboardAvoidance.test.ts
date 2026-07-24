@@ -264,7 +264,7 @@ describe('loginKeyboard 接线(hook 订阅拓扑 + 登录页测量拓扑,读源�
     expect(stageSource).toContain('translateY: -keyboardShiftPx');
     // 背景钉在根 View 的 backgroundColor 上,位于键盘位移层之外
     // (源码顺序:根 View 底色声明先于位移容器;wave4 双红渐变叠层已撤,对齐 PR#104)
-    const backgroundAt = stageSource.indexOf('backgroundColor: colors.surface');
+    const backgroundAt = stageSource.indexOf('backgroundColor: colors.login.bgBase');
     const shiftAt = stageSource.indexOf('translateY: -keyboardShiftPx');
     expect(backgroundAt).toBeGreaterThan(0);
     expect(shiftAt).toBeGreaterThan(backgroundAt);

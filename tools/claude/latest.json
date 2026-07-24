@@ -91,6 +91,11 @@
       "url": "https://downloads.claude.ai/claude-code-releases/2.1.215/linux-x64/claude",
       "sha256": "c1efffaaf370aa187cb6a09dd93d4e511c646899b0078476f83791b664bde7fe",
       "size": 265239536
+    },
+    "linux-arm64": {
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.215/linux-arm64/claude",
+      "sha256": "2b43a3d5b0787217e5d7381fad42c7314292546fe9db9eb8b9b379de90509b30",
+      "size": 262060960
     }
   },
   "scripts": {

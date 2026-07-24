@@ -129,7 +129,150 @@ export interface ThemeColors {
   swipeActionArchive: string;
   /** swipe 按钮上的文字/图标色:两个主题都是白(按钮底色恒为深色系,不能用会反相的 ctaText) */
   swipeActionText: string;
+  /** 登录皮肤色板(light/dark 二态;暗色实现 PR 起随主题切换,见 LoginSkinColors) */
+  login: LoginSkinColors;
 }
+
+/**
+ * 登录皮肤色板(light/dark 二态)。
+ *
+ * 暗色实现 PR 前提变更:原「跨 light/dark 恒定」已废(DESIGN.md §16.2 决策记录
+ * 2026-07-23),登录皮随基础 light/dark 二态切换、不跟具体扩展主题。dark 值经
+ * Figma 组件库 Dark symbol 核验(DESIGN.md §16.1 双态表;个别标注推导值待 Figma
+ * 精确)。与桌面 `--login-*` token(themes/colors.ts)同名同值。
+ * 组件消费:useThemedStyles 工厂内走 `colors.login.*`(per-mode 编译缓存天然生效),
+ * JSX 内联色走 `useTheme().colors.login.*`——不要再直接 import 模块级常量。
+ */
+export interface LoginSkinColors {
+  /** 登录画布底(亮 #EDEDED / 暗 #1F1F1E,figma 532:585 暗色帧实测;纯平,PR#104 拍板) */
+  bgBase: string;
+  /** 品牌红 accent(Global pill/字标红元素;禁止用作页面背景——wave4 改判;跨模式不变) */
+  brandAccent: string;
+  /** 品牌深红 pressed/hover(跨模式不变) */
+  brandAccentPressed: string;
+  /** 登录面板底(亮 #FBFBFB / 暗 #312F2F) */
+  panelBg: string;
+  /** 面板 1px inside 描边(亮 #D4D4D4 / 暗 #434343) */
+  panelBorder: string;
+  /** 输入框底(亮 #EEEEEE / 暗 #2C2A2A;figma Dark_normal 输入 symbol) */
+  controlBg: string;
+  /** 方式行/返回钮底(亮与输入框同 #EEEEEE;暗 #2A2828 分化;figma 549:850/549:897) */
+  actionControlBg: string;
+  /** 返回钮描边(亮白 / 暗 #434343;figma 549:897) */
+  backBorder: string;
+  /** 控件 default 描边(亮 #D4D4D4 / 暗 #434343) */
+  controlBorder: string;
+  /** 控件 focus/filled 描边(亮 #2A2828 / 暗 #EEEEEE 反相;figma Dark_highlight) */
+  controlBorderActive: string;
+  /** disabled 控件描边(两模式同构 #B4B4B4,§16.5 disabled 特例) */
+  controlBorderDisabled: string;
+  /** 控件已填文本(亮 #252222 / 暗 #EEEEEE) */
+  controlText: string;
+  /** placeholder/倒计时文案(亮 #D4D4D4 / 暗 #6F6F6F;figma 539:754) */
+  controlPlaceholder: string;
+  /** 面板标题(亮 #252222 / 暗 #D4D4D4) */
+  titleText: string;
+  /** 副标题/说明文案(两模式同值 #6F6F6F) */
+  secondaryText: string;
+  /** 主按钮/第三方圆钮底(亮深 #2A2828 / 暗白 #EEEEEE 反相;圆钮图标保品牌色) */
+  primaryButtonBg: string;
+  /** 主按钮/圆钮描边(亮 #434343 / 暗 #FFFFFF) */
+  primaryButtonBorder: string;
+  /** 主按钮文字(亮 #D4D4D4 / 暗 #2A2828 反相) */
+  primaryButtonText: string;
+  /** disabled 按钮白 70% 叠层(两模式同构,§16.5 disabled 特例) */
+  disabledButtonOverlay: string;
+  /** disabled 主按钮底(两模式同构深底 #2A2828,暗色不反相;figma Disable) */
+  disabledButtonBg: string;
+  /** disabled 主按钮文字(两模式同构 #D4D4D4,配合 opacity 0.8) */
+  disabledButtonText: string;
+  /** Text_link 重发链接(亮墨黑 #2A2828 / 暗浅色 #EEEEEE;figma 539:752 dark_重新发送) */
+  linkText: string;
+  /** Text_link pressed(亮 U-9 #1A1818 / 暗 #C0BEBE 推导,待 Figma 精确) */
+  linkPressed: string;
+  /** 登录错误文字(#D91F37 语义豁免,跨模式不变;不复用 statusError) */
+  loginError: string;
+  /** SLOGAN 矢量墨色(亮 #2A2828;暗色画布用白字版 #EDEDED 推导,待 Figma 精确) */
+  sloganInk: string;
+  /** wave4 双背景渐变的品牌红基色(跨模式同值;层 opacity 见 loginGradients) */
+  gradientTint: string;
+  /** 主钮/圆钮 pressed 叠层(亮黑 50% / 暗黑 10%;figma white_button Pressed) */
+  overlayButtonPressed: string;
+  /** 浅底控件(方式行/返回钮)pressed 叠层(两模式黑 8%) */
+  overlayControlPressed: string;
+  /** 浅底钮白描边/Global pill(两模式 #FFFFFF;推导,待 Figma 精确) */
+  invertedButtonBorder: string;
+  /** 大 loading 环轨(亮 rgba(42,40,40,.18) / 暗 rgba(212,212,212,.18) 推导,待 Figma) */
+  loadingRingTrack: string;
+}
+
+/** 登录皮肤双态色板(与桌面 --login-* dark 值同源,DESIGN.md §16.1) */
+export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
+  light: {
+    bgBase: '#EDEDED',
+    brandAccent: '#DF0C27',
+    brandAccentPressed: '#A61629',
+    panelBg: '#FBFBFB',
+    panelBorder: '#D4D4D4',
+    controlBg: '#EEEEEE',
+    actionControlBg: '#EEEEEE',
+    backBorder: '#FFFFFF',
+    controlBorder: '#D4D4D4',
+    controlBorderActive: '#2A2828',
+    controlBorderDisabled: '#B4B4B4',
+    controlText: '#252222',
+    controlPlaceholder: '#D4D4D4',
+    titleText: '#252222',
+    secondaryText: '#6F6F6F',
+    primaryButtonBg: '#2A2828',
+    primaryButtonBorder: '#434343',
+    primaryButtonText: '#D4D4D4',
+    disabledButtonOverlay: 'rgba(255, 255, 255, 0.7)',
+    disabledButtonBg: '#2A2828',
+    disabledButtonText: '#D4D4D4',
+    linkText: '#2A2828',
+    linkPressed: '#1A1818',
+    loginError: '#D91F37',
+    sloganInk: '#2A2828',
+    gradientTint: '#F70121',
+    overlayButtonPressed: 'rgba(0, 0, 0, 0.5)',
+    overlayControlPressed: 'rgba(0, 0, 0, 0.08)',
+    invertedButtonBorder: '#FFFFFF',
+    loadingRingTrack: 'rgba(42, 40, 40, 0.18)',
+  },
+  dark: {
+    bgBase: '#1F1F1E',
+    brandAccent: '#DF0C27',
+    brandAccentPressed: '#A61629',
+    panelBg: '#312F2F',
+    panelBorder: '#434343',
+    controlBg: '#2C2A2A',
+    actionControlBg: '#2A2828',
+    backBorder: '#434343',
+    controlBorder: '#434343',
+    controlBorderActive: '#EEEEEE',
+    controlBorderDisabled: '#B4B4B4',
+    controlText: '#EEEEEE',
+    controlPlaceholder: '#6F6F6F',
+    titleText: '#D4D4D4',
+    secondaryText: '#6F6F6F',
+    primaryButtonBg: '#EEEEEE',
+    primaryButtonBorder: '#FFFFFF',
+    primaryButtonText: '#2A2828',
+    disabledButtonOverlay: 'rgba(255, 255, 255, 0.7)',
+    disabledButtonBg: '#2A2828',
+    disabledButtonText: '#D4D4D4',
+    linkText: '#EEEEEE',
+    linkPressed: '#C0BEBE',
+    loginError: '#D91F37',
+    sloganInk: '#EDEDED',
+    gradientTint: '#F70121',
+    overlayButtonPressed: 'rgba(0, 0, 0, 0.1)',
+    overlayControlPressed: 'rgba(0, 0, 0, 0.08)',
+    invertedButtonBorder: '#FFFFFF',
+    loadingRingTrack: 'rgba(212, 212, 212, 0.18)',
+  },
+};
 
 /**
  * Default Light —— CINDY 色板(决策表 PRE-2 / U3+U8 批准)。
@@ -190,6 +333,7 @@ export const lightColors: ThemeColors = {
   swipeActionNeutral: '#8e8e93',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
+  login: loginPalettes.light,
 };
 
 /**
@@ -249,6 +393,7 @@ export const darkColors: ThemeColors = {
   swipeActionNeutral: '#636366',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
+  login: loginPalettes.dark,
 };
 
 export const palettes: Record<ThemeMode, ThemeColors> = {
@@ -406,60 +551,14 @@ export const docThumbSnippetType = {
 } as const;
 
 /**
- * 登录皮肤专用 token 组(PR0a,implementation-plan Step 0 WHAT1)。
+ * @deprecated 亮色单值别名,仅供 node 单测与历史引用过渡。
  *
- * 跨 light/dark **恒定**——Cindy 品牌登录入口不随主题染色,因此刻意不进
- * ThemeColors(那是随主题切换的色板)。参数权威:design.md §8(wave4)/
- * figma-component-spec.md §4·§10/token-decision-table.md(wave4 改判)。
- * 错误文字用独立 `loginError`(#D91F37 族,figma 登录稿专用错误红),
- * **不得复用 statusError**(语义违规,守护测试锁死)。
- * 页面底色不在本组:wave4 改判为消费主题 surface(design.md §8.1),由
- * 宿主组件用 `useTheme().colors.surface` 取值,不另造 #F1F0F1 字面值。
+ * 暗色实现 PR 起登录皮随 light/dark 二态切换(前提变更,DESIGN.md §16.2 决策
+ * 记录 2026-07-23),权威 = `loginPalettes` + `ThemeColors.login`。组件消费一律走
+ * `colors.login.*`(useThemedStyles 工厂)/`useTheme().colors.login.*`(JSX 内联),
+ * **不要**再 import 本常量——它永远是亮色,暗色下用它 = 静默单模式 bug。
  */
-export const loginColors = {
-  /** 品牌红 accent(Global pill/字标红元素;禁止用作页面背景——wave4 改判) */
-  brandAccent: '#DF0C27',
-  /** 品牌深红 pressed/hover(figma §1 Color System) */
-  brandAccentPressed: '#A61629',
-  /** 白色登录面板(680×440 r36 fill,figma §4) */
-  panelBg: '#FBFBFB',
-  /** wave4 全部登录面板 1px inside 描边(368:1383) */
-  panelBorder: '#D4D4D4',
-  /** 输入框/浅底控件底(figma §4.1) */
-  controlBg: '#EEEEEE',
-  /** 输入框默认描边/placeholder/主按钮文字(figma §1「正文」#D4D4D4) */
-  controlBorder: '#D4D4D4',
-  /** 输入框 focus 描边/主按钮底/深色控件(figma §1「背景」#2A2828) */
-  controlBorderActive: '#2A2828',
-  /** disabled 按钮描边(figma §4.3 disable 态) */
-  controlBorderDisabled: '#B4B4B4',
-  /** 标题/输入已填文本(figma §1 #252222) */
-  controlText: '#252222',
-  /** placeholder/倒计时文案 */
-  controlPlaceholder: '#D4D4D4',
-  /** 面板标题 */
-  titleText: '#252222',
-  /** 副标题/说明文案(figma §1「二级信息」) */
-  secondaryText: '#6F6F6F',
-  /** 主按钮/第三方圆钮底 */
-  primaryButtonBg: '#2A2828',
-  /** 主按钮/圆钮描边(figma §1「边框」#434343) */
-  primaryButtonBorder: '#434343',
-  /** 主按钮文字 */
-  primaryButtonText: '#D4D4D4',
-  /** disabled 按钮白 70% 叠层(figma §1.4) */
-  disabledButtonOverlay: 'rgba(255, 255, 255, 0.7)',
-  /** Text_link 默认色 */
-  linkText: '#2A2828',
-  /** Text_link pressed(U-9 裁决 2026-07-20:#1A1818,wave3 实测落地后替换) */
-  linkPressed: '#1A1818',
-  /** 登录错误文字(#D91F37 族,不复用 statusError——语义违规) */
-  loginError: '#D91F37',
-  /** SLOGAN 矢量近黑(wave4 368:1394,#2A2828 + 0.5px stroke 同色) */
-  sloganInk: '#2A2828',
-  /** wave4 双背景渐变的品牌红基色(379:518/379:520,层 opacity 见 loginGradients) */
-  gradientTint: '#F70121',
-} as const;
+export const loginColors = loginPalettes.light;
 
 /**
  * wave4 背景双渐变参数(代码复现非资产;归一化百分比锚定物理 viewport,

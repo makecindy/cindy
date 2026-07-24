@@ -64,7 +64,7 @@ import {
 } from '@/components/MobileLoginHandoffStage';
 import { AUTH_REGION, getMobileConfigIssues } from '@/config/env';
 import { resolveIdentifierMethod } from '@/auth/loginIdentifierMethod';
-import { fontWeight, lineHeight, loginColors, loginSizes, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, loginPalettes, loginSizes, radius, spacing, typeScale } from '@/theme/tokens';
 
 /**
  * Auth-server login presentation(PR4a 全登录态皮肤化,implementation-plan Step 5 WHAT3)。
@@ -1226,7 +1226,8 @@ const configIssueStyles = {
     width: LOGIN_SUBTITLE.width,
   },
   line: {
-    color: loginColors.loginError,
+    // loginError 语义豁免跨模式同值(#D91F37),静态样式取 light 侧即可
+    color: loginPalettes.light.loginError,
     fontSize: LOGIN_ERROR_TEXT.font,
     fontWeight: fontWeight.regular,
     textAlign: 'center' as const,

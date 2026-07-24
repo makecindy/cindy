@@ -48,6 +48,10 @@ const overrides = {
   accent: '0.0 2.2% 18.0%', // 裁决: shadcn 中性 hover
   'agent-actions-rail': '#434343', // 边框/rail
   'ask-checkbox-border': '#BFC1C4', // AA checkbox border
+  'ask-header-chip-bg': '#3A3838', // ask 卡 header chip 底: surface-chip #2F2D2D 与卡底 #312F2F 撞色不可辨,借 settings-menu-bg-hover 同档提亮值(2026-07-21 已验证在 #312F2F 上可分辨);序号角标(ask-badge-bg)落在 #3A3838 列表面上,维持默认 #2F2D2D 反而可辨,不随 header chip 提亮档调整
+  'ask-send-disabled-bg': '#3A3838', // ask 卡自由输入行禁用圆形 Send 底: 同 chip 提亮档(禁用感由 text-disabled-tertiary 文字承担)
+  'ask-option-list-bg': '#3A3838', // ask 卡选项列表面: 同 chip 提亮档,浮在 #312F2F 卡底上
+  'ask-option-hover': '#444242', // ask 卡选项行 hover: 需高于列表面 #3A3838 一档,借 send-btn-disabled-bg 同档(2026-07-23 ask 卡整改)
   background: '0.0 2.4% 16.1%', // 背景 -> HSL
   'chat-input-bg': '#312F2F', // 输入框
   'chat-input-border-focus': 'rgba(191, 193, 196, 0.30)', // 用户改稿 2026-07-20:输入框聚焦描边降至 30%
@@ -83,7 +87,7 @@ const overrides = {
   'perm-code-bg': '#2B2929', // code bg
   'perm-item-selected-bg': '#2F2D2D', // selected bg
   'plan-outline-active-bg': '#2F2D2D', // active bg
-  'plan-toolbar-btn-hover-bg': '#2F2D2D', // hover bg
+  'plan-toolbar-btn-hover-bg': '#444242', // hover bg: 原 #2F2D2D 比卡底 #312F2F 更暗近不可辨,且低于 ask 卡按钮静默底 #3A3838 会反向变暗,提亮到已有禁用灰底档 #444242(2026-07-23 ask 卡整改)
   popover: '0.0 2.1% 18.8%', // elevated -> HSL
   'primary-foreground': '0.0 0.0% 100.0%', // 白前景
   'search-match-fg': '0.0 0.0% 83.1%', // search fg

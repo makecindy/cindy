@@ -49,6 +49,20 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.routing.codex?.headerOverride).toBeUndefined();
   });
 
+  it('preserves an explicit Chat Completions protocol for Codex routing', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: { ...codexOnly.runtimes.codex!, wireProtocol: 'openai-chat' },
+      },
+    });
+    expect(p.routing.codex).toMatchObject({
+      upstream: 'https://openrouter.ai/api/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'openai-chat',
+    });
+  });
+
   it('maps models per runtime with conservative default metadata', () => {
     const p = buildUserProvider(codexOnly);
     const models = p.models.codex ?? [];

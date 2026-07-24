@@ -31,7 +31,7 @@ const layoutSource = readFileSync(
 describe('loginSkin 白底体系视觉(源码接线 + token 参数)', () => {
   it('brand-background:stage 消费主题 surface 纯平底,撤 wave4 双红渐变叠层(对齐 PR#104)', () => {
     // 底色 = 主题 surface 纯平底(wave4 改判沿用,不另造字面值),用户 2026-07-22 拍板对齐 PR#104
-    expect(stageSource).toContain('backgroundColor: colors.surface');
+    expect(stageSource).toContain('backgroundColor: colors.login.bgBase');
     // 红渐变叠层已移除:组件定义 / token 引用 / SVG 渐变坐标系 / 品牌红字面量全部不再出现
     expect(stageSource).not.toContain('LoginBackgroundGradients');
     expect(stageSource).not.toContain('loginGradients');
@@ -48,8 +48,8 @@ describe('loginSkin 白底体系视觉(源码接线 + token 参数)', () => {
   });
 
   it('login-panel-border:面板 1px panelBorder 描边 + panelBg r36(368:1383)', () => {
-    expect(controlsSource).toContain('borderColor: loginColors.panelBorder');
-    expect(controlsSource).toContain('backgroundColor: loginColors.panelBg');
+    expect(controlsSource).toContain('borderColor: colors.login.panelBorder');
+    expect(controlsSource).toContain('backgroundColor: colors.login.panelBg');
     expect(controlsSource).toContain('borderRadius: loginSizes.panelRadius');
     expect(loginColors.panelBorder).toBe('#D4D4D4');
     expect(loginColors.panelBg).toBe('#FBFBFB');

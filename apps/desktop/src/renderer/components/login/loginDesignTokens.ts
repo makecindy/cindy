@@ -103,6 +103,10 @@ export const LOGIN_COLORS = {
   panelBg: 'var(--login-panel-bg)',
   panelBorder: 'var(--login-panel-border)',
   controlBg: 'var(--login-control-bg)',
+  /** 方式行/返回钮底(暗色与输入框底分化,figma 549:850/549:897;色值见 themes/colors.ts) */
+  actionControlBg: 'var(--login-action-control-bg)',
+  /** 返回钮描边(亮白/暗深灰,figma 549:897;色值见 themes/colors.ts) */
+  backBorder: 'var(--login-back-border)',
   controlBorder: 'var(--login-control-border)',
   controlBorderActive: 'var(--login-control-border-active)',
   controlBorderDisabled: 'var(--login-control-border-disabled)',
@@ -114,6 +118,9 @@ export const LOGIN_COLORS = {
   primaryButtonBorder: 'var(--login-primary-button-border)',
   primaryButtonText: 'var(--login-primary-button-text)',
   disabledOverlay: 'var(--login-disabled-button-overlay)',
+  /** disabled 主按钮底/字(两模式同构深底浅字,暗色不反相;figma Disable 态) */
+  disabledButtonBg: 'var(--login-disabled-button-bg)',
+  disabledButtonText: 'var(--login-disabled-button-text)',
   invertedButtonBorder: 'var(--login-inverted-button-border)',
   errorFg: 'var(--login-error-fg)',
   brandAccent: 'var(--login-brand-accent)',

@@ -61,6 +61,13 @@ const PLATFORMS = [
     binFile: 'codex',
   },
   {
+    key: 'linux-arm64',
+    // Verified 2026-07-24 from the official openai/codex GitHub release asset
+    // list: aarch64 Linux is likewise published as the musl tarball only.
+    asset: 'codex-aarch64-unknown-linux-musl.tar.gz',
+    binFile: 'codex',
+  },
+  {
     key: 'win32-x64',
     asset: 'codex-x86_64-pc-windows-msvc.exe.tar.gz',
     binFile: 'codex.exe',

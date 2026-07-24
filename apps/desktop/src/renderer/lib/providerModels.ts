@@ -91,14 +91,36 @@ export function providerMonogram(name: string): string {
   return ch.toUpperCase();
 }
 
-/** 派生某 agent 的可见模型清单：跨 provider union（数组序）+ 按 id 首见去重。 */
+/** Whether a provider relies on the local Responses-to-Chat handler for Codex. */
+export function isChatBridgedCodexProvider(provider: ProviderView): boolean {
+  return provider.routing?.codex?.wireProtocol === 'openai-chat';
+}
+
+export function filterChatBridgedCodexProviders(
+  providers: ProviderView[],
+  agent: AgentKind,
+  exclude: boolean,
+): ProviderView[] {
+  return exclude && agent === 'codex'
+    ? providers.filter((provider) => !isChatBridgedCodexProvider(provider))
+    : providers;
+}
+
+/**
+ * 派生某 agent 的可见模型清单：跨 provider union（数组序）+ 按 id 首见去重。
+ *
+ * `excludeProvider` 命中的供应商整条跳过（其模型不加入、也不占 seen），这样若同一
+ * model id 另有可路由的供应商提供，仍能由后者补上——用于 SSH 远程排除仅本地可桥接的来源。
+ */
 export function deriveModelsFromProviders(
   providers: ProviderView[],
   agent: AgentKind,
+  opts?: { excludeProvider?: (provider: ProviderView) => boolean },
 ): ModelDescriptor[] {
   const seen = new Set<string>();
   const out: ModelDescriptor[] = [];
   for (const provider of providersForAgent(providers, agent)) {
+    if (opts?.excludeProvider?.(provider)) continue;
     for (const m of provider.models[agent] ?? []) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);
@@ -136,12 +158,22 @@ export function selectVisibleModels(params: {
    * (被控端跑完整 app,其本地 proxy 上 bridge 可用,模型清单本就来自被控端)。
    */
   excludeSubscriptionDirect?: boolean;
+  /**
+   * 过滤 `wireProtocol: 'openai-chat'` 的 Codex 供应商(DeepSeek / Kimi / GLM 等):它们的
+   * Responses→Chat 翻译只挂在本地 codex-proxy 的 localHandler 上。SSH 远程会话(remoteHostId)
+   * 必须传 true:远程走 daemon transport、不经本地 proxy,未经桥接的 Chat-only 模型送到远端必失败。
+   * 与 excludeSubscriptionDirect 同由 `!!remoteHostId` 驱动;device-link 远程不受影响(被控端跑完整 app)。
+   */
+  excludeChatBridgedCodex?: boolean;
 }): ModelDescriptor[] {
-  const { agentKind, deviceId, providers, deviceCcModels, deviceCodexModels, excludeSubscriptionDirect } = params;
+  const { agentKind, deviceId, providers, deviceCcModels, deviceCodexModels, excludeSubscriptionDirect, excludeChatBridgedCodex } = params;
   const drop = (list: ModelDescriptor[]): ModelDescriptor[] =>
     excludeSubscriptionDirect ? list.filter((m) => !isSubscriptionDirectModel(m.id)) : list;
+  const codexDeriveOpts = excludeChatBridgedCodex
+    ? { excludeProvider: isChatBridgedCodexProvider }
+    : undefined;
   const cc = drop(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
-  const codex = drop(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex'));
+  const codex = drop(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   const merged = [...cc];

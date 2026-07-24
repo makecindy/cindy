@@ -2,11 +2,13 @@
 // =============================================================================
 // build-android.mjs —— Android 纯构建(本机出自签 APK,不含任何上传 / 分发 / 发布)
 //
-// 流程:git 闸门 → expo prebuild(注入 versionCode)→ patch build.gradle 用自有
+// 流程(--execute):git 闸门 → expo prebuild(注入 versionCode)→ patch build.gradle 用自有
 //       keystore 自签 → gradlew assembleRelease → app-release.apk
 //       → 从 APK 回读内嵌 runtimeVersion(assets/fingerprint,仅报告)
 //       → aapt2 本地校验 package/versionCode(找不到 aapt2 时降级 warn)
 //       → 产物留在 gradle 输出目录并打印路径(--out 可另拷一份)。
+// dry-run 纯本地:校验配置 + 打印计划,git 闸门(含 origin/main 远端比对)只在
+// --execute 时执行,分支/离线环境也能直接看计划。
 //
 // 与发布无关:不读写任何远端(无版本基线拉取、无 OSS/CDN、无分发平台)。
 // versionCode 缺省取 android-version.json 现值,可用 --version-code 覆盖
@@ -20,8 +22,11 @@
 //   --region cn|global|dev     必填。从 scripts/self-host-regions.json 取应用身份
 //                              (androidPackage)与签名配置(androidSigning)。该文件
 //                              不入仓(gitignore),按 self-host-regions.json.example
-//                              复制填写;构建只需 authRegion / androidPackage /
-//                              androidSigning 三项,其余字段可留空。
+//                              复制填写;构建必填 authRegion / androidPackage /
+//                              androidSigning,以及 selfhost 包烘焙必填的 tapdb 两字段
+//                              (global 另需 google 三字段)——prebuild 期 app.config.js
+//                              硬校验,本脚本 dry-run 预告缺失、--execute 前置拦截;
+//                              商店 ID / OSS / npkgExpectBundle 等纯发布字段可留空。
 //                              dev 区域还需先按 config/endpoint.dev.json.example
 //                              复制出 config/endpoint.dev.json(同样 gitignore),
 //                              并把 cdnBaseUrl 换成实际的无凭据 HTTPS 基址
@@ -32,7 +37,8 @@
 //   --desktop-version x.y.z    可选。配对的桌面产品线版本号(设置页展示用),
 //                              不传则不注入、设置页不显示该行。
 //   --out <dir>                可选。构建完把 .apk 另拷到该目录。
-//   --skip-git-gate            跳过 main/clean/HEAD 校验(仅本地迭代用)。
+//   --skip-git-gate            跳过 --execute 的 main/clean/HEAD 校验(仅本地迭代用;
+//                              dry-run 本就不校验)。
 //
 // 签名配置(全部本地,仓内零敏感值):
 //   self-host-regions.json 的 <region>.androidSigning:keystorePath / keyAlias
@@ -62,7 +68,7 @@ import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import { clearBundlerCache } from './lib/bundler-cache.mjs';
 import { readEmbeddedRuntimeVersionFromApk } from './lib/embedded-runtime.mjs';
 import { loadEndpointManifestBaseUrl, mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
-import { SELF_HOST_REGIONS, loadSelfHostRegions, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
+import { SELF_HOST_REGIONS, loadSelfHostRegions, missingSelfHostBakeFields, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
 
 const MOBILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -194,8 +200,9 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   // --region 必填(cn|global|dev):选出本次出包身份 + 签名配置(见 lib/self-host-region.mjs)。
   // 不走 resolveSelfHostRegion:它对 dev 强校验发布专用的 npkgExpectBundle,与纯构建
-  // 「只需身份 + 签名」的契约不符。这里等价解析 region,装载用 mode 'local'(发布面
-  // 字段——商店 ID / TapDB / Google——允许留空),构建面身份字段自查。
+  // 契约不符。这里等价解析 region,装载用 mode 'local'(纯发布字段——商店 ID / OSS /
+  // npkgExpectBundle——允许留空);构建面身份与 selfhost 烘焙必填字段(tapdb,global
+  // 另有 google)由本脚本自查,口径同 prebuild 期 app.config.js 的硬校验。
   const rawRegion = typeof args.region === 'string' ? args.region.trim() : '';
   if (!rawRegion) {
     throw new Error('必须显式指定 --region cn|global|dev(不提供默认值);例:pnpm mobile:build:android -- --region global');
@@ -220,11 +227,23 @@ async function main() {
   const versionCode = rawVersionCode || readAndroidVersionCode(MOBILE_DIR);
   const desktopVersion = typeof args.desktopVersion === 'string' ? args.desktopVersion : '';
 
-  if (!args.skipGitGate) assertProductionGitGate();
-  else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
+  // selfhost 烘焙必填字段(prebuild 期 app.config.js 硬校验)提前自查:dry-run 只预告,
+  // --execute 在 prebuild 白跑数分钟之前 fail-fast。
+  const missingBake = missingSelfHostBakeFields(region);
 
-  // 签名配置预检:缺配置尽早暴露,不白跑数分钟 prebuild(取用值在 buildApk 内再解析一次)。
-  if (args.execute) resolveAndroidSigningEnv(region, process.env);
+  // git 闸门只管真构建:dry-run 纯本地(不做 origin/main 远端比对,分支/离线可跑)。
+  if (args.execute) {
+    if (!args.skipGitGate) assertProductionGitGate();
+    else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
+    if (missingBake.length) {
+      throw new Error(
+        `self-host-regions.json 的 ${region.authRegion} 缺少 selfhost 构建必填字段: ${missingBake.join(', ')} ` +
+          '(prebuild 期 app.config.js 硬校验; tapdb 为包内统计防漏填, global 的 google 为 Google 登录配置)',
+      );
+    }
+    // 签名配置预检:缺配置尽早暴露,不白跑数分钟 prebuild(取用值在 buildApk 内再解析一次)。
+    resolveAndroidSigningEnv(region, process.env);
+  }
 
   // env 必须在 versionCode 决定之后构建:经 XDT_ANDROID_VERSION_CODE 注入 prebuild。
   const env = selfhostEnv(region, versionCode, desktopVersion);
@@ -238,7 +257,16 @@ async function main() {
   const pwPreview = (base) => (process.env[`${base}_${suffix}`]?.trim() || (suffix === 'CN' ? process.env[base]?.trim() : '')) ? 'set' : '未设';
   console.log(`sign: 自有 keystore 自签,path=${aSign.keystorePath || '(JSON 未填)'} alias=${aSign.keyAlias || '(JSON 未填)'} storePw(env ${suffix})=${pwPreview('XDT_ANDROID_KEYSTORE_PASSWORD')} keyPw(env ${suffix})=${pwPreview('XDT_ANDROID_KEY_PASSWORD')}`);
   console.log('steps: prebuild → patch build.gradle 签名 → gradlew assembleRelease → 从 APK 回读 runtimeVersion → aapt2 本地校验(仅构建,无上传/发布)');
-  for (const line of formatBakedEnvLines(bakedDisplayEnv(region, versionCode, desktopVersion), { extraKeys: ['XDT_ANDROID_VERSION_CODE'] })) console.log(line);
+  if (missingBake.length) {
+    console.log(`selfhost 必填缺失: ${missingBake.join(', ')}(--execute 前须在 self-host-regions.json 补齐;prebuild 期 app.config.js 硬校验)`);
+  }
+  const display = bakedDisplayEnv(region, versionCode, desktopVersion);
+  for (const line of formatBakedEnvLines(display, { extraKeys: ['XDT_ANDROID_VERSION_CODE'] })) console.log(line);
+  // 实际构建 env 从打包机 process.env 起步(微信 AppId 等公开配置本就由打包机 env 注入),
+  // 计划里如实列出将一并烤入的继承键——只列键名不打值,不引机密入日志。
+  const injectedKeys = new Set(Object.keys(display));
+  const inheritedPublicKeys = Object.keys(env).filter((k) => k.startsWith('EXPO_PUBLIC_') && !injectedKeys.has(k)).sort();
+  console.log(`打包机 env 继承的 EXPO_PUBLIC_*(将随构建一并烤入,仅列键名): ${inheritedPublicKeys.join(', ') || '(无)'}`);
   if (!args.execute) {
     console.log('dry-run: 传 --execute 才真正构建(需 Android SDK + JDK 17 + keystore 口令 env)');
     return;

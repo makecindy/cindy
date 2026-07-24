@@ -228,6 +228,12 @@ import {
   stopOptionsForProjection,
   type QueueEditTextState,
 } from '@/session/inputProjection';
+import {
+  acquireQueueEditLock,
+  commitQueueEdit,
+  releaseQueueEditLockAfter,
+  type QueueEditLockOwner,
+} from '@/session/queueEditLifecycle';
 import { findErrorTailClientId, isContinuationQueueItem, resolveSessionTailBanner } from '@/session/sessionTailBannerModel';
 import { SessionTailBanner } from '@/session/SessionTailBanner';
 import {
@@ -806,6 +812,8 @@ export default function SessionScreen() {
   // 排队编辑保存(update-content RPC)在途 promise:会话切换 cleanup 据此把解锁
   // 排到保存落定之后,防止 device-link 并发下解锁超车、桌面端用旧内容抢先派发。
   const queueEditSaveInFlightRef = useRef<Promise<void> | null>(null);
+  const queueEditLockOwnerRef = useRef<QueueEditLockOwner | null>(null);
+  const queueEditSaveOwnerRef = useRef<QueueEditLockOwner | null>(null);
   // 「已出队、消息尚未回流」的落定中条目:桌面端 drain 会先从 pendingQueue 摘除、
   // 后落库推送,device-link 下两者相隔可感知——此间继续渲染半透明气泡(转圈徽标),
   // 消息回流(clientId 进入 queueHiddenClientIds)或超时后移除,保证「原位变实」
@@ -1964,6 +1972,17 @@ export default function SessionScreen() {
     const editing = queueEditingRef.current;
     if (editing) {
       queueEditingRef.current = null;
+      const currentLockOwner = queueEditLockOwnerRef.current;
+      const idleLockOwner = currentLockOwner?.clientId === editing.clientId
+        ? currentLockOwner
+        : null;
+      const currentSaveOwner = queueEditSaveOwnerRef.current;
+      const saveLockOwner = currentSaveOwner?.clientId === editing.clientId
+        ? currentSaveOwner
+        : null;
+      const lockOwner = saveLockOwner ?? idleLockOwner;
+      if (idleLockOwner) queueEditLockOwnerRef.current = null;
+      if (saveLockOwner) queueEditSaveOwnerRef.current = null;
       // 保存(update-content)在途时,解锁与附件回收都不抢跑:解锁超车会让桌面端
       // 用旧内容抢先派发该行;立即回收则可能删掉桌面端正在物化的 OSS 对象,保存
       // 成功却拿到残缺附件(review P2 两条)。统一排到保存落定之后——保存成功时
@@ -1973,9 +1992,9 @@ export default function SessionScreen() {
       const inFlightSave = queueEditSaveInFlightRef.current;
       const attachmentsSnapshot = [...attachmentsRef.current];
       const finalize = () => {
-        void maker.input.setEditLock(sessionId, editing.clientId, false).catch(() => undefined);
         discardQueueEditTransientAttachmentsRef.current?.(editing, attachmentsSnapshot);
       };
+      if (lockOwner) void releaseQueueEditLockAfter(lockOwner, inFlightSave).catch(() => undefined);
       if (inFlightSave) void inFlightSave.then(finalize, finalize);
       else finalize();
       // 托盘不是 per-session 状态:编辑中切会话若不还原,队列条目的 files 会跟进
@@ -1984,7 +2003,7 @@ export default function SessionScreen() {
       attachmentsRef.current = [...editing.stashedAttachments];
       setAttachments([...editing.stashedAttachments]);
     }
-  }, [maker, sessionId]);
+  }, [sessionId]);
 
   useEffect(() => {
     if (canUseComposer) return;
@@ -4151,7 +4170,7 @@ export default function SessionScreen() {
         if (!original) {
           // 条目已被远端发出/删除(vanish effect 与本次点击竞态):原文不可改,放弃保存。
           setError('这条排队消息已不在队列里,修改未保存。');
-          cancelQueueEdit({ unlock: false });
+          cancelQueueEdit();
           return;
         }
         const updatedDraft = {
@@ -4179,58 +4198,99 @@ export default function SessionScreen() {
           throw err;
         }
         // 引用解析会跨设备等待；期间用户可能切换或放弃编辑，落库前再次确认仍持有同一行。
+        // (取消 / 切换路径已按 lock owner 排队释放锁,这里不再直发解锁 RPC。)
         if (queueEditingRef.current?.clientId !== editingQueueItem.clientId) {
-          void maker.input.setEditLock(sessionId, editingQueueItem.clientId, false)
-            .catch(() => undefined);
           return;
         }
-        // 保存在途 promise:会话切换 cleanup 据此把解锁排到保存落定之后
-        // (device-link 并发下解锁不许超车 update-content,见 cleanup 注释)。
-        let settleSave: (() => void) | undefined;
-        queueEditSaveInFlightRef.current = new Promise<void>((resolve) => {
-          settleSave = resolve;
-        });
-        try {
-          try {
-            const projection = await maker.input.updateContent(sessionId, editingQueueItem.clientId, updated);
-            applyProjection(projection);
-          } catch (err) {
-            if (
-              isChannelNotAllowedError(err)
-              && text.trim().length > 0
-              && attachmentIdSetsEqual(original.files, sendAttachments)
-              && queuedMessageHasEncodedQuotes(original) === queueEditPreservesEncodedQuotes
-            ) {
-              // 旧被控端无 update-content:附件与 quote metadata 都不变、文本非空时
-              // 才退回 update-text。空文本不降级——旧端 update-text 对空文本静默 no-op,会造成"看似
-              // 保存成功、队列还是旧文案"的假成功(review P2)。降级本身失败(弱网两次
-              // RPC 之间断连)与其余失败分支对称:先还原编辑文本再抛,不许静默丢字
-              // (review P1)。
-              try {
-                const projection = await maker.input.updateText(
-                  sessionId,
-                  editingQueueItem.clientId,
-                  text,
-                  updated.sessionRefs,
-                  updated.trustedSessionReferenceContexts,
-                );
-                applyProjection(projection);
-              } catch (fallbackErr) {
-                restoreDraftAfterFailure();
-                throw fallbackErr;
-              }
-            } else if (isChannelNotAllowedError(err)) {
-              setError('电脑端版本过旧,还不支持安全修改排队引用、附件或清空文本。请升级电脑端,或仅修改普通文字。');
-              restoreDraftAfterFailure();
-              return;
-            } else {
-              restoreDraftAfterFailure();
-              throw err;
-            }
+        // 保存必须等加锁落定,并在 update-content / update-text 完成后再解锁。
+        // owner 在交给 commitQueueEdit 后由它独占,避免取消 / 卸载重复解锁。
+        const currentLockOwner = queueEditLockOwnerRef.current;
+        const lockOwner = currentLockOwner?.clientId === editingQueueItem.clientId
+          ? currentLockOwner
+          : acquireQueueEditLock(null, editingQueueItem.clientId, setQueueEditLock);
+        queueEditLockOwnerRef.current = null;
+        queueEditSaveOwnerRef.current = lockOwner;
+        let lockReady = false;
+        let editSaved = false;
+        const restoreQueueEditDraftAfterFailure = () => {
+          if (queueEditingRef.current?.clientId === editingQueueItem.clientId) {
+            restoreDraftAfterFailure();
           }
+        };
+        const save = (async () => {
+          await lockOwner.ready;
+          lockReady = true;
+          editSaved = await commitQueueEdit(lockOwner, async () => {
+            try {
+              const projection = await maker.input.updateContent(sessionId, editingQueueItem.clientId, updated);
+              applyProjection(projection);
+            } catch (err) {
+              if (
+                isChannelNotAllowedError(err)
+                && text.trim().length > 0
+                && attachmentIdSetsEqual(original.files, sendAttachments)
+                && queuedMessageHasEncodedQuotes(original) === queueEditPreservesEncodedQuotes
+              ) {
+                // 旧被控端无 update-content:附件与 quote metadata 都不变、文本非空时
+                // 才退回 update-text。空文本不降级——旧端 update-text 对空文本静默 no-op,会造成"看似
+                // 保存成功、队列还是旧文案"的假成功(review P2)。降级本身失败(弱网两次
+                // RPC 之间断连)与其余失败分支对称:先还原编辑文本再抛,不许静默丢字
+                // (review P1)。
+                try {
+                  const projection = await maker.input.updateText(
+                    sessionId,
+                    editingQueueItem.clientId,
+                    text,
+                    updated.sessionRefs,
+                    updated.trustedSessionReferenceContexts,
+                  );
+                  applyProjection(projection);
+                } catch (fallbackErr) {
+                  restoreQueueEditDraftAfterFailure();
+                  throw fallbackErr;
+                }
+              } else if (isChannelNotAllowedError(err)) {
+                setError('电脑端版本过旧,还不支持安全修改排队引用、附件或清空文本。请升级电脑端,或仅修改普通文字。');
+                restoreQueueEditDraftAfterFailure();
+                return false;
+              } else {
+                restoreQueueEditDraftAfterFailure();
+                throw err;
+              }
+            }
+            return true;
+          });
+        })();
+        queueEditSaveInFlightRef.current = save;
+        try {
+          await save;
+        } catch (err) {
+          restoreQueueEditDraftAfterFailure();
+          if (
+            queueEditSaveOwnerRef.current === lockOwner
+            && queueEditingRef.current?.clientId === editingQueueItem.clientId
+          ) {
+            queueEditSaveOwnerRef.current = null;
+            queueEditLockOwnerRef.current = lockReady
+              ? lockOwner
+              : acquireQueueEditLock(null, editingQueueItem.clientId, setQueueEditLock);
+          }
+          throw err;
         } finally {
-          settleSave?.();
-          queueEditSaveInFlightRef.current = null;
+          if (queueEditSaveInFlightRef.current === save) queueEditSaveInFlightRef.current = null;
+        }
+        if (!editSaved) {
+          if (
+            queueEditSaveOwnerRef.current === lockOwner
+            && queueEditingRef.current?.clientId === editingQueueItem.clientId
+          ) {
+            queueEditSaveOwnerRef.current = null;
+            queueEditLockOwnerRef.current = lockOwner;
+          }
+          return;
+        }
+        if (queueEditSaveOwnerRef.current === lockOwner) {
+          queueEditSaveOwnerRef.current = null;
         }
         // 已保存进队列的附件从相册勾选/预览映射摘除(同正常发送路径的差集清理),
         // 否则恢复 stash 后相册面板仍显示"已附加"角标。
@@ -4241,16 +4301,9 @@ export default function SessionScreen() {
         setAttachmentPreviews((current) => Object.fromEntries(
           Object.entries(current).filter(([attachmentId]) => !savedAttachmentIds.has(attachmentId)),
         ));
-        // 成功:退出编辑态 + 恢复 stash(cancelQueueEdit 会把 stash 写回 composer)。
-        // RPC 在途期间用户可能已切到另一条的编辑(beginQueueEdit 切换路径已解锁并
-        // 回收过本条的编辑现场):此时不动新的编辑会话,只幂等补一次本条的解锁
-        // (review P1)。
+        // 成功:锁已由 commitQueueEdit 释放,退出编辑态并恢复 stash。
         if (queueEditingRef.current?.clientId === editingQueueItem.clientId) {
           cancelQueueEdit();
-        } else {
-          void maker.input.setEditLock(sessionId, editingQueueItem.clientId, false)
-            .then(applyProjection)
-            .catch(() => undefined);
         }
         voiceDictionaryLearningTrackerRef.current?.flush();
         return;
@@ -4692,10 +4745,13 @@ export default function SessionScreen() {
   };
 
   const setQueueEditLock = useCallback((clientId: string, locked: boolean) => {
-    void maker.input.setEditLock(sessionId, clientId, locked)
+    return maker.input.setEditLock(sessionId, clientId, locked)
       .then(applyProjection)
       .catch((err) => {
-        setError(formatRemoteError(err));
+        if (queueEditingRef.current?.clientId === clientId) {
+          setError(formatRemoteError(err));
+        }
+        throw err;
       });
   }, [applyProjection, maker, sessionId]);
 
@@ -4794,9 +4850,6 @@ export default function SessionScreen() {
     const previous = queueEditingRef.current;
     if (previous?.clientId === item.clientId) return;
     if (previous) {
-      void maker.input.setEditLock(sessionId, previous.clientId, false)
-        .then(applyProjection)
-        .catch(() => undefined);
       discardQueueEditTransientAttachments(previous);
     }
     const textState = createQueueEditTextState(item);
@@ -4823,34 +4876,55 @@ export default function SessionScreen() {
     attachmentsRef.current = files;
     setAttachments(files);
     setAttachmentError(null);
-    setQueueEditLock(item.clientId, true);
+    queueEditLockOwnerRef.current = acquireQueueEditLock(
+      queueEditLockOwnerRef.current,
+      item.clientId,
+      setQueueEditLock,
+    );
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(textState.document);
   };
 
   /** 放弃排队消息编辑:解锁 + 回收编辑期新增附件 + 恢复进入前的草稿与附件托盘。 */
-  const cancelQueueEdit = useCallback((opts: { unlock?: boolean } = {}) => {
+  const cancelQueueEdit = useCallback(() => {
     const editing = queueEditingRef.current;
     if (!editing) return;
     queueEditingRef.current = null;
     setQueueEditing(null);
-    if (opts.unlock !== false) {
-      void maker.input.setEditLock(sessionId, editing.clientId, false)
-        .then(applyProjection)
+    const currentLockOwner = queueEditLockOwnerRef.current;
+    const idleLockOwner = currentLockOwner?.clientId === editing.clientId
+      ? currentLockOwner
+      : null;
+    const currentSaveOwner = queueEditSaveOwnerRef.current;
+    const saveLockOwner = currentSaveOwner?.clientId === editing.clientId
+      ? currentSaveOwner
+      : null;
+    if (idleLockOwner) queueEditLockOwnerRef.current = null;
+    if (saveLockOwner) queueEditSaveOwnerRef.current = null;
+    const lockOwner = saveLockOwner ?? idleLockOwner;
+    const inFlightSave = saveLockOwner ? queueEditSaveInFlightRef.current : null;
+    if (lockOwner) {
+      void releaseQueueEditLockAfter(lockOwner, inFlightSave)
         .catch(() => undefined);
     }
-    discardQueueEditTransientAttachments(editing);
+    if (inFlightSave) {
+      const attachmentsSnapshot = [...attachmentsRef.current];
+      const discard = () => discardQueueEditTransientAttachments(editing, attachmentsSnapshot);
+      void inFlightSave.then(discard, discard);
+    } else {
+      discardQueueEditTransientAttachments(editing);
+    }
     applyComposerDocument(editing.stashedDocument);
     attachmentsRef.current = [...editing.stashedAttachments];
     setAttachments([...editing.stashedAttachments]);
-  }, [applyComposerDocument, applyProjection, discardQueueEditTransientAttachments, maker, sessionId]);
+  }, [applyComposerDocument, discardQueueEditTransientAttachments]);
 
   // 编辑中的条目从队列消失(被远端发出/删除)→ 原文已不可改,自动退出编辑并恢复
-  // stash。条目已不存在,无锁可解(unlock: false)。
+  // stash。即便加锁请求仍在途也要排队释放,避免留下孤儿锁。
   useEffect(() => {
     const editing = queueEditing;
     if (!editing) return;
     if (!inputProjection.pendingQueue.some((item) => item.clientId === editing.clientId)) {
-      cancelQueueEdit({ unlock: false });
+      cancelQueueEdit();
     }
   }, [cancelQueueEdit, inputProjection.pendingQueue, queueEditing]);
 
