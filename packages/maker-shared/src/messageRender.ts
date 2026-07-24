@@ -440,8 +440,12 @@ export function applyCodexPlanSnapshotOnDone<
   messages: readonly TMessage[],
   snapshot: unknown,
   turnId?: string | null,
+  terminalStatus?: unknown,
 ): CodexPlanSnapshotApplyResult<TMessage> {
-  if (!Array.isArray(snapshot)) return { messages, changed: false, toolUseId: null };
+  const hasAuthoritativeSnapshot = Array.isArray(snapshot);
+  if (!hasAuthoritativeSnapshot && terminalStatus !== 'completed') {
+    return { messages, changed: false, toolUseId: null };
+  }
   const expectedToolUseId = turnId ? `plan:${turnId}` : null;
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -454,7 +458,19 @@ export function applyCodexPlanSnapshotOnDone<
 
     const input = readRecord(toolInputOf(message));
     if (!Array.isArray(input?.plan)) continue;
-    if (samePlanSnapshot(input.plan, snapshot)) {
+    // Some Codex hosts finish a successful turn without echoing the final
+    // turn/plan/updated notification. The plan card must still converge after
+    // the turn has completed; otherwise it remains stuck on the first
+    // in_progress/pending snapshot forever. Only synthesize this fallback for
+    // the matching successful turn. Failed/interrupted turns intentionally keep
+    // their last known state.
+    const nextSnapshot = hasAuthoritativeSnapshot
+      ? snapshot
+      : input.plan.map((item) => {
+          const record = readRecord(item);
+          return record ? { ...record, status: 'completed' } : item;
+        });
+    if (samePlanSnapshot(input.plan, nextSnapshot)) {
       return { messages, changed: false, toolUseId };
     }
 
@@ -462,10 +478,10 @@ export function applyCodexPlanSnapshotOnDone<
     next[index] = {
       ...message,
       ...(message.toolInput !== undefined
-        ? { toolInput: { ...input, plan: snapshot } }
+        ? { toolInput: { ...input, plan: nextSnapshot } }
         : {}),
       ...(content
-        ? { content: { ...content, input: { ...input, plan: snapshot } } }
+        ? { content: { ...content, input: { ...input, plan: nextSnapshot } } }
         : {}),
     };
     return { messages: next, changed: true, toolUseId };

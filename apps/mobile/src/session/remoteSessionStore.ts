@@ -1691,8 +1691,14 @@ export const remoteSessionStore = {
         const data = isRecord(event.data) ? event.data : null;
         const rawTurn = isRecord(data?.raw) ? data.raw : null;
         const turnId = readString(rawTurn, 'id');
+        const turnStatus = readString(rawTurn, 'status');
         const currentMessages = messages.get(sessionId) ?? [];
-        const completed = applyCodexPlanSnapshotOnDone(currentMessages, data?.plan, turnId);
+        const completed = applyCodexPlanSnapshotOnDone(
+          currentMessages,
+          data?.plan,
+          turnId,
+          turnStatus,
+        );
         terminalPlanChanged = completed.changed;
         if (completed.changed) {
           messages.set(sessionId, [...completed.messages]);

@@ -88,4 +88,47 @@ describe('applyCodexPlanSnapshotOnDone', () => {
       toolUseId: null,
     });
   });
+
+  it('marks the matching plan complete when a successful turn has no final snapshot', () => {
+    const message = planMessage('plan:done', [
+      { step: 'Inspect', status: 'in_progress' },
+      { step: 'Patch', status: 'pending' },
+    ]);
+    const result = applyCodexPlanSnapshotOnDone(
+      [message],
+      null,
+      'done',
+      'completed',
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.toolUseId).toBe('plan:done');
+    expect(result.messages[0]).toMatchObject({
+      toolInput: {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Patch', status: 'completed' },
+        ],
+      },
+      content: {
+        input: {
+          plan: [
+            { step: 'Inspect', status: 'completed' },
+            { step: 'Patch', status: 'completed' },
+          ],
+        },
+      },
+    });
+  });
+
+  it('does not infer completion for a failed or interrupted turn', () => {
+    const message = planMessage('plan:stopped', [{ step: 'Inspect', status: 'in_progress' }]);
+    const messages = [message];
+
+    expect(applyCodexPlanSnapshotOnDone(messages, null, 'stopped', 'interrupted')).toEqual({
+      messages,
+      changed: false,
+      toolUseId: null,
+    });
+  });
 });
