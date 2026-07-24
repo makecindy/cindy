@@ -42,9 +42,7 @@ describe('consent 文案 catalog 严校验(4 语 × statement/body)', () => {
 
   it('parser 边界行为文档化:未闭合/嵌套标记 fail-open 原样透传(不崩溃)', () => {
     // 未闭合:整串按纯文本透传(严校验用例保证生产 catalog 永远不落入此分支)
-    expect(parseLegalSegments('<terms>未闭合')).toEqual([
-      { kind: 'text', text: '<terms>未闭合' },
-    ]);
+    expect(parseLegalSegments('<terms>未闭合')).toEqual([{ kind: 'text', text: '<terms>未闭合' }]);
     // 嵌套:非贪婪匹配吞到最近的 </terms>,terms 段文本带内层标记原文——
     // 严校验用例的「所有段禁残留尖括号」检查即为拦这种坏 catalog 而设;
     // 此处仅锁 fail-open 不崩溃的现状

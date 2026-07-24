@@ -127,16 +127,14 @@ describe('consent 文案(4 语 catalog 全给标记链接段)', () => {
 });
 
 describe('login.tsx 接线(源码断言)', () => {
-  it('个人链路实际发起点全部过 requireConsent;discover 纯查询放行(SSO 全豁免契约)', () => {
+  it('个人链路发起点全部过 requireConsent,含 email discover(产品拍板 2026-07-24 二次)', () => {
     const guarded = loginSource.match(/requireConsent\(/g) ?? [];
-    // 调用点 ≥4 处(phone 发码/邮箱个人行发码/apple/nonApple;定义处 `requireConsent = (` 不计入)
-    expect(guarded.length).toBeGreaterThanOrEqual(4);
-    // discover 是无副作用的方式查询,且是企业用户进 SSO 的入口——必须不设门
-    // (codex 审查 P1:gate discover 会让企业邮箱用户被迫先同意,违背全豁免拍板)
-    expect(loginSource).not.toMatch(
-      /requireConsent\(\(\) =>[\s\S]{0,120}?type: 'discover'/,
+    // 调用点 ≥5 处(email discover/phone 发码/邮箱个人行发码/apple/nonApple)
+    expect(guarded.length).toBeGreaterThanOrEqual(5);
+    // 手机号/邮箱提交一律先弹协议弹窗(拍板压过审查侧「discover 纯查询可放行」建议)
+    expect(loginSource).toMatch(
+      /requireConsent\(\(\) =>[\s\S]{0,140}?type: 'discover'/,
     );
-    expect(loginSource).toMatch(/void auth\.dispatchLoginAction\(\{ type: 'discover'/);
     // 发码点(phone + 邮箱个人行)与社交圆钮为实际发起点,必须过门
     expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,200}?kind: 'phone'/);
     expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,240}?kind: 'email'/);

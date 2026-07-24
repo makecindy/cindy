@@ -113,11 +113,12 @@ export default function LoginScreen() {
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
   /* ── 协议同意链路(consent PR,与桌面 LoginPage 同源语义):radio 状态 +
-     未勾选拦截弹窗 + 同意后续接。个人登录的「实际发起点」统一过 requireConsent:
-     手机号发码、邮箱个人行发码、社交圆钮(Apple/Google/未来微信);企业 SSO 全豁免
-     (产品拍板)——email discover 是纯方式查询且是企业用户进 SSO 的入口,不设门,
-     门在其后的个人续接点。手机端无游客登录(远程连接客户端必须有账号,产品拍板
-     2026-07-24)。pending 动作只存本组件(不进 AuthContext 状态机;仓规 9)。 ── */
+     未勾选拦截弹窗 + 同意后续接。过门点(产品拍板 2026-07-24 二次):手机号提交、
+     邮箱提交(discover 前)、method-choice 个人行发码、社交圆钮(Apple/Google/
+     未来微信)——个人登录一律先同意再发起,含仅触发方式查询的 email discover
+     (拍板压过审查侧「无副作用可放行」建议)。豁免仅限显式企业 SSO 入口。
+     手机端无游客登录(远程连接客户端必须有账号,产品拍板 2026-07-24)。
+     pending 动作只存本组件(不进 AuthContext 状态机;仓规 9)。 ── */
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [consentDialogOpen, setConsentDialogOpen] = useState(false);
   // pending 带开门时刻快照(stamp),同意时复验防陈旧续接(codex 审查 P1;consentGate 单测覆盖)
@@ -389,10 +390,11 @@ export default function LoginScreen() {
           return;
         }
         setIdentifierFormatError(null);
-        // discover 不过协议门:它是无副作用的方式查询(server 只回登录方式列表,
-        // 不发码),且企业用户正是经它进入 SSO——「SSO 全豁免」要求这里放行;
-        // 个人链路的门在 method-choice 个人行(发码点,与桌面 LoginPage 同源)
-        void auth.dispatchLoginAction({ type: 'discover', email: value });
+        // 邮箱提交先过协议门(产品拍板 2026-07-24 二次:手机号/邮箱提交一律先弹
+        // 协议弹窗,压过审查侧「discover 纯查询可放行」建议;显式 SSO 入口仍豁免)
+        requireConsent(() =>
+          void auth.dispatchLoginAction({ type: 'discover', email: value }),
+        );
       } else {
         // 手机号登录只支持中国大陆号码:UI 固定 +86,输入框只存本地号,提交时拼回完整号码。
         // 号段不合法本地拦截并提示「请输入正确手机号」(设计稿同款红边+红字)。

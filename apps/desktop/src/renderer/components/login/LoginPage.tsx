@@ -113,13 +113,12 @@ export function LoginPage() {
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
 
   /* ── 协议同意链路(consent PR):radio 状态 + 未勾选拦截弹窗 + 同意后续接。
-     个人登录的「实际发起点」统一过 requireConsent:手机号发码、邮箱个人行发码、
-     社交圆钮(Apple/Google/未来微信)、游客;企业 SSO 全豁免(入口圆钮/组织提交/
-     method-choice sso 行均不拦,产品拍板)。注意 email discover 是纯方式查询
-     (main authManager 'discover' 只调 client.discover,无发码副作用),且企业
-     用户正是经它进入 SSO——为兑现「SSO 全豁免」,discover 不设门,门在其后的
-     个人续接点(method-choice 个人行)。pending 动作只存 renderer 本地(不进
-     main loginFlowState;规则 9:分支全部代码状态机化)。 ── */
+     过门点(产品拍板 2026-07-24 二次):手机号提交、邮箱提交(discover 前)、
+     method-choice 个人行发码、社交圆钮(Apple/Google/未来微信)、游客——个人
+     登录一律先同意协议再发起,包括仅触发方式查询的 email discover(拍板压过
+     审查侧「discover 无副作用可放行」的建议)。豁免仅限显式企业 SSO 入口:
+     SSO 圆钮、组织标识提交、method-choice sso 行。pending 动作只存 renderer
+     本地(不进 main loginFlowState;规则 9:分支全部代码状态机化)。 ── */
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [consentDialogOpen, setConsentDialogOpen] = useState(false);
   // pending 带开门时刻快照,同意时复验防陈旧续接(codex 审查 P1;consentGate 单测)
@@ -327,10 +326,9 @@ export function LoginPage() {
         return;
       }
       setIdentifierFormatError(null);
-      // discover 不过协议门:它是无副作用的方式查询(main 侧只调 client.discover,
-      // 不发码),且企业用户正是经它进入 SSO——「SSO 全豁免」要求这里放行;
-      // 个人链路的门在 method-choice 个人行(发码点,见 renderMethodChoice)
-      void dispatch({ type: 'discover', email: value });
+      // 邮箱提交先过协议门(产品拍板 2026-07-24 二次:手机号/邮箱提交一律先弹协议
+      // 弹窗,压过审查侧「discover 纯查询可放行」的建议;显式企业 SSO 入口仍豁免)
+      requireConsent(() => void dispatch({ type: 'discover', email: value }));
     } else {
       // 手机号:桌面不做客户端 +86/号段校验(#223 仅移动端做 cnPhone 本地拦截),
       // 输入原样透传服务端 request-code,由服务端校验号段合法性。
