@@ -21,6 +21,7 @@ import path from 'node:path';
 
 import {
   buildUserProvider,
+  DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   type Catalog,
   type CatalogIO,
@@ -71,14 +72,11 @@ import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('provider-service');
 
-/** 远端 Catalog 拉取超时（与 manifest fetch 同量级）。 */
-const FETCH_TIMEOUT_MS = 15_000;
-
 /**
  * electron net.request GET → 文本。非 200 / 超时 / 网络错均 reject，
  * 由 loadCatalog 兜底到内置目录（绝不让目录加载抛穿）。
  */
-function fetchText(url: string): Promise<string> {
+function fetchText(url: string, timeoutMs: number): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     let settled = false;
     const settle = (fn: () => void): void => {
@@ -93,7 +91,7 @@ function fetchText(url: string): Promise<string> {
       const timer = setTimeout(() => {
         request.abort();
         settle(() => reject(new Error(`catalog fetch timeout: ${url}`)));
-      }, FETCH_TIMEOUT_MS);
+      }, timeoutMs);
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
@@ -152,6 +150,7 @@ function buildSource(): CatalogSourceConfig {
     localPath: process.env.XDT_MODELS_PATH,
     baseUrl: dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl'),
     fallbackBaseUrl: dev ? undefined : getBaseUrl(),
+    remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
     disableFetch: dev || process.env.XDT_DISABLE_MODELS_FETCH === '1',
   };
 }

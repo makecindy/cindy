@@ -21,6 +21,9 @@ export const CATALOG_API_PATH = '/api/model-catalog/catalog';
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = '/cfg/providers.json';
 
+/** 整条远端 Catalog fallback 链共享的默认启动等待预算。 */
+export const DEFAULT_REMOTE_CATALOG_BUDGET_MS = 15_000;
+
 export interface CatalogSourceConfig {
   /** 完整覆盖源 URL（env XDT_MODELS_URL）；缺省使用公共 catalog API。 */
   url?: string;
@@ -30,13 +33,17 @@ export interface CatalogSourceConfig {
   fallbackBaseUrl?: string;
   /** dev 本地文件路径（env XDT_MODELS_PATH）；命中则只读它、不联网。 */
   localPath?: string;
-  /** 关闭远端拉取（env XDT_DISABLE_MODELS_FETCH）；只用内置目录。 */
+  /** 整条远端 fallback 链共享的等待预算；缺省 15 秒。 */
+  remoteBudgetMs?: number;
+  /** 注入单调时钟（测试用）；缺省 Date.now。 */
+  now?: () => number;
+  /** 关闭远端拉取（env XDT_DISABLE_MODELS_FETCH）；不影响 localPath 覆盖。 */
   disableFetch?: boolean;
 }
 
 export interface CatalogIO {
-  /** 拉取远端文本（host 用 electron net.request 绕 CORS）。 */
-  fetchText?: (url: string) => Promise<string>;
+  /** 拉取远端文本（host 用 electron net.request 绕 CORS；timeoutMs 为本次剩余共享预算）。 */
+  fetchText?: (url: string, timeoutMs: number) => Promise<string>;
   /** 读本地文件（dev / localPath）；不存在返回 null。 */
   readFile?: (path: string) => Promise<string | null>;
   /** 诊断日志（可选）。 */
@@ -147,9 +154,18 @@ export async function loadCatalog(cfg: CatalogSourceConfig, io: CatalogIO): Prom
     const remoteUrls = cfg.url?.trim()
       ? [url].filter((value): value is string => !!value)
       : [url, fallbackUrl].filter((value): value is string => !!value);
+    const now = cfg.now ?? Date.now;
+    const configuredBudget = cfg.remoteBudgetMs ?? DEFAULT_REMOTE_CATALOG_BUDGET_MS;
+    const budgetMs = Number.isFinite(configuredBudget) ? Math.max(0, configuredBudget) : 0;
+    const deadline = now() + budgetMs;
     for (const remoteUrl of remoteUrls) {
+      const remainingMs = Math.max(0, deadline - now());
+      if (remainingMs === 0) {
+        log(io, 'warn', 'remote catalog fallback budget exhausted');
+        break;
+      }
       try {
-        const text = await io.fetchText(remoteUrl);
+        const text = await io.fetchText(remoteUrl, remainingMs);
         const parsed = parseCatalog(text);
         log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
         return mergeWithBundled(parsed);

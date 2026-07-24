@@ -35,6 +35,7 @@ export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provide
 export {
   CATALOG_API_PATH,
   CATALOG_CFG_PATH,
+  DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   resolveCatalogUrl,
   resolveFallbackCatalogUrl,
   mergeWithBundled,
