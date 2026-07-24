@@ -75,8 +75,11 @@ const OWNERS_DIR_NAME = 'owners';
 /** SQLite sidecar 后缀;残留 = 库仍被别的进程持有,认领必须推迟。 */
 const DB_SIDECAR_SUFFIXES = ['-wal', '-shm'] as const;
 
-/** 空账号库让位时的备份名后缀(带时间戳防多次重试撞名;文件保留不删)。 */
+/** 空账号库让位时的备份名后缀(带时间戳+序号防多次重试撞名;文件保留不删)。 */
 const ACCOUNT_DB_BACKUP_SUFFIX = '.pre-adoption-';
+
+/** 让位备份名的进程内单调序号(同秒重入不撞名)。 */
+let displaceSeq = 0;
 
 /** 推送给 renderer 的弹窗阶段(语义同 mToc:done/failed 后可解除)。 */
 export type LocalAdoptionPhase = 'confirm' | 'running' | 'done' | 'failed';
@@ -498,12 +501,14 @@ export async function runLocalOwnerDataAdoption(
       if (accountDbToDisplace) {
         // 空账号库(前置已验证未被使用)改名备份让位:文件保留不删,时间戳后缀
         // 防多次重试撞名。窗口期内该库可能残留的少量非关键数据随备份保留,可找回。
+        // 秒级时间戳 + 进程内序号:同秒内重入(快速重试)不撞已存在的备份名;
+        // 跨进程同秒并发让位不可能发生(先到者已把源改走,后到者 ENOENT)。
         const stamp = deps
           .now()
           .toISOString()
           .replace(/[-:.TZ]/g, '')
           .slice(0, 14);
-        const backupPath = `${accountDbPath}${ACCOUNT_DB_BACKUP_SUFFIX}${stamp}`;
+        const backupPath = `${accountDbPath}${ACCOUNT_DB_BACKUP_SUFFIX}${stamp}-${displaceSeq++}`;
         await deps.fs.renameNoReplace(accountDbPath, backupPath);
         deps.log.info(
           'local owner adoption: unused account db displaced to %s',

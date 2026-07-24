@@ -509,10 +509,11 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
     expect(result.status).toBe('adopted');
     expect(phases).toEqual(['confirm', 'running', 'done']);
     expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
-    // 空库不删,时间戳备份保留(now = 2026-07-24T00:00:00Z → 20260724000000)。
-    expect(mem.files.get(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`))).toBe(
-      'empty-account-db',
+    // 空库不删,时间戳+序号备份保留(前缀匹配,序号随进程内计数递增)。
+    const backupEntry = [...mem.files.entries()].find(([f]) =>
+      f.startsWith(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`)),
     );
+    expect(backupEntry?.[1]).toBe('empty-account-db');
   });
 });
 
@@ -549,9 +550,10 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     const second = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(second.status).toBe('adopted');
     expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
-    expect(mem.files.get(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`))).toBe(
-      'auto-created-empty-db',
+    const retryBackup = [...mem.files.entries()].find(([f]) =>
+      f.startsWith(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`)),
     );
+    expect(retryBackup?.[1]).toBe('auto-created-empty-db');
     expect(mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'maker-memory', 'MEMORY.md')))).toBe(
       'mem',
     );
