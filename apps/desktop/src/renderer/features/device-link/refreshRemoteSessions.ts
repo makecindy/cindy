@@ -155,9 +155,10 @@ async function probeMissingSessionStatuses(
   missingSessionIds: readonly string[],
 ): Promise<void> {
   if (missingSessionIds.length === 0) return;
-  // epoch 每轮递增，用它旋转候选起点；满窗口外有很多有效会话时，不会永远只检查前几个。
+  // epoch 每轮递增；按已检查的批次宽度推进起点，避免相邻轮次重复检查 count - 1 条。
+  // 使用 epoch - 1 让首轮从 0 开始；满窗口外有很多有效会话时约 ceil(N / limit) 轮覆盖一遍。
   const count = Math.min(MISSING_STATUS_PROBE_LIMIT, missingSessionIds.length);
-  const start = epoch % missingSessionIds.length;
+  const start = ((epoch - 1) * count) % missingSessionIds.length;
   const candidates = Array.from(
     { length: count },
     (_, index) => missingSessionIds[(start + index) % missingSessionIds.length],
