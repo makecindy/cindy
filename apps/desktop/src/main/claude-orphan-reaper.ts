@@ -90,11 +90,31 @@ interface ProcessRow {
   cmdLine: string;
 }
 
+const WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS = 1000;
+
 function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (processes: IProcessInfo[]): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(processes);
+    };
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      log.debug('windows process snapshot timed out', {
+        timeoutMs: WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS,
+      });
+      resolve([]);
+    }, WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS);
+
     try {
-      getAllProcesses(resolve, ProcessDataFlag.CommandLine);
+      getAllProcesses(finish, ProcessDataFlag.CommandLine);
     } catch (err) {
+      settled = true;
+      clearTimeout(timeout);
       reject(err instanceof Error ? err : new Error(String(err)));
     }
   });

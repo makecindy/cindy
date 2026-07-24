@@ -72,6 +72,7 @@ async function importReaper(options: {
 
 describe('reapClaudeOrphans', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.doUnmock('../logger');
     vi.doUnmock('@vscode/windows-process-tree');
@@ -246,6 +247,38 @@ describe('reapClaudeOrphans', () => {
       expect.objectContaining({ scannedTotal: 0 }),
     );
     expect(logger.debug).toHaveBeenCalled();
+  });
+
+  it('bounds a native Windows scan that never invokes its callback', async () => {
+    vi.useFakeTimers();
+    let nativeCallback: ((processes: WindowsProcessRow[]) => void) | undefined;
+    const getAllProcesses = vi.fn((callback: (processes: WindowsProcessRow[]) => void) => {
+      nativeCallback = callback;
+    });
+    const execFileSync = vi.fn();
+    const { reapClaudeOrphans } = await importReaper({
+      platform: 'win32',
+      getAllProcesses,
+      execFileSync,
+    });
+
+    const resultPromise = reapClaudeOrphans();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(resultPromise).resolves.toEqual(expect.objectContaining({ scannedTotal: 0 }));
+    expect(logger.debug).toHaveBeenCalledWith('windows process snapshot timed out', {
+      timeoutMs: 1000,
+    });
+
+    nativeCallback?.([
+      {
+        name: 'claude.exe',
+        pid: process.pid + 10,
+        ppid: process.pid,
+        commandLine: 'C:\\tools\\claude.exe',
+      },
+    ]);
+    expect(execFileSync).not.toHaveBeenCalled();
   });
 
   it('does not throw when killing fails', async () => {
