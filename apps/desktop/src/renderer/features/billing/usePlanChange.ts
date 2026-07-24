@@ -131,7 +131,7 @@ export function usePlanChange(
       options?: { targetPlan?: BillingPlanChangeTargetPlan | null; open?: boolean },
     ) => {
       const phase = phaseForPlanChange(change);
-      if (phase !== 'QUOTING' && phase !== 'QUOTE_READY' && phase !== 'AWAITING_PAYMENT') {
+      if (phase !== 'QUOTE_READY' && phase !== 'AWAITING_PAYMENT') {
         persistIntent(null);
       }
       notifySettled(change);
