@@ -19,6 +19,7 @@ import {
 import type { Rectangle, WebContents } from 'electron';
 
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
+import { getResolvedMainLocale } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import {
@@ -1028,6 +1029,7 @@ export async function showComputerPermissionGuideWindow(
     void pendingNativeHost.show(
       appBundlePath,
       nativeStateFrom(guideStatus, readPermissionDragState(), lastSwitchLocation),
+      getResolvedMainLocale(),
     ).then((started) => {
       // 关闭可能发生在 helper 启动完成之前;旧实例不能重新挂超时或唤起 fallback。
       if (!ownsNativeHost()) return;

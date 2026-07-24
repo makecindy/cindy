@@ -92,6 +92,25 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).not.toContain('layerZeroCount');
   });
 
+  it('uses app locale copy and appearance-aware colors in the native helper', () => {
+    const source = fs.readFileSync(
+      new URL(
+        '../../../../native/computer-permission-guide/macos-computer-permission-guide-helper.swift',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+
+    expect(source).toContain('case ja');
+    expect(source).toContain('case ko');
+    expect(source).toContain('GuideLocale(rawValue: CommandLine.arguments[2])');
+    expect(source).not.toContain('usesChineseCopy');
+    expect(source).toContain('NSColor.controlBackgroundColor.cgColor');
+    expect(source).toContain('NSColor.separatorColor.cgColor');
+    expect(source).toContain('viewDidChangeEffectiveAppearance()');
+    expect(source).not.toContain('layer?.backgroundColor = NSColor.white.cgColor');
+  });
+
   it('starts the packaged helper and sends permission state after ready', async () => {
     const child = createFakeChild();
     const writes: string[] = [];
@@ -106,12 +125,12 @@ describe('MacComputerPermissionGuideNativeHost', () => {
       screenRecordingGranted: false,
       draggedAccessibility: true,
       draggedScreenRecording: false,
-    });
+    }, 'ja');
 
     await vi.advanceTimersByTimeAsync(0);
     expect(h.spawn).toHaveBeenCalledWith(
       '/Applications/XDMaker.app/Contents/Resources/tools/computer-permission-guide/xdt-macos-computer-permission-guide-helper',
-      ['/tmp/Computer Use.app'],
+      ['/tmp/Computer Use.app', 'ja'],
       { stdio: ['pipe', 'pipe', 'pipe'] },
     );
     child.stdout.write('{"type":"ready"}\n');

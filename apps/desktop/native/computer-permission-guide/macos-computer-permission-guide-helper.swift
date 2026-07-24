@@ -9,6 +9,98 @@ private let switchGuideSize = NSSize(width: 196, height: 44)
 private let switchTargetGap: CGFloat = 28
 private let trackingInterval: TimeInterval = 0.16
 
+private enum GuideLocale: String {
+    case zhCN = "zh-CN"
+    case en
+    case ja
+    case ko
+}
+
+/** Localized native copy selected from the renderer-synchronized app locale. */
+private struct GuideCopy {
+    let close: String
+    let turnThisOn: String
+    let pointsToSwitch: String
+    let accessibility: String
+    let screenRecording: String
+    let completeEyebrow: String
+    let readyTitle: String
+    let step: String
+    let turnOnAppTitle: String
+    let waiting: String
+    let dragTitle: String
+    let dragHint: String
+
+    func interpolated(_ template: String, permission: String) -> String {
+        template.replacingOccurrences(of: "{{permission}}", with: permission)
+    }
+
+    static func resolve(_ locale: GuideLocale) -> GuideCopy {
+        switch locale {
+        case .zhCN:
+            return GuideCopy(
+                close: "关闭",
+                turnThisOn: "打开这一项",
+                pointsToSwitch: "指向开关",
+                accessibility: "辅助功能",
+                screenRecording: "屏幕录制",
+                completeEyebrow: "权限已完成",
+                readyTitle: "Computer Use 已就绪",
+                step: "打开自动操作电脑",
+                turnOnAppTitle: "在「{{permission}}」中打开 CuaDriver",
+                waiting: "等待你开启",
+                dragTitle: "将 CuaDriver 拖入「{{permission}}」",
+                dragHint: "拖拽"
+            )
+        case .ja:
+            return GuideCopy(
+                close: "閉じる",
+                turnThisOn: "この項目をオンにする",
+                pointsToSwitch: "スイッチを指す",
+                accessibility: "アクセシビリティ",
+                screenRecording: "画面収録",
+                completeEyebrow: "権限の設定完了",
+                readyTitle: "Computer Use の準備ができました",
+                step: "コンピュータ操作を有効にする",
+                turnOnAppTitle: "「{{permission}}」で CuaDriver をオンにする",
+                waiting: "操作待ち",
+                dragTitle: "CuaDriver を「{{permission}}」にドラッグ",
+                dragHint: "ドラッグ"
+            )
+        case .ko:
+            return GuideCopy(
+                close: "닫기",
+                turnThisOn: "이 항목 켜기",
+                pointsToSwitch: "스위치를 가리킴",
+                accessibility: "손쉬운 사용",
+                screenRecording: "화면 기록",
+                completeEyebrow: "권한 설정 완료",
+                readyTitle: "Computer Use 준비 완료",
+                step: "컴퓨터 자동화 켜기",
+                turnOnAppTitle: "{{permission}}에서 CuaDriver 켜기",
+                waiting: "켜기 대기",
+                dragTitle: "CuaDriver를 {{permission}}으로 드래그",
+                dragHint: "드래그"
+            )
+        case .en:
+            return GuideCopy(
+                close: "Close",
+                turnThisOn: "Turn this on",
+                pointsToSwitch: "Points to the switch",
+                accessibility: "Accessibility",
+                screenRecording: "Screen Recording",
+                completeEyebrow: "Permissions complete",
+                readyTitle: "Computer Use is ready",
+                step: "Open computer automation",
+                turnOnAppTitle: "Turn on CuaDriver in {{permission}}",
+                waiting: "Waiting for you",
+                dragTitle: "Drag CuaDriver into {{permission}}",
+                dragHint: "Drag"
+            )
+        }
+    }
+}
+
 /** Emits one compact JSON object per line to the Electron main process. */
 private func emit(_ payload: [String: Any]) {
     guard JSONSerialization.isValidJSONObject(payload),
@@ -78,13 +170,12 @@ private final class DraggableApplicationView: NSView, NSDraggingSource {
         wantsLayer = true
         layer?.cornerRadius = 12
         layer?.cornerCurve = .continuous
-        layer?.backgroundColor = NSColor.white.cgColor
-        layer?.borderColor = NSColor.white.cgColor
         layer?.borderWidth = 1
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = 0.28
         layer?.shadowRadius = 14
         layer?.shadowOffset = NSSize(width: 0, height: -5)
+        updateLayerColors()
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel("Computer Use")
@@ -96,6 +187,11 @@ private final class DraggableApplicationView: NSView, NSDraggingSource {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateLayerColors()
+    }
+
     override func layout() {
         super.layout()
         layer?.shadowPath = CGPath(
@@ -104,6 +200,13 @@ private final class DraggableApplicationView: NSView, NSDraggingSource {
             cornerHeight: 12,
             transform: nil
         )
+    }
+
+    private func updateLayerColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -177,14 +280,18 @@ private final class DraggableApplicationView: NSView, NSDraggingSource {
 
 /** Compact pointer shown after the app has been added but its switch is still off. */
 private final class SwitchGuideController: NSViewController {
+    private let copy: GuideCopy
     private let closeButton = NonactivatingCloseButton()
     private let instructionLabel = NSTextField(labelWithString: "")
     private let arrowView = NSImageView()
     var onClose: (() -> Void)?
 
-    private var usesChineseCopy: Bool {
-        Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+    init(locale: GuideLocale) {
+        copy = GuideCopy.resolve(locale)
+        super.init(nibName: nil, bundle: nil)
     }
+
+    required init?(coder: NSCoder) { nil }
 
     override func loadView() {
         let root = NSView(frame: NSRect(origin: .zero, size: switchGuideSize))
@@ -194,7 +301,7 @@ private final class SwitchGuideController: NSViewController {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.image = NSImage(
             systemSymbolName: "xmark.circle.fill",
-            accessibilityDescription: usesChineseCopy ? "关闭" : "Close"
+            accessibilityDescription: copy.close
         )
         closeButton.imageScaling = .scaleProportionallyDown
         closeButton.isBordered = false
@@ -204,7 +311,7 @@ private final class SwitchGuideController: NSViewController {
         root.addSubview(closeButton)
 
         instructionLabel.translatesAutoresizingMaskIntoConstraints = false
-        instructionLabel.stringValue = usesChineseCopy ? "打开这一项" : "Turn this on"
+        instructionLabel.stringValue = copy.turnThisOn
         instructionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         instructionLabel.textColor = .controlAccentColor
         instructionLabel.alignment = .right
@@ -214,7 +321,7 @@ private final class SwitchGuideController: NSViewController {
         arrowView.wantsLayer = true
         arrowView.image = NSImage(
             systemSymbolName: "arrow.right",
-            accessibilityDescription: usesChineseCopy ? "指向开关" : "Points to the switch"
+            accessibilityDescription: copy.pointsToSwitch
         )
         arrowView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .semibold)
         arrowView.contentTintColor = .controlAccentColor
@@ -279,6 +386,7 @@ private final class PermissionCardController: NSViewController {
     }
 
     private let appURL: URL
+    private let copy: GuideCopy
     private let materialView = NSVisualEffectView()
     private let eyebrowLabel = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")
@@ -297,12 +405,9 @@ private final class PermissionCardController: NSViewController {
     var onDragBegan: ((Permission) -> Void)?
     var onDragEnded: ((Permission, NSDragOperation) -> Void)?
 
-    private var usesChineseCopy: Bool {
-        Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
-    }
-
-    init(appURL: URL) {
+    init(appURL: URL, locale: GuideLocale) {
         self.appURL = appURL
+        self.copy = GuideCopy.resolve(locale)
         let icon = NSWorkspace.shared.icon(forFile: appURL.path)
         icon.size = NSSize(width: 64, height: 64)
         self.appRow = DraggableApplicationView(appURL: appURL, appIcon: icon)
@@ -499,16 +604,16 @@ private final class PermissionCardController: NSViewController {
         let permissionName: String
         switch permission {
         case .accessibility:
-            permissionName = usesChineseCopy ? "辅助功能" : "Accessibility"
+            permissionName = copy.accessibility
         case .screenRecording:
-            permissionName = usesChineseCopy ? "屏幕录制" : "Screen Recording"
+            permissionName = copy.screenRecording
         case .complete:
             permissionName = ""
         }
 
         if permission == .complete {
-            eyebrowLabel.stringValue = usesChineseCopy ? "已完成" : "READY"
-            titleLabel.stringValue = usesChineseCopy ? "Computer Use 已就绪" : "Computer Use is ready"
+            eyebrowLabel.stringValue = copy.completeEyebrow
+            titleLabel.stringValue = copy.readyTitle
             statusLabel.stringValue = ""
             appRow.dragEnabled = false
             dragCoach.isHidden = true
@@ -516,23 +621,23 @@ private final class PermissionCardController: NSViewController {
             return
         }
 
-        eyebrowLabel.stringValue = usesChineseCopy
-            ? "打开自动操作电脑"
-            : "Open computer automation"
+        eyebrowLabel.stringValue = copy.step
         appRow.dragEnabled = !hasBeenDragged
         if hasBeenDragged {
-            titleLabel.stringValue = usesChineseCopy
-                ? "在「\(permissionName)」中打开 CuaDriver"
-                : "Turn on CuaDriver in \(permissionName)"
-            statusLabel.stringValue = usesChineseCopy ? "等待你开启" : "Waiting for you"
+            titleLabel.stringValue = copy.interpolated(
+                copy.turnOnAppTitle,
+                permission: permissionName
+            )
+            statusLabel.stringValue = copy.waiting
             dragCoach.isHidden = true
             stopDragCoachAnimation()
         } else {
-            titleLabel.stringValue = usesChineseCopy
-                ? "将 CuaDriver 拖入「\(permissionName)」"
-                : "Drag CuaDriver into \(permissionName)"
+            titleLabel.stringValue = copy.interpolated(
+                copy.dragTitle,
+                permission: permissionName
+            )
             statusLabel.stringValue = ""
-            dragCoachLabel.stringValue = usesChineseCopy ? "拖拽" : "Drag"
+            dragCoachLabel.stringValue = copy.dragHint
             dragCoach.isHidden = false
             startDragCoachAnimation()
         }
@@ -610,7 +715,7 @@ private final class PermissionGuideCoordinator {
     private var switchWindowSize: NSSize?
     private var authSheetVisible = false
 
-    init(appURL: URL) {
+    init(appURL: URL, locale: GuideLocale) {
         panel = PermissionAccessoryPanel(
             contentRect: NSRect(origin: .zero, size: hostSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -624,8 +729,8 @@ private final class PermissionGuideCoordinator {
             defer: false
         )
         hostView = PassthroughHostView(frame: NSRect(origin: .zero, size: hostSize))
-        cardController = PermissionCardController(appURL: appURL)
-        switchGuideController = SwitchGuideController()
+        cardController = PermissionCardController(appURL: appURL, locale: locale)
+        switchGuideController = SwitchGuideController(locale: locale)
 
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -1043,12 +1148,15 @@ private final class PermissionGuideApplicationDelegate: NSObject, NSApplicationD
             return
         }
         let appURL = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        let locale = CommandLine.arguments.count >= 3
+            ? GuideLocale(rawValue: CommandLine.arguments[2]) ?? .en
+            : .en
         guard FileManager.default.fileExists(atPath: appURL.path) else {
             emit(["type": "error", "message": "Computer Use.app is unavailable."])
             NSApp.terminate(nil)
             return
         }
-        let coordinator = PermissionGuideCoordinator(appURL: appURL)
+        let coordinator = PermissionGuideCoordinator(appURL: appURL, locale: locale)
         self.coordinator = coordinator
         coordinator.start()
         beginReadingCommands()

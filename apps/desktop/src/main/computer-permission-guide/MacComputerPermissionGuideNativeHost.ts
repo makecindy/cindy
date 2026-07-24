@@ -6,6 +6,7 @@ import type { Readable, Writable } from 'node:stream';
 import { app } from 'electron';
 
 import { createLogger } from '../logger.js';
+import type { SupportedLocale } from '../../shared/locale.js';
 
 const log = createLogger('computer-permission-guide/native');
 const HELPER_RESOURCE = path.join(
@@ -82,7 +83,11 @@ export class MacComputerPermissionGuideNativeHost {
 
   constructor(private readonly options: MacComputerPermissionGuideNativeHostOptions) {}
 
-  async show(appBundlePath: string, state: ComputerPermissionGuideNativeState): Promise<boolean> {
+  async show(
+    appBundlePath: string,
+    state: ComputerPermissionGuideNativeState,
+    locale: SupportedLocale = 'en',
+  ): Promise<boolean> {
     if (this.dismissed) return false;
     this.pendingState = state;
     if (this.ready && this.child) {
@@ -90,7 +95,7 @@ export class MacComputerPermissionGuideNativeHost {
       return true;
     }
     if (!this.starting) {
-      this.starting = this.start(appBundlePath).finally(() => {
+      this.starting = this.start(appBundlePath, locale).finally(() => {
         this.starting = null;
       });
     }
@@ -122,7 +127,7 @@ export class MacComputerPermissionGuideNativeHost {
     }, 350);
   }
 
-  private async start(appBundlePath: string): Promise<boolean> {
+  private async start(appBundlePath: string, locale: SupportedLocale): Promise<boolean> {
     let binary: string;
     try {
       binary = await resolveMacComputerPermissionGuideHelperBinary();
@@ -136,7 +141,7 @@ export class MacComputerPermissionGuideNativeHost {
 
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const child = spawn(binary, [appBundlePath], {
+      const child = spawn(binary, [appBundlePath, locale], {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       this.child = child;

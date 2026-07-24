@@ -187,6 +187,10 @@ vi.mock('../../appPresence.js', () => ({
   scheduleMainAppPresenceRestore: vi.fn(),
 }));
 
+vi.mock('../../i18n.js', () => ({
+  getResolvedMainLocale: vi.fn(() => 'ja'),
+}));
+
 vi.mock('../../mcp-integrations/computer.js', () => ({
   getComputerDriverAppBundlePath: vi.fn(() => '/Applications/CuaDriver.app'),
   getComputerDriverStatus: harness.getComputerDriverStatus,
@@ -418,6 +422,7 @@ describe('Electron Computer Use permission guide window', () => {
           accessibilityGranted: true,
           screenRecordingGranted: false,
         }),
+        'ja',
       );
     });
 
@@ -952,6 +957,7 @@ describe('Electron Computer Use permission guide window', () => {
         accessibilityGranted: true,
         screenRecordingGranted: false,
       }),
+      'ja',
     );
   });
 
