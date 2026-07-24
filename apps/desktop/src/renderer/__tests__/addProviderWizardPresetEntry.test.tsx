@@ -83,6 +83,8 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       listProviderPresets: vi.fn(async () => ({ presets: [deepseekPreset] })),
+      // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
+      fetchProviderModels: vi.fn(async () => ({ ok: false, code: 'NETWORK' })),
     },
   };
 });
@@ -127,6 +129,36 @@ describe('AddProviderWizard — preset 直达', () => {
     );
     expect(screen.getByDisplayValue('Anthropic API')).not.toBeNull();
     expect(screen.getByText(/api\.anthropic\.com/)).not.toBeNull();
+  });
+
+  it('官方 API 预设:列模型失败 → 第三步仍有推荐模型预勾,可完成(Greptile P1 回归)', async () => {
+    render(
+      React.createElement(AddProviderWizard, {
+        providers: [anthropicProvider],
+        entry: { kind: 'builtin' as const, providerId: 'anthropic' },
+        onOpenCustomForm: vi.fn(),
+        onClose: vi.fn(),
+        onDone: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(await screen.findByText('settings.providers.wizard.useApiKey'));
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    // 填 key 后进入第三步(拉取被 mock 为失败)。
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.fetchFailed')).not.toBeNull(),
+    );
+    // 降级:推荐模型仍在清单里,完成按钮可用(不被空列表堵死)。
+    expect(screen.getByText('Claude Sonnet 5')).not.toBeNull();
+    expect(screen.getByText('Claude Haiku 4.5')).not.toBeNull();
+    expect(
+      (screen.getByText('settings.providers.wizard.finish').closest('button') as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
   });
 
   it('presetId 不存在 → 回落目录第一步', async () => {

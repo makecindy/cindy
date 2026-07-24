@@ -67,8 +67,10 @@ const AGENT_LABEL: Record<AgentKind, string> = {
  * (API 用户没有订阅,OAuth 授权对其是错误路径)。
  *
  * 不能复用 OAuth routing 的 upstream:那是订阅专用端点(openai 是 chatgpt
- * backend)。此处声明官方 API 端点,模型清单交给 Step 3 列模型接口拉取
- * (缺省由 baseUrl 推导 …/v1/models,见 provider-model-fetch)。
+ * backend)。此处声明官方 API 端点,模型清单以 Step 3 列模型接口实拉为准
+ * (缺省由 baseUrl 推导 …/v1/models,见 provider-model-fetch);同时内置少量
+ * 推荐模型兜底——拉取因网络/限流失败时降级为「仅推荐模型」仍可完成创建,
+ * 不把用户堵死(与目录预设同语义;Greptile P1 反馈 2026-07-24)。
  * cc runtime 需 Anthropic 兼容端点、codex 需 OpenAI 兼容端点,故 openai/xai
  * 仅声明 codex(两家无 Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
  */
@@ -77,20 +79,43 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
     id: 'anthropic-api',
     name: 'Anthropic API',
     docsUrl: 'https://console.anthropic.com/settings/keys',
-    runtimes: { 'claude-code': { baseUrl: 'https://api.anthropic.com', models: [] } },
+    runtimes: {
+      'claude-code': {
+        baseUrl: 'https://api.anthropic.com',
+        models: [
+          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
+          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+        ],
+      },
+    },
   },
   openai: {
     id: 'openai-api',
     name: 'OpenAI API',
     docsUrl: 'https://platform.openai.com/api-keys',
-    runtimes: { codex: { baseUrl: 'https://api.openai.com/v1', models: [] } },
+    runtimes: {
+      codex: {
+        baseUrl: 'https://api.openai.com/v1',
+        models: [
+          { id: 'gpt-5.5', name: 'GPT-5.5' },
+          { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
+        ],
+      },
+    },
   },
   xai: {
     id: 'xai-api',
     name: 'xAI API',
     docsUrl: 'https://console.x.ai',
     runtimes: {
-      codex: { baseUrl: 'https://api.x.ai/v1', wireProtocol: 'openai-chat', models: [] },
+      codex: {
+        baseUrl: 'https://api.x.ai/v1',
+        wireProtocol: 'openai-chat',
+        models: [
+          { id: 'grok-4.5', name: 'Grok 4.5' },
+          { id: 'grok-4.3', name: 'Grok 4.3' },
+        ],
+      },
     },
   },
 };
