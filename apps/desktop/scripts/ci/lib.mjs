@@ -632,19 +632,36 @@ export function notarizeMacApp(appPath, identity) {
   exec(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${zipPath}"`);
 
   console.log('    Submitting to Apple notarization service (this may take a few minutes)...');
-  // 密码不进 argv:notarytool 支持 --password @env:VAR,从子进程 env 读取——
-  // 公证等待期间 ps 里只看得到 env 名,不再暴露 app-specific password;
-  // 日志回显的命令也天然无密码,无需打码。
-  const submitCmd =
-    `/usr/bin/xcrun notarytool submit "${zipPath}" ` +
-    `--apple-id "${identity.appleId}" --password "@env:CINDY_NOTARY_PASSWORD" ` +
-    `--team-id "${identity.teamId}" --wait`;
-  console.log(`    $ ${submitCmd}`);
-  execSync(submitCmd, {
+  // 密码作为 --password 值直接传给 notarytool——不再用 --password @env:VAR 间接:
+  // 旧版 notarytool 不认 @env: 前缀,会把字面量 "@env:..." 当密码本身发出去而 401。
+  // 走 spawnSync 参数数组(不经 shell,密码不落进被回显/被 ps 看到的命令字符串);
+  // 日志里对密码打码(credentials 规则:输出不得含凭证明文)。
+  const submitArgs = [
+    'notarytool',
+    'submit',
+    zipPath,
+    '--apple-id',
+    identity.appleId,
+    '--password',
+    identity.applePassword,
+    '--team-id',
+    identity.teamId,
+    '--wait',
+  ];
+  console.log(
+    `    $ /usr/bin/xcrun notarytool submit "${zipPath}" ` +
+      `--apple-id "${identity.appleId}" --password "****" --team-id "${identity.teamId}" --wait`,
+  );
+  const submitResult = spawnSync('/usr/bin/xcrun', submitArgs, {
     stdio: 'inherit',
     timeout: 1800000, // 30 min
-    env: { ...process.env, CINDY_NOTARY_PASSWORD: identity.applePassword },
   });
+  if (submitResult.error) {
+    throw new Error(`notarytool submit 无法执行:${submitResult.error.message}`);
+  }
+  if (submitResult.status !== 0) {
+    throw new Error(`notarytool submit 失败(exit ${submitResult.status});公证未通过。`);
+  }
 
   fs.unlinkSync(zipPath);
 
