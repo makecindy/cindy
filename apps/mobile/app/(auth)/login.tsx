@@ -272,7 +272,10 @@ export default function LoginScreen() {
     // App Store 合规:Apple 必须用官方 Sign in with Apple 按钮(不可皮肤化),
     // 从统一社交圆钮行中拆出、单独全宽渲染;其余(Google/微信/SSO)保留皮肤圆钮。
     const nonAppleProviders = socialProviders.filter(
-      (provider) => provider !== 'apple',
+      // type guard 收窄为 Google/微信(SSO 由行内末位单独渲染),与 LoginSocialGlyph
+      // 收窄后的 provider 类型对齐;Apple 走官方 AppleAuthenticationButton 不进圆钮行。
+      (provider): provider is Exclude<SocialProvider, 'apple'> =>
+        provider !== 'apple',
     );
     if (ssoOrgMode) {
       const submitSsoOrg = () => {

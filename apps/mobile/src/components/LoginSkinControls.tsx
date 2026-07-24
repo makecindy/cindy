@@ -759,22 +759,11 @@ export function LoginTextLinkSlot({
 }
 
 /* ── 图标(矢量源 = figma 现导 SVG path 内联,登记见 asset-manifest.md;
-      Google/WeChat fill 为厂商固定品牌色,跨模式不变;Apple/SSO 为单色图标,
+      Google/WeChat fill 为厂商固定品牌色,跨模式不变;SSO 为单色图标,
       随圆钮底反相(亮色深圆上白/浅图标,暗色白圆上 #2A2828 深图标——figma
-      white apple 489:676 / white SSO 489:710 核验)——与桌面 assets/login/icons 同源) ── */
-
-/** Apple(247:1692,ic:baseline-apple;亮白 / 暗 #2A2828 反相)。 */
-function AppleIcon() {
-  const { mode } = useTheme();
-  return (
-    <Svg width="100%" height="100%" viewBox="0 0 48 48" fill="none" aria-hidden>
-      <Path
-        d="M33.0984 39.56C31.1384 41.46 28.9984 41.16 26.9384 40.26C24.7584 39.34 22.7584 39.3 20.4584 40.26C17.5784 41.5 16.0584 41.14 14.3384 39.56C4.57837 29.5 6.01838 14.18 17.0984 13.62C19.7984 13.76 21.6784 15.1 23.2584 15.22C25.6184 14.74 27.8784 13.36 30.3984 13.54C33.4184 13.78 35.6984 14.98 37.1984 17.14C30.9584 20.88 32.4384 29.1 38.1584 31.4C37.0184 34.4 35.5384 37.38 33.0784 39.58L33.0984 39.56ZM23.0584 13.5C22.7584 9.04 26.3784 5.36 30.5384 5C31.1184 10.16 25.8584 14 23.0584 13.5Z"
-        fill={mode === 'dark' ? '#2A2828' : '#FFFFFF'}
-      />
-    </Svg>
-  );
-}
+      white SSO 489:710 核验)——与桌面 assets/login/icons 同源)。Apple 登录走官方
+      AppleAuthenticationButton(非皮肤化、logo 必须用 Apple 官方组件,不得自绘),
+      不在本图标集,见 login.tsx 与 App Store Guideline 4.8 说明。 ── */
 
 /** Google(247:1714,material-icon-theme:google 四色品牌 mark)。 */
 function GoogleIcon() {
@@ -838,13 +827,13 @@ function SsoIcon() {
   );
 }
 
-/** 第三方圆钮图标分发(figma §4.5 icon 48;providers.social 驱动显隐,无返回不渲染)。 */
+/** 第三方圆钮图标分发(figma §4.5 icon 48;providers.social 驱动显隐,无返回不渲染)。
+ *  Apple 走官方 AppleAuthenticationButton(全宽单列),圆钮行只列 Google/微信/SSO。 */
 export function LoginSocialGlyph({
   provider,
 }: {
-  provider: 'apple' | 'google' | 'wechat' | 'sso';
+  provider: 'google' | 'wechat' | 'sso';
 }) {
-  if (provider === 'apple') return <AppleIcon />;
   if (provider === 'google') return <GoogleIcon />;
   if (provider === 'wechat') return <WeChatIcon />;
   return <SsoIcon />;
