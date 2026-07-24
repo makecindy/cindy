@@ -1,7 +1,8 @@
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { connect as netConnect } from 'node:net';
-import { describe, expect, it, afterEach } from 'vitest';
+import { generate as generateSelfSignedCert } from 'selfsigned';
+import { beforeAll, describe, expect, it, afterEach } from 'vitest';
 
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import {
@@ -14,60 +15,6 @@ import {
   redactProxyUrlForLog,
   TunnelingHttpsAgent,
 } from './outbound-proxy.js';
-
-// ─── 测试专用自签名证书(CN/SAN = upstream.test,有效期 100 年)────────────────
-// 仅供本测试文件的本地 TLS 桩使用,非任何真实凭证。客户端把它同时当 CA 用
-// (自签 = 自己就是根),配合 servername=upstream.test 走完整证书校验,
-// 不关闭 rejectUnauthorized。
-const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCs7jn9/xp6anHr
-73FSJP5Z4Z6rsqFmdp6x6P8737CUzK+HZPhLv1Csd0ssmVpr/01AkTP+Fo000cf5
-IDrPdD/DUj+OCEmfXRxJp8HhydunT1rkvlox6Ih+L1UWUBpX4EdC3AeNJPe/lEFe
-Jg/9nc2RRlPHw7gm6L2+Hd7Ip/SjPf0yvwELmx8Go2WfJ1q211Y/1T24nRw1PEV1
-kTZsY+C232JRQfbl0lK8soEdWiZmWSLHbkn0ULQXIhI7Z60rb8xs2xIILsUynoea
-2ooa9nnu9Rjq9iiuDAmLORcNkQNNMSX3mpctLg9sEEfUs+NpOZ8t/iMir1DwxT5N
-fybMh4SFAgMBAAECggEAEGKEASJmHloukBXATXGu3dJIR+llbIFpuN6kLEaeAwM/
-0FrLQdYPLUAiUcf37sqiRa9cV0NIvsvvoBWjLNvNXNLSrcDwRNa8IuhvsNaA5uHY
-cVrtzdPD9vzCGZqeXFwmNFoHpyJtDOxdoy+FDVkhzJV2w7MyJBGiRLysyqNLRRom
-6WOCD5UDQwV/8L1XYK3LSrV9cTy0l5cKcY1FQIdQ3a+dt+6PLD+yuGBIWLvvyggq
-flRSktRNxaRlFatUIheEdO06VI6UFXla2vDNpu4a1rp7AMJzWRd3gLF/PzyENhjO
-ov5loSDlerU+lX5FNWRJoiquwVVBHbs9B4KRpn0qMwKBgQDpRvz59vVGIyAW8OPW
-fKhZ7E/XWpB/BwSpdX9kNj+oK4/k8W37MzKLgueE7frdE40OB3+GevKqm0AsNN+L
-v6NvEzVh/Gi4FyP3dH2ILiFFYU/tdKvD27PiNLgg4uzW+Cdfyh2DPTmMGj0gjXvb
-eO/NjzrVd9IkkzX0CEZmsmBaCwKBgQC9xm4XXJYQS+41/xP0xs1hrt5sdaqVNiXh
-XHNp9NBzn2OM+hFoRwGHcbzwJWIxJR6OD5IMNpBUenQE0c5JZOL0gwgbXn/rAqRV
-TniF16bv9Uw2cHAx17De3+SsAol7EkUhsIcXS9lxYarcyqLsuNaGq8xbIKEBHmfd
-wBMVMU9FrwKBgCSPMpB+SrxePuY5hIuV59CH/49RqzmtQObJ+lgbRGi3wwpvZ/wp
-bu98aYpkvZ8uNDoRpMPPuv5P7IPBGZPOSe/bg89CfqrzPXjHsfDIwgAcmyks0sqU
-QSHff0fwKIwcQhd6Fpv92WoCprfWVKX10ydVHjRcXfvLcnY3YckwhXc3AoGAcmW1
-Y5vKUhSTijUzgHB+yg2xwsvDgqLbfthOMmcDaU+BoS/1Yli7UTx82n6OjHWFz7kP
-HxGdO299lJIsug14ylBaiLUUg0Rab5oYCQaQeUHzKTXqTAFre06X+CCnY2sGBWL2
-bFKqxzBK4UG9qNlbaF8TlzM6GwSLNB9e4X2R/b0CgYAqoXMa2MeXaA5GzIg9/PeU
-UEkXjU841pQbdw49wTiMrk8qm24aiWxu1Z5R79DKpY0jeNxuc03ChzYIXksylQ/L
-oMATHYy8OlLJ3j4eQNIwSWh1bIyGXV7Jkv/swynh0VzTGf4UyV4K/v0DErcVO9rP
-W0ETJ1ulu43omEuNGkCkdQ==
------END PRIVATE KEY-----`;
-
-const TEST_TLS_CERT = `-----BEGIN CERTIFICATE-----
-MIIDLTCCAhWgAwIBAgIUIEXWlocxnpLV63aHJin8lDGkJtEwDQYJKoZIhvcNAQEL
-BQAwGDEWMBQGA1UEAwwNdXBzdHJlYW0udGVzdDAgFw0yNjA3MjQwODQ2MjFaGA8y
-MTI2MDYzMDA4NDYyMVowGDEWMBQGA1UEAwwNdXBzdHJlYW0udGVzdDCCASIwDQYJ
-KoZIhvcNAQEBBQADggEPADCCAQoCggEBAKzuOf3/GnpqcevvcVIk/lnhnquyoWZ2
-nrHo/zvfsJTMr4dk+Eu/UKx3SyyZWmv/TUCRM/4WjTTRx/kgOs90P8NSP44ISZ9d
-HEmnweHJ26dPWuS+WjHoiH4vVRZQGlfgR0LcB40k97+UQV4mD/2dzZFGU8fDuCbo
-vb4d3sin9KM9/TK/AQubHwajZZ8nWrbXVj/VPbidHDU8RXWRNmxj4LbfYlFB9uXS
-UryygR1aJmZZIsduSfRQtBciEjtnrStvzGzbEgguxTKeh5raihr2ee71GOr2KK4M
-CYs5Fw2RA00xJfealy0uD2wQR9Sz42k5ny3+IyKvUPDFPk1/JsyHhIUCAwEAAaNt
-MGswHQYDVR0OBBYEFOMEEoDze4qD05At9+bjkHfP3+HwMB8GA1UdIwQYMBaAFOME
-EoDze4qD05At9+bjkHfP3+HwMA8GA1UdEwEB/wQFMAMBAf8wGAYDVR0RBBEwD4IN
-dXBzdHJlYW0udGVzdDANBgkqhkiG9w0BAQsFAAOCAQEAaiSXH428BzaOf+4D34V+
-j6Sisp4j2Zeo/DILTOG/TN9kYS3twTzXgAZ62EsvBEPmIuivI6rzOdmYGAHKM+RH
-MH/NZG6D5REdRnoJA9UUOxSGYO6MIAZMb3OzUl0EjWTKnFuDq39Cko6e5+SkM+Pr
-e5s74zkHfTJVmhViyWFls/3UYO5dB/CpiHA0/lUZF1tAEsvm1iPGvXjQRSvi7GCy
-5T5F2ERHMZ7vla/ijDGwPz4dI5pFfbSFbbx+0dAKZsper5sWdxh9iq5fITlGgaGR
-WZ55rszyYN4IK5//d86AdI6N3eYVVf0L0N6PH7zv+vuMr46qO93skYlSbnU7RIos
-lg==
------END CERTIFICATE-----`;
 
 describe('parseOutboundProxyUrl', () => {
   it('parses plain http proxy urls', () => {
@@ -224,6 +171,24 @@ describe('TunnelingHttpsAgent', () => {
     while (cleanups.length) await cleanups.pop()!();
   });
 
+  // 测试自签证书运行时生成(CN/SAN = upstream.test),不在仓库里存任何 PEM 私钥
+  // (即使是测试专用的假密钥也会触发 secret scanning / push protection)。
+  let tlsKey = '';
+  let tlsCert = '';
+  beforeAll(async () => {
+    // 有效期用默认(365 天)—— 每次运行现生成,不存在过期问题。
+    const pems = await generateSelfSignedCert([{ name: 'commonName', value: 'upstream.test' }], {
+      keySize: 2048,
+      algorithm: 'sha256',
+      extensions: [
+        { name: 'basicConstraints', cA: true },
+        { name: 'subjectAltName', altNames: [{ type: 2, value: 'upstream.test' }] },
+      ],
+    });
+    tlsKey = pems.private;
+    tlsCert = pems.cert;
+  });
+
   /** 起一个最小 CONNECT 代理:记录 CONNECT 目标,把隧道打到本地指定端口。 */
   async function startConnectProxy(tunnelToPort: number): Promise<{
     port: number;
@@ -250,7 +215,7 @@ describe('TunnelingHttpsAgent', () => {
   }
 
   async function startTlsUpstream(): Promise<number> {
-    const tls = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+    const tls = createHttpsServer({ key: tlsKey, cert: tlsCert }, (_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -263,7 +228,7 @@ describe('TunnelingHttpsAgent', () => {
     return new Promise<number>((resolve, reject) => {
       // ca + servername:对测试自签证书走完整 TLS 校验(链 + 身份),不禁用证书验证。
       const req = httpsRequest(
-        { host, port, path: '/probe', agent, ca: TEST_TLS_CERT, servername: 'upstream.test' },
+        { host, port, path: '/probe', agent, ca: tlsCert, servername: 'upstream.test' },
         (res) => {
           res.resume();
           res.on('end', () => resolve(res.statusCode ?? 0));
