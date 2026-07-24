@@ -388,16 +388,25 @@ export function LoginPage() {
           error={!!errorCode}
           testId="login-sso-org-input"
         />
-        {/* 帮助行(demo ssoOrgPanel:text-link 位、无下划线、次级色) */}
+        {/* 帮助行(demo ssoOrgPanel:text-link 位、无下划线、次级色)。长语言(en/ja)会
+            折行:按登录长文本口径(DESIGN.md §16.2 分级②)顶对齐 + ≤2 行 clamp + 只向下
+            伸展——旧写法「36px 固定槽 + flex 垂直居中」让两行文本上下双向外溢压到输入框
+            下缘(2026-07-24 实拍)。top +6 让单行视觉位与旧居中版持平;两行时底缘
+            244+46=290,距按钮顶(300)仍有 10px,不越界。 */}
         <span
-          className="absolute flex items-center justify-center"
+          data-testid="login-sso-org-hint"
+          className="absolute overflow-hidden text-center"
           style={{
             left: TEXT_LINK.x,
-            top: TEXT_LINK.y,
+            top: TEXT_LINK.y + 6,
             width: TEXT_LINK.width,
-            height: 36,
+            maxHeight: 46,
+            lineHeight: '23px',
             fontSize: TEXT_LINK.fontSize,
             color: LOGIN_COLORS.secondaryText,
+            display: '-webkit-box',
+            WebkitBoxOrient: 'vertical',
+            WebkitLineClamp: 2,
           }}
         >
           {t('login.ssoOrgHint')}

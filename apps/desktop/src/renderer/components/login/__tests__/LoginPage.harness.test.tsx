@@ -245,7 +245,14 @@ describe('ssoOrgMode 子视图', () => {
     const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
     expect(input.placeholder).toBe('login.ssoOrgPlaceholder');
     expect((screen.getByTestId('login-sso-org-continue') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('login.ssoOrgHint')).toBeTruthy();
+    // 帮助行长文本约束(DESIGN.md §16.2 分级②):顶对齐 + ≤2 行 clamp + 只向下伸展。
+    // 回归锚:禁止回到「固定小槽 + flex 垂直居中」写法(长语言两行时双向外溢压输入框)。
+    const hint = screen.getByTestId('login-sso-org-hint');
+    expect(hint.textContent).toBe('login.ssoOrgHint');
+    expect(hint.style.maxHeight).toBe('46px');
+    expect(hint.style.webkitLineClamp).toBe('2');
+    expect(hint.style.display).toBe('-webkit-box');
+    expect(hint.className).not.toContain('items-center');
   });
 
   it('sso-org 填写态:输入企业 ID 后继续可用,提交派发 discover-sso-org', async () => {
