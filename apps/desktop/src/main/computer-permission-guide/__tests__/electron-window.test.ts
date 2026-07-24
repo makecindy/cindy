@@ -16,6 +16,7 @@ const harness = vi.hoisted(() => {
   const nativeDismiss = vi.fn();
   const cancelComputerDriverPermissionGrant = vi.fn();
   const closeComputerUseSwitchLocator = vi.fn(async () => undefined);
+  let nextGuideLoadError: Error | null = null;
   const computerStatus = (permissionState: Partial<{
     status: 'missing' | 'granted';
     accessibility: 'missing' | 'granted';
@@ -69,7 +70,12 @@ const harness = vi.hoisted(() => {
       startDrag: vi.fn(),
     };
     readonly listeners = new Map<string, (...args: unknown[]) => void>();
-    readonly loadURL = vi.fn(async () => {
+    readonly loadURL = vi.fn(async (url?: string) => {
+      if (nextGuideLoadError && url?.includes('view=computer-permission-guide')) {
+        const error = nextGuideLoadError;
+        nextGuideLoadError = null;
+        throw error;
+      }
       this.listeners.get('did-finish-load')?.();
     });
     readonly loadFile = vi.fn(async () => {
@@ -138,6 +144,9 @@ const harness = vi.hoisted(() => {
     resumeComputerDriverPermissionProbe,
     broadcastSend,
     openExternal,
+    setNextGuideLoadError: (error: Error | null) => {
+      nextGuideLoadError = error;
+    },
     setDeferWindowClosedEvents: (defer: boolean) => {
       deferWindowClosedEvents = defer;
     },
@@ -322,6 +331,7 @@ describe('Electron Computer Use permission guide window', () => {
     harness.broadcastSend.mockReset();
     harness.openExternal.mockReset();
     harness.openExternal.mockResolvedValue(undefined);
+    harness.setNextGuideLoadError(null);
     harness.locateComputerUseSwitchTarget.mockResolvedValue({ status: 'unavailable' });
     harness.locateComputerUseSwitchTarget.mockClear();
     harness.isComputerDriverPermissionProbePaused.mockReturnValue(false);
@@ -533,6 +543,23 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.broadcastSend).toHaveBeenCalledWith(
       'maker:computer:permission-guide-cancelled',
     );
+  });
+
+  it('closes the guide and resumes permission probes when its renderer fails to load', async () => {
+    harness.setNextGuideLoadError(new Error('load failed'));
+    const guide = await import('../window');
+
+    await guide.showComputerPermissionGuideWindow(null);
+
+    await vi.waitFor(() => {
+      expect(harness.resumeComputerDriverPermissionProbe).toHaveBeenCalledOnce();
+      expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
+      expect(harness.broadcastSend).toHaveBeenCalledWith(
+        'maker:computer:permission-guide-cancelled',
+      );
+    });
+    expect(harness.windows[0].close).toHaveBeenCalledOnce();
+    expect(harness.windows[1].close).toHaveBeenCalledOnce();
   });
 
   it('cancels the guide when the attached native guide exits unexpectedly', async () => {
@@ -1207,6 +1234,20 @@ describe('Electron Computer Use permission guide window', () => {
     const dragState = guide.readPermissionDragState();
     expect(dragState.accessibility).toBe(false);
     expect(dragState.screenRecording).toBe(false);
+  });
+
+  it('keeps the in-memory drag state when persistence is unavailable', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
+      throw new Error('disk unavailable');
+    });
+
+    finishTestDrag(guide);
+
+    await vi.waitFor(() => {
+      expect(guide.readPermissionDragState().accessibility).toBe(true);
+    });
   });
 
   it('writes drag state only after a confirmed native copy drag', async () => {

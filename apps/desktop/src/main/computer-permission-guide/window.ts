@@ -124,9 +124,15 @@ export function readPermissionDragState(): PermissionDragState {
 
 function writePermissionDragState(state: PermissionDragState): void {
   permissionDragStateCache = { ...state };
-  const filePath = getPermissionDragStatePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(state)}\n`, 'utf8');
+  try {
+    const filePath = getPermissionDragStatePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${JSON.stringify(state)}\n`, 'utf8');
+  } catch (error) {
+    log.warn('failed to persist Computer Use permission drag state', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function clearPermissionDragState(permission: PermissionKind): void {
@@ -140,14 +146,13 @@ function clearPermissionDragState(permission: PermissionKind): void {
 function loadPermissionView(
   window: BrowserWindow,
   view: 'computer-permission-guide' | 'computer-permission-backdrop',
-): void {
+): Promise<void> {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     const url = new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
     url.searchParams.set('view', view);
-    void window.loadURL(url.toString());
-    return;
+    return window.loadURL(url.toString());
   }
-  void window.loadFile(
+  return window.loadFile(
     path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     { query: { view } },
   );
@@ -855,7 +860,19 @@ export async function showComputerPermissionGuideWindow(
       backdropWindow = null;
     }
   });
-  loadPermissionView(backdrop, 'computer-permission-backdrop');
+  void loadPermissionView(backdrop, 'computer-permission-backdrop').catch((error) => {
+    log.warn('computer permission guide backdrop failed to load', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    if (
+      !isGuideLifecycleActive(generation)
+      || backdropWindow !== backdrop
+    ) {
+      return;
+    }
+    closeComputerPermissionGuideWindow();
+    broadcastPermissionGuideCancelled();
+  });
 
   const guide = new BrowserWindow({
     ...guideBounds,
@@ -923,7 +940,19 @@ export async function showComputerPermissionGuideWindow(
     closeComputerPermissionGuideWindow();
     broadcastPermissionGuideCancelled();
   });
-  loadPermissionView(guide, 'computer-permission-guide');
+  void loadPermissionView(guide, 'computer-permission-guide').catch((error) => {
+    log.warn('computer permission guide renderer failed to load', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    if (
+      !isGuideLifecycleActive(generation)
+      || guideWindow !== guide
+    ) {
+      return;
+    }
+    closeComputerPermissionGuideWindow();
+    broadcastPermissionGuideCancelled();
+  });
 
   // Resolve a persisted drag hint against the live System Settings row before
   // the native panel gets its first frame. Otherwise a removed CuaDriver can
