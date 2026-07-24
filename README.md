@@ -1,17 +1,5 @@
 <p align="center">
-  <img src="apps/mobile/assets/splash/cindy-splash-illustration.webp" alt="Cindy" width="180" />
-</p>
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cindy-wordmark-dark.svg">
-    <img src=".github/assets/cindy-wordmark-light.svg" alt="CINDY" width="280">
-  </picture>
-</p>
-
-<p align="center">
-  <strong>CONSIDER IT DONE.</strong><br />
-  The open-source AI agent that works out of the box — it operates your computer to get real work done, not just answer questions.
+  <a href="https://cindy.app"><img src=".github/assets/hero-en.webp" width="100%" alt="CINDY — Consider it done. The open-source AI agent that works out of the box, doing real work on your own computer."></a>
 </p>
 
 <p align="center">

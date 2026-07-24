@@ -1,17 +1,5 @@
 <p align="center">
-  <img src="apps/mobile/assets/splash/cindy-splash-illustration.webp" alt="Cindy" width="180" />
-</p>
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cindy-wordmark-dark.svg">
-    <img src=".github/assets/cindy-wordmark-light.svg" alt="CINDY" width="280">
-  </picture>
-</p>
-
-<p align="center">
-  <strong>想到，就能做到。</strong><br />
-  开源、开箱即用的 AI Agent —— 她能操作你的电脑，代替你完成真实工作，而不只是给答案。
+  <a href="https://cindy.cn"><img src=".github/assets/hero-zh.webp" width="100%" alt="CINDY —— 想到，就能做到。开源、开箱即用的 AI Agent，在你自己的电脑上替你把真实工作做完。"></a>
 </p>
 
 <p align="center">
