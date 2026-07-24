@@ -202,6 +202,25 @@ describe('billing response projection', () => {
     expect(() =>
       projectModelAccessCreditUsage({
         ...valid,
+        promotional: { remaining: '0', used: '2', total: '2' },
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        promotional: { remaining: '1', used: '1', total: '2' },
+        promotionalGrants: [
+          {
+            ...valid.promotionalGrants[0],
+            usedAmount: '0.5',
+            remainingAmount: '1.5',
+          },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
         promotionalGrants: [valid.promotionalGrants[0], { ...valid.promotionalGrants[0] }],
       }),
     ).toThrow();

@@ -298,6 +298,8 @@ export function projectModelAccessCreditUsage(value: unknown): ModelAccessCredit
 
   const grantIds = new Set<string>();
   let currentOriginalTotal = 0n;
+  let currentUsedTotal = 0n;
+  let currentRemainingTotal = 0n;
   const observedAtMs = Date.parse(snapshotTime);
   const promotionalGrants = value.promotionalGrants.map((grant) => {
     const projected = projectPromotionalGrant(grant);
@@ -308,12 +310,18 @@ export function projectModelAccessCreditUsage(value: unknown): ModelAccessCredit
       Date.parse(projected.expiresAt) > observedAtMs
     ) {
       currentOriginalTotal += ledgerDecimal(projected.originalAmount)!.scaled;
+      currentUsedTotal += ledgerDecimal(projected.usedAmount)!.scaled;
+      currentRemainingTotal += ledgerDecimal(projected.remainingAmount)!.scaled;
     }
     return projected;
   });
   if (
     (value.promotionalGrantsComplete &&
-      (promotional.total === null || promotional.total !== currentOriginalTotal)) ||
+      (promotional.total === null ||
+        promotional.used === null ||
+        promotional.total !== currentOriginalTotal ||
+        promotional.used !== currentUsedTotal ||
+        promotional.remaining !== currentRemainingTotal)) ||
     (!value.promotionalGrantsComplete && (promotional.used !== null || promotional.total !== null))
   ) {
     invalidResponse();
