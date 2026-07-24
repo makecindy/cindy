@@ -127,6 +127,7 @@ export function ConnectProviderCard({ className }: { className?: string }) {
               type="button"
               onClick={() => setOthersOpen((v) => !v)}
               aria-expanded={othersOpen}
+              aria-controls="connect-provider-more"
               className="group flex w-full items-center gap-3.5 border-b border-[var(--border-default)] px-1 py-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
             >
               <span className="flex flex-1 text-[13px] font-medium text-[var(--text-secondary)]">
@@ -140,7 +141,9 @@ export function ConnectProviderCard({ className }: { className?: string }) {
                 )}
               />
             </button>
-            {othersOpen && moreRows.map(renderRow)}
+            <div id="connect-provider-more" className="flex flex-col" hidden={!othersOpen}>
+              {othersOpen && moreRows.map(renderRow)}
+            </div>
           </>
         )}
       </div>
