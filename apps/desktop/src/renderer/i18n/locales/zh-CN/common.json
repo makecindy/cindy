@@ -6812,5 +6812,19 @@
       "codexStateSkipped": "本机尚未初始化 Codex 环境，会话状态未完全恢复；先运行一次 Codex 会话后即可正常续聊。",
       "workdirKeyInexact": "所选目录路径过长，无法放置历史转录，已降级为仅聊天记录。"
     }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS 文件夹访问被拒绝",
+      "message": "Cindy 无法访问你的“{{folder}}”文件夹",
+      "detail": "macOS 拒绝了访问。请打开“系统设置”授予权限，然后重新运行 Agent 命令。",
+      "openSystemSettings": "打开系统设置",
+      "cancel": "取消",
+      "folderNames": {
+        "desktop": "桌面",
+        "documents": "文稿",
+        "downloads": "下载"
+      }
+    }
   }
 }

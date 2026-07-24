@@ -6812,5 +6812,19 @@
       "codexStateSkipped": "このマシンでは Codex がまだ初期化されていないため、セッション状態は完全には復元されていません。Codex セッションを一度実行すれば続行できるようになります。",
       "workdirKeyInexact": "選択したディレクトリのパスが長すぎるためトランスクリプトを配置できず、チャット履歴のみに切り替えました。"
     }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS のフォルダアクセスが拒否されました",
+      "message": "Cindy は「{{folder}}」フォルダにアクセスできません",
+      "detail": "macOS によりアクセスが拒否されました。「システム設定」を開いて権限を付与し、Agent のコマンドをもう一度実行してください。",
+      "openSystemSettings": "システム設定を開く",
+      "cancel": "キャンセル",
+      "folderNames": {
+        "desktop": "デスクトップ",
+        "documents": "書類",
+        "downloads": "ダウンロード"
+      }
+    }
   }
 }

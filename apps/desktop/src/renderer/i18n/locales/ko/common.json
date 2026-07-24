@@ -6812,5 +6812,19 @@
       "codexStateSkipped": "이 컴퓨터에서 Codex가 아직 초기화되지 않아 세션 상태가 완전히 복원되지 않았습니다. Codex 세션을 한 번 실행하면 이어갈 수 있습니다.",
       "workdirKeyInexact": "선택한 디렉터리 경로가 너무 길어 트랜스크립트를 배치할 수 없어 채팅 기록만 가져왔습니다."
     }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS 폴더 접근이 거부되었습니다",
+      "message": "Cindy가 {{folder}} 폴더에 접근할 수 없습니다",
+      "detail": "macOS에서 접근을 거부했습니다. 시스템 설정을 열어 권한을 부여한 다음 Agent 명령을 다시 실행하세요.",
+      "openSystemSettings": "시스템 설정 열기",
+      "cancel": "취소",
+      "folderNames": {
+        "desktop": "데스크탑",
+        "documents": "문서",
+        "downloads": "다운로드"
+      }
+    }
   }
 }

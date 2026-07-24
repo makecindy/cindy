@@ -105,7 +105,9 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import {
   detectProtectedFolderEperm,
   openFolderPrivacySettings,
+  releaseEpermGuidance,
   shouldShowEpermGuidance,
+  type ProtectedFolderKind,
 } from '../file-access/permissions.js';
 import { SessionActivityRelay } from './sessionActivityRelay.js';
 
@@ -613,11 +615,14 @@ export class AgentIslandService {
       this.clearCompletedSilencedRunForNewActivity(hydrated.sessionId);
       this.deferredCompletions.delete(hydrated.sessionId);
     }
-    if (event.type === 'tool_result_full') {
+    if (process.platform === 'darwin' && event.type === 'tool_result_full') {
       const data = event.data as { fullText?: string } | undefined;
       const folderKind = data?.fullText ? detectProtectedFolderEperm(data.fullText) : null;
       if (folderKind && shouldShowEpermGuidance(folderKind)) {
-        void this.showFolderEpermGuidance(folderKind);
+        void this.showFolderEpermGuidance(folderKind).catch((error: unknown) => {
+          releaseEpermGuidance(folderKind);
+          log.warn('failed to show folder access guidance', { kind: folderKind, error });
+        });
       }
     }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
@@ -895,24 +900,30 @@ export class AgentIslandService {
     };
   }
 
-  private async showFolderEpermGuidance(kind: 'Desktop' | 'Documents' | 'Downloads'): Promise<void> {
-    const mainWindow = this.deps.getMainWindow();
-    const result = await dialog.showMessageBox(mainWindow ?? undefined!, {
-      type: 'warning',
-      title: 'macOS folder access denied',
-      message: 'Cindy cannot access your ' + kind + ' folder',
-      detail:
-        'macOS denied access silently. Open System Settings to grant permission, then re-run your agent command.',
-      buttons: ['Open System Settings', 'Cancel'],
+  private async showFolderEpermGuidance(kind: ProtectedFolderKind): Promise<void> {
+    const folderName = t(`fileAccess.epermGuidance.folderNames.${kind.toLowerCase()}`);
+    const options = {
+      type: 'warning' as const,
+      title: t('fileAccess.epermGuidance.title'),
+      message: t('fileAccess.epermGuidance.message').replace('{{folder}}', folderName),
+      detail: t('fileAccess.epermGuidance.detail'),
+      buttons: [
+        t('fileAccess.epermGuidance.openSystemSettings'),
+        t('fileAccess.epermGuidance.cancel'),
+      ],
       defaultId: 0,
       cancelId: 1,
-    });
+    };
+    const mainWindow = this.deps.getMainWindow();
+    const result = mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
     if (result.response === 0) {
       await openFolderPrivacySettings(kind);
     }
   }
 
-    private ensureMetadata(sessionId: string): void {
+  private ensureMetadata(sessionId: string): void {
     const cached = this.metadataCache.get(sessionId);
     if (this.metadataLoading.has(sessionId) || (cached && !isPlaceholderSessionTitle(cached.title))) return;
     this.metadataLoading.add(sessionId);

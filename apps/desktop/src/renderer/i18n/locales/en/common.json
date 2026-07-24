@@ -6823,5 +6823,19 @@
       "codexStateSkipped": "Codex has not been initialized on this machine, so session state was not fully restored. Run any Codex session once, then continuing will work.",
       "workdirKeyInexact": "The chosen directory path is too long to place transcripts; downgraded to chat history only."
     }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS folder access denied",
+      "message": "Cindy cannot access your {{folder}} folder",
+      "detail": "macOS denied access. Open System Settings to grant permission, then run your agent command again.",
+      "openSystemSettings": "Open System Settings",
+      "cancel": "Cancel",
+      "folderNames": {
+        "desktop": "Desktop",
+        "documents": "Documents",
+        "downloads": "Downloads"
+      }
+    }
   }
 }

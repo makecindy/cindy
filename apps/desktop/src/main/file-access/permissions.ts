@@ -25,32 +25,42 @@ const TCC_SETTINGS_URLS: Record<ProtectedFolderKind, string> = {
 
 const EPERM_PATTERNS = /operation not permitted|eperm/i;
 
-/** Returns the folder kind if the text contains EPERM + a protected path. */
-export function detectProtectedFolderEperm(text: string): ProtectedFolderKind | null {
-  if (!EPERM_PATTERNS.test(text)) return null;
+/** Returns the folder kind if a macOS tool result contains EPERM + a protected path. */
+export function detectProtectedFolderEperm(
+  text: string,
+  platform: NodeJS.Platform = process.platform,
+): ProtectedFolderKind | null {
+  if (platform !== 'darwin' || !EPERM_PATTERNS.test(text)) return null;
   for (const [kind, folderPath] of Object.entries(PROTECTED_PATHS) as [ProtectedFolderKind, string][]) {
     if (text.includes(folderPath)) return kind;
   }
   return null;
 }
 
+// Shared across agent sessions for this app process. Restarting the app resets it.
 const guidanceShownFor = new Set<ProtectedFolderKind>();
 
-/** Opens the macOS System Settings panel for the given protected folder. */
-export async function openFolderPrivacySettings(kind: ProtectedFolderKind): Promise<void> {
+/** Opens the matching macOS System Settings panel. Does nothing on other platforms. */
+export async function openFolderPrivacySettings(
+  kind: ProtectedFolderKind,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  if (platform !== 'darwin') return;
   const url = TCC_SETTINGS_URLS[kind];
   log.info('opening folder privacy settings', { kind, url });
   await shell.openExternal(url);
 }
 
-/**
- * Shows guidance once per folder kind per app session.
- * Returns true if guidance was shown, false if already shown.
- */
+/** Reserves the process-lifetime guidance slot for a folder kind. */
 export function shouldShowEpermGuidance(kind: ProtectedFolderKind): boolean {
   if (guidanceShownFor.has(kind)) return false;
   guidanceShownFor.add(kind);
   return true;
+}
+
+/** Allows a retry when the native dialog failed before it could be shown. */
+export function releaseEpermGuidance(kind: ProtectedFolderKind): void {
+  guidanceShownFor.delete(kind);
 }
 
 export function resetEpermGuidanceForTest(): void {
