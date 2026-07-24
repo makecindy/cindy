@@ -68,13 +68,14 @@ const bridgeLastEmit = new Map<string, number>();
 export function reportProviderUpstreamError(params: {
   agent: AgentKind;
   providerId: string;
+  providerName?: string;
   status: number;
   bodyText: string;
   now?: () => number;
 }): void {
   const now = params.now ?? Date.now;
   const cls = classifyProviderError({ status: params.status, bodyText: params.bodyText });
-  const key = `${params.providerId}:${cls.code}`;
+  const key = `${params.agent}:${params.providerId}:${cls.code}`;
   const t = now();
   const prev = bridgeLastEmit.get(key);
   if (prev !== undefined && t - prev < THROTTLE_MS) return;
@@ -82,6 +83,7 @@ export function reportProviderUpstreamError(params: {
   _broadcast({
     agent: params.agent,
     providerId: params.providerId,
+    providerName: params.providerName ?? params.providerId,
     code: cls.code,
     retryable: cls.retryable,
     status: params.status,

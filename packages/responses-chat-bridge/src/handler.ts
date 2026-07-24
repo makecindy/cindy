@@ -230,9 +230,6 @@ export function createResponsesChatHandler(
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          if (buffer.length > MAX_SSE_BUFFER_CHARS && !buffer.includes('\n')) {
-            throw new Error('upstream SSE line exceeds 1 MiB');
-          }
           let start = 0;
           let newline: number;
           while ((newline = buffer.indexOf('\n', start)) >= 0) {
@@ -242,6 +239,9 @@ export function createResponsesChatHandler(
             parseDataPayload(line.slice(5).trim());
           }
           if (start > 0) buffer = buffer.slice(start);
+          if (buffer.length > MAX_SSE_BUFFER_CHARS) {
+            throw new Error('upstream SSE line exceeds 1 MiB');
+          }
         }
         buffer += decoder.decode();
         if (buffer.trim()) {

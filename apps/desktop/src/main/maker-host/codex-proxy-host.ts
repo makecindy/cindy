@@ -216,9 +216,10 @@ function createChatBridgeDecision(
   // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
   // (与 observer 的 user-only 语义一致)。
   const providerId = route.providerId;
+  const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
-        reportProviderUpstreamError({ agent: 'codex', providerId, status, bodyText: body });
+        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
       }
     : undefined;
   const handler = createResponsesChatHandler({

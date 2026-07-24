@@ -640,9 +640,10 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
         const n = h.name.trim();
         if (n) headers[n] = h.value.trim();
       }
+      const defaultProtocol = a === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
-        wireProtocol: rf.wireProtocol,
+        ...(rf.wireProtocol !== defaultProtocol ? { wireProtocol: rf.wireProtocol } : {}),
         models,
         ...(Object.keys(headers).length > 0 ? { headers } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
