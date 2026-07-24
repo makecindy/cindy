@@ -187,6 +187,12 @@
   [data-theme='cindy-dark'][data-splash-active] .bg-content-area {
     background: transparent;
   }
+
+  html[data-computer-permission-overlay='true'],
+  html[data-computer-permission-overlay='true'] body,
+  html[data-computer-permission-overlay='true'] #root {
+    background: transparent;
+  }
 }
 
 /* 按 <html lang> 切换 CJK 字体栈 —— 同一汉字在中/日/韩字体中字形不同

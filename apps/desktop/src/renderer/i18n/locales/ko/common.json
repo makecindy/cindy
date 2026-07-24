@@ -1697,6 +1697,15 @@
       "directControl": {
         "title": "자동 조작 컴퓨터",
         "description": "에이전트가 창을 검사하고 UI를 읽고 클릭하거나 입력할 수 있습니다",
+        "status": {
+          "ready": "사용할 수 있음",
+          "needsPermission": "시스템 권한 필요",
+          "notInstalled": "드라이버가 설치되지 않음",
+          "disabled": "꺼짐",
+          "checking": "권한 확인 중…",
+          "setup": "권한 설정",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "컴퓨터 직접 제어 전환",
         "driverInfo": "컴퓨터 자동 조작은 오픈 소스 CUA Driver로 제공됩니다. 로컬에서 실행되어 화면을 읽고 클릭, 입력 등의 작업을 수행합니다.",
         "openSourceProject": "오픈 소스 프로젝트 보기",
@@ -1714,14 +1723,25 @@
           "cancel": "나중에"
         },
         "permissionGuide": {
-          "title": "시스템 권한 허용 대기 중",
-          "description": "시스템 설정에서 CuaDriver에 아래 권한을 허용해 주세요(권한 목록에서 왼쪽 아이콘과 같은 앱을 찾으세요). 모두 허용되면 자동으로 계속됩니다.",
-          "waiting": "허용 대기"
+          "waiting": "켜기 대기",
+          "step": "컴퓨터 자동화 켜기",
+          "completeEyebrow": "권한 설정 완료",
+          "dragTitle": "CuaDriver를 {{permission}}으로 드래그",
+          "turnOnAppTitle": "{{permission}}에서 CuaDriver 켜기",
+          "dragHint": "드래그",
+          "draggingTitle": "CuaDriver 드래그 중",
+          "draggingHint": "{{permission}} 목록에 놓으세요",
+          "appName": "CuaDriver",
+          "turnOnTitle": "{{permission}} 켜기",
+          "turnOnDescription": "시스템 설정에서 이 권한을 켜세요. Cindy가 자동으로 계속합니다.",
+          "readyTitle": "Computer Use 준비 완료",
+          "readyDescription": "이제 요청할 때 Cindy가 이 컴퓨터를 조작할 수 있습니다."
         },
         "permissions": {
-          "macosHint": "macOS에서는 Cua Driver에 손쉬운 사용 및 화면 기록 기본 권한이 필요합니다. 실제 사용 중에는 대상 앱이나 특정 동작에 대해 추가 확인이 표시될 수 있습니다.",
-          "accessibilityLabel": "CuaDriver 손쉬운 사용",
-          "screenRecordingLabel": "CuaDriver 화면 기록",
+          "title": "시스템 권한",
+          "macosHint": "컴퓨터 사용에는 손쉬운 사용 및 화면 기록 권한이 필요합니다. 실제 사용 중에는 대상 앱이나 동작에 대한 추가 확인이 표시될 수 있습니다.",
+          "accessibilityLabel": "손쉬운 사용",
+          "screenRecordingLabel": "화면 기록",
           "grant": "허용",
           "accessibility": "손쉬운 사용: {{status}}",
           "screenRecording": "화면 기록: {{status}}",
@@ -1733,6 +1753,8 @@
           "openAccessibility": "손쉬운 사용 설정 열기",
           "openScreenRecording": "화면 기록 설정 열기",
           "recheck": "다시 확인",
+          "moreDetails": "자세한 설명",
+          "hideDetails": "설명 접기",
           "windowsHint": "Windows에서는 추가 시스템 권한이 필요하지 않습니다. 에이전트가 작업하는 동안 대상 앱을 현재 활성 데스크톱에 보이도록 유지하세요.",
           "linuxHint": "Linux에서는 macOS TCC 권한을 사용하지 않습니다. 현재 데스크톱 세션에서 창 검사와 입력 자동화가 허용되는지 확인하세요."
         },
@@ -1755,9 +1777,10 @@
           "disabled": "컴퓨터 직접 제어 비활성화됨",
           "toggleFailed": "컴퓨터 직접 제어 전환 실패",
           "installFailed": "cua-driver 설치 실패",
-          "permissionFailed": "cua-driver 권한 부여가 완료되지 않았습니다",
-          "permissionPending": "Cua Driver 시스템 권한을 완료하면 여기에서 자동으로 활성화됩니다",
+          "permissionFailed": "컴퓨터 사용 권한이 완료되지 않았습니다",
+          "permissionPending": "두 시스템 권한을 허용한 후 여기로 돌아와 다시 확인을 누르세요",
           "permissionSettingsOpened": "시스템 권한 설정을 열었습니다. 권한 부여를 마친 뒤 여기로 돌아와 \"다시 확인\"을 눌러 주세요.",
+          "permissionSettingsMonitoring": "시스템 권한 설정을 열었습니다. 권한 부여를 마치면 상태가 자동으로 업데이트됩니다.",
           "openPermissionSettingsFailed": "시스템 권한 설정을 열지 못했습니다"
         }
       }

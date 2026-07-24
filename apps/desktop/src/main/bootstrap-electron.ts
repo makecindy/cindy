@@ -36,6 +36,7 @@ import {
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
 } from './devStartupStatus';
+import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -5424,6 +5425,10 @@ app.on('ready', async () => {
   // 端点清单已就绪、IPC 已注册,此后 second-instance / activate 允许按需建窗。
   startupWindowCreationAllowed = true;
   createWindow();
+  // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
+  setTimeout(() => {
+    prewarmMacComputerPermissionGuideHelper();
+  }, 3_000);
   initUpdateService();
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
   initHeartbeatService();

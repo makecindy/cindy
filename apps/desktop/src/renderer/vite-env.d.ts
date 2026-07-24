@@ -247,8 +247,10 @@ interface ComputerDriverStatus {
 interface ComputerDriverStatusOptions {
   includeDoctor?: boolean;
   forcePermissionProbe?: boolean;
+  skipPermissionProbe?: boolean;
   freshPermissionProbe?: boolean;
   bypassPermissionProbeCache?: boolean;
+  passivePermissionProbeOnly?: boolean;
 }
 
 type ComputerDriverPermissionPlatform = 'macos' | 'windows' | 'linux' | 'unsupported';
@@ -4331,9 +4333,19 @@ interface ElectronAPI {
     computer: {
       status: (options?: ComputerDriverStatusOptions) => Promise<ComputerDriverStatus>;
       installDriver: () => Promise<ComputerDriverInstallResult>;
-      grantPermissions: () => Promise<ComputerDriverPermissionGrantResult>;
+      grantPermissions: (options?: {
+        showGuide?: boolean;
+        initialStatus?: ComputerDriverStatus;
+        openedPaneUrl?: string;
+      }) => Promise<ComputerDriverPermissionGrantResult>;
       driverIcon: () => Promise<{ iconDataUrl: string | null }>;
+      startPermissionAppDrag: (iconDataUrl: string) => void;
+      finishPermissionAppDrag: () => void;
       cancelPermissionGrant: () => Promise<{ cancelled: boolean }>;
+      onPermissionGuideCancelled: (callback: () => void) => () => void;
+      onPermissionGuideStatusChanged: (
+        callback: (status: ComputerDriverStatus) => void,
+      ) => () => void;
       checkUpdate: () => Promise<ComputerDriverUpdateCheck>;
       updateDriver: (opts?: { joinOnly?: boolean }) => Promise<ComputerDriverInstallResult>;
       onUpdateProgress: (

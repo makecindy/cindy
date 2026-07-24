@@ -64,8 +64,19 @@ import {
   getComputerDriverStatus,
   grantComputerDriverPermissions,
   installComputerDriver,
+  pauseComputerDriverPermissionProbe,
   updateComputerDriver,
 } from '../mcp-integrations/computer.js';
+import {
+  closeComputerPermissionGuideWindow,
+  finishComputerPermissionAppDrag,
+  openComputerPermissionPaneForStatus,
+  isComputerPermissionGuideWebContents,
+  refreshComputerPermissionGuideWindow,
+  seedOpenedPermissionPane,
+  showComputerPermissionGuideWindow,
+  startComputerPermissionAppDrag,
+} from '../computer-permission-guide/window.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -6922,15 +6933,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   });
 
   // ── Local desktop computer-use (Settings →「电脑使用」) ─────────────────
-  // Probe external driver availability. Read-only and side-effect-free.
+  // Probe the installed CuaDriver used by the phase-one Computer Use runtime.
   ipcMain.handle(MAKER_INVOKE.COMPUTER_STATUS, async (_event, options?: {
     includeDoctor?: boolean;
     forcePermissionProbe?: boolean;
+    skipPermissionProbe?: boolean;
     freshPermissionProbe?: boolean;
     bypassPermissionProbeCache?: boolean;
+    passivePermissionProbeOnly?: boolean;
   }) => {
     try {
-      return await getComputerDriverStatus(options);
+      const status = await getComputerDriverStatus(options);
+      if (
+        options?.forcePermissionProbe === true
+        || options?.freshPermissionProbe === true
+      ) {
+        refreshComputerPermissionGuideWindow(status);
+      }
+      return status;
     } catch (err) {
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
@@ -6944,23 +6964,68 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
   });
 
-  ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS, async () => {
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS, async (_event, options?: {
+    showGuide?: boolean;
+    initialStatus?: Awaited<ReturnType<typeof getComputerDriverStatus>>;
+    openedPaneUrl?: string;
+  }) => {
+    const shouldShowGuide = process.platform === 'darwin' && options?.showGuide === true;
     try {
-      return await grantComputerDriverPermissions();
+      const initialStatus = options?.initialStatus
+        ?? (shouldShowGuide
+          ? await getComputerDriverStatus({ skipPermissionProbe: true })
+          : undefined);
+      if (shouldShowGuide) {
+        if (!initialStatus) throw new Error('Computer Use permission guide status unavailable');
+        if (options?.openedPaneUrl) {
+          seedOpenedPermissionPane(options.openedPaneUrl);
+        }
+        await openComputerPermissionPaneForStatus(initialStatus);
+        // Phase one keeps CuaDriver as the real permission/runtime identity.
+        // The new guide wraps its existing grant flow without introducing a
+        // second Computer Use.app entry in macOS privacy settings.
+        await pauseComputerDriverPermissionProbe();
+        await showComputerPermissionGuideWindow(
+          BrowserWindow.fromWebContents(_event.sender),
+          initialStatus,
+        );
+      }
+      return await grantComputerDriverPermissions(
+        initialStatus,
+      );
     } catch (err) {
+      if (shouldShowGuide) closeComputerPermissionGuideWindow();
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
   });
 
-  // 查询型:授权引导弹窗的 CuaDriver 图标。取不到(未装 app bundle / 非 macOS /
-  // 读图失败)返回 null,renderer 降级用通用图标继续渲染,不抛错。
+  // 查询型:授权引导弹窗的 CuaDriver 图标。取不到时 renderer 降级用通用图标。
   ipcMain.handle(MAKER_INVOKE.COMPUTER_DRIVER_ICON, async () => {
     return { iconDataUrl: await getComputerDriverAppIcon() };
   });
 
+  ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_START, (_event, payload?: {
+    iconDataUrl?: unknown;
+  }) => {
+    startComputerPermissionAppDrag(_event.sender, payload?.iconDataUrl);
+  });
+
+  ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_END, (_event) => {
+    finishComputerPermissionAppDrag(_event.sender);
+  });
+
   // 命令型:取消在途授权流程。幂等,无在途 grant 时 no-op。
-  ipcMain.handle(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT, async () => {
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT, async (_event) => {
+    const cancelledFromGuide = isComputerPermissionGuideWebContents(_event.sender);
     cancelComputerDriverPermissionGrant();
+    closeComputerPermissionGuideWindow();
+    if (cancelledFromGuide) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED);
+        }
+      }
+    }
     return { cancelled: true };
   });
 

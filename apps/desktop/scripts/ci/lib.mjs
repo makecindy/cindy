@@ -560,6 +560,7 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
   const resourceToolsDir = path.join(appPath, 'Contents', 'Resources', 'tools');
   if (fs.existsSync(resourceToolsDir)) {
     exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} {} \\;`);
   }
 
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
@@ -598,6 +599,8 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
   if (fs.existsSync(resourceToolsDir)) {
     console.log('    Signing bundled CLI tools in Contents/Resources/tools/...');
     exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    console.log('    Signing bundled resource app bundles...');
+    exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} {} \\;`);
   }
 
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)

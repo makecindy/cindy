@@ -1698,6 +1698,15 @@
       "directControl": {
         "title": "Computer automation",
         "description": "Let agents inspect windows, read UI, click, and type",
+        "status": {
+          "ready": "Ready to use",
+          "needsPermission": "Needs system access",
+          "notInstalled": "Driver not installed",
+          "disabled": "Turned off",
+          "checking": "Checking access…",
+          "setup": "Set up access",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "Toggle direct computer control",
         "driverInfo": "Computer automation is powered by the open-source CUA Driver. It runs locally to read the screen and perform actions such as clicking and typing.",
         "openSourceProject": "View open-source project",
@@ -1715,14 +1724,25 @@
           "cancel": "Not now"
         },
         "permissionGuide": {
-          "title": "Waiting for system permissions",
-          "description": "In System Settings, grant the permissions below to CuaDriver (look for the app matching the icon on the left). This will continue automatically once everything is granted.",
-          "waiting": "Pending"
+          "waiting": "Waiting for you",
+          "step": "Open computer automation",
+          "completeEyebrow": "Permissions complete",
+          "dragTitle": "Drag CuaDriver into {{permission}}",
+          "turnOnAppTitle": "Turn on CuaDriver in {{permission}}",
+          "dragHint": "Drag",
+          "draggingTitle": "Dragging CuaDriver",
+          "draggingHint": "Drop into {{permission}}",
+          "appName": "CuaDriver",
+          "turnOnTitle": "Turn on {{permission}}",
+          "turnOnDescription": "Turn on this permission in System Settings. Cindy will continue automatically.",
+          "readyTitle": "Computer Use is ready",
+          "readyDescription": "Cindy can now operate this computer when you ask."
         },
         "permissions": {
-          "macosHint": "macOS requires core Accessibility and Screen Recording permissions for Cua Driver. During actual use, the system may still show additional confirmations for a target app or a specific action.",
-          "accessibilityLabel": "CuaDriver Accessibility",
-          "screenRecordingLabel": "CuaDriver Screen Recording",
+          "title": "System access",
+          "macosHint": "Computer Use needs Accessibility and Screen Recording. During actual use, macOS may still show additional confirmations for a target app or action.",
+          "accessibilityLabel": "Accessibility",
+          "screenRecordingLabel": "Screen Recording",
           "grant": "Grant",
           "accessibility": "Accessibility: {{status}}",
           "screenRecording": "Screen Recording: {{status}}",
@@ -1734,6 +1754,8 @@
           "openAccessibility": "Open Accessibility settings",
           "openScreenRecording": "Open Screen Recording settings",
           "recheck": "Recheck",
+          "moreDetails": "More details",
+          "hideDetails": "Hide details",
           "windowsHint": "Windows does not require extra system permissions. Keep the target app visible on the active desktop while the agent works.",
           "linuxHint": "Linux does not use macOS TCC permissions; make sure the current desktop session allows window inspection and input automation."
         },
@@ -1756,9 +1778,10 @@
           "disabled": "Direct computer control disabled",
           "toggleFailed": "Failed to toggle direct computer control",
           "installFailed": "Failed to install cua-driver",
-          "permissionFailed": "cua-driver permissions are not complete",
-          "permissionPending": "Finish Cua Driver system permissions and this will enable automatically",
+          "permissionFailed": "Computer Use permissions are not complete",
+          "permissionPending": "Finish the two system permissions, then return here and click Recheck",
           "permissionSettingsOpened": "System permission settings opened. After granting, come back and click \"Recheck\".",
+          "permissionSettingsMonitoring": "System permission settings opened. Finish the permissions and the status will update automatically.",
           "openPermissionSettingsFailed": "Failed to open system permission settings"
         }
       }

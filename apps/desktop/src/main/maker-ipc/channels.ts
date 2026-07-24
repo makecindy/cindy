@@ -546,6 +546,13 @@ export const MAKER_INVOKE = {
  */
 export const MAKER_SEND = {
   /**
+   * macOS permission coach: begin/end a native drag of the real Computer Use
+   * app bundle into System Settings. Main validates that the sender is the
+   * dedicated guide window before acting.
+   */
+  COMPUTER_PERMISSION_APP_DRAG_START: 'maker:computer:permission-app-drag-start',
+  COMPUTER_PERMISSION_APP_DRAG_END: 'maker:computer:permission-app-drag-end',
+  /**
    * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / fastModeByModel /
    * effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
    * worker (enableOrcaInternal / orca-bridge.create_worker) 读这份缓存决定 worker
@@ -580,6 +587,10 @@ export const MAKER_SEND = {
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
   STATUS_CHANGED: 'maker:status-changed',
+  /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
+  COMPUTER_PERMISSION_GUIDE_CANCELLED: 'maker:computer:permission-guide-cancelled',
+  /** Native Computer Use onboarding status changed while System Settings is open. */
+  COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED: 'maker:computer:permission-guide-status-changed',
   INPUT_PROJECTION: 'maker:input:projection',
   /** New interaction request (permission / ask_user_question / plan_review) */
   INTERACTION_REQUEST: 'maker:interaction-request',
