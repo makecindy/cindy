@@ -104,9 +104,7 @@ export function PlanChangeTargetDialog({
                 <div className="grid size-11 place-items-center rounded-full bg-[var(--surface-chip)]">
                   <PackageOpen size={22} />
                 </div>
-                <p className="mt-4 text-sm font-medium">
-                  {t('billing.planChange.emptyTitle')}
-                </p>
+                <p className="mt-4 text-sm font-medium">{t('billing.planChange.emptyTitle')}</p>
                 <p className="mt-1 text-12 text-[var(--text-secondary)]">
                   {t('billing.planChange.emptyDescription')}
                 </p>
@@ -237,6 +235,8 @@ export function PlanChangeStatusDialog({
         return t('billing.planChange.quoteTitle');
       case 'CONFIRMING':
         return t('billing.planChange.confirmingTitle');
+      case 'PENDING_PROVIDER':
+        return t('billing.planChange.pendingProviderTitle');
       case 'AWAITING_PAYMENT':
         return t('billing.planChange.awaitingTitle');
       case 'SCHEDULED':
@@ -307,6 +307,15 @@ export function PlanChangeStatusDialog({
                   {state.phase === 'QUOTING'
                     ? t('billing.planChange.quotingBody')
                     : t('billing.planChange.confirmingBody')}
+                </p>
+              </>
+            )}
+
+            {state.phase === 'PENDING_PROVIDER' && (
+              <>
+                <Spinner icon={LoaderCircle} size={28} className="text-[var(--text-secondary)]" />
+                <p className="mt-4 max-w-[400px] text-sm text-[var(--text-secondary)]">
+                  {t('billing.planChange.pendingProviderBody')}
                 </p>
               </>
             )}
@@ -453,6 +462,7 @@ export function PlanChangeStatusDialog({
             </div>
             <div className="flex items-center gap-2">
               {(state.phase === 'AWAITING_PAYMENT' ||
+                state.phase === 'PENDING_PROVIDER' ||
                 (state.phase === 'QUOTE_READY' && state.stale)) && (
                 <button
                   type="button"
@@ -465,7 +475,7 @@ export function PlanChangeStatusDialog({
               )}
               {/* A stale snapshot must never be confirmable; the refresh action
                   above (plus background polling) re-reads the server first. */}
-              {state.phase === 'QUOTE_READY' && !state.stale && (
+              {state.phase === 'QUOTE_READY' && change?.status === 'QUOTED' && !state.stale && (
                 <button
                   type="button"
                   onClick={onConfirm}

@@ -75,4 +75,32 @@ describe('PlanChangeStatusDialog stale snapshot handling', () => {
     fireEvent.click(screen.getByText('billing.actions.refresh'));
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+
+  it('shows provider-pending progress without offering another confirm', () => {
+    const onRefresh = vi.fn();
+    render(
+      <PlanChangeStatusDialog
+        state={quoteReadyState({
+          phase: 'PENDING_PROVIDER',
+          planChange: {
+            ...quoteReadyState().planChange!,
+            status: 'PENDING_PROVIDER',
+          },
+        })}
+        targetName={null}
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+        onRefresh={onRefresh}
+        onAbandon={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('billing.planChange.pendingProviderTitle')).toBeTruthy();
+    expect(screen.getByText('billing.planChange.pendingProviderBody')).toBeTruthy();
+    expect(screen.queryByText('billing.planChange.confirm')).toBeNull();
+    expect(screen.queryByText('billing.planChange.abandon')).toBeNull();
+
+    fireEvent.click(screen.getByText('billing.actions.refresh'));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
 });

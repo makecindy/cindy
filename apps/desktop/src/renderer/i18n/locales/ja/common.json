@@ -7009,6 +7009,8 @@
       "quoteTitle": "プラン変更の確認",
       "confirmingTitle": "変更を送信中",
       "confirmingBody": "プラン変更をサーバーに送信しています…",
+      "pendingProviderTitle": "プラン変更を処理中",
+      "pendingProviderBody": "決済プロバイダーが変更を処理しています。Cindy が結果を確認し続けます…",
       "awaitingTitle": "差額のお支払い",
       "scheduledTitle": "ダウングレードを予約しました",
       "scheduledBody": "新しいプランは {{date}} に適用されます。それまで現在のプランが継続します。",

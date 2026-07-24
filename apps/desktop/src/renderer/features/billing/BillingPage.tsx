@@ -492,7 +492,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     planChange.close();
     // Leaving an open change mid-flow: re-sync the pending projection so the
     // banner reflects what is still open on the server.
-    if (phase === 'QUOTE_READY' || phase === 'AWAITING_PAYMENT') void loadSubscription();
+    if (phase === 'QUOTE_READY' || phase === 'PENDING_PROVIDER' || phase === 'AWAITING_PAYMENT')
+      void loadSubscription();
   };
 
   return (

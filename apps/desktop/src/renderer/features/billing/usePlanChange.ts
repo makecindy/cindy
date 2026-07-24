@@ -19,6 +19,7 @@ export type PlanChangePhase =
   | 'QUOTING'
   | 'QUOTE_READY'
   | 'CONFIRMING'
+  | 'PENDING_PROVIDER'
   | 'AWAITING_PAYMENT'
   | 'SCHEDULED'
   | 'APPLIED'
@@ -59,8 +60,9 @@ const INITIAL_STATE: PlanChangeState = {
 function phaseForPlanChange(change: BillingPlanChange): PlanChangePhase {
   switch (change.status) {
     case 'QUOTED':
-    case 'PENDING_PROVIDER':
       return 'QUOTE_READY';
+    case 'PENDING_PROVIDER':
+      return 'PENDING_PROVIDER';
     case 'AWAITING_PAYMENT':
       return 'AWAITING_PAYMENT';
     case 'SCHEDULED':
@@ -213,7 +215,8 @@ export function usePlanChange(
 
   const confirm = useCallback(async () => {
     const current = stateRef.current;
-    if (!current.planChange || inFlightRef.current) return;
+    if (!current.planChange || current.planChange.status !== 'QUOTED' || inFlightRef.current)
+      return;
     const change = current.planChange;
     setState((value) => ({ ...value, phase: 'CONFIRMING', error: false }));
     await withRequestLock(async () => {
@@ -315,7 +318,10 @@ export function usePlanChange(
             // The catalog-side target label is rebuilt from the server pending
             // projection when present; a bare refresh keeps it unknown.
             targetPlan: null,
-            open: phase === 'AWAITING_PAYMENT' || phase === 'QUOTE_READY',
+            open:
+              phase === 'AWAITING_PAYMENT' ||
+              phase === 'PENDING_PROVIDER' ||
+              phase === 'QUOTE_READY',
           });
           if (isSettledPhase(phase)) persistIntent(null);
         } catch {
@@ -337,7 +343,11 @@ export function usePlanChange(
     // Poll while waiting for a payment, and also while showing a stale
     // snapshot so the dialog resynchronizes on its own once the server is
     // reachable again.
-    if (!state.open || (state.phase !== 'AWAITING_PAYMENT' && !state.stale)) return;
+    if (
+      !state.open ||
+      (state.phase !== 'AWAITING_PAYMENT' && state.phase !== 'PENDING_PROVIDER' && !state.stale)
+    )
+      return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, 3_000);

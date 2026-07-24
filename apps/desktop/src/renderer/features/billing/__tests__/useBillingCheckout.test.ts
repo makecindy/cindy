@@ -258,6 +258,46 @@ describe('billing checkout phase projection', () => {
     expect(readBillingCheckoutIntent(ACCOUNT_ID)).toEqual(intent);
   });
 
+  it('accepts a terminal same-subscription result after its purchase attempt is cleared', async () => {
+    const intent = {
+      version: 1 as const,
+      kind: 'SUBSCRIPTION' as const,
+      idempotencyKey: 'desktop:subscription:completed-intent',
+      request: {
+        offerCode: 'plus_month',
+        purchaseOptionId: 'listing_alipay',
+      },
+      subscriptionId: 'subscription_expected',
+      purchaseAttemptId: 'purchase_expected',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+    const completed = {
+      subscriptionId: 'subscription_expected',
+      status: 'ACTIVE' as const,
+      currentPeriodStartAt: '2026-01-01T00:00:00.000Z',
+      currentPeriodEndAt: '2026-02-01T00:00:00.000Z',
+      entitlementValidUntil: '2026-02-01T00:00:00.000Z',
+      cancelAtPeriodEnd: false,
+      effectivePlan: null,
+      purchaseAttemptId: null,
+      paymentAction: null,
+    };
+    writeBillingCheckoutIntent(ACCOUNT_ID, intent);
+    api.getCurrentSubscription.mockResolvedValue({ subscription: completed });
+    api.refreshSubscriptionPurchase.mockResolvedValue(completed);
+
+    const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
+    await waitFor(() => expect(result.current.recovering).toBe(false));
+
+    expect(api.refreshSubscriptionPurchase).toHaveBeenCalledWith('purchase_expected');
+    expect(result.current.state).toMatchObject({
+      phase: 'COMPLETED',
+      subscription: completed,
+      error: false,
+    });
+    expect(readBillingCheckoutIntent(ACCOUNT_ID)).toBeNull();
+  });
+
   it('keeps an unresolved persisted purchase retryable when recovery fails', async () => {
     const intent = {
       version: 1 as const,

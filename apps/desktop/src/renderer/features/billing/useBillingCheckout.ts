@@ -98,8 +98,14 @@ function matchesSubscriptionIntent(
   intent: Extract<BillingCheckoutIntentV1, { kind: 'SUBSCRIPTION' }>,
 ): boolean {
   if (intent.subscriptionId && subscription.subscriptionId !== intent.subscriptionId) return false;
-  if (intent.purchaseAttemptId && subscription.purchaseAttemptId !== intent.purchaseAttemptId)
-    return false;
+  if (intent.purchaseAttemptId && subscription.purchaseAttemptId !== intent.purchaseAttemptId) {
+    const terminalSameSubscription =
+      intent.subscriptionId !== null &&
+      subscription.subscriptionId === intent.subscriptionId &&
+      subscription.status !== 'INCOMPLETE' &&
+      subscription.purchaseAttemptId === null;
+    if (!terminalSameSubscription) return false;
+  }
   return true;
 }
 

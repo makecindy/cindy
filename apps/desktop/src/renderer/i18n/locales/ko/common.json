@@ -7009,6 +7009,8 @@
       "quoteTitle": "플랜 변경 확인",
       "confirmingTitle": "변경 제출 중",
       "confirmingBody": "플랜 변경을 서버에 제출하는 중…",
+      "pendingProviderTitle": "요금제 변경 처리 중",
+      "pendingProviderBody": "결제 제공업체에서 변경을 처리하고 있습니다. Cindy가 결과를 계속 확인합니다…",
       "awaitingTitle": "차액 결제",
       "scheduledTitle": "다운그레이드 예약됨",
       "scheduledBody": "새 플랜은 {{date}}에 적용됩니다. 그때까지 현재 플랜이 유지됩니다.",

@@ -7020,6 +7020,8 @@
       "quoteTitle": "Confirm plan change",
       "confirmingTitle": "Submitting plan change",
       "confirmingBody": "Submitting your plan change to the server…",
+      "pendingProviderTitle": "Processing plan change",
+      "pendingProviderBody": "The payment provider is processing this change. Cindy will keep checking the result…",
       "awaitingTitle": "Pay the difference",
       "scheduledTitle": "Downgrade scheduled",
       "scheduledBody": "The new plan takes effect on {{date}}. Your current plan stays active until then.",

@@ -129,6 +129,26 @@ describe('usePlanChange', () => {
     expect(api.refreshPlanChange).toHaveBeenCalledWith('plan_change_1');
   });
 
+  it('polls a provider-pending change without confirming it again', async () => {
+    const onSettled = vi.fn();
+    api.quotePlanChange.mockResolvedValue(change());
+    api.confirmPlanChange.mockResolvedValue(change({ status: 'PENDING_PROVIDER' }));
+    api.refreshPlanChange.mockResolvedValue(change({ status: 'APPLIED' }));
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, onSettled));
+
+    await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+    await act(() => result.current.confirm());
+    expect(result.current.state.phase).toBe('PENDING_PROVIDER');
+
+    await act(() => result.current.confirm());
+    expect(api.confirmPlanChange).toHaveBeenCalledTimes(1);
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(result.current.state.phase).toBe('APPLIED'));
+    expect(api.refreshPlanChange).toHaveBeenCalledWith('plan_change_1');
+    expect(onSettled).toHaveBeenCalledWith('APPLIED');
+  });
+
   it('schedules a downgrade and notifies so the pending banner can refresh', async () => {
     const onSettled = vi.fn();
     api.quotePlanChange.mockResolvedValue(
@@ -149,9 +169,7 @@ describe('usePlanChange', () => {
 
   it('cancels a scheduled downgrade (undo)', async () => {
     const onSettled = vi.fn();
-    api.cancelPlanChange.mockResolvedValue(
-      change({ changeType: 'DOWNGRADE', status: 'CANCELED' }),
-    );
+    api.cancelPlanChange.mockResolvedValue(change({ changeType: 'DOWNGRADE', status: 'CANCELED' }));
     const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, onSettled));
 
     await act(() => result.current.cancelChange('plan_change_1'));
@@ -324,7 +342,7 @@ describe('usePlanChange', () => {
     expect(api.refreshPlanChange).not.toHaveBeenCalled();
   });
 
-  it('never reads another account\'s intent', async () => {
+  it("never reads another account's intent", async () => {
     writeBillingPlanChangeIntent('other-account', {
       version: 1,
       targetOfferCode: 'max_month',

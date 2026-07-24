@@ -7009,6 +7009,8 @@
       "quoteTitle": "确认套餐变更",
       "confirmingTitle": "正在提交变更",
       "confirmingBody": "正在向服务端提交套餐变更…",
+      "pendingProviderTitle": "正在处理套餐变更",
+      "pendingProviderBody": "支付渠道正在处理本次变更，Cindy 会持续确认最新结果…",
       "awaitingTitle": "支付差价",
       "scheduledTitle": "降级已排期",
       "scheduledBody": "新套餐将于 {{date}} 生效,当前套餐在此之前保持不变。",
