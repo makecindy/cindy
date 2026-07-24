@@ -554,6 +554,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(voiceSource).toContain('|| voiceStopInFlightRef.current');
+    expect(voiceSource).toContain('resolveMobileVoiceRecordingPermission({');
+    expect(voiceSource).toContain('voiceStartupInFlightRef.current = true;');
     expect(voiceSource.indexOf('resolveMobileVoiceRecordingPermission({')).toBeLessThan(
       voiceSource.indexOf('voiceStartupInFlightRef.current = true;'),
     );

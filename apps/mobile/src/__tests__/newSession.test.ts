@@ -864,6 +864,8 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStartupSeqRef = useRef(0);');
     expect(newSource).toContain('|| voiceStopInFlightRef.current');
+    expect(newSource).toContain('resolveMobileVoiceRecordingPermission({');
+    expect(newSource).toContain('voiceStartupInFlightRef.current = true;');
     expect(newSource.indexOf('resolveMobileVoiceRecordingPermission({')).toBeLessThan(
       newSource.indexOf('voiceStartupInFlightRef.current = true;'),
     );

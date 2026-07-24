@@ -3378,7 +3378,7 @@ export default function SessionScreen() {
       permissionRequestAbortController = currentPermissionAbortController;
       voicePermissionRequestAbortRef.current = currentPermissionAbortController;
       voicePermissionRequestInFlightRef.current = true;
-      let permissionResult;
+      let permissionResult: Awaited<ReturnType<typeof resolveMobileVoiceRecordingPermission>>;
       try {
         permissionResult = await resolveMobileVoiceRecordingPermission({
           getPermission: getRecordingPermissionsAsync,
