@@ -15,8 +15,12 @@ describe('renderOrcaLeadSystemPrompt', () => {
     'Use create_worker only when the user explicitly asks to open one new worker, and use create_workers only when the user explicitly asks to open multiple new workers.';
   const missingWorkerBoundary =
     'If no existing worker matches a requested role or label, say so and ask whether to create one; do not silently substitute another worker or a native subagent.';
-  const asyncDispatchBoundary =
-    'A worker response is expected only when the tool result says a task was accepted or queued.';
+  const missingGenericWorkerBoundary =
+    'If the user assigns a task to a generic Orca Worker but no worker exists, say so and ask whether to create one; the assignment itself is not authorization to create it.';
+  const sendDispatchSignals =
+    'Treat send_to_worker as dispatched only when its payload has ok=true and wake_kind=resumed, already-active, or queued.';
+  const createDispatchSignals =
+    'Treat create_worker, and each created result from create_workers, as dispatched only when it has dispatched=true, a queued_message_id, or dispatch_outcome.kind=session-dispatch with dispatch_outcome.dispatched=true (including dispatch_outcome.wakeKind=queued).';
   const batchResultRule =
     'After create_workers returns, always relay user_report verbatim when present and summarize every per-item result or error.';
 
@@ -46,13 +50,14 @@ describe('renderOrcaLeadSystemPrompt', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(toolSurfaceRule);
-    expect(prompt).toContain(asyncDispatchBoundary);
+    expect(prompt).toContain(sendDispatchSignals);
+    expect(prompt).toContain(createDispatchSignals);
     expect(prompt).toContain(batchResultRule);
     expect(prompt).toContain(
-      'If at least one task was accepted or queued, end the turn immediately after that single batch report',
+      'If at least one result has the concrete dispatch signals above, end the turn immediately after that single batch report',
     );
     expect(prompt).toContain(
-      'If no task was accepted or queued, report the result and do not wait or poll.',
+      'Otherwise, report the result and do not wait or poll.',
     );
     expect(prompt).not.toContain(
       'After create_worker, create_workers, or send_to_worker returns, your turn is OVER.',
@@ -66,11 +71,12 @@ describe('renderOrcaLeadSystemPrompt', () => {
     const prompt = renderOrcaLeadSystemPrompt(null);
 
     expect(prompt).toContain(
-      'If create_worker or send_to_worker fails, or no task was accepted or queued, report the result immediately instead of ending silently.',
+      'If create_worker or send_to_worker fails or lacks those dispatch signals, report the result immediately instead of ending silently.',
     );
     expect(prompt).toContain(
-      'Silence is tied to an actual asynchronous dispatch, not merely to calling a tool.',
+      'Silence is tied to the concrete dispatch signals above, not merely to calling a tool.',
     );
+    expect(prompt).not.toContain('when the tool result says a task was accepted or queued');
   });
 
   it('distinguishes reuse from explicit worker creation and forbids silent fallback', () => {
@@ -78,6 +84,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
 
     expect(prompt).toContain(explicitCreationBoundary);
     expect(prompt).toContain(missingWorkerBoundary);
+    expect(prompt).toContain(missingGenericWorkerBoundary);
   });
 
   it('keeps Worker routing and disclosure rules when an initial worker exists', () => {

@@ -164,7 +164,9 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
    用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
    内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
-   `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。Codex
+   `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。
+   如果用户只泛称“Worker”且当前没有任何 Worker，Lead 同样必须先说明并询问是否创建；
+   任务指派本身不等于创建授权。Codex
    `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
    Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
    Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
@@ -179,12 +181,16 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
    的 `handleCollabAgentToolCall`。
 
 3. **只有真实异步派发才静默结束 turn（状态：不变量）**<br>
-   `create_worker`／`send_to_worker` 只有在工具结果明确表示任务已 accepted／queued 时，
-   Lead 才能零输出结束当前 turn；工具失败、只创建 Worker 而没有首任务，或首任务未派发时，
-   必须立即向用户报告真实结果，不能等待一个不会到来的 Worker 回报。`create_workers`
-   每次返回都必须先转告 `user_report`（若存在）并汇总逐项终态；若至少一个任务已
-   accepted／queued，报告后立即结束 turn 且不再调用工具，否则报告结果后等待用户决定，
-   不 sleep、不 poll。实现指针：
+   `send_to_worker` 只有返回 `ok=true` 且 `wake_kind` 为 `resumed`／`already-active`／
+   `queued` 时才算真实派发。`create_worker` 及 `create_workers` 的每个 created 结果，
+   只有 `dispatched=true`、存在 `queued_message_id`，或
+   `dispatch_outcome.kind=session-dispatch` 且 `dispatch_outcome.dispatched=true`
+   （包括 `dispatch_outcome.wakeKind=queued`）时才算真实派发。Lead 只能据这些具体信号
+   零输出结束当前 turn；工具失败、只创建 Worker 而没有首任务，或首任务未派发时，必须
+   立即向用户报告真实结果，不能等待一个不会到来的 Worker 回报。`create_workers` 每次
+   返回都必须先转告 `user_report`（若存在）并汇总逐项终态；若至少一个结果满足上述
+   派发信号，报告后立即结束 turn 且不再调用工具，否则报告结果后等待用户决定，不
+   sleep、不 poll。实现指针：
    `packages/orca-workflow/src/orca-bridge-prompt.ts` 的
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
