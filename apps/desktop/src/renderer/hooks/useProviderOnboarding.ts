@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { useProviders } from '@/hooks/useProviders';
+import { subscribeProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import type { LocalCliDetection } from '../../shared/localCliDetect';
 import {
@@ -28,6 +29,14 @@ import {
   resetProviderOnboardingDismissal,
   subscribeProviderOnboardingDismissal,
 } from '@/state/providerOnboardingDismissal';
+
+// 模块级订阅:任一供应商连上即清 dismiss,不依赖引导 UI 是否挂载——用户在设置页
+// 连上又断开、期间从未回到首屏/会话视图时,dismiss 也必须被清,否则回到零连接后
+// 引导永远不再出现(Codex P1,2026-07-24)。与 hook 内 effect 并存:effect 覆盖
+// 挂载中的即时清理(含测试 mock 场景),此处覆盖未挂载窗口;reset 为幂等 no-op。
+subscribeProvidersSnapshot((providers) => {
+  if (providers.some((p) => p.connected)) resetProviderOnboardingDismissal();
+});
 
 /** 引导卡一行:内置渠道(OAuth)或 API-key 预设,统一由卡片渲染。 */
 export type ProviderOnboardingRow =

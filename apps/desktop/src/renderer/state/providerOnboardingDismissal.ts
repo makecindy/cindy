@@ -37,11 +37,14 @@ export function isProviderOnboardingDismissed(): boolean {
 }
 
 export function dismissProviderOnboarding(): void {
-  memoryDismissed = true;
   try {
     localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+    // 写成功则 storage 是唯一真值源,不置内存态——否则跨窗口 storage 事件
+    // 清掉 key 后,本窗口会因内存态永远判定 dismissed(review 反馈)。
+    memoryDismissed = false;
   } catch {
-    // localStorage 不可用 — 内存兜底已生效,本次会话内仍视为 dismissed
+    // localStorage 不可用 — 内存兜底,本次会话内仍视为 dismissed
+    memoryDismissed = true;
   }
   notify();
 }
