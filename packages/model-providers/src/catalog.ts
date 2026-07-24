@@ -329,9 +329,26 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
       out.push(normalizePresetModelsUrls(rest as ProviderPreset));
       continue;
     }
+    // nameEn 非法值(非非空字符串)同 regionHint 容错语义:剥字段不淘汰整条。
+    if (v.nameEn !== undefined && (typeof v.nameEn !== 'string' || v.nameEn.length === 0)) {
+      const { nameEn: _drop, ...rest } = v as ProviderPreset & { nameEn: unknown };
+      out.push(normalizePresetModelsUrls(rest as ProviderPreset));
+      continue;
+    }
     out.push(normalizePresetModelsUrls(v));
   }
   return out;
+}
+
+/**
+ * 预设展示名:中文 UI 用目录 `name`(国内厂商为中文原名),其它语言优先 `nameEn`
+ * (缺省回落 `name`)。纯呈现选择,不影响预设 id / 创建后的供应商命名语义。
+ */
+export function presetDisplayName(
+  preset: Pick<ProviderPreset, 'name' | 'nameEn'>,
+  locale: string,
+): string {
+  return locale.toLowerCase().startsWith('zh') ? preset.name : (preset.nameEn ?? preset.name);
 }
 
 /** 预设的厂商分组键：id 去掉区域后缀（`zhipu-glm-cn`/`zhipu-glm-global` → `zhipu-glm`）。 */

@@ -1287,7 +1287,7 @@
         "stepConnect": "接続",
         "stepModels": "モデルを選択",
         "searchPlaceholder": "プロバイダーを検索…",
-        "groupSubscription": "サブスクリプション認証 · 推奨、API キー不要",
+        "groupSubscription": "サブスクリプション認証 · おすすめ",
         "groupApiKey": "API キープロバイダー · プリセットはカタログと同期",
         "groupCustom": "カスタム",
         "metaOAuth": "サブスクリプション認証",
@@ -1312,7 +1312,9 @@
         "next": "次へ",
         "back": "← 戻る",
         "finish": "追加を完了",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "useApiKey": "API キーで接続する",
+        "metaOAuthOrApi": "サブスク認証 · API キー"
       }
     },
     "experimental": {
@@ -3901,7 +3903,7 @@
         "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます"
       },
       "othersToggle": "その他のプロバイダー({{count}})",
-      "presetSub": "API キーで接続",
+      "presetSub": "API キーを入力して接続",
       "dismiss": "あとで",
       "haveApiKey": "API キーを持っています",
       "banner": {
@@ -3909,7 +3911,9 @@
         "connectCta": "プロバイダーを接続",
         "loginCta": "Cindy にサインイン",
         "dismissAria": "閉じる"
-      }
+      },
+      "detectedLabel": "検出済み",
+      "oauthSub": "ブラウザで認証ページが開き、ログイン後に自動接続されます"
     }
   },
   "voiceInputOverlay": {

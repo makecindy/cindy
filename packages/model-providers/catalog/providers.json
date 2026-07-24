@@ -251,6 +251,7 @@
     {
       "id": "zhipu-glm-cn",
       "name": "智谱 GLM（中国大陆）",
+      "nameEn": "Zhipu GLM (China)",
       "docsUrl": "https://docs.bigmodel.cn/cn/guide/develop/claude",
       "regionHint": "cn",
       "runtimes": {
@@ -321,6 +322,7 @@
     {
       "id": "moonshot-kimi-cn",
       "name": "Kimi (Moonshot 中国大陆)",
+      "nameEn": "Kimi (Moonshot China)",
       "docsUrl": "https://platform.moonshot.cn/docs/guide/agent-support",
       "regionHint": "cn",
       "runtimes": {
@@ -417,6 +419,7 @@
     {
       "id": "moonshot-kimi-code",
       "name": "Kimi Code（编程计划包月）",
+      "nameEn": "Kimi Code (coding plan)",
       "docsUrl": "https://www.kimi.com/zh-cn/help/kimi-code/third-party-agents",
       "runtimes": {
         "claude-code": {
@@ -461,6 +464,7 @@
     {
       "id": "minimax-cn",
       "name": "MiniMax（中国大陆）",
+      "nameEn": "MiniMax (China)",
       "docsUrl": "https://platform.minimaxi.com/docs/api-reference/responses-create",
       "regionHint": "cn",
       "runtimes": {
@@ -531,6 +535,7 @@
     {
       "id": "aliyun-bailian-coding",
       "name": "阿里云百炼 Coding Plan（包月）",
+      "nameEn": "Alibaba Cloud Bailian Coding Plan",
       "docsUrl": "https://help.aliyun.com/zh/model-studio/coding-plan",
       "regionHint": "cn",
       "runtimes": {

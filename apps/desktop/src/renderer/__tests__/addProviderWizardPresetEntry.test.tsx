@@ -7,7 +7,7 @@
  *   2. presetId 在目录里不存在 → 回落目录第一步,不假装直达。
  */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -104,6 +104,29 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByPlaceholderText('sk-…')).not.toBeNull();
     // 不在目录步(搜索框只在 step 1)。
     expect(screen.queryByPlaceholderText('settings.providers.wizard.searchPlaceholder')).toBeNull();
+  });
+
+  it('OAuth 授权步提供「改用 API Key 接入」→ 切到官方 API 预设表单', async () => {
+    render(
+      React.createElement(AddProviderWizard, {
+        providers: [anthropicProvider],
+        entry: { kind: 'builtin' as const, providerId: 'anthropic' },
+        onOpenCustomForm: vi.fn(),
+        onClose: vi.fn(),
+        onDone: vi.fn(),
+      }),
+    );
+
+    // 授权步:有「授权」按钮与「改用 API Key」替代路径。
+    const useApiKey = await screen.findByText('settings.providers.wizard.useApiKey');
+    fireEvent.click(useApiKey);
+
+    // 切到官方 API 预设表单:名称预填 Anthropic API,baseUrl 展示官方端点。
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    expect(screen.getByDisplayValue('Anthropic API')).not.toBeNull();
+    expect(screen.getByText(/api\.anthropic\.com/)).not.toBeNull();
   });
 
   it('presetId 不存在 → 回落目录第一步', async () => {

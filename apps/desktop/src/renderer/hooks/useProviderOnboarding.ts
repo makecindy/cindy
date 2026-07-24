@@ -20,12 +20,24 @@ import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { useProviders } from '@/hooks/useProviders';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import type { LocalCliDetection } from '../../shared/localCliDetect';
 import {
   dismissProviderOnboarding,
   isProviderOnboardingDismissed,
   resetProviderOnboardingDismissal,
   subscribeProviderOnboardingDismissal,
 } from '@/state/providerOnboardingDismissal';
+
+/** 引导卡一行:内置渠道(OAuth)或 API-key 预设,统一由卡片渲染。 */
+export type ProviderOnboardingRow =
+  { kind: 'builtin'; provider: ProviderView } | { kind: 'preset'; preset: ProviderPreset };
+
+/** 本机 CLI 检测行:该渠道大概率是用户现有生态,置于全卡最顶(优先于推荐行)。 */
+export interface DetectedProviderRow {
+  provider: ProviderView;
+  detection: LocalCliDetection;
+}
 
 export interface UseProviderOnboardingReturn {
   /** 是否应展示引导:providers 已加载 && 零已连接来源 && 未被 dismiss。 */
@@ -35,10 +47,22 @@ export interface UseProviderOnboardingReturn {
   authMode: 'signed-out' | 'local' | 'cloud';
   /** Cindy AI 官方供应商(恒在目录中;仅卡片推荐行消费)。 */
   xdProvider: ProviderView | undefined;
-  /** 内置 OAuth 供应商行(anthropic → openai → xai,目录序)。 */
-  oauthProviders: ProviderView[];
-  /** 「其他供应商」折叠区的 API-key 预设(懒加载,失败为空数组)。 */
-  presets: ProviderPreset[];
+  /**
+   * 本机 CLI 检测行:**仅限已有登录态凭证**(installed && loggedIn)且对应渠道
+   * 未连接——有凭证才意味着一键授权大概率直接成功,配得上排在最顶(优先于
+   * Cindy 推荐行)。只安装未登录不置顶(装了 ≠ 有账号,2026-07-24 用户反馈),
+   * 该渠道回落为主列/折叠区的普通 OAuth 行。
+   */
+  detectedRows: DetectedProviderRow[];
+  /**
+   * 主列表行,按构建区域装配(CN 版首推海外订阅渠道不合理,2026-07-24 用户反馈):
+   *   - cn:regionHint=cn 的预设(智谱/Kimi/MiniMax/百炼…,最多 4 行;目录异常
+   *     取不到 cn 预设时回落 OAuth 行);Anthropic/OpenAI/xAI 收进折叠区。
+   *   - global:内置 OAuth 行(anthropic → openai → xai,目录序);预设收折叠区。
+   */
+  primaryRows: ProviderOnboardingRow[];
+  /** 「其他供应商」折叠区行(主列表之外的全部选项)。 */
+  moreRows: ProviderOnboardingRow[];
   dismiss: () => void;
 }
 
@@ -76,7 +100,8 @@ export function useProviderOnboarding(
     [providers],
   );
 
-  // 预设懒加载:仅在引导实际可见且调用方需要时拉取;失败静默空数组(折叠区整体不渲染)。
+  // 预设与本机 CLI 检测懒加载:仅在引导实际可见且调用方需要时拉取;失败静默空数组
+  // (折叠区/检测行是增强,不是依赖)。
   const wantPresets = Boolean(options?.loadPresets) && visible;
   const [rawPresets, setRawPresets] = useState<ProviderPreset[] | null>(null);
   useEffect(() => {
@@ -95,18 +120,85 @@ export function useProviderOnboarding(
     };
   }, [wantPresets, rawPresets]);
 
+  const [detections, setDetections] = useState<LocalCliDetection[] | null>(null);
+  useEffect(() => {
+    if (!wantPresets || detections != null) return;
+    let cancelled = false;
+    void window.electronAPI.maker
+      .scanLocalCli()
+      .then((r) => {
+        if (!cancelled) setDetections(r.detections);
+      })
+      .catch(() => {
+        if (!cancelled) setDetections([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantPresets, detections]);
+
+  const detectedRows = useMemo<DetectedProviderRow[]>(() => {
+    if (!detections) return [];
+    return detections
+      .filter((d) => d.installed && d.loggedIn)
+      .map((detection) => ({
+        detection,
+        provider: providers.find((p) => p.id === detection.providerId),
+      }))
+      .filter((r): r is DetectedProviderRow => !!r.provider && !r.provider.connected);
+  }, [detections, providers]);
+
   const presets = useMemo(
     () => (rawPresets ? sortPresetsForLocale(rawPresets, i18n.language) : []),
     [rawPresets, i18n.language],
   );
+
+  // 主列/折叠区装配(区域策略见 UseProviderOnboardingReturn.primaryRows 注释)。
+  // 已被检测行占位的渠道从两区剔除,不重复出现。
+  const { primaryRows, moreRows } = useMemo(() => {
+    const detectedIds = new Set(detectedRows.map((r) => r.provider.id));
+    const oauthRows: ProviderOnboardingRow[] = oauthProviders
+      .filter((p) => !detectedIds.has(p.id))
+      .map((provider) => ({
+        kind: 'builtin' as const,
+        provider,
+      }));
+    const presetRows: ProviderOnboardingRow[] = presets.map((preset) => ({
+      kind: 'preset',
+      preset,
+    }));
+    if (CURRENT_CINDY_REGION === 'cn') {
+      // presets 未落定(本地 IPC,毫秒级)前主列留空,避免先闪 OAuth 再换预设。
+      if (rawPresets == null) return { primaryRows: [], moreRows: [] };
+      const cnPresets = presetRows.filter(
+        (r) => r.kind === 'preset' && r.preset.regionHint === 'cn',
+      );
+      const primary = cnPresets.slice(0, 4);
+      if (primary.length === 0) {
+        // 目录异常(载入失败/无 cn 预设)兜底:退回 OAuth 主列,不留空列表。
+        return { primaryRows: oauthRows, moreRows: presetRows };
+      }
+      const inPrimary = new Set(primary.map((r) => (r.kind === 'preset' ? r.preset.id : '')));
+      return {
+        primaryRows: primary,
+        // 折叠区:OAuth 三家在前(知名度高),其余预设随后。
+        moreRows: [
+          ...oauthRows,
+          ...presetRows.filter((r) => r.kind === 'preset' && !inPrimary.has(r.preset.id)),
+        ],
+      };
+    }
+    return { primaryRows: oauthRows, moreRows: presetRows };
+  }, [oauthProviders, presets, rawPresets, detectedRows]);
 
   return {
     visible,
     loading,
     authMode: mode,
     xdProvider,
-    oauthProviders,
-    presets,
+    detectedRows,
+    primaryRows,
+    moreRows,
     dismiss: dismissProviderOnboarding,
   };
 }

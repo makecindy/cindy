@@ -1288,7 +1288,7 @@
         "stepConnect": "Connect",
         "stepModels": "Choose models",
         "searchPlaceholder": "Search providers…",
-        "groupSubscription": "Subscription sign-in · recommended, no API key",
+        "groupSubscription": "Subscription sign-in · recommended",
         "groupApiKey": "API key providers · presets update with the catalog",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription (OAuth)",
@@ -1313,7 +1313,9 @@
         "next": "Next",
         "back": "← Back",
         "finish": "Finish",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "useApiKey": "Use an API key instead",
+        "metaOAuthOrApi": "Subscription (OAuth) · API key"
       }
     },
     "experimental": {
@@ -3902,7 +3904,7 @@
         "loginDesc": "Sign in to enable the official Cindy AI service with access to all models"
       },
       "othersToggle": "Other providers ({{count}})",
-      "presetSub": "Connect with an API key",
+      "presetSub": "Paste an API key to connect",
       "dismiss": "Maybe later",
       "haveApiKey": "I have an API key",
       "banner": {
@@ -3910,7 +3912,9 @@
         "connectCta": "Connect a provider",
         "loginCta": "Sign in to Cindy",
         "dismissAria": "Dismiss"
-      }
+      },
+      "detectedLabel": "Detected",
+      "oauthSub": "Opens a verification page in your browser — connects automatically"
     }
   },
   "voiceInputOverlay": {

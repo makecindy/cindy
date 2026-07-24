@@ -17,9 +17,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { providersState, authState } = vi.hoisted(() => ({
+const { providersState, authState, regionState, detectState } = vi.hoisted(() => ({
   providersState: { providers: [] as unknown[], loading: false },
   authState: { mode: 'cloud' as string },
+  regionState: { value: 'global' as string },
+  detectState: { detections: [] as unknown[] },
+}));
+
+// 与 hook 内 `../../shared/brandRegion` 解析到同一模块(都落 src/shared/)。
+vi.mock('../../shared/brandRegion', () => ({
+  get CURRENT_CINDY_REGION() {
+    return regionState.value;
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -104,14 +113,29 @@ beforeEach(() => {
   providersState.providers = baseProviders;
   providersState.loading = false;
   authState.mode = 'cloud';
+  regionState.value = 'global';
+  detectState.detections = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      scanLocalCli: vi.fn(async () => ({ detections: detectState.detections })),
       listProviderPresets: vi.fn(async () => ({
         presets: [
           {
             id: 'deepseek',
             name: 'DeepSeek',
             runtimes: { 'claude-code': { baseUrl: 'https://x' } },
+          },
+          {
+            id: 'zhipu-glm-cn',
+            name: '智谱 GLM',
+            regionHint: 'cn',
+            runtimes: { 'claude-code': { baseUrl: 'https://y' } },
+          },
+          {
+            id: 'kimi-cn',
+            name: 'Kimi',
+            regionHint: 'cn',
+            runtimes: { 'claude-code': { baseUrl: 'https://z' } },
           },
         ],
       })),
@@ -126,7 +150,7 @@ afterEach(() => {
 });
 
 describe('ConnectProviderCard', () => {
-  it('零连接 → 渲染推荐行(Cindy AI)+ 三条 OAuth 行;点 Anthropic 落 connect=anthropic', async () => {
+  it('global 区零连接 → 推荐行(Cindy AI)+ 三条 OAuth 主列;点 Anthropic 落 connect=anthropic', async () => {
     await renderCardSettled();
 
     expect(screen.getByTestId('connect-provider-card')).not.toBeNull();
@@ -140,6 +164,62 @@ describe('ConnectProviderCard', () => {
     expect(screen.getByTestId('location').textContent).toBe(
       '/settings?tab=providers&connect=anthropic',
     );
+  });
+
+  it('检测到本机 CLI 已登录 → 该渠道置顶带徽标;只安装未登录不置顶,回落普通行', async () => {
+    detectState.detections = [
+      { cli: 'claude-cli', providerId: 'anthropic', installed: true, loggedIn: true },
+      // 只安装未登录:装了 ≠ 有账号,不给「已检测到」待遇。
+      { cli: 'codex-cli', providerId: 'openai', installed: true, loggedIn: false },
+    ];
+    await renderCardSettled();
+
+    // 检测行:仅 Anthropic(已登录)置顶带徽标,副标题「已登录可直接授权」。
+    expect(screen.getAllByText('onboarding.connectProvider.detectedLabel')).toHaveLength(1);
+    expect(screen.getByText('settings.providers.detect.hintLoggedIn')).not.toBeNull();
+    // 去重:Anthropic 只出现一次(检测行);OpenAI 留在普通 OAuth 主列(无徽标)。
+    expect(screen.getAllByText('Anthropic')).toHaveLength(1);
+    expect(screen.getAllByText('OpenAI')).toHaveLength(1);
+    expect(screen.getByText('OpenAI').closest('button')!.textContent).not.toContain(
+      'onboarding.connectProvider.detectedLabel',
+    );
+
+    // 检测行在推荐行(Cindy AI)之前。
+    const card = screen.getByTestId('connect-provider-card');
+    const labels = Array.from(card.querySelectorAll('button')).map((b) => b.textContent ?? '');
+    expect(labels.findIndex((x) => x.includes('Anthropic'))).toBeLessThan(
+      labels.findIndex((x) => x.includes('Cindy AI')),
+    );
+
+    fireEvent.click(screen.getByText('Anthropic').closest('button')!);
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/settings?tab=providers&connect=anthropic',
+    );
+  });
+
+  it('cn 区零连接 → 主列为国内预设,OAuth 三家收进折叠区;点预设行落 connect=<presetId>', async () => {
+    regionState.value = 'cn';
+    await renderCardSettled();
+
+    // 主列:cn 预设;Anthropic 不在主列(折叠区未展开时不可见)。
+    expect(screen.getByText('智谱 GLM')).not.toBeNull();
+    expect(screen.getByText('Kimi')).not.toBeNull();
+    expect(screen.queryByText('Anthropic')).toBeNull();
+
+    fireEvent.click(screen.getByText('智谱 GLM').closest('button')!);
+    expect(screen.getByTestId('location').textContent).toBe(
+      '/settings?tab=providers&connect=zhipu-glm-cn',
+    );
+
+    cleanup();
+    localStorage.clear();
+    await renderCardSettled();
+    // 展开折叠区:OAuth 三家 + 非 cn 预设都在。
+    fireEvent.click(screen.getByText('onboarding.connectProvider.othersToggle').closest('button')!);
+    expect(screen.getByText('Anthropic')).not.toBeNull();
+    expect(screen.getByText('OpenAI')).not.toBeNull();
+    expect(screen.getByText('xAI')).not.toBeNull();
+    expect(screen.getByText('DeepSeek')).not.toBeNull();
   });
 
   it('cloud 模式点推荐行 → connect=xd;「我有 API key」→ wizard=1', async () => {

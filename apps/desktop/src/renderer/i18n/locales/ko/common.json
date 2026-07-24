@@ -1287,7 +1287,7 @@
         "stepConnect": "연결",
         "stepModels": "모델 선택",
         "searchPlaceholder": "공급자 검색…",
-        "groupSubscription": "구독 인증 · 권장, API 키 불필요",
+        "groupSubscription": "구독 인증 · 추천",
         "groupApiKey": "API 키 공급자 · 프리셋은 카탈로그와 함께 업데이트",
         "groupCustom": "사용자 지정",
         "metaOAuth": "구독 인증",
@@ -1312,7 +1312,9 @@
         "next": "다음",
         "back": "← 이전",
         "finish": "추가 완료",
-        "cancel": "취소"
+        "cancel": "취소",
+        "useApiKey": "API 키로 연결",
+        "metaOAuthOrApi": "구독 인증 · API 키"
       }
     },
     "experimental": {
@@ -3901,7 +3903,7 @@
         "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다"
       },
       "othersToggle": "기타 제공업체 ({{count}})",
-      "presetSub": "API 키로 연결",
+      "presetSub": "API 키를 입력하여 연결",
       "dismiss": "나중에",
       "haveApiKey": "API 키가 있어요",
       "banner": {
@@ -3909,7 +3911,9 @@
         "connectCta": "제공업체 연결",
         "loginCta": "Cindy 로그인",
         "dismissAria": "닫기"
-      }
+      },
+      "detectedLabel": "감지됨",
+      "oauthSub": "브라우저에서 인증 페이지가 열리며, 로그인 후 자동으로 연결됩니다"
     }
   },
   "voiceInputOverlay": {

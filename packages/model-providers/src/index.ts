@@ -28,7 +28,7 @@ export type {
   OAuthProviderDescriptor,
 } from './types.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, sanitizePresets, sortPresetsForLocale } from './catalog.js';
+export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from './catalog.js';
 
 export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
 

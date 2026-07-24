@@ -2009,9 +2009,14 @@ export function NewMakerDraftRoute() {
             data-testid="create-agent-main"
             className={cn(
               'relative flex h-full min-w-0 w-full flex-col items-center justify-start',
+              // 引导卡比快速开始高一截:收紧顶部留白并允许纵向滚动,否则外壳
+              // overflow-hidden 会把卡片下半截裁在视口外(2026-07-24 用户实测)。
+              showProviderOnboardingCard && 'overflow-y-auto pb-8',
               isDraftNarrow
                 ? 'px-4 pt-[calc(max(64px,18vh)_+_32px_-_var(--content-header-h,46px))]'
-                : 'px-8 pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]',
+                : showProviderOnboardingCard
+                  ? 'px-8 pt-[calc(max(56px,10vh)_+_46px_-_var(--content-header-h,46px))]'
+                  : 'px-8 pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]',
             )}
           >
             <div
@@ -2212,7 +2217,7 @@ export function NewMakerDraftRoute() {
                 {/* 零可用模型 → 快速开始换成「连接供应商」引导卡(互斥:此时快捷入口
                     只会把 prompt 填进发不出去的输入框);dismiss / 连上后恢复快捷入口。 */}
                 {showProviderOnboardingCard && (
-                  <div className="mt-[42px] w-full" style={{ maxWidth: 800 }}>
+                  <div className="mt-8 w-full" style={{ maxWidth: 800 }}>
                     <ConnectProviderCard />
                   </div>
                 )}

@@ -1287,7 +1287,7 @@
         "stepConnect": "连接",
         "stepModels": "选择模型",
         "searchPlaceholder": "搜索供应商…",
-        "groupSubscription": "订阅授权 · 推荐,免 API Key",
+        "groupSubscription": "订阅授权 · 推荐",
         "groupApiKey": "API Key 供应商 · 预设随目录更新",
         "groupCustom": "自定义",
         "metaOAuth": "订阅授权",
@@ -1312,7 +1312,9 @@
         "next": "下一步",
         "back": "← 上一步",
         "finish": "完成添加",
-        "cancel": "取消"
+        "cancel": "取消",
+        "useApiKey": "改用 API Key 接入",
+        "metaOAuthOrApi": "订阅授权 · API Key"
       }
     },
     "experimental": {
@@ -3901,7 +3903,7 @@
         "loginDesc": "登录后自动开通 Cindy AI 官方服务,即可使用全部模型"
       },
       "othersToggle": "其他供应商({{count}})",
-      "presetSub": "使用 API Key 连接",
+      "presetSub": "填入 API Key 即可连接",
       "dismiss": "稍后再说",
       "haveApiKey": "我有 API Key",
       "banner": {
@@ -3909,7 +3911,9 @@
         "connectCta": "连接供应商",
         "loginCta": "登录 Cindy",
         "dismissAria": "关闭引导"
-      }
+      },
+      "detectedLabel": "已检测到",
+      "oauthSub": "在浏览器打开授权页,登录后自动连接"
     }
   },
   "voiceInputOverlay": {
