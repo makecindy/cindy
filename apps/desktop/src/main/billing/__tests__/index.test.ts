@@ -46,6 +46,34 @@ function harness() {
         observedAt: now,
       };
     }
+    if (path === '/api/model-access/credit-usage') {
+      return {
+        available: '12.345678901',
+        plan: { remaining: '7.000000001', used: '3', total: '10.000000001' },
+        purchased: { remaining: '5.000000002', used: '5', total: '10.000000002' },
+        promotional: {
+          remaining: '0.345678898',
+          used: '0.654321102',
+          total: '1',
+        },
+        promotionalGrants: [
+          {
+            grantId: 'welcome',
+            displayName: 'Welcome',
+            originalAmount: '1',
+            usedAmount: '0.654321102',
+            remainingAmount: '0.345678898',
+            expiresAt: '2026-08-23T12:00:00.000Z',
+            state: 'active',
+          },
+        ],
+        promotionalGrantsComplete: true,
+        promotionalGrantConsistency: 'LAST_SETTLED',
+        ledgerUpdatedAt: now,
+        scale: 9,
+        observedAt: now,
+      };
+    }
     if (path === '/api/billing/catalog') return { products: [] };
     if (path === '/api/billing/orders?limit=20') return { orders: [], nextCursor: null };
     if (path === '/api/billing/subscription') return { subscription };
@@ -97,15 +125,31 @@ describe('billing IPC', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it.each([BILLING_INVOKE.GET_CATALOG, BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION])(
-    'rejects any payload on the no-payload channel %s before network access',
-    async (channel) => {
-      const { call, fetch } = harness();
+  it('queries the fixed current-account credit usage endpoint', async () => {
+    const { call, fetch } = harness();
 
-      await expect(call(channel, {})).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
+    await expect(call(BILLING_INVOKE.GET_CREDIT_USAGE)).resolves.toMatchObject({
+      available: '12.345678901',
+      plan: { remaining: '7.000000001', used: '3', total: '10.000000001' },
+      promotionalGrants: [{ grantId: 'welcome', state: 'active' }],
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/model-access/credit-usage', {
+      baseUrl: 'https://model-access.example',
+      timeoutMs: 20_000,
+      redactErrorDetails: true,
+    });
+  });
+
+  it.each([
+    BILLING_INVOKE.GET_CREDIT_USAGE,
+    BILLING_INVOKE.GET_CATALOG,
+    BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION,
+  ])('rejects any payload on the no-payload channel %s before network access', async (channel) => {
+    const { call, fetch } = harness();
+
+    await expect(call(channel, {})).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['NOT_FOUND', 404, 'NOT_FOUND'],

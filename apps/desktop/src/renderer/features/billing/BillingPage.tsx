@@ -25,7 +25,12 @@ import type {
   BillingSubscription,
 } from '../../../shared/billing';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
-import type { ModelAccessBalance } from '../../../shared/modelAccess';
+import type {
+  ModelAccessBalance,
+  ModelAccessCreditPoolUsage,
+  ModelAccessCreditUsage,
+  ModelAccessPromotionalGrantState,
+} from '../../../shared/modelAccess';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
 import { formatBillingAmount as formatMoney } from './money';
@@ -90,6 +95,37 @@ function compareDecimal(left: string, right: string): number | null {
   return av < bv ? -1 : av > bv ? 1 : 0;
 }
 
+function ledgerUnits(value: string): bigint | null {
+  const match = /^(-?)(0|[1-9]\d{0,9})(?:\.(\d{1,9}))?$/.exec(value);
+  if (!match) return null;
+  const fraction = (match[3] ?? '').padEnd(9, '0');
+  const units = BigInt(match[2]) * 1_000_000_000n + BigInt(fraction || '0');
+  return match[1] === '-' ? -units : units;
+}
+
+function usagePercent(pool: ModelAccessCreditPoolUsage): number | null {
+  if (pool.used === null || pool.total === null) return null;
+  const used = ledgerUnits(pool.used);
+  const total = ledgerUnits(pool.total);
+  if (used === null || total === null || used < 0n || total < 0n) return null;
+  if (total === 0n) return used === 0n ? 0 : null;
+  const tenths = (used * 1_000n) / total;
+  return Number(tenths > 1_000n ? 1_000n : tenths) / 10;
+}
+
+function formatLedgerTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(timestamp);
+  } catch {
+    return value;
+  }
+}
+
 function isCustomTopup(offer: BillingCatalogOffer): boolean {
   return offer.amount === null && offer.minAmount !== null && offer.maxAmount !== null;
 }
@@ -144,7 +180,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [currentSubscription, setCurrentSubscription] = useState<BillingSubscription | null>(null);
   const [loadingSubscription, setLoadingSubscription] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState(false);
+  const [creditUsage, setCreditUsage] = useState<ModelAccessCreditUsage | null>(null);
   const [balance, setBalance] = useState<ModelAccessBalance | null>(null);
+  const [usageDetailsUnavailable, setUsageDetailsUnavailable] = useState(false);
   const [loadingBalance, setLoadingBalance] = useState(true);
   const [balanceError, setBalanceError] = useState<BalanceIssue>(null);
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
@@ -165,11 +203,20 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
     setBalanceError(null);
+    setUsageDetailsUnavailable(false);
     try {
-      setBalance(await billingApi.getBalance());
-    } catch (error) {
+      setCreditUsage(await billingApi.getCreditUsage());
       setBalance(null);
-      setBalanceError(balanceIssue(error));
+    } catch {
+      try {
+        setBalance(await billingApi.getBalance());
+        setCreditUsage(null);
+        setUsageDetailsUnavailable(true);
+      } catch (error) {
+        setCreditUsage(null);
+        setBalance(null);
+        setBalanceError(balanceIssue(error));
+      }
     } finally {
       setLoadingBalance(false);
     }
@@ -474,7 +521,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         </div>
 
         <div className="mt-8 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-          <BillingBalanceSummary balance={balance} issue={balanceError} loading={loadingBalance} />
+          <BillingUsageSummary
+            usage={creditUsage}
+            balance={balance}
+            issue={balanceError}
+            loading={loadingBalance}
+            detailsUnavailable={usageDetailsUnavailable}
+          />
           <div className="border-t border-[var(--border-default)]">
             <BillingSummaryRow
               label={t('billing.settings.subscriptionCard.title')}
@@ -689,18 +742,22 @@ function PendingPlanChangeBanner({
   );
 }
 
-function BillingBalanceSummary({
+function BillingUsageSummary({
+  usage,
   balance,
   issue,
   loading,
+  detailsUnavailable,
 }: {
+  usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
   issue: BalanceIssue;
   loading: boolean;
+  detailsUnavailable: boolean;
 }) {
   const { t } = useTranslation();
   const currency = CURRENT_CINDY_REGION === 'global' ? 'usd' : 'cny';
-  const pools = balance
+  const legacyPools = balance
     ? [
         { key: 'plan', label: t('billing.balance.plan'), amount: balance.planCredits },
         {
@@ -713,6 +770,13 @@ function BillingBalanceSummary({
           label: t('billing.balance.promotional'),
           amount: balance.promotionalCredits,
         },
+      ]
+    : [];
+  const usagePools = usage
+    ? [
+        { key: 'plan', label: t('billing.balance.plan'), pool: usage.plan },
+        { key: 'purchased', label: t('billing.balance.purchased'), pool: usage.purchased },
+        { key: 'promotional', label: t('billing.balance.promotional'), pool: usage.promotional },
       ]
     : [];
   const issueDescription =
@@ -729,20 +793,47 @@ function BillingBalanceSummary({
       aria-live="polite"
       aria-busy={loading}
     >
-      <p id="billing-balance-title" className="text-11 font-medium text-[var(--text-tertiary)]">
-        {t('billing.balance.title')}
-      </p>
       {loading ? (
-        <div className="mt-3 flex h-[76px] items-center">
+        <div className="flex h-[118px] items-center px-5">
           <Spinner size={15} />
         </div>
-      ) : balance ? (
+      ) : usage ? (
         <>
-          <p className="mt-1 text-2xl font-medium tracking-[-0.03em] tabular-nums text-[var(--text-primary)]">
+          <div className="px-5 py-5">
+            <p
+              id="billing-balance-title"
+              className="text-11 font-medium text-[var(--text-tertiary)]"
+            >
+              {t('billing.balance.title')}
+            </p>
+            <p className="mt-1 text-[28px] font-medium leading-9 tracking-[-0.03em] tabular-nums text-[var(--text-primary)]">
+              {formatMoney(usage.available, currency)}
+            </p>
+            <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+              {t('billing.usage.observedAt', {
+                date: formatLedgerTimestamp(usage.observedAt),
+              })}
+            </p>
+          </div>
+          <div className="border-t border-[var(--border-default)] px-5 py-5">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+              {usagePools.map(({ key, label, pool }) => (
+                <CreditPoolCard key={key} label={label} pool={pool} currency={currency} />
+              ))}
+            </div>
+          </div>
+          <PromotionalGrantLedger usage={usage} currency={currency} />
+        </>
+      ) : balance ? (
+        <div className="px-5 py-5">
+          <p id="billing-balance-title" className="text-11 font-medium text-[var(--text-tertiary)]">
+            {t('billing.balance.title')}
+          </p>
+          <p className="mt-1 text-[28px] font-medium leading-9 tracking-[-0.03em] tabular-nums text-[var(--text-primary)]">
             {formatMoney(balance.available, currency)}
           </p>
-          <div className="mt-4 grid grid-cols-3 divide-x divide-[var(--border-default)] rounded-lg bg-[var(--surface-chip)] px-1 py-2.5">
-            {pools.map(({ key, label, amount }) => (
+          <div className="mt-4 grid grid-cols-3 divide-x divide-[var(--border-default)] rounded-xl bg-[var(--surface-chip)] px-1 py-2.5">
+            {legacyPools.map(({ key, label, amount }) => (
               <div key={key} className="min-w-0 px-3">
                 <p className="truncate text-11 text-[var(--text-tertiary)]">{label}</p>
                 <p className="mt-1 truncate text-13 font-medium tabular-nums text-[var(--text-primary)]">
@@ -751,16 +842,210 @@ function BillingBalanceSummary({
               </div>
             ))}
           </div>
-        </>
+          {detailsUnavailable && (
+            <p className="mt-3 text-11 leading-4 text-[var(--text-secondary)]">
+              {t('billing.usage.detailsUnavailable')}
+            </p>
+          )}
+        </div>
       ) : (
         <div
           role="status"
-          className="mt-3 flex min-h-[76px] items-center text-12 leading-5 text-[var(--text-secondary)]"
+          className="flex min-h-[118px] items-center px-5 text-12 leading-5 text-[var(--text-secondary)]"
         >
           {issueDescription}
         </div>
       )}
     </section>
+  );
+}
+
+function CreditPoolCard({
+  label,
+  pool,
+  currency,
+}: {
+  label: string;
+  pool: ModelAccessCreditPoolUsage;
+  currency: string;
+}) {
+  const { t } = useTranslation();
+  const percent = usagePercent(pool);
+  const stats = [
+    { key: 'used', label: t('billing.usage.used'), amount: pool.used },
+    { key: 'total', label: t('billing.usage.total'), amount: pool.total },
+    { key: 'remaining', label: t('billing.usage.remaining'), amount: pool.remaining },
+  ];
+  return (
+    <article className="min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-4">
+      <p className="truncate text-12 font-medium text-[var(--text-primary)]">{label}</p>
+      <p className="mt-3 text-11 text-[var(--text-tertiary)]">{t('billing.usage.remaining')}</p>
+      <p className="mt-0.5 truncate text-lg font-medium tracking-[-0.02em] tabular-nums text-[var(--text-primary)]">
+        {formatMoney(pool.remaining, currency)}
+      </p>
+      <div
+        className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--surface-chip)]"
+        role={percent === null ? undefined : 'progressbar'}
+        aria-label={t('billing.usage.progressLabel', { label })}
+        aria-valuemin={percent === null ? undefined : 0}
+        aria-valuemax={percent === null ? undefined : 100}
+        aria-valuenow={percent ?? undefined}
+      >
+        {percent !== null && (
+          <div
+            className="h-full rounded-full bg-[var(--text-primary)]"
+            style={{ width: `${percent}%` }}
+          />
+        )}
+      </div>
+      {percent === null ? (
+        <p className="mt-2 min-h-8 text-10 leading-4 text-[var(--text-tertiary)]">
+          {t('billing.usage.historyUnavailable')}
+        </p>
+      ) : (
+        <p className="mt-2 min-h-8 text-10 leading-4 text-[var(--text-tertiary)]">
+          {t('billing.usage.percentUsed', {
+            percent: new Intl.NumberFormat(undefined, {
+              maximumFractionDigits: 1,
+            }).format(percent),
+          })}
+        </p>
+      )}
+      <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-[var(--border-default)] pt-3">
+        {stats.map(({ key, label: statLabel, amount }) => (
+          <div key={key} className="min-w-0">
+            <dt className="truncate text-10 text-[var(--text-tertiary)]">{statLabel}</dt>
+            <dd className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
+              {amount === null ? '—' : formatMoney(amount, currency)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </article>
+  );
+}
+
+function PromotionalGrantLedger({
+  usage,
+  currency,
+}: {
+  usage: ModelAccessCreditUsage;
+  currency: string;
+}) {
+  const { t } = useTranslation();
+  const hasUnavailableHistoricalUsage = usage.promotionalGrants.some(
+    (grant) => grant.usedAmount === null,
+  );
+  return (
+    <div className="border-t border-[var(--border-default)] px-5 py-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-13 font-medium text-[var(--text-primary)]">
+            {t('billing.usage.promotionalDetails.title')}
+          </h3>
+          <p className="mt-1 max-w-[620px] text-11 leading-4 text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.description')}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+          {t('billing.usage.promotionalDetails.count', {
+            count: usage.promotionalGrants.length,
+          })}
+        </span>
+      </div>
+
+      {!usage.promotionalGrantsComplete && (
+        <p className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-4 text-[var(--text-secondary)]">
+          {t('billing.usage.promotionalDetails.incomplete', {
+            count: usage.promotionalGrants.length,
+          })}
+        </p>
+      )}
+      {hasUnavailableHistoricalUsage && (
+        <p className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-4 text-[var(--text-secondary)]">
+          {t('billing.usage.promotionalDetails.historicalUsageUnavailable')}
+        </p>
+      )}
+
+      {usage.promotionalGrants.length === 0 ? (
+        <p className="mt-4 rounded-xl border border-[var(--border-default)] px-4 py-5 text-12 text-[var(--text-secondary)]">
+          {t('billing.usage.promotionalDetails.empty')}
+        </p>
+      ) : (
+        <div
+          className="mt-4 max-h-[360px] overflow-y-auto rounded-xl border border-[var(--border-default)] [scrollbar-gutter:stable]"
+          role="list"
+        >
+          {usage.promotionalGrants.map((grant, index) => (
+            <div
+              key={grant.grantId}
+              role="listitem"
+              className={cn(
+                'grid grid-cols-3 gap-x-3 gap-y-2 px-4 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
+                index > 0 && 'border-t border-[var(--border-default)]',
+              )}
+            >
+              <div className="col-span-3 min-w-0 lg:col-span-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="truncate text-12 font-medium text-[var(--text-primary)]">
+                    {grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                  </p>
+                  <PromotionalGrantStatus state={grant.state} />
+                </div>
+                <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
+                  {t('billing.usage.promotionalDetails.expiresAt', {
+                    date: formatLedgerTimestamp(grant.expiresAt),
+                  })}
+                </p>
+              </div>
+              <GrantAmount
+                label={t('billing.usage.promotionalDetails.original')}
+                amount={grant.originalAmount}
+                currency={currency}
+              />
+              <GrantAmount
+                label={t('billing.usage.promotionalDetails.used')}
+                amount={grant.usedAmount}
+                currency={currency}
+              />
+              <GrantAmount
+                label={t('billing.usage.promotionalDetails.remaining')}
+                amount={grant.remainingAmount}
+                currency={currency}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantState }) {
+  const { t } = useTranslation();
+  return (
+    <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+      {t(`billing.usage.promotionalDetails.states.${state}`)}
+    </span>
+  );
+}
+
+function GrantAmount({
+  label,
+  amount,
+  currency,
+}: {
+  label: string;
+  amount: string | null;
+  currency: string;
+}) {
+  return (
+    <div className="min-w-0 text-right">
+      <p className="truncate text-10 text-[var(--text-tertiary)]">{label}</p>
+      <p className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
+        {amount === null ? '—' : formatMoney(amount, currency)}
+      </p>
+    </div>
   );
 }
 

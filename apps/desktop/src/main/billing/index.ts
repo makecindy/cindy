@@ -17,6 +17,7 @@ import {
   projectBillingPlanChange,
   projectBillingSubscription,
   projectModelAccessBalance,
+  projectModelAccessCreditUsage,
 } from './projection.js';
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -211,6 +212,22 @@ export function createBillingHandlers(
         throwBalanceFetchError(error);
       }
       return projectResponse(response, projectModelAccessBalance);
+    }),
+    [BILLING_INVOKE.GET_CREDIT_USAGE]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'credit usage request does not accept a payload');
+      }
+      let response: unknown;
+      try {
+        response = await fetch<unknown>('/api/model-access/credit-usage', {
+          timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
+          redactErrorDetails: true,
+          baseUrl: getBaseUrl(),
+        });
+      } catch (error) {
+        throwBalanceFetchError(error);
+      }
+      return projectResponse(response, projectModelAccessCreditUsage);
     }),
     [BILLING_INVOKE.GET_CATALOG]: protect(async (raw) => {
       if (raw !== undefined) {

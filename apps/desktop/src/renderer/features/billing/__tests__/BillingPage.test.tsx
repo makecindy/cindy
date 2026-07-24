@@ -283,6 +283,53 @@ describe('BillingPage remote catalog rendering', () => {
         ),
       ),
     ).toBeTruthy();
+    expect(screen.getByText('billing.usage.detailsUnavailable')).toBeTruthy();
+  });
+
+  it('shows usage progress and each promotional grant with its own state and expiry', async () => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '66',
+      plan: { remaining: '40', used: '60', total: '100' },
+      purchased: { remaining: '20', used: '30', total: '50' },
+      promotional: { remaining: '6', used: '4', total: '10' },
+      promotionalGrants: [
+        {
+          grantId: 'welcome',
+          displayName: 'Welcome grant',
+          originalAmount: '10',
+          usedAmount: '4',
+          remainingAmount: '6',
+          expiresAt: '2026-08-01T00:00:00Z',
+          state: 'active' as const,
+        },
+        {
+          grantId: 'expired',
+          displayName: null,
+          originalAmount: '5',
+          usedAmount: null,
+          remainingAmount: '0',
+          expiresAt: '2026-07-01T00:00:00Z',
+          state: 'expired' as const,
+        },
+      ],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'LAST_SETTLED' as const,
+      ledgerUpdatedAt: '2026-07-23T12:00:00Z',
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Welcome grant')).toBeTruthy();
+    expect(screen.getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
+    expect(screen.getByText('billing.usage.promotionalDetails.states.active')).toBeTruthy();
+    expect(screen.getByText('billing.usage.promotionalDetails.states.expired')).toBeTruthy();
+    expect(
+      screen.getByText('billing.usage.promotionalDetails.historicalUsageUnavailable'),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(3);
+    expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
   it('refreshes the balance once when a checkout becomes completed', async () => {

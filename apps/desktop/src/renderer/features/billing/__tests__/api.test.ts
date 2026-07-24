@@ -7,6 +7,7 @@ import { billingApi } from '../api';
 describe('billing renderer API', () => {
   const billing = {
     getBalance: vi.fn(),
+    getCreditUsage: vi.fn(),
     listOrders: vi.fn(),
     createTopup: vi.fn(),
     openPaymentRedirect: vi.fn(),
@@ -14,6 +15,7 @@ describe('billing renderer API', () => {
 
   beforeEach(() => {
     billing.getBalance.mockReset().mockResolvedValue({ available: '12.34' });
+    billing.getCreditUsage.mockReset().mockResolvedValue({ available: '12.34' });
     billing.listOrders.mockReset().mockResolvedValue({ orders: [], nextCursor: null });
     billing.createTopup.mockReset().mockResolvedValue({ orderId: 'order_fixture' });
     billing.openPaymentRedirect.mockReset().mockResolvedValue({ success: true });
@@ -26,6 +28,11 @@ describe('billing renderer API', () => {
   it('queries the current account balance without accepting renderer parameters', async () => {
     await billingApi.getBalance();
     expect(billing.getBalance).toHaveBeenCalledWith();
+  });
+
+  it('queries current account credit usage without accepting renderer parameters', async () => {
+    await billingApi.getCreditUsage();
+    expect(billing.getCreditUsage).toHaveBeenCalledWith();
   });
 
   it('uses the bounded default order page size', async () => {

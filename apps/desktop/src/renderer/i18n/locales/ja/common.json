@@ -6847,6 +6847,35 @@
       "notSupported": "このアカウントでは残高照会を利用できません。",
       "unavailable": "残高を取得できません。更新してもう一度お試しください。"
     },
+    "usage": {
+      "observedAt": "クレジット更新: {{date}}",
+      "used": "使用済み",
+      "total": "合計",
+      "remaining": "残り",
+      "progressLabel": "{{label}}の使用状況",
+      "historyUnavailable": "使用履歴が完全ではないため、残りのクレジットのみ表示しています。",
+      "percentUsed": "{{percent}}% 使用済み",
+      "detailsUnavailable": "使用量の詳細を取得できないため、現在の残高のみ表示しています。",
+      "promotionalDetails": {
+        "title": "特典クレジット明細",
+        "description": "付与ごとに状態と有効期限が異なります。残量は前回の台帳精算時点の値で、反映が少し遅れる場合があります。",
+        "count": "{{count}}件",
+        "empty": "特典クレジットの付与履歴はありません。",
+        "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
+        "historicalUsageUnavailable": "期限切れまたは無効化された付与の実使用量は現在 Gateway から復元できないため、「—」で表示します。",
+        "unnamed": "特典クレジット",
+        "original": "付与額",
+        "used": "使用済み",
+        "remaining": "残り",
+        "expiresAt": "有効期限 {{date}}",
+        "states": {
+          "active": "利用可能",
+          "depleted": "使用済み",
+          "expired": "期限切れ",
+          "voided": "無効"
+        }
+      }
+    },
     "dialogs": {
       "subscription": {
         "title": "サブスクリプションプランを選択",

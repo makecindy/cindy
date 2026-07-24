@@ -8,11 +8,14 @@ import type {
   CreateBillingSubscriptionRequest,
   CreateBillingTopupRequest,
 } from '../../../shared/billing';
-import type { ModelAccessBalance } from '../../../shared/modelAccess';
+import type { ModelAccessBalance, ModelAccessCreditUsage } from '../../../shared/modelAccess';
 
 export const billingApi = {
   getBalance(): Promise<ModelAccessBalance> {
     return window.electronAPI.billing.getBalance();
+  },
+  getCreditUsage(): Promise<ModelAccessCreditUsage> {
+    return window.electronAPI.billing.getCreditUsage();
   },
   getCatalog(): Promise<BillingCatalog> {
     return window.electronAPI.billing.getCatalog();

@@ -5,10 +5,11 @@
  * an HTTP path, target service, or arbitrary headers.
  */
 
-import type { ModelAccessBalance } from './modelAccess';
+import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
 export const BILLING_INVOKE = {
   GET_BALANCE: 'billing:get-balance',
+  GET_CREDIT_USAGE: 'billing:get-credit-usage',
   GET_CATALOG: 'billing:get-catalog',
   LIST_ORDERS: 'billing:list-orders',
   GET_ORDER: 'billing:get-order',
@@ -194,6 +195,7 @@ export type CreateBillingSubscriptionRequest = {
 
 export interface BillingRendererApi {
   getBalance: () => Promise<ModelAccessBalance>;
+  getCreditUsage: () => Promise<ModelAccessCreditUsage>;
   getCatalog: () => Promise<BillingCatalog>;
   listOrders: (payload: { limit: number }) => Promise<BillingOrderList>;
   getOrder: (payload: { orderId: string }) => Promise<BillingPaymentOrder>;

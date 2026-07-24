@@ -7,6 +7,7 @@ import {
   projectBillingPaymentOrder,
   projectBillingPlanChange,
   projectModelAccessBalance,
+  projectModelAccessCreditUsage,
 } from '../projection.js';
 
 const now = '2026-07-23T12:00:00.000Z';
@@ -73,6 +74,157 @@ describe('billing response projection', () => {
     ).toThrow();
     expect(() =>
       projectModelAccessBalance({ ...valid, observedAt: '2026-02-31T12:00:00Z' }),
+    ).toThrow();
+  });
+
+  it('projects exact pool usage and independent promotional grant states', () => {
+    expect(
+      projectModelAccessCreditUsage({
+        available: '6',
+        plan: { remaining: '3', used: '7', total: '10' },
+        purchased: { remaining: '2', used: '3', total: '5' },
+        promotional: { remaining: '1', used: '1', total: '2' },
+        promotionalGrants: [
+          {
+            grantId: 'welcome',
+            displayName: 'Welcome',
+            originalAmount: '2',
+            usedAmount: '1',
+            remainingAmount: '1',
+            expiresAt: '2026-08-01T00:00:00.123456789Z',
+            state: 'active',
+            internalMetadata: 'hidden',
+          },
+          {
+            grantId: 'expired',
+            displayName: null,
+            originalAmount: '5',
+            usedAmount: null,
+            remainingAmount: '0',
+            expiresAt: '2026-07-01T00:00:00Z',
+            state: 'expired',
+          },
+        ],
+        promotionalGrantsComplete: true,
+        promotionalGrantConsistency: 'LAST_SETTLED',
+        ledgerUpdatedAt: '2026-07-23T11:00:00Z',
+        scale: 9,
+        observedAt: '2026-07-23T12:00:00.123456789Z',
+        serviceKey: 'must not cross IPC',
+      }),
+    ).toEqual({
+      available: '6',
+      plan: { remaining: '3', used: '7', total: '10' },
+      purchased: { remaining: '2', used: '3', total: '5' },
+      promotional: { remaining: '1', used: '1', total: '2' },
+      promotionalGrants: [
+        {
+          grantId: 'welcome',
+          displayName: 'Welcome',
+          originalAmount: '2',
+          usedAmount: '1',
+          remainingAmount: '1',
+          expiresAt: '2026-08-01T00:00:00.123456789Z',
+          state: 'active',
+        },
+        {
+          grantId: 'expired',
+          displayName: null,
+          originalAmount: '5',
+          usedAmount: null,
+          remainingAmount: '0',
+          expiresAt: '2026-07-01T00:00:00Z',
+          state: 'expired',
+        },
+      ],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'LAST_SETTLED',
+      ledgerUpdatedAt: '2026-07-23T11:00:00Z',
+      scale: 9,
+      observedAt: '2026-07-23T12:00:00.123456789Z',
+    });
+  });
+
+  it('rejects inconsistent pool identities and dishonest promotional histories', () => {
+    const valid = {
+      available: '6',
+      plan: { remaining: '3', used: '7', total: '10' },
+      purchased: { remaining: '2', used: '3', total: '5' },
+      promotional: { remaining: '1', used: '1', total: '2' },
+      promotionalGrants: [
+        {
+          grantId: 'welcome',
+          displayName: null,
+          originalAmount: '2',
+          usedAmount: '1',
+          remainingAmount: '1',
+          expiresAt: '2026-08-01T00:00:00Z',
+          state: 'active',
+        },
+      ],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'LAST_SETTLED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt: now,
+    };
+
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        plan: { remaining: '3', used: '8', total: '10' },
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        promotionalGrantsComplete: false,
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        promotionalGrants: [valid.promotionalGrants[0], { ...valid.promotionalGrants[0] }],
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        promotionalGrants: [
+          {
+            ...valid.promotionalGrants[0],
+            state: 'expired',
+            usedAmount: '2',
+            remainingAmount: '0',
+          },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        promotionalGrants: [
+          {
+            ...valid.promotionalGrants[0],
+            state: 'active',
+            usedAmount: '2',
+            remainingAmount: '0',
+          },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...valid,
+        promotionalGrants: [
+          {
+            ...valid.promotionalGrants[0],
+            state: 'depleted',
+            usedAmount: '1',
+            remainingAmount: '1',
+          },
+        ],
+      }),
     ).toThrow();
   });
 

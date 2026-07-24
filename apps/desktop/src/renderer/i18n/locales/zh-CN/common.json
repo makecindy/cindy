@@ -6847,6 +6847,35 @@
       "notSupported": "当前账户暂不支持额度查询。",
       "unavailable": "暂时无法获取额度，请刷新后重试。"
     },
+    "usage": {
+      "observedAt": "额度更新于 {{date}}",
+      "used": "已用",
+      "total": "总额",
+      "remaining": "剩余",
+      "progressLabel": "{{label}}使用进度",
+      "historyUnavailable": "历史记录不完整，暂时仅显示剩余额度。",
+      "percentUsed": "已使用 {{percent}}%",
+      "detailsUnavailable": "用量明细暂时不可用，当前仅显示各类余额。",
+      "promotionalDetails": {
+        "title": "赠送额度明细",
+        "description": "每笔赠送拥有独立有效期和状态。剩余额度来自上次账本结算，可能稍有延迟。",
+        "count": "{{count}} 笔",
+        "empty": "当前没有赠送额度记录。",
+        "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
+        "historicalUsageUnavailable": "已过期或作废记录的真实已用额度当前无法由 Gateway 还原，以“—”显示。",
+        "unnamed": "赠送额度",
+        "original": "原始额度",
+        "used": "已用",
+        "remaining": "剩余",
+        "expiresAt": "有效期至 {{date}}",
+        "states": {
+          "active": "生效中",
+          "depleted": "已用完",
+          "expired": "已过期",
+          "voided": "已作废"
+        }
+      }
+    },
     "dialogs": {
       "subscription": {
         "title": "选择订阅套餐",

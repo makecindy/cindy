@@ -1440,6 +1440,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 零请求;头像等上传走 main 侧 profileEdit 链路。
   billing: {
     getBalance: () => ipcRenderer.invoke(BILLING_INVOKE.GET_BALANCE),
+    getCreditUsage: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CREDIT_USAGE),
     getCatalog: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CATALOG),
     listOrders: (payload) => ipcRenderer.invoke(BILLING_INVOKE.LIST_ORDERS, payload),
     getOrder: (payload) => ipcRenderer.invoke(BILLING_INVOKE.GET_ORDER, payload),

@@ -16,13 +16,20 @@ import type {
   BillingSubscription,
   BillingSubscriptionStatus,
 } from '../../shared/billing.js';
-import type { ModelAccessBalance } from '../../shared/modelAccess.js';
+import type {
+  ModelAccessBalance,
+  ModelAccessCreditPoolUsage,
+  ModelAccessCreditUsage,
+  ModelAccessPromotionalGrantState,
+  ModelAccessPromotionalGrantUsage,
+} from '../../shared/modelAccess.js';
 import { isAllowedBillingRedirectUrl } from './paymentRedirect.js';
 
 const MAX_ID_LENGTH = 128;
 const MAX_NAME_LENGTH = 128;
 const MAX_CURSOR_LENGTH = 512;
 const MAX_QR_VALUE_LENGTH = 4_096;
+const MAX_PROMOTIONAL_GRANTS = 1_000;
 const CODE_PATTERN = /^[a-z][a-z0-9_]{1,63}$/;
 const CURRENCY_PATTERN = /^[a-z]{3}$/;
 const DECIMAL_PATTERN = /^(0|[1-9]\d{0,14})(?:\.\d{1,9})?$/;
@@ -30,6 +37,12 @@ const LEDGER_DECIMAL_PATTERN = /^-?(?:0|[1-9]\d{0,9})(?:\.\d{1,9})?$/;
 const ISO_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RFC3339_UTC_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/;
 const MAX_LEDGER_SCALED_AMOUNT = 9_000_000_000_000_000_000n;
+const PROMOTIONAL_GRANT_STATES = new Set<ModelAccessPromotionalGrantState>([
+  'active',
+  'depleted',
+  'expired',
+  'voided',
+]);
 
 const PAYMENT_ORDER_STATUSES = new Set<BillingPaymentOrderStatus>([
   'CREATED',
@@ -167,6 +180,157 @@ export function projectModelAccessBalance(value: unknown): ModelAccessBalance {
     purchasedCredits: purchasedCredits.source,
     promotionalCredits: promotionalCredits.source,
     available: available.source,
+    scale: 9,
+    observedAt: snapshotTime,
+  };
+}
+
+function projectCreditPool(
+  value: unknown,
+  allowNegativeRemaining: boolean,
+): {
+  value: ModelAccessCreditPoolUsage;
+  remaining: bigint;
+  used: bigint | null;
+  total: bigint | null;
+} {
+  if (!isRecord(value)) invalidResponse();
+  const remaining = ledgerDecimal(value.remaining);
+  const used = value.used === null ? null : ledgerDecimal(value.used);
+  const total = value.total === null ? null : ledgerDecimal(value.total);
+  if (
+    !remaining ||
+    (!allowNegativeRemaining && remaining.scaled < 0n) ||
+    (value.used !== null && !used) ||
+    (value.total !== null && !total) ||
+    (used === null) !== (total === null) ||
+    (used !== null &&
+      total !== null &&
+      (used.scaled < 0n || total.scaled < 0n || used.scaled + remaining.scaled !== total.scaled))
+  ) {
+    invalidResponse();
+  }
+  return {
+    value: {
+      remaining: remaining.source,
+      used: used?.source ?? null,
+      total: total?.source ?? null,
+    },
+    remaining: remaining.scaled,
+    used: used?.scaled ?? null,
+    total: total?.scaled ?? null,
+  };
+}
+
+function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsage {
+  if (!isRecord(value)) invalidResponse();
+  const grantId = boundedString(value.grantId);
+  const displayName =
+    value.displayName === null
+      ? null
+      : (boundedString(value.displayName, MAX_NAME_LENGTH) ?? undefined);
+  const originalAmount = ledgerDecimal(value.originalAmount);
+  const usedAmount = value.usedAmount === null ? null : ledgerDecimal(value.usedAmount);
+  const remainingAmount = ledgerDecimal(value.remainingAmount);
+  const expiresAt = observedAt(value.expiresAt);
+  const state =
+    typeof value.state === 'string' &&
+    PROMOTIONAL_GRANT_STATES.has(value.state as ModelAccessPromotionalGrantState)
+      ? (value.state as ModelAccessPromotionalGrantState)
+      : null;
+  if (
+    !grantId ||
+    displayName === undefined ||
+    !originalAmount ||
+    !remainingAmount ||
+    originalAmount.scaled <= 0n ||
+    remainingAmount.scaled < 0n ||
+    !expiresAt ||
+    !state ||
+    (state === 'active' &&
+      (remainingAmount.scaled === 0n ||
+        !usedAmount ||
+        usedAmount.scaled < 0n ||
+        usedAmount.scaled + remainingAmount.scaled !== originalAmount.scaled)) ||
+    (state === 'depleted' &&
+      (remainingAmount.scaled !== 0n ||
+      (!usedAmount ||
+        usedAmount.scaled < 0n ||
+        usedAmount.scaled !== originalAmount.scaled))) ||
+    ((state === 'expired' || state === 'voided') &&
+      (value.usedAmount !== null || remainingAmount.scaled !== 0n))
+  ) {
+    invalidResponse();
+  }
+  return {
+    grantId,
+    displayName,
+    originalAmount: originalAmount.source,
+    usedAmount: usedAmount?.source ?? null,
+    remainingAmount: remainingAmount.source,
+    expiresAt,
+    state,
+  };
+}
+
+export function projectModelAccessCreditUsage(value: unknown): ModelAccessCreditUsage {
+  if (
+    !isRecord(value) ||
+    value.scale !== 9 ||
+    !Array.isArray(value.promotionalGrants) ||
+    value.promotionalGrants.length > MAX_PROMOTIONAL_GRANTS ||
+    typeof value.promotionalGrantsComplete !== 'boolean' ||
+    value.promotionalGrantConsistency !== 'LAST_SETTLED'
+  ) {
+    invalidResponse();
+  }
+  const available = ledgerDecimal(value.available);
+  const plan = projectCreditPool(value.plan, false);
+  const purchased = projectCreditPool(value.purchased, true);
+  const promotional = projectCreditPool(value.promotional, false);
+  const snapshotTime = observedAt(value.observedAt);
+  const ledgerUpdatedAt = value.ledgerUpdatedAt === null ? null : observedAt(value.ledgerUpdatedAt);
+  if (
+    !available ||
+    plan.remaining + purchased.remaining + promotional.remaining !== available.scaled ||
+    !snapshotTime ||
+    (value.ledgerUpdatedAt !== null && !ledgerUpdatedAt)
+  ) {
+    invalidResponse();
+  }
+
+  const grantIds = new Set<string>();
+  let currentOriginalTotal = 0n;
+  const observedAtMs = Date.parse(snapshotTime);
+  const promotionalGrants = value.promotionalGrants.map((grant) => {
+    const projected = projectPromotionalGrant(grant);
+    if (grantIds.has(projected.grantId)) invalidResponse();
+    grantIds.add(projected.grantId);
+    if (
+      (projected.state === 'active' || projected.state === 'depleted') &&
+      Date.parse(projected.expiresAt) > observedAtMs
+    ) {
+      currentOriginalTotal += ledgerDecimal(projected.originalAmount)!.scaled;
+    }
+    return projected;
+  });
+  if (
+    (value.promotionalGrantsComplete &&
+      (promotional.total === null || promotional.total !== currentOriginalTotal)) ||
+    (!value.promotionalGrantsComplete && (promotional.used !== null || promotional.total !== null))
+  ) {
+    invalidResponse();
+  }
+
+  return {
+    available: available.source,
+    plan: plan.value,
+    purchased: purchased.value,
+    promotional: promotional.value,
+    promotionalGrants,
+    promotionalGrantsComplete: value.promotionalGrantsComplete,
+    promotionalGrantConsistency: 'LAST_SETTLED',
+    ledgerUpdatedAt,
     scale: 9,
     observedAt: snapshotTime,
   };
