@@ -9,6 +9,8 @@ type ResolveMobileVoiceRecordingPermissionOptions = {
   requestPermission: () => Promise<MobileVoiceRecordingPermission>;
   isRequestCurrent: () => boolean;
   isAppActive: () => boolean;
+  subscribeToAppState: (listener: (state: string) => void) => () => void;
+  signal: AbortSignal;
   waitForAppActive: () => Promise<boolean>;
 };
 
@@ -68,21 +70,48 @@ export function waitForMobileVoiceAppActive(
  * Resolves microphone permission before voice startup claims any audio
  * resources. Android may report the app as backgrounded while its system
  * permission sheet is open, and the permission promise can resolve before the
- * matching foreground event. Only that first-request path waits for active;
- * an already-granted request that genuinely backgrounds is cancelled.
+ * matching foreground event. Only backgrounding after the system prompt opens
+ * may wait for active; a tap that backgrounds during permission preflight is
+ * stale even if the app returns before the permission query resolves.
  */
 export async function resolveMobileVoiceRecordingPermission(
   options: ResolveMobileVoiceRecordingPermissionOptions,
 ): Promise<MobileVoicePermissionResult> {
-  let permission = await options.getPermission();
-  if (!options.isRequestCurrent()) return 'cancelled';
+  if (
+    options.signal.aborted
+    || !options.isRequestCurrent()
+    || !options.isAppActive()
+  ) return 'cancelled';
+
+  let backgroundedDuringPreflight = false;
+  let removePreflightSubscription: (() => void) | null = options.subscribeToAppState((state) => {
+    if (state === 'background') backgroundedDuringPreflight = true;
+  });
+  const stopObservingPreflight = (): void => {
+    removePreflightSubscription?.();
+    removePreflightSubscription = null;
+  };
+  const onAbort = (): void => stopObservingPreflight();
+  options.signal.addEventListener('abort', onAbort, { once: true });
+  let permission: MobileVoiceRecordingPermission;
+  try {
+    permission = await options.getPermission();
+  } finally {
+    stopObservingPreflight();
+    options.signal.removeEventListener('abort', onAbort);
+  }
+  if (
+    options.signal.aborted
+    || !options.isRequestCurrent()
+    || backgroundedDuringPreflight
+    || !options.isAppActive()
+  ) return 'cancelled';
 
   let openedSystemPrompt = false;
   if (!permission.granted) {
-    if (!options.isAppActive()) return 'cancelled';
     openedSystemPrompt = true;
     permission = await options.requestPermission();
-    if (!options.isRequestCurrent()) return 'cancelled';
+    if (options.signal.aborted || !options.isRequestCurrent()) return 'cancelled';
   }
 
   if (!permission.granted) return 'denied';

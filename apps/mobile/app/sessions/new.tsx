@@ -1417,6 +1417,11 @@ export default function NewRemoteSessionScreen() {
           requestPermission: requestRecordingPermissionsAsync,
           isRequestCurrent: () => voicePermissionRequestSeqRef.current === permissionRequestSeq,
           isAppActive: () => AppState.currentState === 'active',
+          subscribeToAppState: (listener) => {
+            const subscription = AppState.addEventListener('change', listener);
+            return () => subscription.remove();
+          },
+          signal: currentPermissionAbortController.signal,
           waitForAppActive: () => waitForMobileVoiceAppActive({
             isAppActive: () => AppState.currentState === 'active',
             subscribe: (listener) => {

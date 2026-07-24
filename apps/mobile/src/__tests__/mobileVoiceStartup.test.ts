@@ -16,6 +16,16 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+function stableAppStateLifecycle(): {
+  signal: AbortSignal;
+  subscribeToAppState: () => () => void;
+} {
+  return {
+    signal: new AbortController().signal,
+    subscribeToAppState: () => () => undefined,
+  };
+}
+
 describe('mobileVoiceStartup', () => {
   it('uses an existing microphone grant without opening the system prompt', async () => {
     const requestPermission = vi.fn(async () => ({ granted: true }));
@@ -23,6 +33,7 @@ describe('mobileVoiceStartup', () => {
     await expect(resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: true }),
       requestPermission,
+      ...stableAppStateLifecycle(),
       isRequestCurrent: () => true,
       isAppActive: () => true,
       waitForAppActive: async () => true,
@@ -33,20 +44,52 @@ describe('mobileVoiceStartup', () => {
   it('does not open the system prompt after backgrounding during permission preflight', async () => {
     const pendingPermission = deferred<{ granted: boolean }>();
     const requestPermission = vi.fn(async () => ({ granted: true }));
+    const abortController = new AbortController();
+    const unsubscribe = vi.fn();
+    let publishAppState = (_state: string): void => undefined;
     let appActive = true;
     const result = resolveMobileVoiceRecordingPermission({
       getPermission: () => pendingPermission.promise,
       requestPermission,
       isRequestCurrent: () => true,
       isAppActive: () => appActive,
+      subscribeToAppState: (listener) => {
+        publishAppState = listener;
+        return unsubscribe;
+      },
+      signal: abortController.signal,
       waitForAppActive: async () => true,
     });
 
     appActive = false;
+    publishAppState('background');
+    appActive = true;
     pendingPermission.resolve({ granted: false });
 
     await expect(result).resolves.toBe('cancelled');
     expect(requestPermission).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes the preflight listener when the permission request is aborted', async () => {
+    const pendingPermission = deferred<{ granted: boolean }>();
+    const abortController = new AbortController();
+    const unsubscribe = vi.fn();
+    const result = resolveMobileVoiceRecordingPermission({
+      getPermission: () => pendingPermission.promise,
+      requestPermission: async () => ({ granted: true }),
+      isRequestCurrent: () => true,
+      isAppActive: () => true,
+      subscribeToAppState: () => unsubscribe,
+      signal: abortController.signal,
+      waitForAppActive: async () => true,
+    });
+
+    abortController.abort();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    pendingPermission.resolve({ granted: false });
+    await expect(result).resolves.toBe('cancelled');
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it('waits for Android to publish active after the first permission prompt resolves', async () => {
@@ -56,6 +99,7 @@ describe('mobileVoiceStartup', () => {
     const result = resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: false }),
       requestPermission: () => pendingPermission.promise,
+      ...stableAppStateLifecycle(),
       isRequestCurrent: () => true,
       isAppActive: () => appActive,
       waitForAppActive: () => pendingForeground.promise,
@@ -87,6 +131,7 @@ describe('mobileVoiceStartup', () => {
     await expect(resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: false }),
       requestPermission: async () => ({ granted: false }),
+      ...stableAppStateLifecycle(),
       isRequestCurrent: () => true,
       isAppActive: () => true,
       waitForAppActive: async () => true,
@@ -98,6 +143,7 @@ describe('mobileVoiceStartup', () => {
     await expect(resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: true }),
       requestPermission: async () => ({ granted: true }),
+      ...stableAppStateLifecycle(),
       isRequestCurrent: () => true,
       isAppActive: () => false,
       waitForAppActive,
@@ -117,6 +163,7 @@ describe('mobileVoiceStartup', () => {
     const result = resolveMobileVoiceRecordingPermission({
       getPermission: async () => ({ granted: false }),
       requestPermission: () => pendingPermission.promise,
+      ...stableAppStateLifecycle(),
       isRequestCurrent: () => requestCurrent,
       isAppActive: () => true,
       waitForAppActive: async () => true,
