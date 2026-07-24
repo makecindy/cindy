@@ -35,6 +35,22 @@ describe('regional money', () => {
     });
   });
 
+  it('keeps actual zero exact while preserving value-estimate semantics', () => {
+    expect(regionalizeLegacyUsd(0, 'cn')).toEqual({
+      amount: 0,
+      currency: 'CNY',
+      approximate: false,
+      kind: 'actual-cost',
+    });
+    expect(regionalizeUsd(0, 'cn', 'subscription-value', 'value-estimate')).toEqual({
+      amount: 0,
+      currency: 'CNY',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value'],
+    });
+  });
+
   it('keeps global USD facts exact but marks subscription values as estimates', () => {
     expect(regionalizeUsd(3, 'global', 'reference-price')).toEqual({
       amount: 3,

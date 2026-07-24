@@ -71,10 +71,11 @@ export function regionalizeUsd(
 ): RegionalMoney {
   assertAmount(amountUsd);
   const convert = region !== 'global';
-  const approximate = convert || kind === 'value-estimate';
+  const approximateConversion = convert && amountUsd !== 0;
+  const approximate = approximateConversion || kind === 'value-estimate';
   const estimateReasons = approximate
     ? uniqueReasons([
-        convert ? 'fixed-fx' : undefined,
+        approximateConversion ? 'fixed-fx' : undefined,
         reason,
         kind === 'value-estimate' ? 'subscription-value' : undefined,
       ])
