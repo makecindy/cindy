@@ -53,6 +53,7 @@ import {
 } from './store.js';
 import {
   createHookControlManager,
+  hookNotConnectedIpcMessage,
   HookNotConnectedError,
   HookPrefsTimeoutError,
   type HookControlManager,
@@ -199,10 +200,11 @@ function currentAccountFingerprint(): string | null {
   return createHash('sha256').update(fingerprintSource).digest('base64url').slice(0, 22);
 }
 
-/** prefs 往返错误 -> IPC 错误码(规则 13)。 */
+/** prefs 往返错误 -> IPC 错误码(规则 13)。not-connected 文案随 provider 区分,
+ *  Telegram 偏好查询失败不再误报 Slack Hook 断线(issue #279)。 */
 function throwHookPrefsError(err: unknown): never {
   if (err instanceof HookNotConnectedError) {
-    throwIpcError('HOOK_NOT_CONNECTED', 'slack hook is not connected');
+    throwIpcError('HOOK_NOT_CONNECTED', hookNotConnectedIpcMessage(err.provider));
   }
   if (err instanceof HookPrefsTimeoutError) {
     throwIpcError(

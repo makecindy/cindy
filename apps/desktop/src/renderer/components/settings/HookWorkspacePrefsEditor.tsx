@@ -148,6 +148,11 @@ export function useHookWorkspacePrefs(
         : 'slack'
       : null;
   const lastReadyIdentityRef = useRef<string | null>(readyIdentity);
+  // Mount-time fetch gate: mirror the latest ready identity so the mount effect
+  // can skip the initial fetch when this provider is disabled/unbound, without
+  // taking readyIdentity as an effect dependency (which would re-subscribe).
+  const readyIdentityRef = useRef<string | null>(readyIdentity);
+  readyIdentityRef.current = readyIdentity;
   const fetchRevisionRef = useRef(0);
   const mutationRevisionRef = useRef(0);
   const telegramBindingIdRef = useRef<string | null>(telegramBindingId);
@@ -208,7 +213,12 @@ export function useHookWorkspacePrefs(
             if (view.provider === 'telegram') applyIncoming(view);
           })
         : window.electronAPI.hookControl.onPrefsChanged(applyIncoming);
-    void fetchPrefs();
+    // Only fetch on mount when the provider is actually reachable (connected and,
+    // for Telegram, a confirmed binding). A disabled/unbound provider would
+    // otherwise issue a meaningless prefs IPC that fails HOOK_NOT_CONNECTED and
+    // logs a misleading Main ERROR (issue #279); the ready-edge effect below
+    // fetches once the provider later becomes reachable.
+    if (readyIdentityRef.current !== null) void fetchPrefs();
     // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可
     void window.electronAPI.maker
       .imDefaultSettingsGet()

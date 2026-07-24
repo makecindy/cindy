@@ -304,12 +304,37 @@ export interface HookSlackToolAvailability {
   bindings: Array<{ teamId: string; teamName: string | null }>;
 }
 
-/** 连接不在线时的 prefs 读写失败(IPC 层映射 HOOK_NOT_CONNECTED)。 */
+/**
+ * 连接不在线时的 prefs 读写失败(IPC 层映射 HOOK_NOT_CONNECTED)。
+ *
+ * provider 记录失败发生在哪条 transport / 服务上: Slack 与 Telegram 各自独立
+ * 部署, 复用同一个错误类时必须带上来源, 否则 Telegram 偏好查询失败会被
+ * 误诊成 Slack 断线(见 issue #279)。null = 未指定 provider 的通用 Hook 失败。
+ */
 export class HookNotConnectedError extends Error {
-  constructor() {
-    super('slack hook connection is not connected');
+  readonly provider: HookProvider | null;
+  constructor(provider: HookProvider | null = null) {
+    super(
+      provider === 'telegram'
+        ? 'telegram provider connection is not connected'
+        : provider === 'slack'
+          ? 'slack hook connection is not connected'
+          : 'hook connection is not connected',
+    );
     this.name = 'HookNotConnectedError';
+    this.provider = provider;
   }
+}
+
+/**
+ * not-connected 失败的 IPC 面向文案(provider-specific)。Telegram 走独立服务,
+ * 失败必须明确指向 Telegram provider 而不是 Slack Hook; Slack / 未指定 provider
+ * 保留原 Slack 语义。抽成纯函数以便在 IPC 组装层复用并单测(不牵扯 electron)。
+ */
+export function hookNotConnectedIpcMessage(provider: HookProvider | null): string {
+  return provider === 'telegram'
+    ? 'Telegram provider is not connected'
+    : 'slack hook is not connected';
 }
 
 /** prefs 往返超时 —— server 大概率是不认识 prefs.* 帧的旧版本(丢帧不应答)。 */
@@ -597,7 +622,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function drainPendingPrefs(): void {
     for (const [, pending] of pendingPrefs) {
       clearTimeout(pending.timer);
-      pending.reject(new HookNotConnectedError());
+      pending.reject(new HookNotConnectedError('slack'));
     }
     pendingPrefs.clear();
   }
@@ -606,7 +631,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function drainPendingProviderPrefs(): void {
     for (const [, pending] of pendingProviderPrefs) {
       clearTimeout(pending.timer);
-      pending.reject(new HookNotConnectedError());
+      pending.reject(new HookNotConnectedError('telegram'));
     }
     pendingProviderPrefs.clear();
   }
@@ -627,13 +652,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function sendPrefsRequest(build: (requestId: string) => HookMessage): Promise<HookPrefsView> {
     const t = transport;
     if (t === null || status !== 'connected') {
-      return Promise.reject(new HookNotConnectedError());
+      return Promise.reject(new HookNotConnectedError('slack'));
     }
     const requestId = randomUUID();
     const frame = build(requestId);
     return new Promise<HookPrefsView>((resolve, reject) => {
       if (!t.send(frame)) {
-        reject(new HookNotConnectedError());
+        reject(new HookNotConnectedError('slack'));
         return;
       }
       const timer = setTimeout(() => {
@@ -657,12 +682,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       !store.get().telegramEnabled ||
       bindingId === null
     ) {
-      return Promise.reject(new HookNotConnectedError());
+      return Promise.reject(new HookNotConnectedError('telegram'));
     }
     const requestId = randomUUID();
     return new Promise<ProviderPrefsView>((resolve, reject) => {
       if (!t.send(build(requestId, bindingId))) {
-        reject(new HookNotConnectedError());
+        reject(new HookNotConnectedError('telegram'));
         return;
       }
       const timer = setTimeout(() => {
@@ -1621,7 +1646,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (msg.payload.bindingId !== pending.bindingId) {
           pendingProviderPrefs.delete(msg.payload.replyTo);
           clearTimeout(pending.timer);
-          pending.reject(new HookNotConnectedError());
+          pending.reject(new HookNotConnectedError('telegram'));
           log.warn('provider prefs state bindingId mismatch, dropped');
           return;
         }
@@ -1630,7 +1655,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (msg.payload.bindingId !== currentBindingId) {
           pendingProviderPrefs.delete(msg.payload.replyTo);
           clearTimeout(pending.timer);
-          pending.reject(new HookNotConnectedError());
+          pending.reject(new HookNotConnectedError('telegram'));
           log.warn('provider prefs reply for a superseded binding, dropped');
           return;
         }

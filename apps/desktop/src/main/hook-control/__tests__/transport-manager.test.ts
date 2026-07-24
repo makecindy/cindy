@@ -38,6 +38,7 @@ import {
 
 import {
   createHookControlManager,
+  hookNotConnectedIpcMessage,
   HookNotConnectedError,
   HookPrefsTimeoutError,
   providerForExternalKey,
@@ -2495,11 +2496,14 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     await expect(manager.getWorkspacePrefs()).rejects.toBeInstanceOf(HookPrefsTimeoutError);
   });
 
-  it('未连接: 立即拒绝 HookNotConnectedError', async () => {
+  it('未连接: 立即拒绝 HookNotConnectedError(provider=slack)', async () => {
     const store = memoryStore({ url: 'ws://127.0.0.1:1', enabled: false });
     const manager = makeManager(store);
     cleanups.push(() => manager.dispose());
-    await expect(manager.getWorkspacePrefs()).rejects.toBeInstanceOf(HookNotConnectedError);
+    const rejection = await manager.getWorkspacePrefs().catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(HookNotConnectedError);
+    // Slack prefs 失败必须携带 slack provider —— IPC 层据此映射 Slack 文案。
+    expect((rejection as HookNotConnectedError).provider).toBe('slack');
   });
 
   it('主动推送(replyTo null): 只广播, 不惊动在途请求', async () => {
@@ -2532,6 +2536,39 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     await server.waitFor('prefs.get');
     sock.close(); // server 掉线
     await expect(promise).rejects.toBeInstanceOf(HookNotConnectedError);
+  });
+});
+
+describe('provider-specific not-connected 映射(issue #279)', () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups.splice(0)) c();
+  });
+
+  it('IPC 文案随 provider 区分: Telegram 不再复用 Slack 文案', () => {
+    expect(hookNotConnectedIpcMessage('telegram')).toBe('Telegram provider is not connected');
+    expect(hookNotConnectedIpcMessage('slack')).toBe('slack hook is not connected');
+    // 未指定 provider 的通用 Hook 失败保留原 Slack 语义(不回归旧调用点)。
+    expect(hookNotConnectedIpcMessage(null)).toBe('slack hook is not connected');
+  });
+
+  it('Telegram 未启用: getProviderWorkspacePrefs 拒绝 HookNotConnectedError(provider=telegram)', async () => {
+    const store = memoryStore({
+      url: 'ws://127.0.0.1:1',
+      enabled: true,
+      telegramEnabled: false,
+    });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+    const rejection = await manager
+      .getProviderWorkspacePrefs('telegram')
+      .catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(HookNotConnectedError);
+    // Telegram 偏好失败必须指向 Telegram provider —— 否则 Slack 在线时会被误诊断线。
+    expect((rejection as HookNotConnectedError).provider).toBe('telegram');
+    expect(hookNotConnectedIpcMessage((rejection as HookNotConnectedError).provider)).toBe(
+      'Telegram provider is not connected',
+    );
   });
 });
 
