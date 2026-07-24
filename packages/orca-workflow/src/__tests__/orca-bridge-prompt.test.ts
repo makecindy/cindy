@@ -17,6 +17,8 @@ describe('renderOrcaLeadSystemPrompt', () => {
     'If no existing worker matches a requested role or label, say so and ask whether to create one; do not silently substitute another worker or a native subagent.';
   const missingGenericWorkerBoundary =
     'If the user assigns a task to a generic Orca Worker but no worker exists, say so and ask whether to create one; the assignment itself is not authorization to create it.';
+  const multiRoleReadinessBoundary =
+    'For a multi-role request, resolve every requested role or label before dispatching any task; if any target is missing or its creation approval is unresolved, dispatch nothing, report all missing targets, and ask first.';
   const sendDispatchSignals =
     'Treat send_to_worker as dispatched only when its payload has ok=true and wake_kind=resumed, already-active, or queued.';
   const createDispatchSignals =
@@ -85,6 +87,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
     expect(prompt).toContain(explicitCreationBoundary);
     expect(prompt).toContain(missingWorkerBoundary);
     expect(prompt).toContain(missingGenericWorkerBoundary);
+    expect(prompt).toContain(multiRoleReadinessBoundary);
   });
 
   it('keeps Worker routing and disclosure rules when an initial worker exists', () => {

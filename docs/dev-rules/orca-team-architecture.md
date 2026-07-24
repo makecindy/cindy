@@ -166,7 +166,8 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
    内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
    `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。
    如果用户只泛称“Worker”且当前没有任何 Worker，Lead 同样必须先说明并询问是否创建；
-   任务指派本身不等于创建授权。Codex
+   任务指派本身不等于创建授权。多角色请求必须在派发任何任务前解析全部 role／label；
+   只要有目标缺失或创建授权未决，就不得部分派发，必须集中列出缺失项并先询问。Codex
    `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
    Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
    Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
