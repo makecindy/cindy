@@ -190,10 +190,14 @@ describe('usePlanChange', () => {
     await act(() => result.current.startQuote('max_month', TARGET_PLAN));
     await act(() => result.current.confirm());
 
-    expect(result.current.state).toMatchObject({ phase: 'QUOTE_READY', error: true });
+    expect(result.current.state).toMatchObject({
+      phase: 'QUOTE_READY',
+      error: true,
+      stale: false,
+    });
   });
 
-  it('falls back to the pre-confirm snapshot when the recovery read also fails', async () => {
+  it('marks the snapshot stale when the recovery read also fails, then resyncs', async () => {
     api.quotePlanChange.mockResolvedValue(change());
     api.confirmPlanChange.mockRejectedValue(new Error('network'));
     api.refreshPlanChange.mockRejectedValue(new Error('network'));
@@ -202,7 +206,21 @@ describe('usePlanChange', () => {
     await act(() => result.current.startQuote('max_month', TARGET_PLAN));
     await act(() => result.current.confirm());
 
-    expect(result.current.state).toMatchObject({ phase: 'QUOTE_READY', error: true });
+    expect(result.current.state).toMatchObject({
+      phase: 'QUOTE_READY',
+      error: true,
+      stale: true,
+    });
+
+    // Connectivity returns: the next read swaps in the server truth and clears
+    // the stale flag, so the change becomes actionable again.
+    api.refreshPlanChange.mockResolvedValue(change({ status: 'AWAITING_PAYMENT' }));
+    await act(() => result.current.refresh());
+    expect(result.current.state).toMatchObject({
+      phase: 'AWAITING_PAYMENT',
+      error: false,
+      stale: false,
+    });
   });
 
   it('adopts the server pending projection when the quote request fails', async () => {

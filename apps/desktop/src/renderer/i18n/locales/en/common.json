@@ -6998,6 +6998,7 @@
       "failedTitle": "Plan change failed",
       "failedBody": "The plan change did not complete. Your current plan is unchanged.",
       "requestFailed": "The request failed. Please try again.",
+      "resyncHint": "The confirmation result could not be verified. Syncing the latest status from the server…",
       "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
       "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",
       "upgradeHint": "The upgrade takes effect immediately after payment. The renewal price becomes the new plan price.",

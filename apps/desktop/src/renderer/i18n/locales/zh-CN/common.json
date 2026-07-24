@@ -6987,6 +6987,7 @@
       "failedTitle": "套餐变更失败",
       "failedBody": "套餐变更未完成,当前套餐保持不变。",
       "requestFailed": "请求失败,请重试。",
+      "resyncHint": "确认结果暂时无法核实,正在从服务端同步最新状态…",
       "upgradeDueNow": "本期需支付差价 {{amount}}",
       "upgradeNoAmount": "确认后升级立即生效。",
       "upgradeHint": "支付完成后升级立即生效,后续按新套餐价格续费。",

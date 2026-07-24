@@ -339,7 +339,9 @@ export function PlanChangeStatusDialog({
                 )}
                 {state.error && (
                   <p className="mt-3 text-12 text-[var(--text-primary)]">
-                    {t('billing.planChange.requestFailed')}
+                    {state.stale
+                      ? t('billing.planChange.resyncHint')
+                      : t('billing.planChange.requestFailed')}
                   </p>
                 )}
               </>
@@ -441,7 +443,7 @@ export function PlanChangeStatusDialog({
 
           <div className="flex min-h-16 items-center justify-between gap-3 border-t border-[var(--border-default)] px-6 py-3">
             <div>
-              {state.phase === 'QUOTE_READY' && change?.status === 'QUOTED' && (
+              {state.phase === 'QUOTE_READY' && change?.status === 'QUOTED' && !state.stale && (
                 <button
                   type="button"
                   onClick={onAbandon}
@@ -452,7 +454,8 @@ export function PlanChangeStatusDialog({
               )}
             </div>
             <div className="flex items-center gap-2">
-              {state.phase === 'AWAITING_PAYMENT' && (
+              {(state.phase === 'AWAITING_PAYMENT' ||
+                (state.phase === 'QUOTE_READY' && state.stale)) && (
                 <button
                   type="button"
                   onClick={onRefresh}
@@ -462,7 +465,9 @@ export function PlanChangeStatusDialog({
                   {t('billing.actions.refresh')}
                 </button>
               )}
-              {state.phase === 'QUOTE_READY' && (
+              {/* A stale snapshot must never be confirmable; the refresh action
+                  above (plus background polling) re-reads the server first. */}
+              {state.phase === 'QUOTE_READY' && !state.stale && (
                 <button
                   type="button"
                   onClick={onConfirm}

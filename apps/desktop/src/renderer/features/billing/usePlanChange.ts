@@ -32,6 +32,12 @@ export type PlanChangeState = {
   planChange: BillingPlanChange | null;
   targetPlan: BillingPlanChangeTargetPlan | null;
   error: boolean;
+  /**
+   * True when the rendered change is a pre-request snapshot that could not be
+   * re-read from the server (confirm and the recovery read both failed). A
+   * stale quote must not be confirmable until a fresh read succeeds.
+   */
+  stale: boolean;
 };
 
 export type PlanChangeSettledKind = 'APPLIED' | 'CANCELED' | 'SCHEDULED';
@@ -42,6 +48,7 @@ const INITIAL_STATE: PlanChangeState = {
   planChange: null,
   targetPlan: null,
   error: false,
+  stale: false,
 };
 
 /**
@@ -135,6 +142,7 @@ export function usePlanChange(
         planChange: change,
         targetPlan: options?.targetPlan !== undefined ? options.targetPlan : current.targetPlan,
         error: false,
+        stale: false,
       }));
     },
     [notifySettled, persistIntent],
@@ -177,7 +185,14 @@ export function usePlanChange(
               createdAt: new Date().toISOString(),
             };
       persistIntent(intent);
-      setState({ open: true, phase: 'QUOTING', planChange: null, targetPlan, error: false });
+      setState({
+        open: true,
+        phase: 'QUOTING',
+        planChange: null,
+        targetPlan,
+        error: false,
+        stale: false,
+      });
       await withRequestLock(async () => {
         try {
           const change = await billingApi.quotePlanChange(targetOfferCode, intent.idempotencyKey);
@@ -219,10 +234,14 @@ export function usePlanChange(
             setState((value) => ({ ...value, error: true }));
           }
         } else {
+          // Offline fallback: the snapshot may lag the server. Mark it stale so
+          // the dialog swaps confirm for a resync action, and let the poll
+          // effect keep retrying the read until connectivity returns.
           setState((value) => ({
             ...value,
             phase: phaseForPlanChange(change),
             error: true,
+            stale: true,
           }));
         }
       }
@@ -313,7 +332,10 @@ export function usePlanChange(
   }, [accountId, applyChange, persistIntent, withRequestLock]);
 
   useEffect(() => {
-    if (!state.open || state.phase !== 'AWAITING_PAYMENT') return;
+    // Poll while waiting for a payment, and also while showing a stale
+    // snapshot so the dialog resynchronizes on its own once the server is
+    // reachable again.
+    if (!state.open || (state.phase !== 'AWAITING_PAYMENT' && !state.stale)) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, 3_000);
@@ -327,7 +349,7 @@ export function usePlanChange(
       window.removeEventListener('focus', onVisible);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [refresh, state.open, state.phase]);
+  }, [refresh, state.open, state.phase, state.stale]);
 
   return {
     state,
