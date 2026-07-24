@@ -47,7 +47,7 @@ export function resolveComputerPermissionGuideInteraction(
   return 'drag';
 }
 
-/** The main process carries this flag across a closed-and-reopened guide. */
+/** Restore the drag hint from localStorage or an explicit query parameter. */
 export function resolveComputerPermissionGuideInitialAwaitingUser(
   search: string,
   storedValue?: string | null,

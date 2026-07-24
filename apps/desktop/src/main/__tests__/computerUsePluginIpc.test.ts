@@ -144,10 +144,16 @@ describe('computer use platform copy invariants', () => {
       path.resolve(__dirname, '../../renderer/components/settings/ComputerUseSection.tsx'),
       'utf-8',
     );
-    expect(sectionSource).toContain("nextStatus?.permissionState?.platform === 'macos'");
-    expect(sectionSource).toContain(
-      "? 'settings.computerUse.directControl.permissionIntro.macosDescription'",
+    expect(sectionSource).toContain("nextStatus.permissionState?.platform === 'macos'");
+    const macPermissionBlockStart = sectionSource.indexOf(
+      "{window.electronAPI.platform === 'darwin' ? (",
     );
+    const permissionTitle = sectionSource.indexOf(
+      "t('settings.computerUse.directControl.permissions.title')",
+      macPermissionBlockStart,
+    );
+    expect(macPermissionBlockStart).toBeGreaterThanOrEqual(0);
+    expect(permissionTitle).toBeGreaterThan(macPermissionBlockStart);
 
     for (const locale of ['en', 'ja', 'ko', 'zh-CN']) {
       const messages = JSON.parse(

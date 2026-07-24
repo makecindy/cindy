@@ -54,6 +54,9 @@ const SWITCH_OBSERVER_INTERVAL_MS = 900;
 const PERMISSION_PROBE_BYPASS_MIN_INTERVAL_MS = 2_000;
 const DRAG_RESTORE_TIMEOUT_MS = 12_000;
 const NATIVE_ATTACH_TIMEOUT_MS = 30_000;
+const DRAG_ICON_DATA_URL_PREFIX = 'data:image/png;base64,';
+const MAX_DRAG_ICON_BASE64_LENGTH = 256 * 1024;
+const PNG_SIGNATURE_BASE64_PREFIX = 'iVBORw0KGgo';
 const MAC_ACCESSIBILITY_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 const MAC_SCREEN_RECORDING_SETTINGS_URL =
@@ -675,6 +678,20 @@ export function isComputerPermissionGuideWebContents(sender: WebContents): boole
   );
 }
 
+function isValidComputerPermissionDragIconDataUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.startsWith(DRAG_ICON_DATA_URL_PREFIX)) {
+    return false;
+  }
+  const encoded = value.slice(DRAG_ICON_DATA_URL_PREFIX.length);
+  return (
+    encoded.length > 0
+    && encoded.length <= MAX_DRAG_ICON_BASE64_LENGTH
+    && encoded.length % 4 === 0
+    && encoded.startsWith(PNG_SIGNATURE_BASE64_PREFIX)
+    && /^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
+  );
+}
+
 /** Start a native file drag for the real Computer Use.app bundle. */
 export function startComputerPermissionAppDrag(
   sender: WebContents,
@@ -682,14 +699,23 @@ export function startComputerPermissionAppDrag(
 ): void {
   if (!isComputerPermissionGuideWebContents(sender)) return;
   const appBundlePath = getComputerDriverAppBundlePath();
-  if (!appBundlePath || typeof iconDataUrl !== 'string') {
+  const hasValidIcon = isValidComputerPermissionDragIconDataUrl(iconDataUrl);
+  if (!appBundlePath || !hasValidIcon) {
     log.warn('Computer Use app drag is unavailable', {
       hasAppBundle: Boolean(appBundlePath),
-      hasIcon: typeof iconDataUrl === 'string',
+      hasValidIcon,
     });
     return;
   }
-  const icon = nativeImage.createFromDataURL(iconDataUrl);
+  let icon: Electron.NativeImage;
+  try {
+    icon = nativeImage.createFromDataURL(iconDataUrl);
+  } catch (error) {
+    log.warn('Computer Use app drag icon could not be decoded', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
   if (icon.isEmpty()) {
     log.warn('Computer Use app drag icon is empty');
     return;
@@ -928,6 +954,17 @@ export async function showComputerPermissionGuideWindow(
       },
       onExited: () => {
         if (!ownsNativeHost()) return;
+        if (!nativeGuideAttached) {
+          clearNativeAttachTimeout();
+          nativeHost = null;
+          fallbackRequested = true;
+          showElectronFallback();
+          log.warn(
+            'native Computer Use permission coach exited before attaching; '
+            + 'showing Electron fallback',
+          );
+          return;
+        }
         log.warn('native Computer Use permission coach exited unexpectedly');
         closeComputerPermissionGuideWindow();
         broadcastPermissionGuideCancelled();

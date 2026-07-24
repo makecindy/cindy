@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import type { WebContents } from 'electron';
 
 const originalPlatform = process.platform;
+const VALID_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
 
 const harness = vi.hoisted(() => {
   const windows: FakeWindow[] = [];
@@ -216,7 +217,7 @@ function createDeferred<T>(): {
 
 function finishTestDrag(guide: typeof import('../window')): void {
   const sender = harness.windows[1].webContents as unknown as WebContents;
-  guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,test');
+  guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
   guide.finishComputerPermissionAppDrag(sender);
 }
 
@@ -484,6 +485,44 @@ describe('Electron Computer Use permission guide window', () => {
       expect(harness.windows[0].showInactive).toHaveBeenCalledOnce();
       expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
     });
+  });
+
+  it('shows the Electron fallback when the native guide exits before attaching', async () => {
+    const nativeStarted = createDeferred<boolean>();
+    harness.nativeShow.mockReturnValueOnce(nativeStarted.promise);
+    const guide = await import('../window');
+
+    await guide.showComputerPermissionGuideWindow(null);
+    harness.nativeHostState.options?.onExited?.();
+
+    await vi.waitFor(() => {
+      expect(harness.windows[0].showInactive).toHaveBeenCalledOnce();
+      expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
+    });
+    expect(harness.closeComputerUseSwitchLocator).not.toHaveBeenCalled();
+    expect(harness.broadcastSend).not.toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
+
+    nativeStarted.resolve(false);
+    await Promise.resolve();
+    expect(harness.windows[0].showInactive).toHaveBeenCalledOnce();
+    expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
+  });
+
+  it('cancels the guide when the attached native guide exits unexpectedly', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    harness.nativeHostState.options?.onAttached?.();
+    harness.closeComputerUseSwitchLocator.mockClear();
+    harness.broadcastSend.mockClear();
+
+    harness.nativeHostState.options?.onExited?.();
+
+    expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
+    expect(harness.broadcastSend).toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
   });
 
   it('does not query through CuaDriver before a confirmed app drag', async () => {
@@ -993,7 +1032,7 @@ describe('Electron Computer Use permission guide window', () => {
     harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
     harness.locateComputerUseSwitchTarget.mockResolvedValue({ status: 'not-found' });
     const sender = harness.windows[1].webContents as unknown as WebContents;
-    guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,test');
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
     guide.finishComputerPermissionAppDrag(sender);
 
     await vi.waitFor(() => {
@@ -1010,7 +1049,7 @@ describe('Electron Computer Use permission guide window', () => {
     const guideWindow = harness.windows[1];
 
     const sender = guideWindow.webContents as unknown as WebContents;
-    guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,test');
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
     expect(guideWindow.webContents.startDrag).toHaveBeenCalledWith({
       file: '/Applications/CuaDriver.app',
       icon: expect.anything(),
@@ -1019,6 +1058,38 @@ describe('Electron Computer Use permission guide window', () => {
 
     guide.finishComputerPermissionAppDrag(sender);
     expect(guideWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(false);
+  });
+
+  it('rejects malformed and oversized drag icons before decoding', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    const guideWindow = harness.windows[1];
+    const sender = guideWindow.webContents as unknown as WebContents;
+    harness.nativeImage.createFromDataURL.mockClear();
+
+    guide.startComputerPermissionAppDrag(sender, 'data:text/plain;base64,aGVsbG8=');
+    guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,aGVsbG8=');
+    guide.startComputerPermissionAppDrag(
+      sender,
+      `data:image/png;base64,iVBORw0KGgo${'A'.repeat(256 * 1024)}`,
+    );
+
+    expect(harness.nativeImage.createFromDataURL).not.toHaveBeenCalled();
+    expect(guideWindow.webContents.startDrag).not.toHaveBeenCalled();
+  });
+
+  it('does not start a drag when the validated icon cannot be decoded', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    const guideWindow = harness.windows[1];
+    const sender = guideWindow.webContents as unknown as WebContents;
+    harness.nativeImage.createFromDataURL.mockImplementationOnce(() => {
+      throw new Error('decode failed');
+    });
+
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
+
+    expect(guideWindow.webContents.startDrag).not.toHaveBeenCalled();
   });
 
   it('centers the guide vertically on the real System Settings window', async () => {
@@ -1073,7 +1144,7 @@ describe('Electron Computer Use permission guide window', () => {
     });
 
     const sender = guideWindow.webContents as unknown as WebContents;
-    guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,test');
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
 
     const dragState = guide.readPermissionDragState();
     expect(dragState.accessibility).toBe(false);
@@ -1087,7 +1158,7 @@ describe('Electron Computer Use permission guide window', () => {
     const guideWindow = harness.windows[1];
 
     const sender = guideWindow.webContents as unknown as WebContents;
-    guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,test');
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
 
     await vi.advanceTimersByTimeAsync(12_000);
 
@@ -1103,7 +1174,7 @@ describe('Electron Computer Use permission guide window', () => {
     const guideWindow = harness.windows[1];
 
     const sender = guideWindow.webContents as unknown as WebContents;
-    guide.startComputerPermissionAppDrag(sender, 'data:image/png;base64,test');
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
 
     guide.closeComputerPermissionGuideWindow();
 
