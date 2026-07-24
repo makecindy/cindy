@@ -32,6 +32,8 @@ const CN_MANIFEST = JSON.stringify({
   telegramHookWsUrl: '',
   slackHookWsUrl: 'wss://hook.example.invalid',
   websiteUrl: 'https://website.example.invalid',
+  modelAccessApiBaseUrl: 'https://model-access.example.invalid',
+  voiceApiBaseUrl: 'https://voice.example.invalid',
   githubApiBaseUrl: 'https://github-api.example.invalid',
   skillhubApiBaseUrl: 'https://skillhub.example.invalid',
   pluginApiBaseUrl: 'https://plugin.example.invalid',
@@ -47,6 +49,8 @@ test('localhost 八件套覆写,其余字段照抄 cn 正本,返回绝对路径'
   assert.equal(local.authApiBaseUrl, 'http://localhost:3344');
   assert.equal(local.deviceLinkApiBaseUrl, 'http://localhost:3335');
   assert.equal(local.ossApiBaseUrl, 'http://localhost:3340');
+  assert.equal(local.modelAccessApiBaseUrl, 'http://localhost:3339');
+  assert.equal(local.voiceApiBaseUrl, 'http://localhost:3342');
   assert.equal(local.githubApiBaseUrl, 'http://localhost:3336');
   assert.equal(local.skillhubApiBaseUrl, 'http://localhost:3341');
   assert.equal(local.pluginApiBaseUrl, 'http://localhost:3343');
@@ -84,6 +88,8 @@ test('生成物能过客户端 parser 的 allowHttp 校验(与仓内正本同一
     'heartbeatUrl',
     'slackHookWsUrl',
     'websiteUrl',
+    'modelAccessApiBaseUrl',
+    'voiceApiBaseUrl',
     'githubApiBaseUrl',
     'skillhubApiBaseUrl',
     'pluginApiBaseUrl',
