@@ -146,7 +146,8 @@ async function listenOnLoopbackPort(server: Server, host: string, port: number):
       cleanup();
       const addr = server.address();
       if (!addr || typeof addr === 'string') {
-        reject(new Error('anthropic-compat-proxy: failed to bind loopback port'));
+        const error = new Error('anthropic-compat-proxy: failed to bind loopback port');
+        server.close(() => reject(error));
         return;
       }
       resolve(addr.port);

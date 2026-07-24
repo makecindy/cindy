@@ -164,6 +164,74 @@ describe('anthropic-compat-proxy loopback port guard', () => {
       random.mockRestore();
     }
   });
+
+  it('closes a listening proxy server before rejecting an invalid address', async () => {
+    let closed = false;
+    const fakeServer = new EventEmitter() as EventEmitter & {
+      address: () => null;
+      close: (callback: () => void) => void;
+      listen: () => void;
+    };
+    fakeServer.address = () => null;
+    fakeServer.close = (callback) => {
+      closed = true;
+      queueMicrotask(callback);
+    };
+    fakeServer.listen = () => queueMicrotask(() => fakeServer.emit('listening'));
+
+    await expect(listenOnFetchSafeLoopbackPort(
+      fakeServer as unknown as Server,
+      '127.0.0.1',
+      {},
+    )).rejects.toThrow('anthropic-compat-proxy: failed to bind loopback port');
+    expect(closed).toBe(true);
+    expect(fakeServer.listenerCount('error')).toBe(0);
+    expect(fakeServer.listenerCount('listening')).toBe(0);
+  });
+
+  it('closes a listening test server before rejecting an invalid address', async () => {
+    let closed = false;
+    const fakeServer = new EventEmitter() as EventEmitter & {
+      address: () => null;
+      close: (callback: () => void) => void;
+      listen: () => void;
+    };
+    fakeServer.address = () => null;
+    fakeServer.close = (callback) => {
+      closed = true;
+      queueMicrotask(callback);
+    };
+    fakeServer.listen = () => queueMicrotask(() => fakeServer.emit('listening'));
+
+    await expect(
+      listenOnAvailableLoopbackPort(fakeServer as unknown as Server),
+    ).rejects.toThrow('test loopback server failed to resolve its listening port');
+    expect(closed).toBe(true);
+    expect(fakeServer.listenerCount('error')).toBe(0);
+    expect(fakeServer.listenerCount('listening')).toBe(0);
+  });
+
+  it('reports a stable Error after exhausting test-server bind retries', async () => {
+    const fakeServer = new EventEmitter() as EventEmitter & {
+      address: () => null;
+      listen: () => void;
+    };
+    fakeServer.address = () => null;
+    fakeServer.listen = () => queueMicrotask(() => {
+      fakeServer.emit(
+        'error',
+        Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+      );
+    });
+
+    await expect(
+      listenOnAvailableLoopbackPort(fakeServer as unknown as Server),
+    ).rejects.toThrow(
+      'test loopback server failed to bind after 32 attempts; last error permission denied',
+    );
+    expect(fakeServer.listenerCount('error')).toBe(0);
+    expect(fakeServer.listenerCount('listening')).toBe(0);
+  });
 });
 
 describe('anthropic-compat-proxy tool_use provider field compatibility', () => {

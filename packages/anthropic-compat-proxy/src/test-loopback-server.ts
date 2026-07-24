@@ -22,7 +22,8 @@ function listenOnce(server: Server): Promise<number> {
       cleanup();
       const address = server.address();
       if (!address || typeof address === 'string') {
-        reject(new Error('test loopback server failed to resolve its listening port'));
+        const error = new Error('test loopback server failed to resolve its listening port');
+        server.close(() => reject(error));
         return;
       }
       resolve(address.port);
@@ -45,16 +46,19 @@ function listenOnce(server: Server): Promise<number> {
  * surfacing EACCES even though another ephemeral port is available.
  */
 export async function listenOnAvailableLoopbackPort(server: Server): Promise<number> {
-  let lastRetryableError: unknown;
+  let lastRetryableError: Error | null = null;
 
   for (let attempt = 1; attempt <= LOOPBACK_LISTEN_MAX_ATTEMPTS; attempt += 1) {
     try {
       return await listenOnce(server);
     } catch (error) {
       if (!isRetryableListenError(error)) throw error;
-      lastRetryableError = error;
+      lastRetryableError = error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  throw lastRetryableError;
+  throw new Error(
+    `test loopback server failed to bind after ${LOOPBACK_LISTEN_MAX_ATTEMPTS} attempts` +
+      (lastRetryableError === null ? '' : `; last error ${lastRetryableError.message}`),
+  );
 }
