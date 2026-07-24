@@ -79,6 +79,12 @@ import {
 } from '@/lib/issueConfirmPayload';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
 import { normalizeTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import {
+  normalizeRegionalMoney,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from '../../shared/regionalMoney';
 import type { PersistedSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata';
 import { isSessionUpgrading } from '@/state/ccMgrUpgradeStore';
 import { i18n } from '@/i18n';
@@ -375,10 +381,12 @@ export interface ChatMessage {
    * 仅 assistant 消息可能有值;MessageActionBar 据此显示"本轮消耗"。
    */
   turnCostUsd?: number;
+  turnMoney?: RegionalMoney;
   /** true = 订阅模式下的 token 价值;false = API 账单 cost / API 单价折算 cost。 */
   turnCostIsEstimate?: boolean;
   /** 用户从最近一条真实输入至本消息的累计成本；只用于消息旁展示。 */
   userTurnCostUsd?: number;
+  userTurnMoney?: RegionalMoney;
   userTurnCostIsEstimate?: boolean;
   /** 本轮 token/cache 明细;旧消息或未拿到 usage 时缺省。 */
   turnUsageDetails?: TurnUsageDetails;
@@ -3519,37 +3527,61 @@ function initGlobalListeners(): void {
     const p = raw as {
       sessionId?: string;
       clientId?: string;
+      turnMoney?: unknown;
       turnCostUsd?: number;
       turnCostIsEstimate?: boolean;
+      userTurnMoney?: unknown;
       userTurnCostUsd?: number;
       userTurnCostIsEstimate?: boolean;
       turnUsageDetails?: unknown;
     } | null;
     if (!p?.sessionId || !p.clientId) return;
-    if (typeof p.turnCostUsd !== 'number' || !(p.turnCostUsd > 0)) return;
-    const { sessionId, clientId, turnCostUsd } = p;
     const turnCostIsEstimate = p.turnCostIsEstimate === true;
+    const turnUsageDetails = normalizeTurnUsageDetails(p.turnUsageDetails);
+    const normalizedTurnMoney = normalizeRegionalMoney(p.turnMoney);
+    const legacyTurnCostUsd =
+      typeof p.turnCostUsd === 'number' && p.turnCostUsd > 0
+        ? resolveEstimatedTurnCostUsd(
+            p.turnCostUsd,
+            turnCostIsEstimate,
+            turnUsageDetails,
+          )
+        : undefined;
+    const turnMoney =
+      normalizedTurnMoney ??
+      (legacyTurnCostUsd !== undefined
+        ? regionalizeLegacyUsd(legacyTurnCostUsd, CURRENT_CINDY_REGION)
+        : undefined);
+    if (!turnMoney || !(turnMoney.amount > 0)) return;
+    const { sessionId, clientId } = p;
+    const userTurnMoney =
+      normalizeRegionalMoney(p.userTurnMoney) ??
+      (typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
+        ? regionalizeLegacyUsd(p.userTurnCostUsd, CURRENT_CINDY_REGION)
+        : undefined);
     const userTurnCostUsd =
       typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
         ? p.userTurnCostUsd
         : undefined;
-    const turnUsageDetails = normalizeTurnUsageDetails(p.turnUsageDetails);
-    const resolvedTurnCostUsd = resolveEstimatedTurnCostUsd(
-      turnCostUsd,
-      turnCostIsEstimate,
-      turnUsageDetails,
-    );
+    const resolvedTurnCostUsd =
+      turnMoney.currency === 'USD'
+        ? turnMoney.amount
+        : undefined;
     setState(sessionId, (s) => {
       const idx = s.messages.findIndex((m) => m.clientId === clientId);
       if (idx < 0) return s;
       const msgs = s.messages.slice();
       msgs[idx] = {
         ...msgs[idx],
-        turnCostUsd: resolvedTurnCostUsd,
+        turnMoney,
+        ...(resolvedTurnCostUsd !== undefined
+          ? { turnCostUsd: resolvedTurnCostUsd }
+          : {}),
         turnCostIsEstimate,
-        ...(userTurnCostUsd
+        ...(userTurnMoney
           ? {
-              userTurnCostUsd,
+              userTurnMoney,
+              ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
               userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
             }
           : {}),
@@ -3637,15 +3669,27 @@ function initGlobalListeners(): void {
           // 被控端 session 终身累计 cost 落库推送(sessionSpendBroadcaster 走裸 UPDATE、
           // 不发 sessions:patched)→ 镜像进远程项目分片;打开中的远程会话底部 $ chip 经
           // session.totalCostUsd → useSessionSpend 初值重置显示最新值。
-          const p = push.payload as { sessionId?: string; totalCostUsd?: number } | null;
-          // 跨设备 payload 防御:NaN / 负数不入镜像(否则 chip 显示 $NaN / 污染后续计算)。
-          if (
-            push.deviceId && p?.sessionId
-            && typeof p.totalCostUsd === 'number'
-            && Number.isFinite(p.totalCostUsd) && p.totalCostUsd >= 0
-          ) {
+          const p = push.payload as {
+            sessionId?: string;
+            totalMoney?: unknown;
+            totalCostUsd?: number;
+          } | null;
+          const totalMoney =
+            normalizeRegionalMoney(p?.totalMoney) ??
+            (typeof p?.totalCostUsd === 'number' &&
+            Number.isFinite(p.totalCostUsd) &&
+            p.totalCostUsd >= 0
+              ? regionalizeLegacyUsd(
+                  p.totalCostUsd,
+                  CURRENT_CINDY_REGION,
+                )
+              : undefined);
+          if (push.deviceId && p?.sessionId && totalMoney) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
-              totalCostUsd: p.totalCostUsd,
+              totalMoney,
+              ...(typeof p.totalCostUsd === 'number'
+                ? { totalCostUsd: p.totalCostUsd }
+                : {}),
             });
           }
           break;
@@ -7956,6 +8000,33 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: { kind: m.agentMeta.goalNotice },
       };
     }
+    const agentMeta = m.agentMeta;
+    const turnUsageDetails =
+      m.role === 'assistant'
+        ? normalizeTurnUsageDetails(agentMeta?.turnUsageDetails)
+        : undefined;
+    const normalizedTurnMoney =
+      m.role === 'assistant'
+        ? normalizeRegionalMoney(agentMeta?.turnCost)
+        : undefined;
+    const legacyTurnCostUsd =
+      m.role === 'assistant' &&
+      typeof agentMeta?.turnCostUsd === 'number' &&
+      agentMeta.turnCostUsd > 0
+        ? resolveEstimatedTurnCostUsd(
+            agentMeta.turnCostUsd,
+            agentMeta.turnCostIsEstimate === true,
+            turnUsageDetails,
+            agentMeta.model,
+          )
+        : undefined;
+    const persistedTurnMoney =
+      m.role === 'assistant'
+        ? normalizedTurnMoney ??
+          (legacyTurnCostUsd !== undefined
+            ? regionalizeLegacyUsd(legacyTurnCostUsd, CURRENT_CINDY_REGION)
+            : undefined)
+        : undefined;
     return {
       clientId: m.clientId,
       role: m.role,
@@ -7967,30 +8038,42 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
       ...(m.role === 'assistant' && (
-        m.agentMeta?.turnCompleted === true ||
-        (typeof m.agentMeta?.turnCostUsd === 'number' && m.agentMeta.turnCostUsd > 0)
+        agentMeta?.turnCompleted === true ||
+        (persistedTurnMoney?.amount ?? 0) > 0
       )
         ? { turnCompleted: true }
         : {}),
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
-      typeof m.agentMeta?.turnCostUsd === 'number' &&
-      m.agentMeta.turnCostUsd > 0
+      agentMeta &&
+      persistedTurnMoney &&
+      persistedTurnMoney.amount > 0
         ? (() => {
-            const turnUsageDetails = normalizeTurnUsageDetails(m.agentMeta.turnUsageDetails);
-            const turnCostUsd = resolveEstimatedTurnCostUsd(
-              m.agentMeta.turnCostUsd,
-              m.agentMeta.turnCostIsEstimate === true,
-              turnUsageDetails,
-              m.agentMeta.model,
-            );
+            const turnCostUsd =
+              persistedTurnMoney.currency === 'USD'
+                ? persistedTurnMoney.amount
+                : undefined;
+            const persistedUserTurnMoney =
+              normalizeRegionalMoney(agentMeta.userTurnCost) ??
+              (typeof agentMeta.userTurnCostUsd === 'number' &&
+              agentMeta.userTurnCostUsd > 0
+                ? regionalizeLegacyUsd(
+                    agentMeta.userTurnCostUsd,
+                    CURRENT_CINDY_REGION,
+                  )
+                : undefined);
             return {
-              turnCostUsd,
-              turnCostIsEstimate: m.agentMeta.turnCostIsEstimate === true,
-              ...(typeof m.agentMeta.userTurnCostUsd === 'number' && m.agentMeta.userTurnCostUsd > 0
+              turnMoney: persistedTurnMoney,
+              ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
+              turnCostIsEstimate: agentMeta.turnCostIsEstimate === true,
+              ...(persistedUserTurnMoney
                 ? {
-                    userTurnCostUsd: m.agentMeta.userTurnCostUsd,
-                    userTurnCostIsEstimate: m.agentMeta.userTurnCostIsEstimate === true,
+                    userTurnMoney: persistedUserTurnMoney,
+                    ...(typeof agentMeta.userTurnCostUsd === 'number' &&
+                    agentMeta.userTurnCostUsd > 0
+                      ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
+                      : {}),
+                    userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
                   }
                 : {}),
               ...(turnUsageDetails ? { turnUsageDetails } : {}),
@@ -8048,15 +8131,24 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
 
 /**
  * Device-link can load history from a peer that predates persisted
- * userTurnCostUsd. Rebuild only those missing display totals from the ordered
+ * userTurnCost. Rebuild only those missing display totals from the ordered
  * rows returned by that peer; raw per-segment values remain untouched.
  */
 function projectLegacyUserTurnCosts(
   serverMsgs: Message[],
-): Map<string, Pick<ChatMessage, 'userTurnCostUsd' | 'userTurnCostIsEstimate'>> {
+): Map<
+  string,
+  Pick<
+    ChatMessage,
+    'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'
+  >
+> {
   const projected = new Map<
     string,
-    Pick<ChatMessage, 'userTurnCostUsd' | 'userTurnCostIsEstimate'>
+    Pick<
+      ChatMessage,
+      'userTurnMoney' | 'userTurnCostUsd' | 'userTurnCostIsEstimate'
+    >
   >();
   let hasRealUserBoundary = false;
   let costUsd = 0;
@@ -8079,8 +8171,12 @@ function projectLegacyUserTurnCosts(
     }
     costUsd += meta.turnCostUsd;
     hasEstimatedValue ||= meta.turnCostIsEstimate === true;
-    if (typeof meta.userTurnCostUsd !== 'number' || !(meta.userTurnCostUsd > 0)) {
+    if (
+      !normalizeRegionalMoney(meta.userTurnCost) &&
+      (typeof meta.userTurnCostUsd !== 'number' || !(meta.userTurnCostUsd > 0))
+    ) {
       projected.set(message.clientId, {
+        userTurnMoney: regionalizeLegacyUsd(costUsd, CURRENT_CINDY_REGION),
         userTurnCostUsd: costUsd,
         userTurnCostIsEstimate: hasEstimatedValue,
       });

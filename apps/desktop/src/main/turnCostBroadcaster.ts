@@ -26,6 +26,11 @@ import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import { applyScheduleRunCostMetaChange } from './scheduler-host/runCostLedger.js';
+import {
+  addRegionalMoney,
+  normalizeRegionalMoney,
+  type RegionalMoney,
+} from '../shared/regionalMoney.js';
 
 const log = createLogger('turnCostBroadcaster');
 
@@ -36,11 +41,12 @@ export interface MessageTurnCostPayload {
   sessionId: string;
   /** 该轮最后一条 assistant 的 messages.client_id。 */
   clientId: string;
-  turnCostUsd: number;
-  /** true = 订阅模式下的 token 价值;false = API 账单 cost / API 单价折算 cost。 */
+  turnMoney: RegionalMoney;
+  turnCostUsd?: number;
   turnCostIsEstimate: boolean;
   /** User-visible cumulative cost from the latest real user prompt through this message. */
-  userTurnCostUsd: number;
+  userTurnMoney: RegionalMoney;
+  userTurnCostUsd?: number;
   /** True when any segment in userTurnCostUsd is a subscription-value estimate. */
   userTurnCostIsEstimate: boolean;
   /** 本轮 token/cache 明细;旧消息或取不到 usage 时缺省。 */
@@ -59,6 +65,7 @@ export interface TurnCostDeps {
     next: Record<string, unknown>,
   ): Promise<void>;
   readPriorUserRoundCost(sessionId: string, clientId: string): Promise<{
+    money: RegionalMoney | null;
     costUsd: number;
     hasEstimatedValue: boolean;
   }>;
@@ -92,34 +99,43 @@ export async function recordTurnCostOnMessage(
   args: {
     sessionId: string;
     clientId: string;
-    costUsd: number;
-    isEstimate: boolean;
+    money: RegionalMoney;
     turnUsageDetails?: TurnUsageDetails | null;
     turnOrigin?: SendOrigin;
   },
   deps: TurnCostDeps = defaultDeps,
 ): Promise<void> {
-  const { sessionId, clientId, costUsd, isEstimate, turnUsageDetails, turnOrigin } = args;
+  const { sessionId, clientId, money, turnUsageDetails, turnOrigin } = args;
   if (!sessionId || !clientId) return;
-  if (!Number.isFinite(costUsd) || costUsd < 1e-10) return;
+  const normalized = normalizeRegionalMoney(money);
+  if (!normalized || normalized.amount < 1e-10) return;
   try {
-    let userTurnCostUsd = costUsd;
-    let userTurnCostIsEstimate = isEstimate;
+    let userTurnMoney = normalized;
+    let userTurnCostIsEstimate = normalized.kind === 'value-estimate';
     const patched = await deps.enqueue(`turn-cost:${sessionId}:${clientId}`, async () => {
       // This runs in the durable FIFO after prior assistant cost patches, so
       // the query sees every earlier segment of this user round.
       const prior = await deps.readPriorUserRoundCost(sessionId, clientId);
-      userTurnCostUsd = prior.costUsd + costUsd;
-      userTurnCostIsEstimate = prior.hasEstimatedValue || isEstimate;
+      userTurnMoney = prior.money
+        ? addRegionalMoney([prior.money, normalized])
+        : normalized;
+      userTurnCostIsEstimate =
+        prior.hasEstimatedValue || normalized.kind === 'value-estimate';
       const patch: Record<string, unknown> = {
         // Keep the raw segment immutable: daily/session/model accounting and
         // scheduler summaries consume this field and must never see a running
         // user-round total.
-        turnCostUsd: costUsd,
-        turnCostIsEstimate: isEstimate,
-        userTurnCostUsd,
+        turnCost: normalized,
+        turnCostIsEstimate: normalized.kind === 'value-estimate',
+        userTurnCost: userTurnMoney,
         userTurnCostIsEstimate,
       };
+      if (normalized.currency === 'USD') {
+        patch.turnCostUsd = normalized.amount;
+      }
+      if (userTurnMoney.currency === 'USD') {
+        patch.userTurnCostUsd = userTurnMoney.amount;
+      }
       if (turnOrigin?.kind === 'scheduler' && typeof turnOrigin.runId === 'string' && turnOrigin.runId) {
         patch.origin = turnOrigin;
       }
@@ -138,9 +154,15 @@ export async function recordTurnCostOnMessage(
     deps.broadcast({
       sessionId,
       clientId,
-      turnCostUsd: costUsd,
-      turnCostIsEstimate: isEstimate,
-      userTurnCostUsd,
+      turnMoney: normalized,
+      ...(normalized.currency === 'USD'
+        ? { turnCostUsd: normalized.amount }
+        : {}),
+      turnCostIsEstimate: normalized.kind === 'value-estimate',
+      userTurnMoney,
+      ...(userTurnMoney.currency === 'USD'
+        ? { userTurnCostUsd: userTurnMoney.amount }
+        : {}),
       userTurnCostIsEstimate,
       ...(turnUsageDetails ? { turnUsageDetails } : {}),
     });

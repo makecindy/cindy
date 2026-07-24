@@ -3608,6 +3608,16 @@
       "edit": "编辑",
       "options": "选项",
       "priceTip": "输入 {{input}} · 输出 {{output}} / 百万 token",
+      "pricing": {
+        "title": "每百万 token",
+        "input": "输入",
+        "output": "输出",
+        "cacheRead": "缓存读取",
+        "cacheCreate": "缓存写入",
+        "perMillion": "模型标准价格",
+        "fixedFx": "按固定汇率 1 USD = 6.7 CNY 约算",
+        "subscriptionEstimate": "价值估算，不代表实际账单"
+      },
       "trigger": {
         "placeholder": "选择模型",
         "aria": "选择模型。当前：{{model}}",

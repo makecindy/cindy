@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 
 import { createLogger } from '@/lib/logger';
+import type { RegionalMoney } from '../../../../shared/regionalMoney';
 
 const log = createLogger('ScheduleCostSummaries');
 
 /** 单个自动化任务按自动化触发的 turn 汇总出的累计开销。 */
 export interface ScheduleCostSummary {
   scheduleId: string;
-  totalCostUsd: number;
-  totalEstimatedValueUsd: number;
+  totalMoney: RegionalMoney;
+  totalEstimatedValueMoney: RegionalMoney;
+  totalCostUsd?: number;
+  totalEstimatedValueUsd?: number;
   /** 产生过自动化 turn cost 的去重 session 数；legacy 会话兜底同样计入。 */
   sessionCount: number;
   sessions?: readonly ScheduleSessionCostSummary[];
@@ -17,8 +20,10 @@ export interface ScheduleCostSummary {
 
 export interface ScheduleSessionCostSummary {
   sessionId: string;
-  totalCostUsd: number;
-  totalEstimatedValueUsd: number;
+  totalMoney: RegionalMoney;
+  totalEstimatedValueMoney: RegionalMoney;
+  totalCostUsd?: number;
+  totalEstimatedValueUsd?: number;
 }
 
 /** Automation 任务列表的 cost summary 状态；loaded=false 时 UI 不显示占位金额。 */

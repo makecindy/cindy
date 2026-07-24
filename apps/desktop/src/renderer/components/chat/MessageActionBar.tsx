@@ -51,9 +51,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
-import { formatTurnCostUsd } from '@/lib/usageFormat';
+import { formatTurnCostMoney, formatTurnCostUsd } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+} from '../../../shared/regionalMoney';
 
 interface MessageActionBarProps {
   createdAt?: string;
@@ -92,9 +97,11 @@ interface MessageActionBarProps {
    *  Preview Dialog's open lifetime + commit, which the bar doesn't manage. */
   rewindInFlight?: boolean;
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, 时间旁显示。 */
+  turnMoney?: RegionalMoney;
   turnCostUsd?: number;
   turnCostIsEstimate?: boolean;
   /** User-visible cumulative cost for the surrounding user round. */
+  userTurnMoney?: RegionalMoney;
   userTurnCostUsd?: number;
   userTurnCostIsEstimate?: boolean;
   /** Per-turn token/cache 明细。旧消息没有时 tooltip 保持旧文案。 */
@@ -118,8 +125,10 @@ export function MessageActionBar({
   onEdit,
   onRewind,
   rewindInFlight = false,
+  turnMoney,
   turnCostUsd,
   turnCostIsEstimate = false,
+  userTurnMoney,
   userTurnCostUsd,
   userTurnCostIsEstimate = false,
   turnUsageDetails,
@@ -297,20 +306,30 @@ export function MessageActionBar({
   );
 
   // 用户轮累计优先；没有新字段的历史消息继续显示原始 SDK 分段成本。
-  const displayedCostUsd = userTurnCostUsd ?? turnCostUsd;
-  const displayedCostIsEstimate = userTurnCostUsd != null
+  const effectiveTurnMoney =
+    turnMoney ??
+    (typeof turnCostUsd === 'number' && turnCostUsd > 0
+      ? regionalizeLegacyUsd(turnCostUsd, CURRENT_CINDY_REGION)
+      : undefined);
+  const effectiveUserTurnMoney =
+    userTurnMoney ??
+    (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
+      ? regionalizeLegacyUsd(userTurnCostUsd, CURRENT_CINDY_REGION)
+      : undefined);
+  const displayedMoney = effectiveUserTurnMoney ?? effectiveTurnMoney;
+  const displayedCostIsEstimate = effectiveUserTurnMoney
     ? userTurnCostIsEstimate
     : turnCostIsEstimate;
-  const isUserTurnTotal = userTurnCostUsd != null;
+  const isUserTurnTotal = effectiveUserTurnMoney != null;
 
   // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
   // 仅 assistant(align='left')会拿到值;估算值(Codex 折算)表达为 token 价值。
   const turnCostTooltipNode =
-    displayedCostUsd != null && displayedCostUsd > 0 && turnUsageDetails ? (
+    displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
       <span className="whitespace-pre-line">
         {isUserTurnTotal && (
           <>{t('chat.messageActionBar.userTurnCostTotalLine', {
-            cost: formatTurnCostUsd(displayedCostUsd),
+            cost: formatTurnCostMoney(displayedMoney),
           })}\n</>
         )}
         {buildTurnUsageTooltipLines({
@@ -318,7 +337,7 @@ export function MessageActionBar({
           t,
           // Token / model detail is currently scoped to this final SDK segment;
           // never pair it with the user-turn cumulative total above.
-          costUsd: isUserTurnTotal ? turnCostUsd : displayedCostUsd,
+          money: isUserTurnTotal ? effectiveTurnMoney : displayedMoney,
           isEstimate: isUserTurnTotal ? turnCostIsEstimate : displayedCostIsEstimate,
           ...(isUserTurnTotal ? { title: t('chat.messageActionBar.userTurnCostDetailsTitle') } : {}),
         }).join('\n')}
@@ -331,7 +350,7 @@ export function MessageActionBar({
       )
     );
 
-  const costText = displayedCostUsd != null && displayedCostUsd > 0 && (
+  const costText = displayedMoney && displayedMoney.amount > 0 && (
     <Tooltip.Root key="cost">
       <Tooltip.Trigger asChild>
         <span
@@ -346,9 +365,9 @@ export function MessageActionBar({
         >
           {displayedCostIsEstimate
             ? t('chat.messageActionBar.turnCostEstimatedValue', {
-                cost: formatTurnCostUsd(displayedCostUsd),
+                cost: formatTurnCostMoney(displayedMoney),
               })
-            : formatTurnCostUsd(displayedCostUsd)}
+            : formatTurnCostMoney(displayedMoney)}
         </span>
       </Tooltip.Trigger>
       <Tooltip.Content>

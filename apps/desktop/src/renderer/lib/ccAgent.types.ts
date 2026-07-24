@@ -1,6 +1,7 @@
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
+import type { RegionalMoney } from '../../shared/regionalMoney';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -92,15 +93,14 @@ export interface CcMeta {
    */
   hookSource?: { im: string; channelName?: string | null; userText?: string; threadContext?: Array<{ author: string; text: string; isBot?: boolean }> };
 
-  /**
-   * Per-turn 费用 (USD), main 在 turn 结束时 patch 到该轮最后一条 assistant 上
-   * (turnCostBroadcaster)。MessageActionBar 据此显示"本轮消耗"。
-   */
+  /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;
+  turnCost?: RegionalMoney;
   /** true = Codex token × 价格表折算的估算值; false / 缺省 = SDK 实报。 */
   turnCostIsEstimate?: boolean;
-  /** 用户从最近一条真实输入至本消息的累计成本（用于展示，不参与账单汇总）。 */
+  /** 历史用户轮累计 USD；新数据以 userTurnCost 为区域金额事实。 */
   userTurnCostUsd?: number;
+  userTurnCost?: RegionalMoney;
   /** 累计值含订阅 token 价值估算时为 true。 */
   userTurnCostIsEstimate?: boolean;
   /** Per-turn token/cache 明细,与 turnCostUsd 同时由 main patch 到 agent_meta。 */
@@ -191,6 +191,8 @@ export interface Session {
   sdkSessionId: string | null;
   totalTokenUsage: number;
   totalCostUsd: number;
+  /** 新版区域累计金额；旧会话仍只带 totalCostUsd。 */
+  totalMoney?: RegionalMoney;
   contextTokens: number;
   contextWindow: number;
   fastMode: boolean;

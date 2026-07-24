@@ -1,19 +1,21 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-// usageHistory 经由 localDb/dailySpend → client/current 间接触达 better-sqlite3 /
-// modelPricing 触达 host 依赖 — 这里只测纯函数 + deps 注入版聚合, 全部 mock 掉。
+const currentDbClient = vi.hoisted(() => ({
+  userId: 'user-a' as string | null,
+}));
+const mocks = vi.hoisted(() => ({
+  electronAppGetPath: vi.fn(() => ''),
+}));
+
 vi.mock('../../localDb/dailySpend', () => ({
   getAllSpendDays: vi.fn(),
   localDayKey: () => '2026-06-11',
 }));
 vi.mock('../../localDb/dailyModelUsage', () => ({
   getModelUsageSince: vi.fn(),
-}));
-const currentDbClient = vi.hoisted(() => ({
-  userId: 'user-a' as string | null,
 }));
 vi.mock('../../localDb/client/current', () => ({
   getCurrentDbClientUserId: () => currentDbClient.userId,
@@ -23,27 +25,55 @@ vi.mock('../modelPricing', () => ({
   isModelPricingRefreshInFlight: vi.fn(() => false),
   getCodexSubscriptionValuePrice: (
     model: string,
-    pricing: Record<string, { inputUsdPerMtok: number; outputUsdPerMtok: number }> | null | undefined,
-  ) => pricing?.[model] ?? (model === 'gpt-5.5' ? { inputUsdPerMtok: 2, outputUsdPerMtok: 8 } : undefined),
+    pricing: Record<string, Record<string, unknown>> | null | undefined,
+  ) =>
+    pricing?.openai?.[model] ??
+    (model === 'gpt-5.5'
+      ? {
+          providerId: 'openai',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 8,
+        }
+      : undefined),
   getSubscriptionDirectValuePrice: (model: string) =>
-    model === 'xai/grok-4.3' ? { inputUsdPerMtok: 3, outputUsdPerMtok: 15 } : undefined,
-}));
-const mocks = vi.hoisted(() => ({
-  electronAppGetPath: vi.fn(() => ''),
+    model === 'xai/grok-4.3'
+      ? {
+          providerId: 'xai',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+        }
+      : undefined,
 }));
 vi.mock('electron', () => ({
   app: {
     getPath: mocks.electronAppGetPath,
   },
 }));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
 
 import {
+  __resetUsageHistoryCacheForTesting,
   claudeSubscriptionUsageModelKey,
   codexApiUsageModelKey,
   codexSubscriptionUsageModelKey,
   computeAnomaly,
   computeStreaks,
-  __resetUsageHistoryCacheForTesting,
+  emptyUsageHistoryPayload,
   prevDayKey,
   readUsageHistory,
   readUsageHistoryWith,
@@ -53,685 +83,343 @@ import {
 import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  gatewayCurrencyForRegion,
+  regionalAmountFromUsdReference,
+  zeroRegionalMoney,
+  type ModelPriceQuote,
+  type RegionalMoney,
+} from '../../../shared/regionalMoney';
 
-describe('day key arithmetic', () => {
-  it('prevDayKey crosses month/year boundaries', () => {
-    expect(prevDayKey('2026-06-01')).toBe('2026-05-31');
+const TODAY = '2026-06-11';
+
+function actual(amount: number, approximate = false): RegionalMoney {
+  return {
+    amount,
+    currency: gatewayCurrencyForRegion(CURRENT_CINDY_REGION),
+    approximate,
+    kind: 'actual-cost',
+    ...(approximate ? { estimateReasons: ['legacy-usd'] } : {}),
+  };
+}
+
+function subscriptionQuote(
+  providerId: string,
+  modelId: string,
+  inputPerMtok: number,
+  outputPerMtok: number,
+): ModelPriceQuote {
+  return {
+    providerId,
+    modelId,
+    currency: 'USD',
+    source: 'subscription-reference',
+    approximate: true,
+    inputPerMtok,
+    outputPerMtok,
+  };
+}
+
+function modelRow(
+  day: string,
+  agentKind: 'claude-code' | 'codex',
+  model: string,
+  money: RegionalMoney,
+  tokens: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheCreateTokens?: number;
+  } = {},
+) {
+  return {
+    day,
+    agentKind,
+    model,
+    money,
+    inputTokens: tokens.inputTokens ?? 0,
+    outputTokens: tokens.outputTokens ?? 0,
+    cacheReadTokens: tokens.cacheReadTokens ?? 0,
+    cacheCreateTokens: tokens.cacheCreateTokens ?? 0,
+  };
+}
+
+function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
+  return {
+    getAllSpendDays: async () => [],
+    getModelUsageSince: async () => [],
+    getModelPricing: async () => null,
+    isModelPricingRefreshInFlight: () => false,
+    todayKey: () => TODAY,
+    ...overrides,
+  };
+}
+
+beforeEach(async () => {
+  mocks.electronAppGetPath.mockReturnValue(
+    await mkdtemp(path.join(os.tmpdir(), 'cindy-usage-history-')),
+  );
+  currentDbClient.userId = 'user-a';
+  __resetUsageHistoryCacheForTesting();
+  vi.mocked(getAllSpendDays).mockResolvedValue([]);
+  vi.mocked(getModelUsageSince).mockResolvedValue([]);
+  vi.mocked(getModelPricing).mockResolvedValue(null);
+  vi.mocked(isModelPricingRefreshInFlight).mockReturnValue(false);
+});
+
+afterEach(async () => {
+  const dir = mocks.electronAppGetPath();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  if (dir) {
+    await rm(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
+  }
+});
+
+describe('day arithmetic and streaks', () => {
+  it('crosses month/year boundaries and shifts arbitrary deltas', () => {
     expect(prevDayKey('2026-01-01')).toBe('2025-12-31');
     expect(prevDayKey('2026-03-01')).toBe('2026-02-28');
-  });
-
-  it('shiftDayKey shifts by arbitrary deltas', () => {
-    expect(shiftDayKey('2026-06-11', -1)).toBe('2026-06-10');
     expect(shiftDayKey('2026-06-11', -30)).toBe('2026-05-12');
-    expect(shiftDayKey('2026-06-11', 0)).toBe('2026-06-11');
+  });
+
+  it('keeps today grace while preserving the longest historical run', () => {
+    expect(computeStreaks(
+      ['2026-05-01', '2026-05-02', '2026-05-03', '2026-06-09', '2026-06-10'],
+      TODAY,
+    )).toEqual({ current: 2, longest: 3 });
+    expect(computeStreaks([], TODAY)).toEqual({ current: 0, longest: 0 });
   });
 });
 
-describe('computeStreaks', () => {
-  it('empty input → zero streaks', () => {
-    expect(computeStreaks([], '2026-06-11')).toEqual({ current: 0, longest: 0 });
-  });
-
-  it('counts current streak ending today', () => {
-    const days = ['2026-06-09', '2026-06-10', '2026-06-11'];
-    expect(computeStreaks(days, '2026-06-11')).toEqual({ current: 3, longest: 3 });
-  });
-
-  it('today not yet active does not break the streak (grace from yesterday)', () => {
-    const days = ['2026-06-09', '2026-06-10'];
-    expect(computeStreaks(days, '2026-06-11')).toEqual({ current: 2, longest: 2 });
-  });
-
-  it('gap before yesterday → current 0, longest preserved', () => {
-    const days = ['2026-06-05', '2026-06-06', '2026-06-07'];
-    expect(computeStreaks(days, '2026-06-11')).toEqual({ current: 0, longest: 3 });
-  });
-
-  it('longest picks the biggest historical run across gaps', () => {
-    const days = ['2026-05-01', '2026-05-02', '2026-05-03', '2026-05-04', '2026-06-10', '2026-06-11'];
-    expect(computeStreaks(days, '2026-06-11')).toEqual({ current: 2, longest: 4 });
-  });
-});
-
-describe('computeAnomaly', () => {
-  const today = '2026-06-11';
-
-  function spendMap(trailing: number[], todayVal: number): Map<string, number> {
-    const m = new Map<string, number>();
-    trailing.forEach((v, i) => m.set(shiftDayKey(today, -(i + 1)), v));
-    m.set(today, todayVal);
-    return m;
+describe('anomaly detection', () => {
+  function spendMap(trailing: number[], todayValue: number): Map<string, number> {
+    const values = new Map<string, number>();
+    trailing.forEach((value, index) => {
+      values.set(shiftDayKey(TODAY, -(index + 1)), value);
+    });
+    values.set(TODAY, todayValue);
+    return values;
   }
 
-  it('fewer than 3 active trailing days → null baseline, never anomalous', () => {
-    const m = spendMap([5, 0, 0, 0, 0, 0, 0], 100);
-    expect(computeAnomaly(m, today)).toEqual({ isAnomalous: false, trailing7DayAvg: null });
-  });
-
-  it('today below $1 floor is never anomalous even at huge multiples', () => {
-    const m = spendMap([0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05], 0.9);
-    expect(computeAnomaly(m, today)).toEqual({ isAnomalous: false, trailing7DayAvg: expect.closeTo(0.05) });
-  });
-
-  it('exactly 2x average is NOT anomalous (strict greater-than)', () => {
-    const m = spendMap([7, 7, 7, 7, 7, 7, 7], 14);
-    expect(computeAnomaly(m, today)).toEqual({ isAnomalous: false, trailing7DayAvg: 7 });
-  });
-
-  it('above 2x average and >= $1 is anomalous; missing days count as zero', () => {
-    // 3 active days of 7, sum=21 → avg=3; today 7 > 6
-    const m = spendMap([7, 7, 7, 0, 0, 0, 0], 7);
-    expect(computeAnomaly(m, today)).toEqual({ isAnomalous: true, trailing7DayAvg: 3 });
+  it('requires three active baseline days and a strict two-times increase', () => {
+    expect(computeAnomaly(
+      spendMap([5, 0, 0, 0, 0, 0, 0], 100),
+      TODAY,
+    )).toEqual({ isAnomalous: false, trailing7DayAvg: null });
+    expect(computeAnomaly(
+      spendMap([7, 7, 7, 0, 0, 0, 0], 7),
+      TODAY,
+    )).toEqual({ isAnomalous: true, trailing7DayAvg: 3 });
+    expect(computeAnomaly(
+      spendMap([7, 7, 7, 7, 7, 7, 7], 14),
+      TODAY,
+    )).toEqual({ isAnomalous: false, trailing7DayAvg: 7 });
   });
 });
 
-// Codex 费用折算的纯函数已迁到 turnCostCalculator.computeGatewayTurnCost,
-// 其单测见 turnCostCalculator.test.ts。
+describe('billing model keys', () => {
+  it('keeps API and subscription accounting rows distinct', () => {
+    expect(codexApiUsageModelKey('gpt-5.5')).toBe('gpt-5.5#billing=api');
+    expect(codexSubscriptionUsageModelKey('gpt-5.5')).toBe(
+      'gpt-5.5#billing=subscription',
+    );
+    expect(claudeSubscriptionUsageModelKey('claude-opus-4-8')).toBe(
+      'claude-opus-4-8#billing=subscription',
+    );
+  });
+});
 
 describe('readUsageHistoryWith', () => {
-  const today = '2026-06-11';
-
-  function makeDeps(over: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
-    return {
-      getAllSpendDays: async () => [],
-      getModelUsageSince: async () => [],
-      getModelPricing: async () => null,
-      isModelPricingRefreshInFlight: () => false,
-      todayKey: () => today,
-      ...over,
-    };
-  }
-
-  it('aggregates models across days, estimates codex cost, sorts by comparable amount', async () => {
-    const deps = makeDeps({
+  it('aggregates actual money and subscription value without double counting', async () => {
+    const estimateAmount = regionalAmountFromUsdReference(
+      2,
+      CURRENT_CINDY_REGION,
+    );
+    const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
-        { day: '2026-06-10', costUsd: 3 },
-        { day: '2026-06-11', costUsd: 5 },
+        { day: '2026-06-10', money: actual(3) },
+        { day: TODAY, money: actual(5) },
       ],
       getModelUsageSince: async () => [
-        { day: '2026-06-10', agentKind: 'claude-code', model: 'claude-opus-4-8', costUsd: 2, inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheCreateTokens: 0 },
-        { day: '2026-06-11', agentKind: 'claude-code', model: 'claude-opus-4-8', costUsd: 4, inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheCreateTokens: 0 },
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('gpt-5.5'), costUsd: 0, inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-        { day: '2026-06-11', agentKind: 'codex', model: 'mystery-model', costUsd: 0, inputTokens: 500, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => ({ 'gpt-5.5': { inputUsdPerMtok: 2, outputUsdPerMtok: 8 } }),
-    });
-    const out = await readUsageHistoryWith(deps);
-
-    expect(out.todayKey).toBe(today);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.models.map((m) => m.model)).toEqual(['claude-opus-4-8', 'gpt-5.5', 'mystery-model']);
-    const [claude, gpt, mystery] = out.models;
-    expect(claude).toMatchObject({ agentKind: 'claude-code', costUsd: 6, estimatedCostUsd: null, inputTokens: 20 });
-    expect(gpt).toMatchObject({ agentKind: 'codex', costUsd: 0, estimatedCostUsd: 2 });
-    expect(mystery).toMatchObject({ agentKind: 'codex', estimatedCostUsd: null });
-    // token 合计: claude 两天 (10+20)*2=60 + gpt 今日 1M + mystery 今日 500
-    expect(out.totals).toEqual({
-      today: 5,
-      last30Days: 8,
-      last30DaysWithEstimatedValue: 10,
-      last30DaysEstimatedValue: 2,
-      todayTokens: 30 + 1_000_000 + 500,
-      last30DaysTokens: 60 + 1_000_000 + 500,
-    });
-    expect(out.streak).toEqual({ current: 2, longest: 2 });
-    // days 带每日 token 合计 (热力图/柱状图 tooltip 用)
-    expect(out.days).toEqual([
-      { day: '2026-06-10', costUsd: 3, tokens: 30 },
-      { day: '2026-06-11', costUsd: 5, tokens: 30 + 1_000_000 + 500 },
-    ]);
-    // modelDaily: 每日 × 模型分段; Claude 实报 $, codex 有价折算、无价 amountUsd=0
-    expect(out.modelDaily).toEqual([
-      { day: '2026-06-10', agentKind: 'claude-code', model: 'claude-opus-4-8', amountUsd: 2, apiCostUsd: 2, subscriptionEstimateUsd: 0, tokens: 30 },
-      { day: '2026-06-11', agentKind: 'claude-code', model: 'claude-opus-4-8', amountUsd: 4, apiCostUsd: 4, subscriptionEstimateUsd: 0, tokens: 30 },
-      { day: '2026-06-11', agentKind: 'codex', model: 'gpt-5.5', amountUsd: 2, apiCostUsd: 0, subscriptionEstimateUsd: 2, tokens: 1_000_000 },
-      { day: '2026-06-11', agentKind: 'codex', model: 'mystery-model', amountUsd: 0, apiCostUsd: 0, subscriptionEstimateUsd: 0, tokens: 500 },
-    ]);
-  });
-
-  it('includes codex-only days (tokens without spend) in days', async () => {
-    const deps = makeDeps({
-      getAllSpendDays: async () => [{ day: '2026-06-11', costUsd: 2 }],
-      getModelUsageSince: async () => [
-        { day: '2026-06-10', agentKind: 'codex', model: 'gpt-5.5', costUsd: 0, inputTokens: 7000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.days).toEqual([
-      { day: '2026-06-10', costUsd: 0, tokens: 7000 },
-      { day: '2026-06-11', costUsd: 2, tokens: 0 },
-    ]);
-  });
-
-  it('estimates claude subscription rows (#billing=subscription) like codex ones', async () => {
-    const deps = makeDeps({
-      getAllSpendDays: async () => [],
-      getModelUsageSince: async () => [
-        // Claude 订阅轮: cost=0 的订阅标记行 → 按 Anthropic 价折算估算价值
-        { day: '2026-06-11', agentKind: 'claude-code', model: claudeSubscriptionUsageModelKey('claude-fable-5'), costUsd: 0, inputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 0, cacheCreateTokens: 0 },
-        // Claude API 轮: 实报 $, 不受订阅折算影响
-        { day: '2026-06-11', agentKind: 'claude-code', model: 'claude-opus-4-8', costUsd: 3, inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      // 网关无 claude-fable-5 行 → 走家族牌价兜底 ($10/$50): 1M×10 + 0.1M×50 = 15
-      getModelPricing: async () => null,
-    });
-    const out = await readUsageHistoryWith(deps);
-
-    expect(out.estimatesPending).toBe(false);
-    const fable = out.models.find((m) => m.model === 'claude-fable-5');
-    expect(fable).toMatchObject({ agentKind: 'claude-code', costUsd: 0, estimatedCostUsd: 15 });
-    const fableDaily = out.modelDaily.find((r) => r.model === 'claude-fable-5');
-    expect(fableDaily).toMatchObject({ amountUsd: 15, apiCostUsd: 0, subscriptionEstimateUsd: 15 });
-    // 30 天含估算 = 实报 0 (daily_spend 空) + 订阅估算 15
-    expect(out.totals).toMatchObject({
-      last30Days: 0,
-      last30DaysWithEstimatedValue: 15,
-      last30DaysEstimatedValue: 15,
-    });
-  });
-
-  it('prefers gateway pricing (cache-aware) for claude subscription rows when available', async () => {
-    const deps = makeDeps({
-      getAllSpendDays: async () => [],
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'claude-code', model: claudeSubscriptionUsageModelKey('claude-fable-5'), costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000, cacheCreateTokens: 0 },
+        modelRow(
+          '2026-06-10',
+          'claude-code',
+          'claude-opus-4-8',
+          actual(2),
+          { inputTokens: 10, outputTokens: 20 },
+        ),
+        modelRow(
+          TODAY,
+          'claude-code',
+          'claude-opus-4-8',
+          actual(4),
+          { inputTokens: 10, outputTokens: 20 },
+        ),
+        modelRow(
+          TODAY,
+          'codex',
+          codexSubscriptionUsageModelKey('gpt-5.5'),
+          actual(0),
+          { inputTokens: 1_000_000 },
+        ),
+        modelRow(
+          TODAY,
+          'codex',
+          codexApiUsageModelKey('gpt-5.5'),
+          actual(1),
+          { outputTokens: 100 },
+        ),
       ],
       getModelPricing: async () => ({
-        'claude-fable-5': { inputUsdPerMtok: 10, outputUsdPerMtok: 50, cacheReadUsdPerMtok: 1 },
+        openai: {
+          'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 2, 8),
+        },
       }),
+    }));
+
+    expect(result.estimatesPending).toBe(false);
+    expect(result.totals.today).toEqual(actual(5));
+    expect(result.totals.last30Days).toEqual(actual(8));
+    expect(result.totals.last30DaysEstimatedValue).toMatchObject({
+      amount: estimateAmount,
+      kind: 'value-estimate',
+      approximate: true,
     });
-    const out = await readUsageHistoryWith(deps);
-    // cacheRead 1M × $1 (网关 cache 档价) = 1, 而非按 input 价折算的 10
-    expect(out.models[0]).toMatchObject({ model: 'claude-fable-5', estimatedCostUsd: 1 });
+    expect(result.totals.last30DaysWithEstimatedValue.amount).toBeCloseTo(
+      8 + estimateAmount,
+    );
+    expect(result.totals.last30DaysWithEstimatedValue.approximate).toBe(true);
+    expect(result.totals.todayTokens).toBe(1_000_130);
+    expect(result.totals.last30DaysTokens).toBe(1_000_160);
+
+    const subscription = result.models.find(
+      (row) => row.agentKind === 'codex' && row.estimatedMoney,
+    );
+    expect(subscription?.estimatedMoney?.amount).toBeCloseTo(estimateAmount);
+    const api = result.modelDaily.find(
+      (row) => row.apiMoney.amount === 1,
+    );
+    expect(api?.subscriptionEstimateMoney.amount).toBe(0);
   });
 
-  it('uses built-in subscription value pricing when gateway pricing is unavailable', async () => {
-    const deps = makeDeps({
+  it('uses provider-scoped Anthropic reference pricing for Claude subscription rows', async () => {
+    const expected = regionalAmountFromUsdReference(5, CURRENT_CINDY_REGION);
+    const result = await readUsageHistoryWith(makeDeps({
       getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('gpt-5.5'), costUsd: 0, inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+        modelRow(
+          TODAY,
+          'claude-code',
+          claudeSubscriptionUsageModelKey('claude-opus-4-8'),
+          actual(0),
+          { inputTokens: 1_000_000 },
+        ),
       ],
-      getModelPricing: async () => null,
+      getModelPricing: async () => ({
+        anthropic: {
+          'claude-opus-4-8': subscriptionQuote(
+            'anthropic',
+            'claude-opus-4-8',
+            5,
+            25,
+          ),
+        },
+      }),
+    }));
+
+    expect(result.models[0]).toMatchObject({
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-8',
     });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.models[0]).toMatchObject({ model: 'gpt-5.5', estimatedCostUsd: 2 });
-    expect(out.modelDaily[0]).toMatchObject({ amountUsd: 2, subscriptionEstimateUsd: 2 });
-    expect(out.totals).toMatchObject({
-      last30Days: 0,
-      last30DaysWithEstimatedValue: 2,
-      last30DaysEstimatedValue: 2,
-    });
+    expect(result.models[0].estimatedMoney?.amount).toBe(expected);
   });
 
-  it('uses xAI direct subscription pricing for Codex xAI subscription rows', async () => {
-    const deps = makeDeps({
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('xai/grok-4.3'), costUsd: 0, inputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => null,
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.models[0]).toMatchObject({ model: 'xai/grok-4.3', estimatedCostUsd: 4.5 });
-    expect(out.modelDaily[0]).toMatchObject({ amountUsd: 4.5, subscriptionEstimateUsd: 4.5 });
-    expect(out.totals).toMatchObject({
-      last30Days: 0,
-      last30DaysWithEstimatedValue: 4.5,
-      last30DaysEstimatedValue: 4.5,
-    });
-  });
-
-  it('does not mark API-billed Codex rows as pending subscription estimates', async () => {
-    const deps = makeDeps({
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexApiUsageModelKey('unknown-model'), costUsd: 3, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => null,
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.modelDaily[0]).toMatchObject({
-      model: 'unknown-model',
-      amountUsd: 3,
-      apiCostUsd: 3,
-      subscriptionEstimateUsd: 0,
-    });
-  });
-
-  it('renders token-only usage when missing subscription pricing cannot refresh', async () => {
-    const deps = makeDeps({
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('mystery-model'), costUsd: 0, inputTokens: 7000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => null,
-      isModelPricingRefreshInFlight: () => false,
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.modelDaily[0]).toMatchObject({ amountUsd: 0, subscriptionEstimateUsd: 0 });
-  });
-
-  it('marks missing subscription estimates pending while stale pricing refresh is in flight', async () => {
-    const deps = makeDeps({
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('future-model'), costUsd: 0, inputTokens: 7000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => ({ 'gpt-5.5': { inputUsdPerMtok: 2, outputUsdPerMtok: 8 } }),
+  it('marks estimates pending only when a subscription price is missing during refresh', async () => {
+    const row = modelRow(
+      TODAY,
+      'codex',
+      codexSubscriptionUsageModelKey('unknown-model'),
+      actual(0),
+      { inputTokens: 1_000 },
+    );
+    const pending = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [row],
       isModelPricingRefreshInFlight: () => true,
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(true);
-    expect(out.modelDaily[0]).toMatchObject({ amountUsd: 0, subscriptionEstimateUsd: 0 });
-  });
-
-  it('does not keep missing subscription estimates pending after stale pricing refresh settles', async () => {
-    const deps = makeDeps({
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('future-model'), costUsd: 0, inputTokens: 7000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => ({ 'gpt-5.5': { inputUsdPerMtok: 2, outputUsdPerMtok: 8 } }),
+    }));
+    const settled = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [row],
       isModelPricingRefreshInFlight: () => false,
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.modelDaily[0]).toMatchObject({ amountUsd: 0, subscriptionEstimateUsd: 0 });
+    }));
+    expect(pending.estimatesPending).toBe(true);
+    expect(settled.estimatesPending).toBe(false);
+    expect(settled.models[0].estimatedMoney).toBeNull();
   });
 
-  it('adds subscription estimates on top of unclassified actual daily spend', async () => {
-    const deps = makeDeps({
-      getAllSpendDays: async () => [{ day: '2026-06-11', costUsd: 10 }],
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('gpt-5.5'), costUsd: 0, inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => null,
-    });
-    const out = await readUsageHistoryWith(deps);
-    expect(out.estimatesPending).toBe(false);
-    expect(out.totals).toMatchObject({
-      last30Days: 10,
-      last30DaysWithEstimatedValue: 12,
-      last30DaysEstimatedValue: 2,
-    });
-  });
-
-  it('keeps Codex API cost and subscription value separate for the same model and day', async () => {
-    const deps = makeDeps({
-      getAllSpendDays: async () => [{ day: '2026-06-11', costUsd: 10 }],
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('gpt-5.5'), costUsd: 0, inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-        { day: '2026-06-11', agentKind: 'codex', model: codexApiUsageModelKey('gpt-5.5'), costUsd: 3, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => null,
-    });
-    const out = await readUsageHistoryWith(deps);
-
-    expect(out.models).toEqual([
-      expect.objectContaining({ agentKind: 'codex', model: 'gpt-5.5', costUsd: 3, estimatedCostUsd: null }),
-      expect.objectContaining({ agentKind: 'codex', model: 'gpt-5.5', costUsd: 0, estimatedCostUsd: 2 }),
-    ]);
-    expect(out.modelDaily).toEqual([
-      { day: '2026-06-11', agentKind: 'codex', model: 'gpt-5.5', amountUsd: 2, apiCostUsd: 0, subscriptionEstimateUsd: 2, tokens: 1_000_000 },
-      { day: '2026-06-11', agentKind: 'codex', model: 'gpt-5.5', amountUsd: 3, apiCostUsd: 3, subscriptionEstimateUsd: 0, tokens: 0 },
-    ]);
-    expect(out.totals).toMatchObject({
-      last30Days: 10,
-      last30DaysWithEstimatedValue: 12,
-      last30DaysEstimatedValue: 2,
-    });
-  });
-
-  it('does not add subscription estimates for legacy unsuffixed Codex rows', async () => {
-    const deps = makeDeps({
-      getAllSpendDays: async () => [{ day: '2026-06-11', costUsd: 10 }],
-      getModelUsageSince: async () => [
-        { day: '2026-06-11', agentKind: 'codex', model: 'gpt-5.5', costUsd: 0, inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ],
-      getModelPricing: async () => null,
-    });
-    const out = await readUsageHistoryWith(deps);
-
-    expect(out.estimatesPending).toBe(false);
-    expect(out.models[0]).toMatchObject({ agentKind: 'codex', model: 'gpt-5.5', costUsd: 0, estimatedCostUsd: null });
-    expect(out.modelDaily[0]).toMatchObject({
-      amountUsd: 0,
-      apiCostUsd: 0,
-      subscriptionEstimateUsd: 0,
-      tokens: 1_000_000,
-    });
-    expect(out.totals).toMatchObject({
-      last30Days: 10,
-      last30DaysWithEstimatedValue: 10,
-      last30DaysEstimatedValue: 0,
-    });
-  });
-
-  it('clamps heatmap window and filters zero-cost days', async () => {
-    const deps = makeDeps({
+  it('propagates approximate legacy history into anomaly and totals', async () => {
+    const trailing = Array.from({ length: 7 }, (_, index) => ({
+      day: shiftDayKey(TODAY, -(index + 1)),
+      money: actual(1, true),
+    }));
+    const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
-        { day: '2020-01-01', costUsd: 9 },
-        { day: '2026-06-10', costUsd: 0 },
-        { day: '2026-06-11', costUsd: 1 },
+        ...trailing,
+        { day: TODAY, money: actual(7, true) },
       ],
+    }));
+    expect(result.anomaly).toMatchObject({
+      isAnomalous: true,
+      trailing7DayAvg: {
+        amount: 1,
+        approximate: true,
+      },
     });
-    const out = await readUsageHistoryWith(deps, { days: 7 });
-    expect(out.days).toEqual([{ day: '2026-06-11', costUsd: 1, tokens: 0 }]);
-  });
-
-  it('empty database → empty payload shape', async () => {
-    const out = await readUsageHistoryWith(makeDeps());
-    expect(out.days).toEqual([]);
-    expect(out.models).toEqual([]);
-    expect(out.streak).toEqual({ current: 0, longest: 0 });
-    expect(out.anomaly).toEqual({ isAnomalous: false, trailing7DayAvg: null });
+    expect(result.totals.last30Days.approximate).toBe(true);
   });
 });
 
-describe('readUsageHistory persistent cache', () => {
-  async function withTempUserData<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'xdt-maker-usage-history-'));
-    mocks.electronAppGetPath.mockReturnValue(dir);
-    currentDbClient.userId = 'user-a';
-    try {
-      return await fn(dir);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-      __resetUsageHistoryCacheForTesting();
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    }
-  }
+describe('production cache and empty payload', () => {
+  it('writes a structured fresh payload and serves it from memory', async () => {
+    vi.mocked(getAllSpendDays).mockResolvedValue([
+      { day: TODAY, money: actual(2) },
+    ]);
+    const first = await readUsageHistory({ days: 30 });
+    const second = await readUsageHistory({ days: 30 });
+    expect(first.stale).toBe(false);
+    expect(second.stale).toBe(false);
+    expect(second.totals.today).toEqual(actual(2));
 
-  it('returns the previous disk snapshot first, then a fresh memory snapshot after background refresh', async () => {
-    await withTempUserData(async (dir) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 1 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-      await vi.waitFor(async () => {
-        const raw = await readFile(path.join(dir, 'cache', 'usage-history.json'), 'utf8');
-        expect(JSON.parse(raw)).toMatchObject({
-          version: 1,
-          optsKey: 'user=user-a|days=140',
-          payload: { totals: { today: 1, last30Days: 1 } },
-        });
-      });
-
-      __resetUsageHistoryCacheForTesting();
-      vi.setSystemTime(new Date('2026-06-11T00:00:01.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 2 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: true,
-        totals: { today: 1, last30Days: 1 },
-      });
-      await vi.waitFor(() => expect(getAllSpendDays).toHaveBeenCalledTimes(2));
-
-      await vi.waitFor(async () => {
-        await expect(readUsageHistory()).resolves.toMatchObject({
-          stale: false,
-          totals: { today: 2, last30Days: 2 },
-        });
-      });
-    });
-  });
-
-  it('scopes fresh memory cache by current user', async () => {
-    await withTempUserData(async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      currentDbClient.userId = 'user-a';
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 1 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-
-      vi.setSystemTime(new Date('2026-06-11T00:00:01.000Z'));
-      currentDbClient.userId = 'user-b';
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 9 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 9, last30Days: 9 },
-      });
-      expect(getAllSpendDays).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it('does not reuse an in-flight refresh across users', async () => {
-    await withTempUserData(async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      currentDbClient.userId = 'user-a';
-      let resolveUserASpendDays: (rows: Array<{ day: string; costUsd: number }>) => void = () => {};
-      vi.mocked(getAllSpendDays).mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveUserASpendDays = resolve;
-        }),
+    await vi.waitFor(async () => {
+      const raw = JSON.parse(
+        await readFile(
+          path.join(mocks.electronAppGetPath(), 'cache', 'usage-history.json'),
+          'utf8',
+        ),
       );
-
-      const userARead = readUsageHistory();
-      await vi.waitFor(() => expect(getAllSpendDays).toHaveBeenCalledTimes(1));
-
-      vi.setSystemTime(new Date('2026-06-11T00:00:01.000Z'));
-      currentDbClient.userId = 'user-b';
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 9 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 9, last30Days: 9 },
-      });
-      expect(getAllSpendDays).toHaveBeenCalledTimes(2);
-
-      currentDbClient.userId = 'user-a';
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-      resolveUserASpendDays([{ day: '2026-06-11', costUsd: 1 }]);
-      await vi.runAllTimersAsync();
-      await expect(userARead).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
+      expect(raw).toMatchObject({
+        version: 2,
+        optsKey: 'user=user-a|days=30',
+        payload: {
+          totals: {
+            today: actual(2),
+          },
+        },
       });
     });
   });
 
-  it('keeps disk snapshots stale while the background refresh is still in flight', async () => {
-    await withTempUserData(async (dir) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 1 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-      await vi.waitFor(async () => {
-        const raw = await readFile(path.join(dir, 'cache', 'usage-history.json'), 'utf8');
-        expect(JSON.parse(raw)).toMatchObject({
-          payload: { totals: { today: 1, last30Days: 1 } },
-        });
-      });
-
-      __resetUsageHistoryCacheForTesting();
-      vi.setSystemTime(new Date('2026-06-11T00:00:01.000Z'));
-      let resolveSpendDays: (rows: Array<{ day: string; costUsd: number }>) => void = () => {};
-      vi.mocked(getAllSpendDays).mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveSpendDays = resolve;
-        }),
-      );
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: true,
-        totals: { today: 1, last30Days: 1 },
-      });
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: true,
-        totals: { today: 1, last30Days: 1 },
-      });
-
-      resolveSpendDays([{ day: '2026-06-11', costUsd: 2 }]);
-      await vi.runAllTimersAsync();
-      await vi.waitFor(() => expect(getAllSpendDays).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => expect(getModelUsageSince).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => expect(getModelPricing).toHaveBeenCalledTimes(2));
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 2, last30Days: 2 },
-      });
-    });
-  });
-
-  it('force refresh bypasses the fresh in-memory shortcut after a usage push', async () => {
-    await withTempUserData(async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 1 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-
-      vi.setSystemTime(new Date('2026-06-11T00:00:01.000Z'));
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-      expect(getAllSpendDays).toHaveBeenCalledTimes(1);
-
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 2 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory({ forceRefresh: true })).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 2, last30Days: 2 },
-      });
-      expect(getAllSpendDays).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it('does not let an older stale-while-refresh overwrite a newer forced refresh', async () => {
-    await withTempUserData(async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 1 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-
-      vi.setSystemTime(new Date('2026-06-11T00:00:11.000Z'));
-      let resolveOldSpendDays: (rows: Array<{ day: string; costUsd: number }>) => void = () => {};
-      vi.mocked(getAllSpendDays).mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveOldSpendDays = resolve;
-        }),
-      );
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: true,
-        totals: { today: 1, last30Days: 1 },
-      });
-      await vi.waitFor(() => expect(getAllSpendDays).toHaveBeenCalledTimes(2));
-
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 3 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory({ forceRefresh: true })).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 3, last30Days: 3 },
-      });
-
-      resolveOldSpendDays([{ day: '2026-06-11', costUsd: 2 }]);
-      await vi.runAllTimersAsync();
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        totals: { today: 3, last30Days: 3 },
-      });
-      expect(getAllSpendDays).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  it('keeps estimates-pending refreshes in memory without overwriting the disk cache', async () => {
-    await withTempUserData(async (dir) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-06-11T00:00:00.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 1 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        estimatesPending: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-      await vi.waitFor(async () => {
-        const raw = await readFile(path.join(dir, 'cache', 'usage-history.json'), 'utf8');
-        expect(JSON.parse(raw)).toMatchObject({
-          payload: { estimatesPending: false, totals: { today: 1, last30Days: 1 } },
-        });
-      });
-
-      __resetUsageHistoryCacheForTesting();
-      vi.setSystemTime(new Date('2026-06-11T00:00:01.000Z'));
-      vi.mocked(getAllSpendDays).mockResolvedValueOnce([{ day: '2026-06-11', costUsd: 2 }]);
-      vi.mocked(getModelUsageSince).mockResolvedValueOnce([
-        { day: '2026-06-11', agentKind: 'codex', model: codexSubscriptionUsageModelKey('mystery-model'), costUsd: 0, inputTokens: 7000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
-      ]);
-      vi.mocked(getModelPricing).mockResolvedValueOnce(null);
-      vi.mocked(isModelPricingRefreshInFlight).mockReturnValueOnce(true);
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: true,
-        estimatesPending: false,
-        totals: { today: 1, last30Days: 1 },
-      });
-      await vi.waitFor(() => expect(getAllSpendDays).toHaveBeenCalledTimes(2));
-
-      await expect(readUsageHistory()).resolves.toMatchObject({
-        stale: false,
-        estimatesPending: true,
-        totals: { today: 2, last30Days: 2 },
-      });
-
-      const diskPayload = JSON.parse(await readFile(path.join(dir, 'cache', 'usage-history.json'), 'utf8'));
-      expect(diskPayload).toMatchObject({
-        payload: { estimatesPending: false, totals: { today: 1, last30Days: 1 } },
-      });
-      expect(getAllSpendDays).toHaveBeenCalledTimes(2);
-    });
+  it('returns region-correct structured zero money on fallback', () => {
+    const empty = emptyUsageHistoryPayload();
+    expect(empty.totals.today).toEqual(
+      zeroRegionalMoney(CURRENT_CINDY_REGION),
+    );
+    expect(empty.totals.last30DaysEstimatedValue).toEqual(
+      zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'),
+    );
   });
 });

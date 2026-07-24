@@ -156,6 +156,52 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
   if (fileName === '0065_equal_shinobi_shaw.sql') {
     ensureColumnSync(db, 'sessions', 'last_turn_ended_at', 'integer');
   }
+  if (fileName === '0080_regional_money.sql') {
+    ensureColumnSync(db, 'sessions', 'total_cost_amount', 'real DEFAULT 0 NOT NULL');
+    ensureColumnSync(db, 'sessions', 'total_cost_currency', 'text');
+    ensureColumnSync(
+      db,
+      'sessions',
+      'total_cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    ensureColumnSync(db, 'daily_spend', 'cost_amount', 'real DEFAULT 0 NOT NULL');
+    ensureColumnSync(db, 'daily_spend', 'cost_currency', 'text');
+    ensureColumnSync(
+      db,
+      'daily_spend',
+      'cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    ensureColumnSync(
+      db,
+      'daily_model_usage',
+      'cost_amount',
+      'real DEFAULT 0 NOT NULL',
+    );
+    ensureColumnSync(db, 'daily_model_usage', 'cost_currency', 'text');
+    ensureColumnSync(
+      db,
+      'daily_model_usage',
+      'cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    ensureColumnSync(db, 'schedule_runs', 'cost_amount', 'real DEFAULT 0 NOT NULL');
+    ensureColumnSync(
+      db,
+      'schedule_runs',
+      'estimated_value_amount',
+      'real DEFAULT 0 NOT NULL',
+    );
+    ensureColumnSync(db, 'schedule_runs', 'cost_currency', 'text');
+    ensureColumnSync(
+      db,
+      'schedule_runs',
+      'cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    return;
+  }
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
@@ -189,6 +235,52 @@ async function applyMigrationScript(target: DbClient, fileName: string): Promise
   }
   if (fileName === '0065_equal_shinobi_shaw.sql') {
     await ensureColumn(target, 'sessions', 'last_turn_ended_at', 'integer');
+  }
+  if (fileName === '0080_regional_money.sql') {
+    await ensureColumn(target, 'sessions', 'total_cost_amount', 'real DEFAULT 0 NOT NULL');
+    await ensureColumn(target, 'sessions', 'total_cost_currency', 'text');
+    await ensureColumn(
+      target,
+      'sessions',
+      'total_cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    await ensureColumn(target, 'daily_spend', 'cost_amount', 'real DEFAULT 0 NOT NULL');
+    await ensureColumn(target, 'daily_spend', 'cost_currency', 'text');
+    await ensureColumn(
+      target,
+      'daily_spend',
+      'cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    await ensureColumn(
+      target,
+      'daily_model_usage',
+      'cost_amount',
+      'real DEFAULT 0 NOT NULL',
+    );
+    await ensureColumn(target, 'daily_model_usage', 'cost_currency', 'text');
+    await ensureColumn(
+      target,
+      'daily_model_usage',
+      'cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    await ensureColumn(target, 'schedule_runs', 'cost_amount', 'real DEFAULT 0 NOT NULL');
+    await ensureColumn(
+      target,
+      'schedule_runs',
+      'estimated_value_amount',
+      'real DEFAULT 0 NOT NULL',
+    );
+    await ensureColumn(target, 'schedule_runs', 'cost_currency', 'text');
+    await ensureColumn(
+      target,
+      'schedule_runs',
+      'cost_is_approximate',
+      'integer DEFAULT 0 NOT NULL',
+    );
+    return;
   }
 }
 

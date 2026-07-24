@@ -9,17 +9,23 @@ import { eq, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { scheduleRuns } from '../localDb/schema';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import { normalizeRegionalMoney, regionalizeLegacyUsd } from '../../shared/regionalMoney.js';
 
 interface RunCostEntry {
   runId: string;
-  costUsd: number;
-  estimatedValueUsd: number;
+  costAmount: number;
+  estimatedValueAmount: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
 }
 
 export interface ScheduleRunCostDelta {
   runId: string;
-  costUsdDelta: number;
-  estimatedValueUsdDelta: number;
+  costAmountDelta: number;
+  estimatedValueAmountDelta: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
 }
 
 function finitePositive(value: unknown): number {
@@ -34,10 +40,22 @@ function runCostEntry(meta: Record<string, unknown>): RunCostEntry | null {
   const runId = parsedOrigin.runId;
   if (typeof runId !== 'string' || runId.length === 0) return null;
 
-  const amount = finitePositive(meta.turnCostUsd);
-  return meta.turnCostIsEstimate === true
-    ? { runId, costUsd: 0, estimatedValueUsd: amount }
-    : { runId, costUsd: amount, estimatedValueUsd: 0 };
+  const money =
+    normalizeRegionalMoney(meta.turnCost) ??
+    (finitePositive(meta.turnCostUsd) > 0
+      ? regionalizeLegacyUsd(finitePositive(meta.turnCostUsd), CURRENT_CINDY_REGION)
+      : undefined);
+  if (!money || money.amount <= 0) return null;
+  const isEstimate = meta.turnCostIsEstimate === true || money.kind === 'value-estimate';
+  return {
+    runId,
+    costAmount: isEstimate ? 0 : money.amount,
+    estimatedValueAmount: isEstimate ? money.amount : 0,
+    currency: money.currency,
+    // cost_is_approximate 只描述真实费用；订阅价值本身始终由
+    // estimatedValueMoney 标成 value-estimate，不能污染真实费用。
+    approximate: !isEstimate && money.approximate,
+  };
 }
 
 /** 计算消息元数据变化对 run 聚合的幂等差值，最多影响旧/新两个 run。 */
@@ -50,17 +68,25 @@ export function computeScheduleRunCostDeltas(
     if (!entry) return;
     const current = changes.get(entry.runId) ?? {
       runId: entry.runId,
-      costUsdDelta: 0,
-      estimatedValueUsdDelta: 0,
+      costAmountDelta: 0,
+      estimatedValueAmountDelta: 0,
+      currency: entry.currency,
+      approximate: false,
     };
-    current.costUsdDelta += direction * entry.costUsd;
-    current.estimatedValueUsdDelta += direction * entry.estimatedValueUsd;
+    if (current.currency !== entry.currency) {
+      throw new Error('schedule run cost currency mismatch');
+    }
+    current.costAmountDelta += direction * entry.costAmount;
+    current.estimatedValueAmountDelta += direction * entry.estimatedValueAmount;
+    current.approximate ||= entry.approximate;
     changes.set(entry.runId, current);
   };
   apply(runCostEntry(previous), -1);
   apply(runCostEntry(next), 1);
   return [...changes.values()].filter(
-    (change) => Math.abs(change.costUsdDelta) >= 1e-10 || Math.abs(change.estimatedValueUsdDelta) >= 1e-10,
+    (change) =>
+      Math.abs(change.costAmountDelta) >= 1e-10 ||
+      Math.abs(change.estimatedValueAmountDelta) >= 1e-10,
   );
 }
 
@@ -76,8 +102,10 @@ export async function applyScheduleRunCostMetaChange(
     await db
       .update(scheduleRuns)
       .set({
-        costUsd: sql<number>`MAX(0, ${scheduleRuns.costUsd} + ${change.costUsdDelta})`,
-        estimatedValueUsd: sql<number>`MAX(0, ${scheduleRuns.estimatedValueUsd} + ${change.estimatedValueUsdDelta})`,
+        costAmount: sql<number>`MAX(0, ${scheduleRuns.costAmount} + ${change.costAmountDelta})`,
+        estimatedValueAmount: sql<number>`MAX(0, ${scheduleRuns.estimatedValueAmount} + ${change.estimatedValueAmountDelta})`,
+        costCurrency: change.currency,
+        costIsApproximate: sql`${scheduleRuns.costIsApproximate} OR ${change.approximate ? 1 : 0}`,
         costAttribution: 'exact',
       })
       .where(eq(scheduleRuns.id, change.runId));

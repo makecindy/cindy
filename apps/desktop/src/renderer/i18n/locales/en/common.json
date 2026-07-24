@@ -3609,6 +3609,16 @@
       "edit": "Edit",
       "options": "Options",
       "priceTip": "Input {{input}} · Output {{output}} per 1M tokens",
+      "pricing": {
+        "title": "Per 1M tokens",
+        "input": "Input",
+        "output": "Output",
+        "cacheRead": "Cache read",
+        "cacheCreate": "Cache write",
+        "perMillion": "Standard model pricing",
+        "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
+        "subscriptionEstimate": "Value estimate, not an actual bill"
+      },
       "trigger": {
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",

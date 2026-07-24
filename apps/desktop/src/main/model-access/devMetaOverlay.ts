@@ -57,6 +57,28 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * 去掉可由 dev 元数据覆盖的字段，保留模型成员资格、token 上限和全部 Gateway
+ * 价格。这样本地 overlay 或 null 撤销登记都不会把同快照里的价格静默丢掉。
+ */
+function gatewayFields(m: ModelAccessGatewayModel): ModelAccessGatewayModel {
+  const {
+    agents: _agents,
+    name: _name,
+    group: _group,
+    description: _description,
+    icon: _icon,
+    efforts: _efforts,
+    defaultEffort: _defaultEffort,
+    sortOrder: _sortOrder,
+    supportsFastMode: _supportsFastMode,
+    defaultEnabled: _defaultEnabled,
+    perAgent: _perAgent,
+    ...fields
+  } = m;
+  return fields;
+}
+
 /** 校验并拷贝 override 形态的能力字段(基线与 perAgent 共用);非法返回原因。 */
 function readOverrideFields(
   o: Record<string, unknown>,
@@ -141,14 +163,11 @@ function parseEntry(raw: unknown): { meta: MetaEntry } | { reason: string } {
 /** 以本地条目重建服务端下发条目(网关权威字段保留,元数据字段整体替换)。 */
 function rebuildModel(m: ModelAccessGatewayModel, meta: MetaEntry): ModelAccessGatewayModel {
   return {
-    id: m.id,
+    ...gatewayFields(m),
     // 网关上报的 token 上限权威;本地 contextWindow 仅在服务端条目缺失时兜底(同服务端规则)。
-    ...(m.contextWindow !== undefined
-      ? { contextWindow: m.contextWindow }
-      : meta.contextWindow !== undefined
-        ? { contextWindow: meta.contextWindow }
-        : {}),
-    ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
+    ...(m.contextWindow === undefined && meta.contextWindow !== undefined
+      ? { contextWindow: meta.contextWindow }
+      : {}),
     agents: meta.agents,
     name: meta.name,
     ...(meta.group ? { group: meta.group } : {}),
@@ -187,11 +206,7 @@ export function overlayCindyModelMeta(
     if (raw === null) {
       // 撤销登记:剥掉全部元数据,只留网关权威字段(客户端回落确定性默认)。
       revoked += 1;
-      return {
-        id: m.id,
-        ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-        ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
-      };
+      return gatewayFields(m);
     }
     const parsed = parseEntry(raw);
     if ('reason' in parsed) {

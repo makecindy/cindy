@@ -44,7 +44,9 @@ vi.mock('../../../git-context/prRefsStore', () => ({
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
-vi.mock('../../../device-link/broadcast-tap.js', () => ({ tapWindowBroadcast: h.tapWindowBroadcast }));
+vi.mock('../../../device-link/broadcast-tap.js', () => ({
+  tapWindowBroadcast: h.tapWindowBroadcast,
+}));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
@@ -69,6 +71,9 @@ function createDb(): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_amount REAL NOT NULL DEFAULT 0,
+      total_cost_currency TEXT,
+      total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       fast_mode INTEGER NOT NULL DEFAULT 0,
@@ -141,8 +146,8 @@ describe('local-db:sessions:update handler wiring', () => {
   it('persists and broadcasts title-only patches to device-link subscribers', async () => {
     await invokeUpdate('codex-local', { title: '排查远程标题同步' });
 
-    const persisted = h.sqlite!
-      .prepare('SELECT title FROM sessions WHERE id = ?')
+    const persisted = h
+      .sqlite!.prepare('SELECT title FROM sessions WHERE id = ?')
       .get('codex-local') as { title: string };
     expect(persisted.title).toBe('排查远程标题同步');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
@@ -178,7 +183,10 @@ describe('local-db:sessions:update handler wiring', () => {
     // 模拟真实编排:迁移把内存 id 持久化进 DB 并上报;handler 必须在迁移后才查
     // 返回行,并把该 id 并入广播 patch,renderer 才不会留着旧 resume id。
     h.relocate.mockImplementation(async () => {
-      h.sqlite!.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(liveId, 'cc-local');
+      h.sqlite!.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(
+        liveId,
+        'cc-local',
+      );
       return { persistedSdkSessionId: liveId };
     });
 

@@ -241,6 +241,10 @@ export interface ScheduleRun {
   costUsd?: number;
   /** 本次 run 的订阅 token 估算价值，不计入真实账单。 */
   estimatedValueUsd?: number;
+  /** 新版区域真实费用；旧 costUsd 仅作历史 USD 兼容。 */
+  costMoney?: ScheduleRunMoney;
+  /** 新版区域订阅价值估算；不代表实际账单。 */
+  estimatedValueMoney?: ScheduleRunMoney;
   /** exact = 有持久化 runId 归因；legacy = 历史数据无法精确拆到单次 run。 */
   costAttribution?: 'exact' | 'legacy';
   /**
@@ -260,6 +264,16 @@ export interface ScheduleRun {
    * 仅 'running' 期间有意义；老版本写入的行可能为 NULL（按 firedAt 兜底判停滞）。
    */
   heartbeatAt?: number;
+}
+
+export interface ScheduleRunMoney {
+  amount: number;
+  currency: 'CNY' | 'USD';
+  approximate: boolean;
+  kind: 'actual-cost' | 'value-estimate';
+  estimateReasons?: Array<
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price'
+  >;
 }
 
 export interface CreateScheduleInput {

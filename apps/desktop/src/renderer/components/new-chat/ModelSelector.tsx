@@ -26,6 +26,10 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
+  formatModelPricePair,
+  modelPriceDetailRows,
+} from '@/lib/modelPriceFormat';
+import {
   filterChatBridgedCodexProviders,
   providerMonogram,
   resolveVisibleModelAgentKind,
@@ -46,6 +50,12 @@ import {
   visibleModelUnion,
   type ProviderView,
 } from '@cindy/model-providers';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  getModelPriceQuote,
+  regionalizeModelPriceQuote,
+} from '../../../shared/modelPriceQuote';
+import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
@@ -622,14 +632,26 @@ export function ModelSelectorContent({
   };
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
-  const priceTipOf = (id: string): string | null => {
-    const p = pricing?.[id];
-    if (!p) return null;
-    const fmt = (v: number) => `$${Number(v.toFixed(2))}`;
-    return t('newChat.modelSelector.priceTip', {
-      input: fmt(p.inputUsdPerMtok),
-      output: fmt(p.outputUsdPerMtok),
-    });
+  // providerId 是价格索引的一部分。同模型经 XD / OpenAI / Anthropic 等来源出现时，
+  // 必须按实际行来源查价，不能退化为 pricing[modelId]。
+  const priceQuoteOf = (
+    providerId: string | null,
+    id: string,
+  ): ModelPriceQuote | null => {
+    const effectiveProviderId =
+      providerId ??
+      (currentAgentKind
+        ? effectiveSourceIdForModel(
+            providers,
+            currentProviderId,
+            id,
+            currentAgentKind,
+          )
+        : null);
+    const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
+    return quote
+      ? regionalizeModelPriceQuote(quote, CURRENT_CINDY_REGION)
+      : null;
   };
   const modelDisabledOf = (id: string): boolean => {
     if (!deviceId) return id.startsWith('codex/') && !hasSavedKey;
@@ -870,7 +892,9 @@ export function ModelSelectorContent({
       effectiveSourceIdForModel(providers, currentProviderId, editingModel.id, currentAgentKind);
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
   }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId]);
-  const editingPrice = editingModel ? priceTipOf(editingModel.id) : null;
+  const editingPrice = editingModel
+    ? priceQuoteOf(editingProvider?.id ?? editingProviderId, editingModel.id)
+    : null;
 
   // 每个模型行的信息 / 配置内容由一个独立的 portaled Popover 承载,而不是拼进主菜单宽度。
   // 这样浮层会像 Hermes 的 Radix submenu 一样贴着当前行移动,切行不触发主菜单重排。
@@ -953,6 +977,36 @@ export function ModelSelectorContent({
       {(editShowFast || editHasEfforts) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
+      {editingPrice && (
+        <>
+          <div className="px-2 pb-1 pt-1">
+            <div className="mb-1.5 text-11 font-medium text-[var(--text-tertiary)]">
+              {t('newChat.modelSelector.pricing.title')}
+            </div>
+            <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-12 leading-[1.4]">
+              {modelPriceDetailRows(editingPrice).map((row) => (
+                <div key={row.kind} className="contents">
+                  <span className="text-[var(--text-secondary)]">
+                    {t(`newChat.modelSelector.pricing.${row.kind}`)}
+                  </span>
+                  <span className="tabular-nums text-[var(--model-item-text)]">
+                    {editingPrice.approximate ? '≈' : ''}
+                    {row.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-1.5 text-11 leading-[1.4] text-[var(--text-tertiary)]">
+              {editingPrice.source === 'subscription-reference'
+                ? t('newChat.modelSelector.pricing.subscriptionEstimate')
+                : editingPrice.approximate
+                  ? t('newChat.modelSelector.pricing.fixedFx')
+                  : t('newChat.modelSelector.pricing.perMillion')}
+            </div>
+          </div>
+          <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+        </>
+      )}
       <div className="px-2 py-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-11 font-normal leading-[1.4] text-[var(--text-tertiary)]">
           {editingProvider && (
@@ -972,7 +1026,6 @@ export function ModelSelectorContent({
           {editingModel.supportsFastMode && (
             <span>{t('newChat.modelSelector.meta.fastBadge')}</span>
           )}
-          {editingPrice && <span>{editingPrice}</span>}
         </div>
       </div>
     </div>
@@ -988,6 +1041,7 @@ export function ModelSelectorContent({
     const disabled = modelDisabledOf(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
+    const rowPrice = priceQuoteOf(providerId, model.id);
     // 信息面板对所有可用模型开放;能否编辑 effort / Fast 在面板内部另行判定。
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态
@@ -1109,8 +1163,17 @@ export function ModelSelectorContent({
                 )}
               </span>
             </span>
-            {isSelected && (
-              <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
+            {(rowPrice || isSelected) && (
+              <span className="ml-2 flex shrink-0 items-center gap-1.5">
+                {rowPrice && (
+                  <span className="tabular-nums text-11 font-normal text-[var(--text-tertiary)]">
+                    {formatModelPricePair(rowPrice)}
+                  </span>
+                )}
+                {isSelected && (
+                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+                )}
+              </span>
             )}
           </div>
         </PopoverAnchor>

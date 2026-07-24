@@ -7,6 +7,7 @@
 import type { AgentMeta, Message, MessageRole } from '@/lib/ccAgent.types';
 import { ApiError } from '@/lib/httpClient';
 import { extractIpcError } from '@/utils/ipcError';
+import type { RegionalMoney } from '../../shared/regionalMoney';
 
 function wrap<T>(p: Promise<T>): Promise<T> {
   return p.catch((err: unknown) => {
@@ -31,8 +32,14 @@ export async function list(
 export async function estimatedSessionValue(
   sessionId: string,
 ): Promise<{
-  totalValueUsd: number;
-  entries: Array<{ clientId: string; costUsd: number }>;
+  totalValueMoney?: RegionalMoney | null;
+  totalValueUsd?: number;
+  entries: Array<{
+    clientId: string;
+    money?: RegionalMoney;
+    costUsd?: number;
+    turnUsageDetails?: unknown;
+  }>;
 }> {
   return wrap(window.electronAPI.localDb.messages.estimatedSessionValue(sessionId));
 }

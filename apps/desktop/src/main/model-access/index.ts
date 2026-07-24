@@ -14,6 +14,7 @@ import {
 import { getActiveCatalog, setXdGatewayModels } from '../maker-host/active-catalog.js';
 import { isDev } from '../manifestService.js';
 import { overlayCindyModelMeta } from './devMetaOverlay.js';
+import { replaceGatewayModelPricing } from '../usage/modelPricing.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
@@ -125,6 +126,10 @@ let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 
 function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
+  // 同一次 /models 响应先建立 provider-scoped 价格投影，再做仅影响展示元数据的
+  // dev overlay。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
+  // 因而保留上一份完整成功快照。
+  replaceGatewayModelPricing(models);
   // dev:本地目录文件(catalog/providers.json)的 cindyModelMeta 段覆盖服务端下发的
   // 元数据,改本地 json + 重启即可自测,无需发 OSS / 等服务端热加载;只覆盖同 id,
   // 清单成员资格仍以网关为准。packaged 不走此分支(语义见 devMetaOverlay.ts)。

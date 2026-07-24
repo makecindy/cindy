@@ -27,6 +27,9 @@ const DRIZZLE_PROXY_SCHEMA = [
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_amount REAL NOT NULL DEFAULT 0,
+      total_cost_currency TEXT,
+      total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       fast_mode INTEGER NOT NULL DEFAULT 0,
@@ -80,12 +83,14 @@ describe('drizzle proxy', () => {
       await applyDrizzleProxySchema(client);
       for (const target of [inProc, client] as const) {
         if ('prepare' in target) {
-          target.prepare(
-            'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
-          ).run('s1', 'Session 1', 1, 2);
-          target.prepare(
-            'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          ).run('m1', 'c1', 's1', 'user', '"hello"', 3);
+          target
+            .prepare('INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
+            .run('s1', 'Session 1', 1, 2);
+          target
+            .prepare(
+              'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+            )
+            .run('m1', 'c1', 's1', 'user', '"hello"', 3);
         } else {
           await target.exec(
             'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
@@ -134,10 +139,7 @@ describe('drizzle proxy', () => {
         .values({ id: 's2', title: 'b', createdAt: 2, updatedAt: 2 } as never);
 
       // UPDATE
-      await client.drizzle
-        .update(sessions)
-        .set({ title: 'updated' })
-        .where(eq(sessions.id, 's1'));
+      await client.drizzle.update(sessions).set({ title: 'updated' }).where(eq(sessions.id, 's1'));
 
       // DELETE
       await client.drizzle.delete(sessions).where(eq(sessions.id, 's2'));

@@ -3293,6 +3293,7 @@ export function CCAgentSessionView({
                         : (session?.providerId ?? null)
                     }
                     sessionId={sessionId}
+                    sessionInitialMoney={session?.totalMoney ?? null}
                     sessionInitialCostUsd={session?.totalCostUsd ?? null}
                     sessionInitialTokens={session?.totalTokenUsage ?? null}
                     remoteHostId={session?.remoteHostId ?? null}

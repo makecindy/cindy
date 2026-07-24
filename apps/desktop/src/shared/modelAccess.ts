@@ -54,7 +54,59 @@ export interface ModelAccessAgentOverride {
   defaultEnabled?: boolean;
 }
 
-export interface ModelAccessGatewayModel {
+export interface ModelGroupTieredPricing {
+  range: [number, number];
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
+  cacheReadInputTokenCost?: number;
+  cacheCreationInputTokenCost?: number;
+}
+
+/**
+ * model-access-server 从 AIGateway /model-groups 白名单透传的价格字段。
+ * 字段名和单位保持 Gateway 原样（per token）；Desktop 在构建 quote 时才转
+ * per-million-token，并按构建区域赋予币种。
+ */
+export interface ModelGroupPricing {
+  costDiscount?: number;
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
+  inputCostPerTokenPriority?: number;
+  outputCostPerTokenPriority?: number;
+  cacheReadInputTokenCost?: number;
+  cacheReadInputTokenCostPriority?: number;
+  cacheCreationInputTokenCost?: number;
+  inputCostPerTokenAbove200kTokens?: number;
+  outputCostPerTokenAbove200kTokens?: number;
+  cacheReadInputTokenCostAbove200kTokens?: number;
+  inputCostPerTokenAbove200kTokensPriority?: number;
+  outputCostPerTokenAbove200kTokensPriority?: number;
+  cacheReadInputTokenCostAbove200kTokensPriority?: number;
+  inputCostPerTokenAbove272kTokens?: number;
+  outputCostPerTokenAbove272kTokens?: number;
+  cacheReadInputTokenCostAbove272kTokens?: number;
+  inputCostPerTokenAbove272kTokensPriority?: number;
+  outputCostPerTokenAbove272kTokensPriority?: number;
+  cacheReadInputTokenCostAbove272kTokensPriority?: number;
+  inputCostPerCharacter?: number;
+  outputCostPerCharacter?: number;
+  inputCostPerSecond?: number;
+  outputCostPerSecond?: number;
+  inputCostPerAudioToken?: number;
+  outputCostPerAudioToken?: number;
+  inputCostPerAudioPerSecond?: number;
+  outputCostPerAudioPerSecond?: number;
+  inputCostPerImage?: number;
+  outputCostPerImage?: number;
+  inputCostPerImageToken?: number;
+  outputCostPerImageToken?: number;
+  cacheReadInputImageTokenCost?: number;
+  inputCostPerVideoPerSecond?: number;
+  outputCostPerVideoPerSecond?: number;
+  tieredPricing?: ModelGroupTieredPricing[];
+}
+
+export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
   agents?: ('claude-code' | 'codex')[];

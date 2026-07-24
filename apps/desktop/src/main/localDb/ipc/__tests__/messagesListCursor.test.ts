@@ -73,15 +73,20 @@ function createDb(): Database.Database {
   return sqlite;
 }
 
-function insertMessage(sqlite: Database.Database, input: { id: string; createdAt: number; content: string }): void {
+function insertMessage(
+  sqlite: Database.Database,
+  input: { id: string; createdAt: number; content: string },
+): void {
   sqlite
-    .prepare(`
+    .prepare(
+      `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
       ) VALUES (
         @id, @clientId, 's1', 'assistant', @content, NULL, NULL, @createdAt, NULL
       )
-    `)
+    `,
+    )
     .run({
       id: input.id,
       clientId: input.id,
@@ -101,13 +106,15 @@ function insertCostMessage(
   },
 ): void {
   sqlite
-    .prepare(`
+    .prepare(
+      `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
       ) VALUES (
         @id, @id, 's1', @role, '""', NULL, @agentMeta, @createdAt, @rewindAt
       )
-    `)
+    `,
+    )
     .run({
       ...input,
       agentMeta: input.agentMeta ? JSON.stringify(input.agentMeta) : null,
@@ -139,10 +146,7 @@ describe('local-db:messages:list cursor', () => {
       'row-z',
       'row-old',
     ]);
-    expect((rows as Array<{ id: string; rowid: number }>).map((row) => row.rowid)).toEqual([
-      1,
-      4,
-    ]);
+    expect((rows as Array<{ id: string; rowid: number }>).map((row) => row.rowid)).toEqual([1, 4]);
   });
 
   it('keeps around windows stable for same timestamp rows', async () => {
@@ -164,9 +168,7 @@ describe('local-db:messages:list cursor', () => {
       'row-m',
     ]);
     expect((rows as Array<{ id: string; rowid: number }>).map((row) => row.rowid)).toEqual([
-      1,
-      2,
-      3,
+      1, 2, 3,
     ]);
   });
 
@@ -189,9 +191,7 @@ describe('local-db:messages:list cursor', () => {
       'row-m',
     ]);
     expect((rows as Array<{ id: string; rowid: number }>).map((row) => row.rowid)).toEqual([
-      1,
-      2,
-      3,
+      1, 2, 3,
     ]);
   });
 
@@ -202,7 +202,10 @@ describe('local-db:messages:list cursor', () => {
 
     registerMessageIpc();
     const handler = h.handlers.get('local-db:messages:around-client-id');
-    const rows = await handler?.({}, 's1', 'anchor', { radius: 0, contentCharLimit: 5 }) as Array<{
+    const rows = (await handler?.({}, 's1', 'anchor', {
+      radius: 0,
+      contentCharLimit: 5,
+    })) as Array<{
       id: string;
       content: string;
       agentMeta: Record<string, unknown>;
@@ -248,7 +251,7 @@ describe('local-db:messages:list cursor', () => {
     registerMessageIpc();
     const prepareSpy = vi.spyOn(sqlite, 'prepare');
     const listHandler = h.handlers.get('local-db:messages:list');
-    const rows = await listHandler?.({}, 's1', { limit: 10 }) as Array<{
+    const rows = (await listHandler?.({}, 's1', { limit: 10 })) as Array<{
       id: string;
       agentMeta: Record<string, unknown> | null;
     }>;
@@ -258,7 +261,9 @@ describe('local-db:messages:list cursor', () => {
       userTurnCostUsd: 52.229224,
       userTurnCostIsEstimate: false,
     });
-    const stored = sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('final') as { agent_meta: string };
+    const stored = sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('final') as {
+      agent_meta: string;
+    };
     expect(JSON.parse(stored.agent_meta)).toEqual({
       turnCostUsd: 0.777042,
     });
@@ -274,21 +279,29 @@ describe('findPendingAgentHandoff 持久消费位', () => {
     content: Record<string, unknown>,
     createdAt = 1_000,
   ): void {
-    sqlite.prepare(`
+    sqlite
+      .prepare(
+        `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta,
         agent_kind, created_at, rewind_at
       ) VALUES ('sw', 'sw', 's1', 'agent_switch', ?, NULL, NULL, 'cc', ?, NULL)
-    `).run(JSON.stringify(content), createdAt);
+    `,
+      )
+      .run(JSON.stringify(content), createdAt);
   }
 
   function insertUser(sqlite: Database.Database, createdAt = 2_000): void {
-    sqlite.prepare(`
+    sqlite
+      .prepare(
+        `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta,
         agent_kind, created_at, rewind_at
       ) VALUES ('user-after', 'user-after', 's1', 'user', '"失败首发"', NULL, NULL, 'codex', ?, NULL)
-    `).run(createdAt);
+    `,
+      )
+      .run(createdAt);
   }
 
   it('失败首发已落 user 行但 consumed=false,重启重建仍返回 handoff', async () => {
@@ -317,16 +330,22 @@ describe('findPendingAgentHandoff 持久消费位', () => {
   it('restores a hidden context rebuild marker after app restart', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    sqlite.prepare(`
+    sqlite
+      .prepare(
+        `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta,
         agent_kind, created_at, rewind_at
       ) VALUES ('ctx', 'ctx', 's1', 'context_rebuild', ?, NULL, NULL, 'cc', 3000, 3000)
-    `).run(JSON.stringify({ handoff: 'FILTERED-HISTORY', consumed: false }));
+    `,
+      )
+      .run(JSON.stringify({ handoff: 'FILTERED-HISTORY', consumed: false }));
     await expect(findPendingAgentHandoff('s1')).resolves.toBe('FILTERED-HISTORY');
     await markLatestAgentHandoffConsumed('s1');
     await expect(findPendingAgentHandoff('s1')).resolves.toBeNull();
-    const stored = sqlite.prepare('SELECT content, rewind_at FROM messages WHERE id = ?').get('ctx') as {
+    const stored = sqlite
+      .prepare('SELECT content, rewind_at FROM messages WHERE id = ?')
+      .get('ctx') as {
       content: string;
       rewind_at: number;
     };
@@ -342,17 +361,21 @@ describe('findParkedEngineSession context rebuild boundary', () => {
   it('does not resume a parked native session from before message deletion', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    sqlite.prepare(`
+    sqlite
+      .prepare(
+        `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta,
         agent_kind, created_at, rewind_at
       ) VALUES
         ('sw', 'sw', 's1', 'agent_switch', ?, NULL, NULL, 'codex', 1000, NULL),
         ('ctx', 'ctx', 's1', 'context_rebuild', ?, NULL, NULL, NULL, 2000, 2000)
-    `).run(
-      JSON.stringify({ fromAgentKind: 'codex', fromSdkSessionId: 'parked-codex' }),
-      JSON.stringify({ handoff: 'filtered', consumed: true }),
-    );
+    `,
+      )
+      .run(
+        JSON.stringify({ fromAgentKind: 'codex', fromSdkSessionId: 'parked-codex' }),
+        JSON.stringify({ handoff: 'filtered', consumed: true }),
+      );
 
     await expect(findParkedEngineSession('s1', 'codex')).resolves.toBeNull();
   });
@@ -375,8 +398,20 @@ describe('getMessageDeletionTarget', () => {
     `);
     for (const row of [
       { id: 'user', role: 'user', content: '"diagnose"', agentMeta: null, createdAt: 1_000 },
-      { id: 'progress', role: 'assistant', content: '"checking"', agentMeta: null, createdAt: 1_100 },
-      { id: 'thinking', role: 'thinking', content: '"analysis"', agentMeta: null, createdAt: 1_200 },
+      {
+        id: 'progress',
+        role: 'assistant',
+        content: '"checking"',
+        agentMeta: null,
+        createdAt: 1_100,
+      },
+      {
+        id: 'thinking',
+        role: 'thinking',
+        content: '"analysis"',
+        agentMeta: null,
+        createdAt: 1_200,
+      },
       {
         id: 'auto-resume',
         role: 'user',
@@ -389,7 +424,13 @@ describe('getMessageDeletionTarget', () => {
       { id: 'error', role: 'error', content: '"late error"', agentMeta: null, createdAt: 1_600 },
       { id: 'switch', role: 'agent_switch', content: '{}', agentMeta: null, createdAt: 1_700 },
       { id: 'next-user', role: 'user', content: '"thanks"', agentMeta: null, createdAt: 1_800 },
-      { id: 'next-answer', role: 'assistant', content: '"welcome"', agentMeta: null, createdAt: 1_900 },
+      {
+        id: 'next-answer',
+        role: 'assistant',
+        content: '"welcome"',
+        agentMeta: null,
+        createdAt: 1_900,
+      },
     ]) {
       insert.run(row);
     }
@@ -397,14 +438,7 @@ describe('getMessageDeletionTarget', () => {
     await expect(getMessageDeletionTarget('s1', 'progress')).resolves.toEqual({
       id: 'progress',
       role: 'assistant',
-      deletedClientIds: [
-        'progress',
-        'thinking',
-        'auto-resume',
-        'tool',
-        'final',
-        'error',
-      ],
+      deletedClientIds: ['progress', 'thinking', 'auto-resume', 'tool', 'final', 'error'],
     });
   });
 
@@ -523,7 +557,9 @@ describe('getMessageDeletionTarget', () => {
   it('keeps a blank real user message as a deletion boundary', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    sqlite.prepare(`
+    sqlite
+      .prepare(
+        `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
       ) VALUES
@@ -531,7 +567,9 @@ describe('getMessageDeletionTarget', () => {
         ('before', 'before', 's1', 'assistant', '"before"', NULL, NULL, 1100, NULL),
         ('blank-user', 'blank-user', 's1', 'user', '""', NULL, NULL, 1200, NULL),
         ('target', 'target', 's1', 'assistant', '"target"', NULL, NULL, 1300, NULL)
-    `).run();
+    `,
+      )
+      .run();
 
     await expect(getMessageDeletionTarget('s1', 'target')).resolves.toEqual({
       id: 'target',
@@ -543,13 +581,17 @@ describe('getMessageDeletionTarget', () => {
   it('keeps user-message deletion scoped to the selected row', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    sqlite.prepare(`
+    sqlite
+      .prepare(
+        `
       INSERT INTO messages (
         id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
       ) VALUES
         ('user', 'user', 's1', 'user', '"question"', NULL, NULL, 1000, NULL),
         ('answer', 'answer', 's1', 'assistant', '"answer"', NULL, NULL, 1100, NULL)
-    `).run();
+    `,
+      )
+      .run();
 
     await expect(getMessageDeletionTarget('s1', 'user')).resolves.toEqual({
       id: 'user',
@@ -590,7 +632,14 @@ describe('readPriorUserRoundCost', () => {
     insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_300 });
 
     await expect(readPriorUserRoundCost('s1', 'target')).resolves.toEqual({
-      costUsd: 18.934191,
+      money: {
+        amount: expect.closeTo(18.934191 * 6.7, 10),
+        currency: 'CNY',
+        approximate: true,
+        kind: 'actual-cost',
+        estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+      },
+      costUsd: 0,
       hasEstimatedValue: true,
     });
   });
@@ -622,7 +671,14 @@ describe('readPriorUserRoundCost', () => {
     insertCostMessage(sqlite, { id: 'target', role: 'assistant', createdAt: 1_500 });
 
     await expect(readPriorUserRoundCost('s1', 'target')).resolves.toEqual({
-      costUsd: 0.5,
+      money: {
+        amount: 3.35,
+        currency: 'CNY',
+        approximate: true,
+        kind: 'actual-cost',
+        estimateReasons: ['fixed-fx', 'legacy-usd'],
+      },
+      costUsd: 0,
       hasEstimatedValue: false,
     });
   });

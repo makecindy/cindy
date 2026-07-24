@@ -83,9 +83,7 @@ beforeEach(() => {
 
 describe('patchMessageAgentMeta', () => {
   it('merge:保留已有 meta 字段(uuid 等 fork/rewind 锚点),合并 patch 字段', async () => {
-    selectQueue.push([
-      { agentMeta: JSON.stringify({ uuid: 'sdk-u1', model: 'claude-fable-5' }) },
-    ]);
+    selectQueue.push([{ agentMeta: JSON.stringify({ uuid: 'sdk-u1', model: 'claude-fable-5' }) }]);
     const ok = await patchMessageAgentMeta('s1', 'm1', {
       turnCostUsd: 0.05,
       turnCostIsEstimate: false,
@@ -122,18 +120,20 @@ describe('patchMessageAgentMeta', () => {
   });
 
   it('元数据更新复用 messages:created 广播权威完整行', async () => {
-    selectQueue.push([{
-      id: 'row-1',
-      sessionId: 's1',
-      clientId: 'm1',
-      role: 'assistant',
-      content: JSON.stringify('正式总结'),
-      toolUseId: null,
-      agentMeta: JSON.stringify({ turnCompleted: true }),
-      agentKind: 'cc',
-      createdAt: 1,
-      rewindAt: null,
-    }]);
+    selectQueue.push([
+      {
+        id: 'row-1',
+        sessionId: 's1',
+        clientId: 'm1',
+        role: 'assistant',
+        content: JSON.stringify('正式总结'),
+        toolUseId: null,
+        agentMeta: JSON.stringify({ turnCompleted: true }),
+        agentKind: 'cc',
+        createdAt: 1,
+        rewindAt: null,
+      },
+    ]);
 
     await expect(broadcastMessageAgentMetaUpdate('s1', 'm1')).resolves.toBe(true);
     expect(mockSend).toHaveBeenCalledWith(
@@ -151,102 +151,115 @@ describe('patchMessageAgentMeta', () => {
 
 describe('extractEstimatedSessionValueEntries', () => {
   it('只汇总订阅模式估算价值,忽略真实 API cost / 非法 meta', () => {
-    expect(extractEstimatedSessionValueEntries([
-      {
-        clientId: 'estimate-1',
-        agentMeta: JSON.stringify({ turnCostUsd: 0.12, turnCostIsEstimate: true }),
+    const legacyEstimatedEntry = (clientId: string, costUsd: number) => ({
+      clientId,
+      money: {
+        amount: expect.closeTo(costUsd * 6.7),
+        currency: 'CNY',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
       },
-      {
-        clientId: 'api-cost',
-        agentMeta: JSON.stringify({ turnCostUsd: 0.34, turnCostIsEstimate: false }),
-      },
-      {
-        clientId: 'missing-flag',
-        agentMeta: JSON.stringify({ turnCostUsd: 0.56 }),
-      },
-      {
-        clientId: 'zero',
-        agentMeta: JSON.stringify({ turnCostUsd: 0, turnCostIsEstimate: true }),
-      },
-      {
-        clientId: 'broken',
-        agentMeta: '{broken',
-      },
-      {
-        clientId: 'estimate-2',
-        agentMeta: JSON.stringify({ uuid: 'u2', turnCostUsd: 0.03, turnCostIsEstimate: true }),
-      },
-      {
-        clientId: 'estimate-recomputed',
-        agentMeta: JSON.stringify({
-          turnCostUsd: 8.76,
-          turnCostIsEstimate: true,
-          turnUsageDetails: {
-            inputTokens: 213_800,
-            outputTokens: 6_400,
-            cacheReadTokens: 1_500_000,
-            cacheCreateTokens: 0,
-            totalTokens: 1_720_200,
-            cacheHitRate: 0.875,
+      costUsd: expect.closeTo(costUsd),
+    });
+    expect(
+      extractEstimatedSessionValueEntries([
+        {
+          clientId: 'estimate-1',
+          agentMeta: JSON.stringify({ turnCostUsd: 0.12, turnCostIsEstimate: true }),
+        },
+        {
+          clientId: 'api-cost',
+          agentMeta: JSON.stringify({ turnCostUsd: 0.34, turnCostIsEstimate: false }),
+        },
+        {
+          clientId: 'missing-flag',
+          agentMeta: JSON.stringify({ turnCostUsd: 0.56 }),
+        },
+        {
+          clientId: 'zero',
+          agentMeta: JSON.stringify({ turnCostUsd: 0, turnCostIsEstimate: true }),
+        },
+        {
+          clientId: 'broken',
+          agentMeta: '{broken',
+        },
+        {
+          clientId: 'estimate-2',
+          agentMeta: JSON.stringify({ uuid: 'u2', turnCostUsd: 0.03, turnCostIsEstimate: true }),
+        },
+        {
+          clientId: 'estimate-recomputed',
+          agentMeta: JSON.stringify({
+            turnCostUsd: 8.76,
+            turnCostIsEstimate: true,
+            turnUsageDetails: {
+              inputTokens: 213_800,
+              outputTokens: 6_400,
+              cacheReadTokens: 1_500_000,
+              cacheCreateTokens: 0,
+              totalTokens: 1_720_200,
+              cacheHitRate: 0.875,
+              model: 'gpt-5.5',
+            },
+          }),
+        },
+        {
+          clientId: 'estimate-recomputed-meta-model',
+          agentMeta: JSON.stringify({
             model: 'gpt-5.5',
-          },
-        }),
-      },
-      {
-        clientId: 'estimate-recomputed-meta-model',
-        agentMeta: JSON.stringify({
-          model: 'gpt-5.5',
-          turnCostUsd: 8.76,
-          turnCostIsEstimate: true,
-          turnUsageDetails: {
-            inputTokens: 213_800,
-            outputTokens: 6_400,
-            cacheReadTokens: 1_500_000,
-            cacheCreateTokens: 0,
-            totalTokens: 1_720_200,
-            cacheHitRate: 0.875,
-          },
-        }),
-      },
-      {
-        clientId: 'estimate-legacy-fallback-recomputed',
-        agentMeta: JSON.stringify({
-          model: 'gpt-5.5',
-          turnCostUsd: 3.4788,
-          turnCostIsEstimate: true,
-          turnUsageDetails: {
-            inputTokens: 213_800,
-            outputTokens: 6_400,
-            cacheReadTokens: 1_500_000,
-            cacheCreateTokens: 0,
-            totalTokens: 1_720_200,
-            cacheHitRate: 0.875,
-          },
-        }),
-      },
-      {
-        clientId: 'estimate-live-pricing-preserved',
-        agentMeta: JSON.stringify({
-          model: 'gpt-5.5',
-          turnCostUsd: 3.14,
-          turnCostIsEstimate: true,
-          turnUsageDetails: {
-            inputTokens: 213_800,
-            outputTokens: 6_400,
-            cacheReadTokens: 1_500_000,
-            cacheCreateTokens: 0,
-            totalTokens: 1_720_200,
-            cacheHitRate: 0.875,
-          },
-        }),
-      },
-    ])).toEqual([
-      { clientId: 'estimate-1', costUsd: 0.12 },
-      { clientId: 'estimate-2', costUsd: 0.03 },
-      { clientId: 'estimate-recomputed', costUsd: expect.closeTo(2.011) },
-      { clientId: 'estimate-recomputed-meta-model', costUsd: expect.closeTo(2.011) },
-      { clientId: 'estimate-legacy-fallback-recomputed', costUsd: expect.closeTo(2.011) },
-      { clientId: 'estimate-live-pricing-preserved', costUsd: 3.14 },
+            turnCostUsd: 8.76,
+            turnCostIsEstimate: true,
+            turnUsageDetails: {
+              inputTokens: 213_800,
+              outputTokens: 6_400,
+              cacheReadTokens: 1_500_000,
+              cacheCreateTokens: 0,
+              totalTokens: 1_720_200,
+              cacheHitRate: 0.875,
+            },
+          }),
+        },
+        {
+          clientId: 'estimate-legacy-fallback-recomputed',
+          agentMeta: JSON.stringify({
+            model: 'gpt-5.5',
+            turnCostUsd: 3.4788,
+            turnCostIsEstimate: true,
+            turnUsageDetails: {
+              inputTokens: 213_800,
+              outputTokens: 6_400,
+              cacheReadTokens: 1_500_000,
+              cacheCreateTokens: 0,
+              totalTokens: 1_720_200,
+              cacheHitRate: 0.875,
+            },
+          }),
+        },
+        {
+          clientId: 'estimate-live-pricing-preserved',
+          agentMeta: JSON.stringify({
+            model: 'gpt-5.5',
+            turnCostUsd: 3.14,
+            turnCostIsEstimate: true,
+            turnUsageDetails: {
+              inputTokens: 213_800,
+              outputTokens: 6_400,
+              cacheReadTokens: 1_500_000,
+              cacheCreateTokens: 0,
+              totalTokens: 1_720_200,
+              cacheHitRate: 0.875,
+            },
+          }),
+        },
+      ]),
+    ).toEqual([
+      legacyEstimatedEntry('estimate-1', 0.12),
+      legacyEstimatedEntry('estimate-2', 0.03),
+      legacyEstimatedEntry('estimate-recomputed', 2.011),
+      legacyEstimatedEntry('estimate-recomputed-meta-model', 2.011),
+      legacyEstimatedEntry('estimate-legacy-fallback-recomputed', 2.011),
+      legacyEstimatedEntry('estimate-live-pricing-preserved', 3.14),
     ]);
   });
 });
