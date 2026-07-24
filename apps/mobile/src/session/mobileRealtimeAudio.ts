@@ -83,6 +83,14 @@ type ExpoAudioNativeModule = {
   }) => ExpoAudioStream;
 };
 
+type ExpoAudioPcm16ResampleState = {
+  sourceSampleRate: number;
+  sourceChannels: number;
+  targetSampleRate: number;
+  sourceFramesConsumed: number;
+  outputFramesProduced: number;
+};
+
 const DEFAULT_NATIVE_AUDIO_BUFFER_SIZE = 4096;
 const EXPO_AUDIO_STREAM_STALL_TIMEOUT_MS = 5_000;
 const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
@@ -190,6 +198,7 @@ async function startExpoAudioRealtimeAudio(
   },
 ): Promise<() => Promise<void>> {
   const targetSampleRate = normalizeSampleRate(options.sampleRate);
+  const convertPcm16 = createExpoAudioPcm16Converter(targetSampleRate);
   const stream = new module.AudioStream({
     sampleRate: targetSampleRate,
     channels: 1,
@@ -234,13 +243,14 @@ async function startExpoAudioRealtimeAudio(
   subscriptions.push(
     stream.addListener('audioStreamBuffer', (event) => {
       if (stopping) return;
+      const capturedAt = Date.now();
+      lastChunkAt = capturedAt;
       let pcm16: ArrayBuffer;
       try {
-        pcm16 = convertExpoAudioPcm16(
+        pcm16 = convertPcm16(
           event.data,
           event.sampleRate,
           event.channels,
-          targetSampleRate,
         );
       } catch {
         reportFailure();
@@ -248,11 +258,10 @@ async function startExpoAudioRealtimeAudio(
       }
       if (pcm16.byteLength === 0) return;
       const convertedAt = Date.now();
-      lastChunkAt = convertedAt;
       options.onChunk({
         pcm16,
         trace: {
-          capturedAt: convertedAt,
+          capturedAt,
           convertedAt,
           chunkIndex,
           sampleRate: targetSampleRate,
@@ -304,6 +313,7 @@ export function prewarmMobileRealtimeAudio(): void {
 export const __testing = {
   decodeBase64ToArrayBuffer,
   convertExpoAudioPcm16,
+  createExpoAudioPcm16Converter,
   resetNativeBindingForTests: () => {
     nativeBinding = undefined;
     expoAudioNativeModule = undefined;
@@ -375,17 +385,42 @@ function normalizeSampleRate(sampleRate: number | undefined): number {
   return Math.round(sampleRate);
 }
 
+function createExpoAudioPcm16Converter(
+  targetSampleRate: number,
+): (
+  input: ArrayBuffer,
+  sourceSampleRate: number,
+  sourceChannels: number,
+) => ArrayBuffer {
+  const state: ExpoAudioPcm16ResampleState = {
+    sourceSampleRate: 0,
+    sourceChannels: 0,
+    targetSampleRate,
+    sourceFramesConsumed: 0,
+    outputFramesProduced: 0,
+  };
+  return (input, sourceSampleRate, sourceChannels) => convertExpoAudioPcm16(
+    input,
+    sourceSampleRate,
+    sourceChannels,
+    targetSampleRate,
+    state,
+  );
+}
+
 /**
  * Converts interleaved little-endian PCM16 from Expo AudioStream into the mono
  * sample rate declared to the ASR provider. AudioStream may fall back to a
  * hardware-supported rate, so forwarding its bytes unchanged would make the
- * provider interpret (for example) 48 kHz audio as 16 kHz.
+ * provider interpret (for example) 48 kHz audio as 16 kHz. The optional state
+ * keeps the resampling clock continuous across native buffer boundaries.
  */
 function convertExpoAudioPcm16(
   input: ArrayBuffer,
   sourceSampleRate: number,
   sourceChannels: number,
   targetSampleRate: number,
+  state?: ExpoAudioPcm16ResampleState,
 ): ArrayBuffer {
   if (!Number.isFinite(sourceSampleRate) || sourceSampleRate <= 0) {
     throw new RangeError(`Invalid source sample rate: ${sourceSampleRate}`);
@@ -397,30 +432,64 @@ function convertExpoAudioPcm16(
     throw new RangeError(`Invalid target sample rate: ${targetSampleRate}`);
   }
 
+  const resampleState = state ?? {
+    sourceSampleRate,
+    sourceChannels,
+    targetSampleRate,
+    sourceFramesConsumed: 0,
+    outputFramesProduced: 0,
+  };
+  if (
+    resampleState.sourceSampleRate !== sourceSampleRate
+    || resampleState.sourceChannels !== sourceChannels
+    || resampleState.targetSampleRate !== targetSampleRate
+  ) {
+    resampleState.sourceSampleRate = sourceSampleRate;
+    resampleState.sourceChannels = sourceChannels;
+    resampleState.targetSampleRate = targetSampleRate;
+    resampleState.sourceFramesConsumed = 0;
+    resampleState.outputFramesProduced = 0;
+  }
+
   const bytesPerFrame = sourceChannels * 2;
   const sourceFrameCount = Math.floor(input.byteLength / bytesPerFrame);
   if (sourceFrameCount === 0) return new ArrayBuffer(0);
+  const sourceFrameStart = resampleState.sourceFramesConsumed;
+  const sourceFrameEnd = sourceFrameStart + sourceFrameCount;
+  const outputFrameEnd = Math.ceil(
+    sourceFrameEnd * targetSampleRate / sourceSampleRate,
+  );
+  const outputFrameCount = outputFrameEnd - resampleState.outputFramesProduced;
+
   if (sourceChannels === 1 && sourceSampleRate === targetSampleRate) {
-    return input.slice(0, sourceFrameCount * bytesPerFrame);
+    resampleState.sourceFramesConsumed = sourceFrameEnd;
+    resampleState.outputFramesProduced = outputFrameEnd;
+    const alignedByteLength = sourceFrameCount * bytesPerFrame;
+    return input.byteLength === alignedByteLength
+      ? input
+      : input.slice(0, alignedByteLength);
   }
 
-  const outputFrameCount = Math.max(
-    1,
-    Math.floor(sourceFrameCount * targetSampleRate / sourceSampleRate),
-  );
   const inputView = new DataView(input);
   const output = new ArrayBuffer(outputFrameCount * 2);
   const outputView = new DataView(output);
-  const sourceFramesPerOutputFrame = sourceSampleRate / targetSampleRate;
 
   for (let outputIndex = 0; outputIndex < outputFrameCount; outputIndex += 1) {
-    const sourceFrameIndex = Math.min(
-      sourceFrameCount - 1,
-      Math.floor(outputIndex * sourceFramesPerOutputFrame),
-    );
+    const globalOutputFrameIndex =
+      resampleState.outputFramesProduced + outputIndex;
+    const sourceFrameIndex = Math.floor(
+      globalOutputFrameIndex * sourceSampleRate / targetSampleRate,
+    ) - sourceFrameStart;
+    if (sourceFrameIndex < 0 || sourceFrameIndex >= sourceFrameCount) {
+      throw new RangeError(
+        `Invalid realtime audio resampling phase: ${sourceFrameIndex}`,
+      );
+    }
     let monoSample = 0;
     for (let channelIndex = 0; channelIndex < sourceChannels; channelIndex += 1) {
-      const byteOffset = (sourceFrameIndex * sourceChannels + channelIndex) * 2;
+      const byteOffset = (
+        sourceFrameIndex * sourceChannels + channelIndex
+      ) * 2;
       monoSample += inputView.getInt16(byteOffset, true);
     }
     const averagedSample = Math.max(
@@ -430,6 +499,8 @@ function convertExpoAudioPcm16(
     outputView.setInt16(outputIndex * 2, averagedSample, true);
   }
 
+  resampleState.sourceFramesConsumed = sourceFrameEnd;
+  resampleState.outputFramesProduced = outputFrameEnd;
   return output;
 }
 

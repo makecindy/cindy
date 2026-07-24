@@ -21,6 +21,7 @@ vi.mock('expo-modules-core', () => ({
 }));
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.mocked(requireNativeModule).mockReset();
   vi.mocked(requireNativeModule).mockImplementation(() => {
@@ -112,6 +113,12 @@ describe('mobileRealtimeAudio', () => {
     expect(isMobileRealtimeAudioAvailable()).toBe(true);
     expect(shouldShowMobileVoiceUi('android')).toBe(true);
 
+    vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_100)
+      .mockReturnValueOnce(1_200)
+      .mockReturnValueOnce(1_225)
+      .mockReturnValue(1_300);
     const onChunk = vi.fn();
     const onError = vi.fn();
     const stopCapture = await startMobileRealtimeAudio({
@@ -146,6 +153,8 @@ describe('mobileRealtimeAudio', () => {
     const chunk = onChunk.mock.calls[0]?.[0];
     expect(Array.from(new Int16Array(chunk.pcm16))).toEqual([2_000, 10_000]);
     expect(chunk.trace).toMatchObject({
+      capturedAt: 1_200,
+      convertedAt: 1_225,
       chunkIndex: 0,
       sampleRate: 12_000,
     });
@@ -163,6 +172,41 @@ describe('mobileRealtimeAudio', () => {
 
     expect(streamStop).toHaveBeenCalledTimes(1);
     expect(streamRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves non-integer resampling phase across native buffer boundaries', async () => {
+    const { __testing } = await import('@/session/mobileRealtimeAudio');
+    const convert = __testing.createExpoAudioPcm16Converter(16_000);
+
+    const firstChunk = Int16Array.from(
+      { length: 7 },
+      (_, index) => index,
+    );
+    const secondChunk = Int16Array.from(
+      { length: 7 },
+      (_, index) => index + 7,
+    );
+
+    const firstOutput = new Int16Array(
+      convert(firstChunk.buffer, 44_100, 1),
+    );
+    const secondOutput = new Int16Array(
+      convert(secondChunk.buffer, 44_100, 1),
+    );
+
+    expect(Array.from(firstOutput)).toEqual([0, 2, 5]);
+    expect(Array.from(secondOutput)).toEqual([8, 11, 13]);
+    expect(firstOutput.length + secondOutput.length).toBe(
+      Math.ceil(14 * 16_000 / 44_100),
+    );
+  });
+
+  it('reuses an aligned mono PCM buffer when no conversion is needed', async () => {
+    const { __testing } = await import('@/session/mobileRealtimeAudio');
+    const input = new Int16Array([1, 2, 3]).buffer;
+
+    expect(__testing.convertExpoAudioPcm16(input, 16_000, 1, 16_000))
+      .toBe(input);
   });
 
   it('keeps the Android voice entry available to explicit E2E mock runs', async () => {
