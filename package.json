@@ -55,6 +55,7 @@
       "sharp": "^0.35.0"
     },
     "patchedDependencies": {
+      "@vscode/windows-process-tree@0.8.0": "dependency-patches/@vscode__windows-process-tree@0.8.0.patch",
       "harmonyos-sans-sc-webfont-splitted": "dependency-patches/harmonyos-sans-sc-webfont-splitted.patch",
       "react-native@0.85.3": "dependency-patches/react-native@0.85.3.patch",
       "react-native-uitextview@2.2.0": "dependency-patches/react-native-uitextview@2.2.0.patch",

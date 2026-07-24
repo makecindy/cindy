@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/27779725b0f4b72f2318f3fb1e9a0575e25df4d082eb55cc01696fe567a7d423",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/405f780af386f73b36223a8ea6d26c375f5dccbe25e0b67f5d3494a0a7803882",
   "creationInfo": {
-    "created": "1970-01-01T00:00:00Z",
+    "created": "2026-07-24T08:09:43Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -3491,6 +3491,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40vladfrangu/async_event_emitter@2.4.7"
+        }
+      ]
+    },
+    {
+      "name": "@vscode/windows-process-tree",
+      "SPDXID": "SPDXRef-Package-88ae36a83a6358a0",
+      "versionInfo": "0.8.0",
+      "downloadLocation": "https://github.com/microsoft/vscode-windows-process-tree",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40vscode/windows-process-tree@0.8.0"
         }
       ]
     },
@@ -9905,6 +9922,23 @@
     },
     {
       "name": "node-addon-api",
+      "SPDXID": "SPDXRef-Package-b972d6600d506f99",
+      "versionInfo": "7.1.0",
+      "downloadLocation": "https://github.com/nodejs/node-addon-api",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/node-addon-api@7.1.0"
+        }
+      ]
+    },
+    {
+      "name": "node-addon-api",
       "SPDXID": "SPDXRef-Package-d7616bbd4bf0b764",
       "versionInfo": "7.1.1",
       "downloadLocation": "https://github.com/nodejs/node-addon-api",
@@ -14319,6 +14353,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-88ae36a83a6358a0"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-8eaddaef2aabf7b6"
     },
     {
@@ -16200,6 +16239,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-28d476c4cc7bcb2a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-b972d6600d506f99"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

@@ -62,10 +62,6 @@ if (
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
 async function shutdownMaker(): Promise<void> {
-  // Windows uses an async native Win32 snapshot instead of a startup/quit
-  // PowerShell child. Finish the ownership scan before SDK shutdown removes
-  // the direct Claude process that anchors taskkill's tree traversal.
-  await reapClaudeOrphans();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
   // shutdown 触发的批量 onClose 是 fire-and-forget 的,不会被 await,worktree 回收会
   // 和 app.exit 竞争——可能 stash 了一半进程就没了,留下半拆的 worktree。退出期不做
@@ -5093,7 +5089,13 @@ app.on('ready', async () => {
   //
   // 必须在创建任何 Notification 之前调用。macOS / Linux 不需要。
   if (process.platform === 'win32') {
-    await cleanupLegacyDevShortcuts();
+    // 旧开发快捷方式清理是 best-effort 后台维护；即使 Start Menu 位于慢速
+    // 或重定向存储，也不能阻塞 AUMID 与其余 ready 初始化。
+    void cleanupLegacyDevShortcuts().catch((err) => {
+      createLogger('legacyDevShortcutCleanup').warn('startup cleanup threw', {
+        error: String(err),
+      });
+    });
     app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
     console.log('[AUMID] runtime=%s', WINDOWS_APP_USER_MODEL_ID);
   }
@@ -5405,7 +5407,8 @@ app.on('ready', async () => {
 //   - process.on('uncaughtException')—— main 进程未捕获异常
 //   - app.on('render-process-gone')  —— renderer 崩 (main 还活)
 //
-// 三个阶段串成 sync → async(并发+6s 超时, 见下方 installQuitHandler) → post-async,
+// 四个阶段串成 sync → pre-async(串行 await) → async(并发+6s 超时,
+// 见下方 installQuitHandler) → post-async,
 // 然后 app.exit(<code>)。
 // 散落的 fire-and-forget 已经收掉, 进程不会在 disposer 跑完之前死。
 // 真硬崩 (segfault / kill -9) JS 层无能为力, 子进程靠 stdin EOF 自死。
@@ -5447,9 +5450,13 @@ onQuit(
   'sync',
 );
 
+// Pre-async 阶段: 串行 await。Claude ownership snapshot + tree reap 必须在任何
+// 并发 teardown 之前完成；否则 proxy / maker 先关会让直接 Claude 进程退出并丢失
+// 可证明归属的 PPID 链。
+onQuit('reap-claude-orphans', () => reapClaudeOrphans().then(() => undefined), 'pre-async');
+
 // Async 阶段: 并发跑, 6s 超时兜底。
-//   - shutdown-maker:       先等待 Claude ownership snapshot + tree reap；再由
-//                           Layer 1 关 sessions → Layer 2 dispose agents (Codex
+//   - shutdown-maker:       Layer 1 关 sessions → Layer 2 dispose agents (Codex
 //                           shared app-server 子进程 SIGTERM)。**必须 await** —
 //                           kill 是 Layer 2 才发出, fire-and-forget 会让 app.exit
 //                           在 kill 之前就掐掉 Node, Windows 上子进程会变孤儿。

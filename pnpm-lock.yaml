@@ -15,6 +15,9 @@ overrides:
   sharp: ^0.35.0
 
 patchedDependencies:
+  '@vscode/windows-process-tree@0.8.0':
+    hash: 1232c04ccc2cc6c6102bc3f880089ea95232f03c6976dbe4ca9807e9b6b6dc7e
+    path: dependency-patches/@vscode__windows-process-tree@0.8.0.patch
   expo-paste-input@0.2.2:
     hash: 53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8
     path: dependency-patches/expo-paste-input@0.2.2.patch
@@ -248,7 +251,7 @@ importers:
         version: 3.28.0(@floating-ui/dom@1.8.0)(@tiptap/core@3.28.0(@tiptap/pm@3.28.0))(@tiptap/pm@3.28.0)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@vscode/windows-process-tree':
         specifier: 0.8.0
-        version: 0.8.0
+        version: 0.8.0(patch_hash=1232c04ccc2cc6c6102bc3f880089ea95232f03c6976dbe4ca9807e9b6b6dc7e)
       '@xterm/addon-clipboard':
         specifier: ^0.1.0
         version: 0.1.0(@xterm/xterm@5.5.0)
@@ -14721,7 +14724,7 @@ snapshots:
 
   '@vscode/sudo-prompt@9.3.2': {}
 
-  '@vscode/windows-process-tree@0.8.0':
+  '@vscode/windows-process-tree@0.8.0(patch_hash=1232c04ccc2cc6c6102bc3f880089ea95232f03c6976dbe4ca9807e9b6b6dc7e)':
     dependencies:
       node-addon-api: 7.1.0
 

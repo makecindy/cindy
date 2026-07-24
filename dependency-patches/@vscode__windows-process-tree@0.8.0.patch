@@ -1,0 +1,11 @@
+diff --git a/src/process.cc b/src/process.cc
+index 8d7d2aa..f165e88 100644
+--- a/src/process.cc
++++ b/src/process.cc
+@@ -37,5 +37,5 @@ uint32_t GetRawProcessList(std::vector<ProcessInfo>& process_info,
+         process_info.push_back(std::move(pinfo));
+         process_count++;
+       }
+-    } while (process_count < 1024 && Process32Next(snapshot_handle, &process_entry));
++    } while (Process32Next(snapshot_handle, &process_entry));
+   }

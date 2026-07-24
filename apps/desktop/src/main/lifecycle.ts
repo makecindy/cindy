@@ -11,8 +11,9 @@
  * 执行顺序:
  *   1. sync       —— 串行跑, 吞个体异常不影响后续。允许返回 Promise 但不会被 await
  *                    (出现时只 warn, 鼓励标成 async)
- *   2. async      —— 并发跑, 整体不超过 timeoutMs (默认 2000ms), 超时谁没完就被腰斩
- *   3. post-async —— 串行跑, 确保依赖 async 阶段产物的清理 (例如关 sqlite 必须晚于
+ *   2. pre-async  —— 串行 await, 用于必须先于所有并发 teardown 完成的短任务
+ *   3. async      —— 并发跑, 整体不超过 timeoutMs (默认 2000ms), 超时谁没完就被腰斩
+ *   4. post-async —— 串行跑, 确保依赖 async 阶段产物的清理 (例如关 sqlite 必须晚于
  *                    db.backup, 关 IM WS 必须晚于 announce offline)
  *
  * 然后 `app.exit(<code>)` 强制退出。`will-quit` / `quit` 事件不会触发——任何
@@ -81,7 +82,7 @@ function broadcastTransientNetworkErrorTip(err: NodeJS.ErrnoException): void {
 const log = createLogger('lifecycle');
 let brokenStdioWarningLogged = false;
 
-export type DisposerPhase = 'sync' | 'async' | 'post-async';
+export type DisposerPhase = 'sync' | 'pre-async' | 'async' | 'post-async';
 
 interface Disposer {
   name: string;
@@ -112,7 +113,16 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
     }
   }
 
-  // ── Phase 2: async (concurrent, bounded by timeout) ──────────────────────
+  // ── Phase 2: pre-async (serial, awaited before concurrent teardown) ─────
+  for (const d of registry.filter((x) => x.phase === 'pre-async')) {
+    try {
+      await d.fn();
+    } catch (err) {
+      log.error(`pre-async disposer "${d.name}" threw`, err);
+    }
+  }
+
+  // ── Phase 3: async (concurrent, bounded by timeout) ──────────────────────
   const asyncs = registry.filter((x) => x.phase === 'async');
   if (asyncs.length > 0) {
     const settled = Promise.allSettled(
@@ -140,7 +150,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
     }
   }
 
-  // ── Phase 3: post-async ──────────────────────────────────────────────────
+  // ── Phase 4: post-async ──────────────────────────────────────────────────
   for (const d of registry.filter((x) => x.phase === 'post-async')) {
     try {
       const ret = d.fn();

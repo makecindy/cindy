@@ -329,7 +329,7 @@ Apache License
    limitations under the License.
 
 ==============================================================================
-SECTION 2: npm packages (606 packages)
+SECTION 2: npm packages (607 packages)
 ==============================================================================
 
 - @adobe/css-tools@4.5.0 — MIT — https://github.com/adobe/css-tools
@@ -617,6 +617,7 @@ SECTION 2: npm packages (606 packages)
 - expo-audio@56.0.12 — MIT — https://github.com/expo/expo
 - expo-auth-session@56.0.15 — MIT — https://github.com/expo/expo
 - expo-blur@56.0.4 — MIT — https://github.com/expo/expo
+- expo-build-properties@56.0.23 — MIT — https://github.com/expo/expo
 - expo-clipboard@56.0.4 — MIT — https://github.com/expo/expo
 - expo-constants@56.0.21 — MIT — https://github.com/expo/expo
 - expo-constants@56.0.22 — MIT — https://github.com/expo/expo
@@ -1088,7 +1089,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[7] Applies to: npm:@expo/cli@56.1.20, npm:@expo/config@56.0.12, npm:@expo/config-plugins@56.0.13, npm:@expo/devtools@56.0.2, npm:@expo/dom-webview@56.0.6, npm:@expo/expo-modules-macros-plugin@0.2.2, npm:@expo/fingerprint@0.19.8, npm:@expo/image-utils@0.10.3, npm:@expo/image-utils@0.10.4, npm:@expo/inline-modules@0.0.14, npm:@expo/json-file@10.2.0, npm:@expo/json-file@11.0.1, npm:@expo/local-build-cache-provider@56.0.10, npm:@expo/log-box@56.0.14, npm:@expo/metro-config@56.0.17, npm:@expo/metro-file-map@56.0.3, npm:@expo/metro-runtime@56.0.17, npm:@expo/osascript@2.7.1, npm:@expo/package-manager@1.13.1, npm:@expo/plist@0.7.0, npm:@expo/prebuild-config@56.0.20, npm:@expo/router-server@56.0.16, npm:babel-preset-expo@56.0.17, npm:expo@56.0.16, npm:expo-app-metrics@56.0.22, npm:expo-apple-authentication@56.0.4, npm:expo-application@56.0.3, npm:expo-asset@56.0.20, npm:expo-audio@56.0.12, npm:expo-auth-session@56.0.15, npm:expo-blur@56.0.4, npm:expo-clipboard@56.0.4, npm:expo-constants@56.0.21, npm:expo-constants@56.0.22, npm:expo-crypto@56.0.4, npm:expo-document-picker@56.0.4, npm:expo-eas-client@56.0.1, npm:expo-file-system@56.0.8, npm:expo-font@56.0.7, npm:expo-glass-effect@56.0.4, npm:expo-image@56.0.11, npm:expo-image-loader@56.0.3, npm:expo-image-manipulator@56.0.22, npm:expo-image-picker@56.0.21, npm:expo-keep-awake@56.0.3, npm:expo-linking@56.0.15, npm:expo-localization@56.0.6, npm:expo-manifests@56.0.4, npm:expo-media-library@56.0.9, npm:expo-modules-autolinking@56.0.20, npm:expo-modules-core@56.0.21, npm:expo-modules-jsi@56.0.12, npm:expo-notifications@56.0.22, npm:expo-observe@56.0.25, npm:expo-secure-store@56.0.4, npm:expo-server@56.0.5, npm:expo-sharing@56.0.22, npm:expo-splash-screen@56.0.13, npm:expo-status-bar@56.0.4, npm:expo-symbols@56.0.6, npm:expo-updates-interface@56.0.2, npm:expo-web-browser@56.0.5
+[7] Applies to: npm:@expo/cli@56.1.20, npm:@expo/config@56.0.12, npm:@expo/config-plugins@56.0.13, npm:@expo/devtools@56.0.2, npm:@expo/dom-webview@56.0.6, npm:@expo/expo-modules-macros-plugin@0.2.2, npm:@expo/fingerprint@0.19.8, npm:@expo/image-utils@0.10.3, npm:@expo/image-utils@0.10.4, npm:@expo/inline-modules@0.0.14, npm:@expo/json-file@10.2.0, npm:@expo/json-file@11.0.1, npm:@expo/local-build-cache-provider@56.0.10, npm:@expo/log-box@56.0.14, npm:@expo/metro-config@56.0.17, npm:@expo/metro-file-map@56.0.3, npm:@expo/metro-runtime@56.0.17, npm:@expo/osascript@2.7.1, npm:@expo/package-manager@1.13.1, npm:@expo/plist@0.7.0, npm:@expo/prebuild-config@56.0.20, npm:@expo/router-server@56.0.16, npm:babel-preset-expo@56.0.17, npm:expo@56.0.16, npm:expo-app-metrics@56.0.22, npm:expo-apple-authentication@56.0.4, npm:expo-application@56.0.3, npm:expo-asset@56.0.20, npm:expo-audio@56.0.12, npm:expo-auth-session@56.0.15, npm:expo-blur@56.0.4, npm:expo-build-properties@56.0.23, npm:expo-clipboard@56.0.4, npm:expo-constants@56.0.21, npm:expo-constants@56.0.22, npm:expo-crypto@56.0.4, npm:expo-document-picker@56.0.4, npm:expo-eas-client@56.0.1, npm:expo-file-system@56.0.8, npm:expo-font@56.0.7, npm:expo-glass-effect@56.0.4, npm:expo-image@56.0.11, npm:expo-image-loader@56.0.3, npm:expo-image-manipulator@56.0.22, npm:expo-image-picker@56.0.21, npm:expo-keep-awake@56.0.3, npm:expo-linking@56.0.15, npm:expo-localization@56.0.6, npm:expo-manifests@56.0.4, npm:expo-media-library@56.0.9, npm:expo-modules-autolinking@56.0.20, npm:expo-modules-core@56.0.21, npm:expo-modules-jsi@56.0.12, npm:expo-notifications@56.0.22, npm:expo-observe@56.0.25, npm:expo-secure-store@56.0.4, npm:expo-server@56.0.5, npm:expo-sharing@56.0.22, npm:expo-splash-screen@56.0.13, npm:expo-status-bar@56.0.4, npm:expo-symbols@56.0.6, npm:expo-updates-interface@56.0.2, npm:expo-web-browser@56.0.5
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
