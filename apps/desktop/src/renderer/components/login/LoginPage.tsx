@@ -50,13 +50,13 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 import { resolveIdentifierMethod } from '../../../shared/loginIdentifierMethod';
 import {
-  CONSENT_ROW_BOTTOM_RESERVE,
   DRAG_BAR_HEIGHT,
   LOADING_RING,
   LOGIN_COLORS,
   LOGIN_LOCAL_MODE,
   TEXT_LINK,
 } from './loginDesignTokens';
+import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 
 /**
  * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库,PR1 stage 框架)。
@@ -112,35 +112,62 @@ export function LoginPage() {
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
 
   /* ── 协议同意链路(consent PR):radio 状态 + 未勾选拦截弹窗 + 同意后续接。
-     所有个人登录入口(国内手机号/国际邮箱/Apple/Google/微信/游客)统一过
-     requireConsent;企业 SSO 全豁免(入口圆钮/组织提交/method-choice sso 行均
-     不拦,产品拍板)。pending 动作只存 renderer 本地(不进 main loginFlowState,
-     避免动与手机端共享的 auth 协议;规则 9:分支全部代码状态机化)。 ── */
+     个人登录的「实际发起点」统一过 requireConsent:手机号发码、邮箱个人行发码、
+     社交圆钮(Apple/Google/未来微信)、游客;企业 SSO 全豁免(入口圆钮/组织提交/
+     method-choice sso 行均不拦,产品拍板)。注意 email discover 是纯方式查询
+     (main authManager 'discover' 只调 client.discover,无发码副作用),且企业
+     用户正是经它进入 SSO——为兑现「SSO 全豁免」,discover 不设门,门在其后的
+     个人续接点(method-choice 个人行)。pending 动作只存 renderer 本地(不进
+     main loginFlowState;规则 9:分支全部代码状态机化)。 ── */
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [consentDialogOpen, setConsentDialogOpen] = useState(false);
-  const pendingConsentAction = useRef<(() => void) | null>(null);
+  // pending 带开门时刻快照,同意时复验防陈旧续接(codex 审查 P1;consentGate 单测)
+  const pendingConsentAction = useRef<{
+    action: () => void;
+    stamp: ConsentStamp;
+  } | null>(null);
 
   const requireConsent = (action: () => void) => {
     if (consentAccepted) {
       action();
       return;
     }
-    pendingConsentAction.current = action;
+    pendingConsentAction.current = {
+      action,
+      stamp: makeConsentStamp(loginState?.step, isLoading, loginState?.step === 'completed'),
+    };
     setConsentDialogOpen(true);
   };
   const agreeConsent = () => {
     // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
     setConsentAccepted(true);
     setConsentDialogOpen(false);
-    const run = pendingConsentAction.current;
+    const pending = pendingConsentAction.current;
     pendingConsentAction.current = null;
-    run?.();
+    if (!pending) return;
+    // 复验:弹窗期间 auth 状态被异步推进(登录完成/步骤切换/in-flight)则丢弃动作
+    const current = makeConsentStamp(
+      loginState?.step,
+      isLoading,
+      loginState?.step === 'completed',
+    );
+    if (canResumePendingConsent(pending.stamp, current)) pending.action();
   };
   const dismissConsent = () => {
     // 不同意 = 退回登录页,radio 保持未勾选
     pendingConsentAction.current = null;
     setConsentDialogOpen(false);
   };
+  // 弹窗打开期间登录上下文漂移(完成/步骤切换)→ 自动收窗弃 pending
+  useEffect(() => {
+    if (!consentDialogOpen) return;
+    const pending = pendingConsentAction.current;
+    const step = loginState?.step ?? 'unknown';
+    if (step === 'completed' || (pending && step !== pending.stamp.step)) {
+      pendingConsentAction.current = null;
+      setConsentDialogOpen(false);
+    }
+  }, [consentDialogOpen, loginState?.step]);
   const openLegalLink = (kind: 'terms' | 'privacy') => {
     // 链接经系统默认浏览器打开(shell:open-external 只放行 http(s),未登录可用);
     // URL 按构建区域分流(国内 protocol.xd.cn / 国际 protocol.xd.com)。
@@ -160,11 +187,13 @@ export function LoginPage() {
   // 的「跳过登录」逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
   const showLocalModeFooter = loginState?.step === 'error';
   const showConsentRow = loginState?.step === 'identifier' && !ssoOrgMode;
-  const panelBottomReserve = showConsentRow
-    ? CONSENT_ROW_BOTTOM_RESERVE
-    : showLocalModeFooter
-      ? LOGIN_LOCAL_MODE.reservedHeight
-      : 0;
+  // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
+  // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
+  // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
+  const panelBottomReserve =
+    loginState?.step === 'browser-redirect' || loginState?.step === 'completed'
+      ? 0
+      : LOGIN_LOCAL_MODE.reservedHeight;
   const { reportPanelBottomReserve } = handoff;
   useLayoutEffect(() => {
     reportPanelBottomReserve(panelBottomReserve);
@@ -301,8 +330,10 @@ export function LoginPage() {
         return;
       }
       setIdentifierFormatError(null);
-      // 个人登录链路过协议门:未勾选先弹同意弹窗,同意后续接本次 discover
-      requireConsent(() => void dispatch({ type: 'discover', email: value }));
+      // discover 不过协议门:它是无副作用的方式查询(main 侧只调 client.discover,
+      // 不发码),且企业用户正是经它进入 SSO——「SSO 全豁免」要求这里放行;
+      // 个人链路的门在 method-choice 个人行(发码点,见 renderMethodChoice)
+      void dispatch({ type: 'discover', email: value });
     } else {
       // 手机号:桌面不做客户端 +86/号段校验(#223 仅移动端做 cnPhone 本地拦截),
       // 输入原样透传服务端 request-code,由服务端校验号段合法性。
@@ -546,7 +577,11 @@ export function LoginPage() {
             disabled={isLoading}
             title={t('login.personalLogin')}
             subtitle={t('login.personalDesc')}
-            onClick={() => void dispatchRequestCode('email', loginState.email)}
+            // 个人邮箱发码 = 个人链路实际发起点,在此过协议门(discover 已放行,
+            // 保证企业用户经 discover→SSO 全程无门)
+            onClick={() =>
+              requireConsent(() => void dispatchRequestCode('email', loginState.email))
+            }
           />
         )}
         {ssoMethods.some((method) => method.ssoRequired) && (

@@ -107,12 +107,6 @@ export const CONSENT_ROW = {
 } as const;
 
 /**
- * 协议行在登录组下方的预留高度(屏幕 px,panelPlacement bottomReserve):
- * 行底 622 设计px 超出组高 560 共 62 设计px → 31 屏幕px(恒定 0.5 缩放)+ 16 安全边距。
- */
-export const CONSENT_ROW_BOTTOM_RESERVE = 48;
-
-/**
  * 服务条款弹窗(figma 602:822 Log_in_bg 680×380 r36;标题 Bold 32 @y31;
  * 正文 26/40 @(41,122) w599;两钮 260×80 r40 @y260:不同意 x70 / 同意 x350)。
  * 面板复用 login-panel-bg/border;同意钮 = login-primary-button-*;

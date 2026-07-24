@@ -192,10 +192,11 @@ export function LoginConsentRow({
       }}
       testID="login.consentRow"
     >
+      {/* 命中区 = 权威 24×24,不加 hitSlop:水平扩张会越过 gap 6.5 侵入协议链接
+          点击区(ja 文案句首即链接,边缘点击产生 radio/链接竞争;codex 审查 P1) */}
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked }}
-        hitSlop={12}
         onPress={onToggle}
         style={{
           alignItems: 'center',

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Animated, Easing, Linking, Platform, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Keyboard, Linking, Platform, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
@@ -13,6 +13,7 @@ import {
 } from '@/auth/cnPhone';
 import { AuthApiError, isValidEmail } from '@cindy/auth-client';
 import { authErrorText, getAuthLocale, loginText } from '@/auth/loginMessages';
+import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from '@/auth/consentGate';
 import { isNativeSocialProviderSupported } from '@/auth/nativeSocial';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -112,34 +113,59 @@ export default function LoginScreen() {
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
   /* ── 协议同意链路(consent PR,与桌面 LoginPage 同源语义):radio 状态 +
-     未勾选拦截弹窗 + 同意后续接。所有个人登录入口(国内手机号/国际邮箱/
-     Apple/Google/微信)统一过 requireConsent;企业 SSO 全豁免(产品拍板);
-     手机端无游客登录(远程连接客户端必须有账号,产品拍板 2026-07-24)。
-     pending 动作只存本组件(不进 AuthContext 状态机;仓规 9 代码状态机化)。 ── */
+     未勾选拦截弹窗 + 同意后续接。个人登录的「实际发起点」统一过 requireConsent:
+     手机号发码、邮箱个人行发码、社交圆钮(Apple/Google/未来微信);企业 SSO 全豁免
+     (产品拍板)——email discover 是纯方式查询且是企业用户进 SSO 的入口,不设门,
+     门在其后的个人续接点。手机端无游客登录(远程连接客户端必须有账号,产品拍板
+     2026-07-24)。pending 动作只存本组件(不进 AuthContext 状态机;仓规 9)。 ── */
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [consentDialogOpen, setConsentDialogOpen] = useState(false);
-  const pendingConsentAction = useRef<(() => void) | null>(null);
+  // pending 带开门时刻快照(stamp),同意时复验防陈旧续接(codex 审查 P1;consentGate 单测覆盖)
+  const pendingConsentAction = useRef<{
+    action: () => void;
+    stamp: ConsentStamp;
+  } | null>(null);
   const requireConsent = (action: () => void) => {
     if (consentAccepted) {
       action();
       return;
     }
-    pendingConsentAction.current = action;
+    // 弹窗非原生 Modal、不参与键盘避让:从输入框 onSubmitEditing 进来时先收键盘,
+    // 否则小屏上「同意」钮会被键盘盖住(codex 审查 P1)
+    Keyboard.dismiss();
+    pendingConsentAction.current = {
+      action,
+      stamp: makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated),
+    };
     setConsentDialogOpen(true);
   };
   const agreeConsent = () => {
     // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
     setConsentAccepted(true);
     setConsentDialogOpen(false);
-    const run = pendingConsentAction.current;
+    const pending = pendingConsentAction.current;
     pendingConsentAction.current = null;
-    run?.();
+    if (!pending) return;
+    // 复验:弹窗期间认证状态被异步推进(深链回调/另一路完成/步骤切换)则丢弃动作
+    const current = makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated);
+    if (canResumePendingConsent(pending.stamp, current)) pending.action();
   };
   const dismissConsent = () => {
     // 不同意 = 退回登录页,radio 保持未勾选
     pendingConsentAction.current = null;
     setConsentDialogOpen(false);
   };
+  // 弹窗打开期间登录上下文漂移(认证完成/步骤切换)→ 自动收窗弃 pending,
+  // 避免用户对着一个已失效来源视图的弹窗做决定
+  useEffect(() => {
+    if (!consentDialogOpen) return;
+    const pending = pendingConsentAction.current;
+    const current = makeConsentStamp(auth.loginState?.step, auth.isBusy, auth.isAuthenticated);
+    if (auth.isAuthenticated || (pending && current.step !== pending.stamp.step)) {
+      pendingConsentAction.current = null;
+      setConsentDialogOpen(false);
+    }
+  }, [consentDialogOpen, auth.isAuthenticated, auth.isBusy, auth.loginState?.step]);
   const openLegalLink = (kind: 'terms' | 'privacy') => {
     // 系统默认浏览器打开(settings.tsx 同款 Linking 模式);URL 按构建区域分流
     void Linking.openURL(
@@ -363,10 +389,10 @@ export default function LoginScreen() {
           return;
         }
         setIdentifierFormatError(null);
-        // 个人登录链路过协议门:未勾选先弹同意弹窗,同意后续接本次 discover
-        requireConsent(() =>
-          void auth.dispatchLoginAction({ type: 'discover', email: value }),
-        );
+        // discover 不过协议门:它是无副作用的方式查询(server 只回登录方式列表,
+        // 不发码),且企业用户正是经它进入 SSO——「SSO 全豁免」要求这里放行;
+        // 个人链路的门在 method-choice 个人行(发码点,与桌面 LoginPage 同源)
+        void auth.dispatchLoginAction({ type: 'discover', email: value });
       } else {
         // 手机号登录只支持中国大陆号码:UI 固定 +86,输入框只存本地号,提交时拼回完整号码。
         // 号段不合法本地拦截并提示「请输入正确手机号」(设计稿同款红边+红字)。
@@ -591,12 +617,16 @@ export default function LoginScreen() {
           <LoginMethodRow
             disabled={disabled}
             icon="person"
+            // 个人邮箱发码 = 个人链路实际发起点,在此过协议门(discover 已放行,
+            // 保证企业用户经 discover→SSO 全程无门)
             onPress={() =>
-              void auth.dispatchLoginAction({
-                type: 'request-code',
-                kind: 'email',
-                identifier: state.email,
-              })
+              requireConsent(() =>
+                void auth.dispatchLoginAction({
+                  type: 'request-code',
+                  kind: 'email',
+                  identifier: state.email,
+                }),
+              )
             }
             testID="login.emailCodeButton"
             title={loginText(
@@ -995,12 +1025,13 @@ export default function LoginScreen() {
   const groupLeftPx = stage.offsetX + stage.loginX * stage.scale;
   const groupTopPxRaw = stage.offsetY + stage.loginY * stage.scale;
   const bottomLimitPx = stage.viewportHeight - insets.bottom;
-  // consent PR:identifier 主视图下方多出协议行(行底 622 超出组高 560 共 62 设计px),
-  // 安全区抬升按实际最低内容计算,保证协议行不被 bottom inset 裁切。
+  // consent PR:identifier 主视图下方多出协议行(行底 622 超出组高 560 共 62 设计px)。
+  // 流程底边全步骤恒取 622(含协议行的最低内容):一防步骤切换时 lift 释放产生
+  // 整组纵向跳变(规则 7,codex 审查 P1),二让下方外层/内层容器 bounds 恒包住
+  // 协议行——RN(尤其 Android)对父 bounds 外子节点不派发触摸,协议行必须在界内。
   const showConsentRow =
     auth.loginState?.step === 'identifier' && !ssoOrgMode && configIssues.length === 0;
-  const flowBottomDesignPx =
-    loginSizes.flowHeight + (showConsentRow ? LOGIN_CONSENT_ROW.bottomOverflow : 0);
+  const flowBottomDesignPx = loginSizes.flowHeight + LOGIN_CONSENT_ROW.bottomOverflow;
   const liftPx = Math.max(
     0,
     groupTopPxRaw + flowBottomDesignPx * groupScale - bottomLimitPx,
@@ -1096,7 +1127,8 @@ export default function LoginScreen() {
         onLayout={measureBaseline}
         ref={outerGroupRef}
         style={{
-          height: loginSizes.flowHeight * groupScale,
+          // 恒含协议行区间(622 设计px):协议行必须在父 bounds 内才可命中(见 flowBottomDesignPx 注)
+          height: flowBottomDesignPx * groupScale,
           left: groupLeftPx,
           position: 'absolute',
           top: groupTopPx,
@@ -1112,10 +1144,11 @@ export default function LoginScreen() {
               transform: [{ translateY: panelEntrance.translateY }],
             }}
           >
-            {/* 内层 680×560 设计 px 坐标系,整层 transform 缩放(demo loginGroup 同构) */}
+            {/* 内层 680 宽设计 px 坐标系,整层 transform 缩放(demo loginGroup 同构);
+                高度恒 622(组 560 + 协议行 overflow 62),保证协议行在 bounds 内可命中 */}
             <View
               style={{
-                height: LOGIN_GROUP.height,
+                height: flowBottomDesignPx,
                 left: 0,
                 position: 'absolute',
                 top: 0,

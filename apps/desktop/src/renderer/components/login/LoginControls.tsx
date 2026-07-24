@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -756,8 +756,11 @@ export function LoginConsentRow({
  * (login-panel-bg/border 双态复用),标题 Bold 32、正文 26/40(secondary-text,
  * 内联链接可点),两钮 260×80 r40——不同意 = 次级钮(wave5 双色小按钮),
  * 同意 = 强调钮(login-primary-button-* 复用)。
- * 交互:打开即焦点落「同意」(DESIGN.md §14.2);Esc = 不同意;遮罩不可点穿
- * (协议确认必须显式选择)。面板按恒定 0.5 缩放渲染(与登录面板同口径)。
+ * 交互:打开即焦点落「同意」,Tab/Shift+Tab 在弹窗内循环(focus trap),背景
+ * 兄弟节点置 inert,关闭后焦点归还触发元素(DESIGN.md §14.2);Esc = 不同意;
+ * 遮罩不可点穿(协议确认必须显式选择)。面板按恒定 0.5 缩放渲染(与登录面板
+ * 同口径)。未复用 confirm-dialog.tsx:登录皮肤需要设计 px 绝对坐标 + 恒定缩放
+ * + login-* token 全套,与通用确认弹窗结构不兼容,故按 §14.2 语义自绘等价实现。
  */
 export function LoginConsentDialog({
   title,
@@ -779,9 +782,54 @@ export function LoginConsentDialog({
   onOpenPrivacy: () => void;
 }) {
   const agreeRef = useRef<HTMLButtonElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
+    // 记录触发元素 → 打开聚焦「同意」→ 背景兄弟节点 inert(遮罩挡鼠标,
+    // inert 挡键盘/读屏,与下方 Tab trap 构成完整模态)→ 关闭归还焦点(§14.2)
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     agreeRef.current?.focus();
+    const rootEl = containerRef.current;
+    const inerted: HTMLElement[] = [];
+    if (rootEl?.parentElement) {
+      for (const child of Array.from(rootEl.parentElement.children)) {
+        if (child !== rootEl && child instanceof HTMLElement && !child.inert) {
+          child.inert = true;
+          inerted.push(child);
+        }
+      }
+    }
+    return () => {
+      for (const el of inerted) el.inert = false;
+      // 元素已随视图卸载时 focus() 为安全 no-op
+      opener?.focus();
+    };
   }, []);
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      onDisagree();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    // focus trap:Tab/Shift+Tab 在弹窗可聚焦元素间循环,不落入背景登录页
+    const root = containerRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !root.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !root.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   const { button } = CONSENT_DIALOG;
   const smallButtonBase = cn(
     'absolute box-border flex items-center justify-center overflow-hidden font-bold',
@@ -795,11 +843,10 @@ export function LoginConsentDialog({
       aria-modal="true"
       aria-labelledby="login-consent-dialog-title"
       aria-describedby="login-consent-dialog-body"
+      ref={containerRef}
       className="fixed inset-0 z-50 grid place-items-center"
       style={{ background: LOGIN_COLORS.consentOverlay }}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') onDisagree();
-      }}
+      onKeyDown={handleKeyDown}
     >
       <div
         className="relative"

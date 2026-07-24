@@ -109,14 +109,19 @@ describe('consent 文案(4 语 catalog 全给标记链接段)', () => {
 });
 
 describe('login.tsx 接线(源码断言)', () => {
-  it('四条个人链路全部过 requireConsent(email discover / phone request-code / Apple / 非 Apple 圆钮)', () => {
+  it('个人链路实际发起点全部过 requireConsent;discover 纯查询放行(SSO 全豁免契约)', () => {
     const guarded = loginSource.match(/requireConsent\(/g) ?? [];
-    // 调用点 ≥4 处(discover/request-code/apple/nonApple;定义处是 `requireConsent = (` 不计入)
+    // 调用点 ≥4 处(phone 发码/邮箱个人行发码/apple/nonApple;定义处 `requireConsent = (` 不计入)
     expect(guarded.length).toBeGreaterThanOrEqual(4);
-    expect(loginSource).toMatch(
-      /requireConsent\(\(\) =>\s*\n?\s*void auth\.dispatchLoginAction\(\{ type: 'discover'/,
+    // discover 是无副作用的方式查询,且是企业用户进 SSO 的入口——必须不设门
+    // (codex 审查 P1:gate discover 会让企业邮箱用户被迫先同意,违背全豁免拍板)
+    expect(loginSource).not.toMatch(
+      /requireConsent\(\(\) =>[\s\S]{0,120}?type: 'discover'/,
     );
-    expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,200}?type: 'request-code'/);
+    expect(loginSource).toMatch(/void auth\.dispatchLoginAction\(\{ type: 'discover'/);
+    // 发码点(phone + 邮箱个人行)与社交圆钮为实际发起点,必须过门
+    expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,200}?kind: 'phone'/);
+    expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,240}?kind: 'email'/);
     expect(loginSource).toMatch(/requireConsent\(\(\) =>[\s\S]{0,200}?provider: 'apple'/);
   });
 
