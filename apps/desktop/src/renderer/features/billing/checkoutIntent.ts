@@ -157,6 +157,77 @@ export function clearBillingCheckoutIntent(accountId: string): void {
   localStorage.removeItem(billingCheckoutIntentKey(accountId));
 }
 
-export function newBillingIdempotencyKey(kind: 'topup' | 'subscription' | 'retry'): string {
+export function newBillingIdempotencyKey(
+  kind: 'topup' | 'subscription' | 'retry' | 'plan-change',
+): string {
   return `desktop:${kind}:${crypto.randomUUID()}`;
+}
+
+const BILLING_PLAN_CHANGE_INTENT_KEY_PREFIX = 'cindy.billing.plan-change-intent.v1';
+
+/**
+ * Request-level recovery only. The server's `pendingPlanChange` projection is
+ * the source of truth for what is actually open; a stored intent must never
+ * override it.
+ */
+export type BillingPlanChangeIntentV1 = {
+  version: 1;
+  targetOfferCode: string;
+  idempotencyKey: string;
+  planChangeId: string | null;
+  createdAt: string;
+};
+
+export function isBillingPlanChangeIntent(value: unknown): value is BillingPlanChangeIntentV1 {
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    hasOnlyKeys(value, [
+      'version',
+      'targetOfferCode',
+      'idempotencyKey',
+      'planChangeId',
+      'createdAt',
+    ]) &&
+    typeof value.targetOfferCode === 'string' &&
+    CODE_PATTERN.test(value.targetOfferCode) &&
+    typeof value.idempotencyKey === 'string' &&
+    KEY_PATTERN.test(value.idempotencyKey) &&
+    (value.planChangeId === null || isRequiredString(value.planChangeId)) &&
+    typeof value.createdAt === 'string' &&
+    Number.isFinite(Date.parse(value.createdAt))
+  );
+}
+
+export function billingPlanChangeIntentKey(accountId: string): string {
+  return `${BILLING_PLAN_CHANGE_INTENT_KEY_PREFIX}:${encodeURIComponent(accountId)}`;
+}
+
+export function readBillingPlanChangeIntent(accountId: string): BillingPlanChangeIntentV1 | null {
+  const storageKey = billingPlanChangeIntentKey(accountId);
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (isBillingPlanChangeIntent(parsed)) return parsed;
+    localStorage.removeItem(storageKey);
+  } catch {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Storage is unavailable; the server projection still recovers state.
+    }
+  }
+  return null;
+}
+
+export function writeBillingPlanChangeIntent(
+  accountId: string,
+  intent: BillingPlanChangeIntentV1,
+): void {
+  localStorage.setItem(billingPlanChangeIntentKey(accountId), JSON.stringify(intent));
+}
+
+export function clearBillingPlanChangeIntent(accountId: string): void {
+  localStorage.removeItem(billingPlanChangeIntentKey(accountId));
 }

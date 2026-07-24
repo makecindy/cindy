@@ -14,6 +14,7 @@ import {
   projectBillingCurrentSubscription,
   projectBillingOrderList,
   projectBillingPaymentOrder,
+  projectBillingPlanChange,
   projectBillingSubscription,
   projectModelAccessBalance,
 } from './projection.js';
@@ -128,7 +129,7 @@ function requireAmount(value: unknown, name: string): string {
   return value;
 }
 
-function parseIdPayload(raw: unknown, key: 'orderId' | 'purchaseAttemptId') {
+function parseIdPayload(raw: unknown, key: 'orderId' | 'purchaseAttemptId' | 'planChangeId') {
   const payload = requireObject(raw);
   assertOnlyKeys(payload, [key], 'payload');
   return { [key]: requireBoundedString(payload[key], key) } as Record<typeof key, string>;
@@ -303,6 +304,50 @@ export function createBillingHandlers(
           { method: 'POST' },
         ),
         projectBillingSubscription,
+      );
+    }),
+    [BILLING_INVOKE.QUOTE_PLAN_CHANGE]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['targetOfferCode', 'idempotencyKey'], 'payload');
+      const targetOfferCode = requireCode(payload.targetOfferCode, 'targetOfferCode');
+      const idempotencyKey = requireIdempotencyKey(payload.idempotencyKey);
+      return projectResponse(
+        await invoke<unknown>('/api/billing/subscription/plan-change-quotes', {
+          method: 'POST',
+          body: { targetOfferCode },
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }),
+        projectBillingPlanChange,
+      );
+    }),
+    [BILLING_INVOKE.CONFIRM_PLAN_CHANGE]: protect(async (raw) => {
+      const { planChangeId } = parseIdPayload(raw, 'planChangeId');
+      return projectResponse(
+        await invoke<unknown>(
+          `/api/billing/subscription/plan-changes/${encodeURIComponent(planChangeId)}/confirm`,
+          { method: 'POST' },
+        ),
+        projectBillingPlanChange,
+      );
+    }),
+    [BILLING_INVOKE.REFRESH_PLAN_CHANGE]: protect(async (raw) => {
+      const { planChangeId } = parseIdPayload(raw, 'planChangeId');
+      return projectResponse(
+        await invoke<unknown>(
+          `/api/billing/subscription/plan-changes/${encodeURIComponent(planChangeId)}/refresh`,
+          { method: 'POST' },
+        ),
+        projectBillingPlanChange,
+      );
+    }),
+    [BILLING_INVOKE.CANCEL_PLAN_CHANGE]: protect(async (raw) => {
+      const { planChangeId } = parseIdPayload(raw, 'planChangeId');
+      return projectResponse(
+        await invoke<unknown>(
+          `/api/billing/subscription/plan-changes/${encodeURIComponent(planChangeId)}`,
+          { method: 'DELETE' },
+        ),
+        projectBillingPlanChange,
       );
     }),
     [BILLING_INVOKE.OPEN_PAYMENT_REDIRECT]: protect(async (raw) => {

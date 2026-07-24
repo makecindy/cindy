@@ -5,6 +5,7 @@ import {
   projectBillingCurrentSubscription,
   projectBillingOrderList,
   projectBillingPaymentOrder,
+  projectBillingPlanChange,
   projectModelAccessBalance,
 } from '../projection.js';
 
@@ -328,5 +329,149 @@ describe('billing response projection', () => {
       },
     });
     expect(projected.subscription).not.toHaveProperty('mandate');
+  });
+});
+
+describe('plan change projection', () => {
+  const planChange = (overrides: Record<string, unknown> = {}) => ({
+    planChangeId: 'plan_change_1',
+    changeType: 'UPGRADE',
+    status: 'AWAITING_PAYMENT',
+    quotedAmountMinor: 1500,
+    quotedCurrency: 'cny',
+    quoteExpiresAt: now,
+    effectiveAt: now,
+    paymentAction: {
+      type: 'QR_CODE',
+      value: 'https://qr.alipay.example/pay',
+      expiresAt: now,
+    },
+    providerChangeId: 'must not cross IPC',
+    ...overrides,
+  });
+
+  const subscription = (overrides: Record<string, unknown> = {}) => ({
+    subscriptionId: 'subscription_1',
+    status: 'ACTIVE',
+    provider: 'alipay',
+    currentPeriodStartAt: null,
+    currentPeriodEndAt: null,
+    entitlementValidUntil: null,
+    cancelAtPeriodEnd: false,
+    effectivePlan: null,
+    purchaseAttemptId: null,
+    paymentAction: null,
+    ...overrides,
+  });
+
+  it('projects a plan change and strips server-only fields', () => {
+    expect(projectBillingPlanChange(planChange())).toEqual({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'AWAITING_PAYMENT',
+      quotedAmountMinor: 1500,
+      quotedCurrency: 'cny',
+      quoteExpiresAt: now,
+      effectiveAt: now,
+      paymentAction: {
+        type: 'QR_CODE',
+        value: 'https://qr.alipay.example/pay',
+        expiresAt: now,
+      },
+    });
+  });
+
+  it.each([
+    ['unknown status', { status: 'FUTURE_STATUS' }],
+    ['unknown change type', { changeType: 'SIDEGRADE' }],
+    ['negative quoted amount', { quotedAmountMinor: -1 }],
+    ['fractional quoted amount', { quotedAmountMinor: 10.5 }],
+    ['missing effectiveAt', { effectiveAt: null }],
+  ])('fail-closes a direct plan change response with %s', (_name, overrides) => {
+    expect(() => projectBillingPlanChange(planChange(overrides))).toThrow(
+      'invalid billing response',
+    );
+  });
+
+  it('keeps a downgrade quote without amount or action', () => {
+    expect(
+      projectBillingPlanChange(
+        planChange({
+          changeType: 'DOWNGRADE',
+          status: 'SCHEDULED',
+          quotedAmountMinor: null,
+          quotedCurrency: null,
+          quoteExpiresAt: null,
+          paymentAction: null,
+        }),
+      ),
+    ).toMatchObject({ changeType: 'DOWNGRADE', status: 'SCHEDULED', quotedAmountMinor: null });
+  });
+
+  it('projects pendingPlanChange with the safe target plan subset', () => {
+    const projected = projectBillingCurrentSubscription({
+      subscription: subscription({
+        pendingPlanChange: {
+          ...planChange(),
+          targetPlan: {
+            product: { code: 'max', level: 300, internal: 'x' },
+            offer: { code: 'max_month', interval: 'MONTH' },
+            terms: { amount: '50', currency: 'cny', creditAmount: '50' },
+          },
+        },
+      }),
+    });
+    expect(projected.subscription?.provider).toBe('alipay');
+    expect(projected.subscription?.pendingPlanChange).toEqual({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'AWAITING_PAYMENT',
+      quotedAmountMinor: 1500,
+      quotedCurrency: 'cny',
+      quoteExpiresAt: now,
+      effectiveAt: now,
+      paymentAction: {
+        type: 'QR_CODE',
+        value: 'https://qr.alipay.example/pay',
+        expiresAt: now,
+      },
+      targetPlan: {
+        product: { code: 'max', level: 300 },
+        offer: { code: 'max_month', interval: 'MONTH' },
+        terms: { amount: '50', currency: 'cny', creditAmount: '50' },
+      },
+    });
+  });
+
+  it('keeps pendingPlanChange null and distinguishes an omitted field', () => {
+    const explicit = projectBillingCurrentSubscription({
+      subscription: subscription({ pendingPlanChange: null }),
+    });
+    expect(explicit.subscription?.pendingPlanChange).toBeNull();
+
+    const omitted = projectBillingCurrentSubscription({ subscription: subscription() });
+    expect(omitted.subscription).not.toHaveProperty('pendingPlanChange');
+  });
+
+  it('drops an unknown pendingPlanChange instead of failing the subscription', () => {
+    const projected = projectBillingCurrentSubscription({
+      subscription: subscription({
+        pendingPlanChange: { ...planChange({ status: 'FUTURE_STATUS' }), targetPlan: null },
+      }),
+    });
+    expect(projected.subscription?.subscriptionId).toBe('subscription_1');
+    expect(projected.subscription).not.toHaveProperty('pendingPlanChange');
+  });
+
+  it('degrades a malformed target plan to null without dropping the change', () => {
+    const projected = projectBillingCurrentSubscription({
+      subscription: subscription({
+        pendingPlanChange: {
+          ...planChange(),
+          targetPlan: { product: { code: 'max' }, offer: {}, terms: {} },
+        },
+      }),
+    });
+    expect(projected.subscription?.pendingPlanChange).toMatchObject({ targetPlan: null });
   });
 });

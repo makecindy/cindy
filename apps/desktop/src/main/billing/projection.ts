@@ -8,6 +8,10 @@ import type {
   BillingPaymentAction,
   BillingPaymentOrder,
   BillingPaymentOrderStatus,
+  BillingPendingPlanChange,
+  BillingPlanChange,
+  BillingPlanChangeStatus,
+  BillingPlanChangeTargetPlan,
   BillingPurchaseOption,
   BillingSubscription,
   BillingSubscriptionStatus,
@@ -56,6 +60,17 @@ const SUBSCRIPTION_CAPABILITIES = new Set([
   'MERCHANT_INITIATED_MANDATE',
   'PROVIDER_MANAGED_SUBSCRIPTION',
 ]);
+const PLAN_CHANGE_STATUSES = new Set<BillingPlanChangeStatus>([
+  'QUOTED',
+  'PENDING_PROVIDER',
+  'AWAITING_PAYMENT',
+  'SCHEDULED',
+  'APPLIED',
+  'CANCELED',
+  'FAILED',
+  'EXPIRED',
+]);
+const MAX_QUOTED_AMOUNT_MINOR = 9_007_199_254_740_991;
 
 function invalidResponse(): never {
   throw new Error('invalid billing response');
@@ -448,6 +463,112 @@ function projectEffectivePlan(value: unknown): BillingSubscription['effectivePla
   };
 }
 
+function planChangeBase(value: unknown): BillingPlanChange | null {
+  if (!isRecord(value)) return null;
+  const planChangeId = boundedString(value.planChangeId);
+  const changeType =
+    value.changeType === 'UPGRADE' || value.changeType === 'DOWNGRADE' ? value.changeType : null;
+  const status =
+    typeof value.status === 'string' &&
+    PLAN_CHANGE_STATUSES.has(value.status as BillingPlanChangeStatus)
+      ? (value.status as BillingPlanChangeStatus)
+      : null;
+  const quotedAmountMinor =
+    value.quotedAmountMinor === null
+      ? null
+      : typeof value.quotedAmountMinor === 'number' &&
+          Number.isSafeInteger(value.quotedAmountMinor) &&
+          value.quotedAmountMinor >= 0 &&
+          value.quotedAmountMinor <= MAX_QUOTED_AMOUNT_MINOR
+        ? value.quotedAmountMinor
+        : undefined;
+  const quotedCurrency = nullable(value.quotedCurrency, currency);
+  const quoteExpiresAt = nullable(value.quoteExpiresAt, isoTime);
+  const effectiveAt = isoTime(value.effectiveAt);
+  if (
+    !planChangeId ||
+    !changeType ||
+    !status ||
+    quotedAmountMinor === undefined ||
+    quotedCurrency === undefined ||
+    quoteExpiresAt === undefined ||
+    !effectiveAt
+  ) {
+    return null;
+  }
+  return {
+    planChangeId,
+    changeType,
+    status,
+    quotedAmountMinor,
+    quotedCurrency,
+    quoteExpiresAt,
+    effectiveAt,
+    paymentAction: projectPaymentAction(value.paymentAction),
+  };
+}
+
+/**
+ * Direct plan-change endpoint responses must parse; an unknown enum here means
+ * the client cannot reason about the operation it just performed, so fail
+ * closed by rejecting the response instead of guessing.
+ */
+export function projectBillingPlanChange(value: unknown): BillingPlanChange {
+  const change = planChangeBase(value);
+  if (!change) invalidResponse();
+  return change;
+}
+
+function projectPlanChangeTargetPlan(value: unknown): BillingPlanChangeTargetPlan | null {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.product) ||
+    !isRecord(value.offer) ||
+    !isRecord(value.terms)
+  ) {
+    return null;
+  }
+  const productCode = code(value.product.code);
+  const offerCode = code(value.offer.code);
+  const amount = decimal(value.terms.amount);
+  const planCurrency = currency(value.terms.currency);
+  const creditAmount = decimal(value.terms.creditAmount);
+  if (
+    !productCode ||
+    typeof value.product.level !== 'number' ||
+    !Number.isSafeInteger(value.product.level) ||
+    value.product.level < 0 ||
+    !offerCode ||
+    (value.offer.interval !== 'MONTH' && value.offer.interval !== 'YEAR') ||
+    !amount ||
+    !planCurrency ||
+    !creditAmount
+  ) {
+    return null;
+  }
+  return {
+    product: { code: productCode, level: value.product.level },
+    offer: { code: offerCode, interval: value.offer.interval },
+    terms: { amount, currency: planCurrency, creditAmount },
+  };
+}
+
+/**
+ * Recovery projection embedded in the subscription. A malformed or unknown
+ * entry is dropped (undefined) rather than failing the whole subscription:
+ * the client then behaves like an older server and relies on server-side
+ * rejection of conflicting writes.
+ */
+function projectPendingPlanChange(value: unknown): BillingPendingPlanChange | null | undefined {
+  if (value === null) return null;
+  const change = planChangeBase(value);
+  if (!change) return undefined;
+  return {
+    ...change,
+    targetPlan: projectPlanChangeTargetPlan((value as Record<string, unknown>).targetPlan),
+  };
+}
+
 export function projectBillingSubscription(value: unknown): BillingSubscription {
   if (!isRecord(value)) invalidResponse();
   const subscriptionId = boundedString(value.subscriptionId);
@@ -485,6 +606,8 @@ export function projectBillingSubscription(value: unknown): BillingSubscription 
     FULFILLMENT_STATUSES.has(value.entitlementStatus as BillingFulfillmentStatus)
       ? (value.entitlementStatus as BillingFulfillmentStatus)
       : undefined;
+  const pendingPlanChange =
+    'pendingPlanChange' in value ? projectPendingPlanChange(value.pendingPlanChange) : undefined;
   return {
     subscriptionId,
     status,
@@ -498,6 +621,7 @@ export function projectBillingSubscription(value: unknown): BillingSubscription 
     effectivePlan: value.effectivePlan === null ? null : projectEffectivePlan(value.effectivePlan),
     purchaseAttemptId,
     paymentAction: projectPaymentAction(value.paymentAction),
+    ...(pendingPlanChange === undefined ? {} : { pendingPlanChange }),
   };
 }
 

@@ -254,6 +254,88 @@ describe('billing IPC', () => {
     });
   });
 
+  it('maps a plan change quote to the fixed endpoint with the idempotency header', async () => {
+    const { call, fetch } = harness();
+    const change = {
+      planChangeId: 'plan_change_1',
+      changeType: 'DOWNGRADE',
+      status: 'QUOTED',
+      quotedAmountMinor: null,
+      quotedCurrency: null,
+      quoteExpiresAt: '2026-07-23T12:05:00.000Z',
+      effectiveAt: '2026-08-01T00:00:00.000Z',
+      paymentAction: null,
+    };
+    fetch.mockResolvedValueOnce(change);
+
+    await expect(
+      call(BILLING_INVOKE.QUOTE_PLAN_CHANGE, {
+        targetOfferCode: 'plus_month',
+        idempotencyKey: 'desktop:plan-change:12345678',
+      }),
+    ).resolves.toEqual(change);
+    expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/plan-change-quotes', {
+      baseUrl: 'https://model-access.example',
+      timeoutMs: 20_000,
+      redactErrorDetails: true,
+      method: 'POST',
+      body: { targetOfferCode: 'plus_month' },
+      headers: { 'Idempotency-Key': 'desktop:plan-change:12345678' },
+    });
+  });
+
+  it('rejects a plan change quote without a valid idempotency key before network access', async () => {
+    const { call, fetch } = harness();
+    await expect(
+      call(BILLING_INVOKE.QUOTE_PLAN_CHANGE, { targetOfferCode: 'plus_month' }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('cancels a plan change with DELETE and an encoded id', async () => {
+    const { call, fetch } = harness();
+    fetch.mockResolvedValueOnce({
+      planChangeId: 'plan/1',
+      changeType: 'DOWNGRADE',
+      status: 'CANCELED',
+      quotedAmountMinor: null,
+      quotedCurrency: null,
+      quoteExpiresAt: null,
+      effectiveAt: '2026-08-01T00:00:00.000Z',
+      paymentAction: null,
+    });
+
+    await call(BILLING_INVOKE.CANCEL_PLAN_CHANGE, { planChangeId: 'plan/1' });
+    expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/plan-changes/plan%2F1', {
+      baseUrl: 'https://model-access.example',
+      timeoutMs: 20_000,
+      redactErrorDetails: true,
+      method: 'DELETE',
+    });
+  });
+
+  it('fail-closes an unknown plan change status from confirm', async () => {
+    const { call, fetch } = harness();
+    fetch.mockResolvedValueOnce({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'FUTURE_STATUS',
+      quotedAmountMinor: 1500,
+      quotedCurrency: 'cny',
+      quoteExpiresAt: null,
+      effectiveAt: '2026-08-01T00:00:00.000Z',
+      paymentAction: null,
+      providerError: 'private detail',
+    });
+
+    await expect(
+      call(BILLING_INVOKE.CONFIRM_PLAN_CHANGE, { planChangeId: 'plan_change_1' }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: '[INTERNAL] billing service response was invalid',
+    });
+  });
+
   it('opens only public HTTPS Stripe Checkout URLs from the main top-level frame', async () => {
     const { call, openExternal } = harness();
     const url = 'https://checkout.stripe.com/c/pay/session_fixture#fragment';

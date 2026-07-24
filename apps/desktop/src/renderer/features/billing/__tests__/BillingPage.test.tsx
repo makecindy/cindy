@@ -599,3 +599,296 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('BillingPage plan change', () => {
+  const subscriptionCatalog = {
+    products: [
+      {
+        code: 'plus',
+        name: 'Plus plan',
+        kind: 'SUBSCRIPTION' as const,
+        level: 1,
+        sortOrder: 1,
+        offers: [
+          {
+            code: 'plus_month',
+            interval: 'MONTH' as const,
+            currency: 'usd',
+            amount: '9',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '100',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_plus_stripe',
+                provider: 'stripe',
+                capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                paymentAction: 'REDIRECT' as const,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        code: 'max',
+        name: 'Max plan',
+        kind: 'SUBSCRIPTION' as const,
+        level: 2,
+        sortOrder: 2,
+        offers: [
+          {
+            code: 'max_month',
+            interval: 'MONTH' as const,
+            currency: 'usd',
+            amount: '20',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '250',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_max_stripe',
+                provider: 'stripe',
+                capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                paymentAction: 'REDIRECT' as const,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        code: 'cn_max',
+        name: 'Alipay-only Max',
+        kind: 'SUBSCRIPTION' as const,
+        level: 2,
+        sortOrder: 3,
+        offers: [
+          {
+            code: 'cn_max_month',
+            interval: 'MONTH' as const,
+            currency: 'cny',
+            amount: '140',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '250',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_cn_max_alipay',
+                provider: 'alipay',
+                capability: 'MERCHANT_INITIATED_MANDATE' as const,
+                paymentAction: 'QR_CODE' as const,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const activeSubscription = (pendingPlanChange: unknown = null) => ({
+    subscriptionId: 'subscription_active',
+    status: 'ACTIVE' as const,
+    provider: 'stripe',
+    currentPeriodStartAt: '2026-07-01T00:00:00.000Z',
+    currentPeriodEndAt: '2026-08-01T00:00:00.000Z',
+    entitlementValidUntil: '2026-08-02T00:00:00.000Z',
+    cancelAtPeriodEnd: false,
+    effectivePlan: {
+      version: 1 as const,
+      product: { code: 'plus', kind: 'SUBSCRIPTION' as const, level: 1 },
+      offer: { code: 'plus_month', interval: 'MONTH' as const },
+      terms: { amount: '9', currency: 'usd', creditAmount: '100', rolloverCap: '0' },
+      capturedAt: '2026-07-01T00:00:00.000Z',
+    },
+    purchaseAttemptId: null,
+    paymentAction: null,
+    pendingPlanChange,
+  });
+
+  const billingMocks = () => ({
+    getBalance: vi.fn(async () => ({
+      planCredits: '7.000000001',
+      purchasedCredits: '5.000000002',
+      promotionalCredits: '0.345678898',
+      available: '12.345678901',
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00.000Z',
+    })),
+    getCatalog: vi.fn(async () => subscriptionCatalog),
+    getCurrentSubscription: vi.fn(async () => ({ subscription: activeSubscription() })),
+    quotePlanChange: vi.fn(),
+    confirmPlanChange: vi.fn(),
+    refreshPlanChange: vi.fn(),
+    cancelPlanChange: vi.fn(),
+  });
+
+  const install = (billing: ReturnType<typeof billingMocks>) => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { billing, openExternal: vi.fn() },
+    });
+    return billing;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    Object.assign(checkout.state, {
+      open: false,
+      kind: null,
+      phase: 'IDLE',
+      intent: null,
+      order: null,
+      subscription: null,
+      error: false,
+    });
+    vi.stubGlobal('crypto', {
+      randomUUID: () => '00000000-0000-4000-8000-000000000042',
+    });
+  });
+
+  it('offers plan change for an active subscription with same-provider candidates only', async () => {
+    const billing = install(billingMocks());
+    billing.quotePlanChange.mockResolvedValue({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'QUOTED',
+      quotedAmountMinor: 1100,
+      quotedCurrency: 'usd',
+      quoteExpiresAt: '2099-01-01T00:00:00.000Z',
+      effectiveAt: '2026-07-24T00:00:00.000Z',
+      paymentAction: null,
+    });
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+
+    await screen.findByText('billing.planChange.targetTitle');
+    expect(screen.getByText('Max plan')).toBeTruthy();
+    expect(screen.queryByText('Alipay-only Max')).toBeNull();
+    // The current plan renders in the summary card but must not be a candidate.
+    expect(screen.getByText('billing.planChange.upgradeBadge')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Max plan'));
+    await screen.findByText('billing.planChange.quoteTitle');
+    expect(billing.quotePlanChange).toHaveBeenCalledTimes(1);
+    expect(billing.quotePlanChange).toHaveBeenCalledWith({
+      targetOfferCode: 'max_month',
+      idempotencyKey: 'desktop:plan-change:00000000-0000-4000-8000-000000000042',
+    });
+    expect(
+      screen.getByText((text) => text.startsWith('billing.planChange.upgradeDueNow')),
+    ).toBeTruthy();
+
+    billing.confirmPlanChange.mockResolvedValue({
+      planChangeId: 'plan_change_1',
+      changeType: 'UPGRADE',
+      status: 'APPLIED',
+      quotedAmountMinor: 1100,
+      quotedCurrency: 'usd',
+      quoteExpiresAt: null,
+      effectiveAt: '2026-07-24T00:00:00.000Z',
+      paymentAction: null,
+    });
+    fireEvent.click(screen.getByText('billing.planChange.confirm'));
+    await screen.findByText('billing.planChange.appliedTitle');
+    // APPLIED refreshes subscription, catalog, and balance exactly once more.
+    await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
+    expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a scheduled downgrade banner and undoes it through DELETE', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: activeSubscription({
+        planChangeId: 'plan_change_down',
+        changeType: 'DOWNGRADE',
+        status: 'SCHEDULED',
+        quotedAmountMinor: null,
+        quotedCurrency: null,
+        quoteExpiresAt: null,
+        effectiveAt: '2026-08-01T00:00:00.000Z',
+        paymentAction: null,
+        targetPlan: {
+          product: { code: 'plus', level: 1 },
+          offer: { code: 'plus_month', interval: 'MONTH' },
+          terms: { amount: '9', currency: 'usd', creditAmount: '100' },
+        },
+      }),
+    }));
+    install(billing);
+    billing.cancelPlanChange.mockResolvedValue({
+      planChangeId: 'plan_change_down',
+      changeType: 'DOWNGRADE',
+      status: 'CANCELED',
+      quotedAmountMinor: null,
+      quotedCurrency: null,
+      quoteExpiresAt: null,
+      effectiveAt: '2026-08-01T00:00:00.000Z',
+      paymentAction: null,
+    });
+
+    render(<BillingPage />);
+    await screen.findByText((text) => text.startsWith('billing.planChange.pendingDowngrade'));
+
+    fireEvent.click(screen.getByText('billing.planChange.undo'));
+    await waitFor(() =>
+      expect(billing.cancelPlanChange).toHaveBeenCalledWith({ planChangeId: 'plan_change_down' }),
+    );
+    // The canceled settle re-syncs the subscription projection for the banner.
+    await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
+  });
+
+  it('resumes a pending alipay upgrade payment with the server-issued QR action', async () => {
+    const qr = {
+      type: 'QR_CODE' as const,
+      value: 'https://qr.alipay.example/plan-change',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: {
+        ...activeSubscription({
+          planChangeId: 'plan_change_up',
+          changeType: 'UPGRADE',
+          status: 'AWAITING_PAYMENT',
+          quotedAmountMinor: 1500,
+          quotedCurrency: 'cny',
+          quoteExpiresAt: null,
+          effectiveAt: '2026-07-24T00:00:00.000Z',
+          paymentAction: qr,
+          targetPlan: {
+            product: { code: 'cn_max', level: 2 },
+            offer: { code: 'cn_max_month', interval: 'MONTH' },
+            terms: { amount: '140', currency: 'cny', creditAmount: '250' },
+          },
+        }),
+        provider: 'alipay',
+      },
+    }));
+    install(billing);
+    billing.refreshPlanChange.mockResolvedValue({
+      planChangeId: 'plan_change_up',
+      changeType: 'UPGRADE',
+      status: 'AWAITING_PAYMENT',
+      quotedAmountMinor: 1500,
+      quotedCurrency: 'cny',
+      quoteExpiresAt: null,
+      effectiveAt: '2026-07-24T00:00:00.000Z',
+      paymentAction: qr,
+    });
+
+    render(<BillingPage />);
+    await screen.findByText((text) => text.startsWith('billing.planChange.pendingPayment'));
+
+    fireEvent.click(screen.getByText('billing.planChange.resume'));
+    await screen.findByText('billing.planChange.awaitingTitle');
+    expect(
+      await screen.findByText((text) => text.startsWith('billing.planChange.scanToPay')),
+    ).toBeTruthy();
+    await screen.findByAltText('billing.checkout.qrAlt');
+    // Resuming re-displays the stored server action without quoting again.
+    expect(billing.quotePlanChange).not.toHaveBeenCalled();
+  });
+});

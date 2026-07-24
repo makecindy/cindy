@@ -20,6 +20,7 @@ import type {
   BillingCatalog,
   BillingCatalogOffer,
   BillingCatalogProduct,
+  BillingPendingPlanChange,
   BillingPurchaseOption,
   BillingSubscription,
 } from '../../../shared/billing';
@@ -27,7 +28,13 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import type { ModelAccessBalance } from '../../../shared/modelAccess';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import {
+  PlanChangeStatusDialog,
+  PlanChangeTargetDialog,
+  type PlanChangeCandidate,
+} from './PlanChangeDialog';
 import { useBillingCheckout } from './useBillingCheckout';
+import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 
 type PurchasableOffer = {
   product: BillingCatalogProduct;
@@ -158,6 +165,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [balanceError, setBalanceError] = useState<BalanceIssue>(null);
   const [subscriptionDialogOpen, setSubscriptionDialogOpen] = useState(false);
   const [topupDialogOpen, setTopupDialogOpen] = useState(false);
+  const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
   const [selectedPurchaseOptionId, setSelectedPurchaseOptionId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState('');
@@ -183,11 +191,22 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
   }, []);
 
+  const loadSubscription = useCallback(async () => {
+    setLoadingSubscription(true);
+    setSubscriptionError(false);
+    try {
+      setCurrentSubscription((await billingApi.getCurrentSubscription()).subscription);
+    } catch {
+      setCurrentSubscription(null);
+      setSubscriptionError(true);
+    } finally {
+      setLoadingSubscription(false);
+    }
+  }, []);
+
   const loadBillingState = useCallback(async () => {
     setLoadingCatalog(true);
-    setLoadingSubscription(true);
     setCatalogError(false);
-    setSubscriptionError(false);
     await Promise.allSettled([
       billingApi
         .getCatalog()
@@ -196,19 +215,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
           setCatalogError(true);
         })
         .finally(() => setLoadingCatalog(false)),
-      billingApi
-        .getCurrentSubscription()
-        .then(
-          (result) => setCurrentSubscription(result.subscription),
-          () => {
-            setCurrentSubscription(null);
-            setSubscriptionError(true);
-          },
-        )
-        .finally(() => setLoadingSubscription(false)),
+      loadSubscription(),
       loadBalance(),
     ]);
-  }, [loadBalance]);
+  }, [loadBalance, loadSubscription]);
 
   useEffect(() => {
     void loadBillingState();
@@ -228,6 +238,17 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       void loadBalance();
     }
   }, [checkout.state.phase, loadBalance]);
+
+  const handlePlanChangeSettled = useCallback(
+    (kind: PlanChangeSettledKind) => {
+      // APPLIED is the only settle that moves credits; one full reload covers
+      // subscription, catalog, and balance without a second balance call.
+      if (kind === 'APPLIED') void loadBillingState();
+      else void loadSubscription();
+    },
+    [loadBillingState, loadSubscription],
+  );
+  const planChange = usePlanChange(accountId, handlePlanChangeSettled);
 
   const offers = useMemo<PurchasableOffer[]>(() => {
     if (!catalog) return [];
@@ -322,11 +343,51 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     ) &&
     (!isCustomTopup(selected.offer) || (customAmount.length > 0 && amountError === null));
 
-  const currentPlanName = useMemo(() => {
-    const productCode = currentSubscription?.effectivePlan?.product.code;
-    if (!productCode) return null;
-    return catalog?.products.find((product) => product.code === productCode)?.name ?? productCode;
-  }, [catalog, currentSubscription]);
+  const planNameOf = useCallback(
+    (productCode: string | null | undefined) => {
+      if (!productCode) return null;
+      return catalog?.products.find((product) => product.code === productCode)?.name ?? productCode;
+    },
+    [catalog],
+  );
+
+  const currentPlanName = useMemo(
+    () => planNameOf(currentSubscription?.effectivePlan?.product.code),
+    [planNameOf, currentSubscription],
+  );
+
+  const currentPlan = currentSubscription?.effectivePlan ?? null;
+  const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
+  const planChangeable =
+    currentSubscription?.status === 'ACTIVE' &&
+    !currentSubscription.cancelAtPeriodEnd &&
+    currentPlan !== null;
+
+  // UI candidates only. The quote is the authority on whether a target is
+  // actually reachable; this filter just avoids offering obviously invalid
+  // targets (other interval, same level, or another provider's offers).
+  const planChangeCandidates = useMemo<PlanChangeCandidate[]>(() => {
+    if (!planChangeable || !currentPlan) return [];
+    const currentProvider = currentSubscription?.provider ?? null;
+    return subscriptionOffers
+      .filter(
+        ({ product, offer }) =>
+          offer.interval === 'MONTH' &&
+          offer.code !== currentPlan.offer.code &&
+          product.level !== null &&
+          product.level !== currentPlan.product.level &&
+          (currentProvider === null ||
+            offer.purchaseOptions.some((option) => option.provider === currentProvider)),
+      )
+      .map(({ product, offer }) => ({
+        product,
+        offer,
+        direction:
+          (product.level ?? 0) > currentPlan.product.level
+            ? ('UPGRADE' as const)
+            : ('DOWNGRADE' as const),
+      }));
+  }, [subscriptionOffers, planChangeable, currentPlan, currentSubscription?.provider]);
 
   const openPurchaseDialog = (kind: PurchaseKind) => {
     resetSelection();
@@ -369,6 +430,36 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const closeTopupDialog = () => {
     setTopupDialogOpen(false);
     resetSelection();
+  };
+
+  const openPlanChange = () => {
+    // An open change is the server's fact; re-enter it instead of quoting anew.
+    if (pendingPlanChange) {
+      planChange.resumePending(pendingPlanChange);
+    } else {
+      setPlanChangeTargetOpen(true);
+    }
+  };
+
+  const selectPlanChangeTarget = (candidate: PlanChangeCandidate) => {
+    setPlanChangeTargetOpen(false);
+    void planChange.startQuote(candidate.offer.code, {
+      product: { code: candidate.product.code, level: candidate.product.level ?? 0 },
+      offer: { code: candidate.offer.code, interval: 'MONTH' },
+      terms: {
+        amount: candidate.offer.amount ?? '0',
+        currency: candidate.offer.currency,
+        creditAmount: candidate.offer.creditAmount ?? '0',
+      },
+    });
+  };
+
+  const closePlanChangeStatus = () => {
+    const phase = planChange.state.phase;
+    planChange.close();
+    // Leaving an open change mid-flow: re-sync the pending projection so the
+    // banner reflects what is still open on the server.
+    if (phase === 'QUOTE_READY' || phase === 'AWAITING_PAYMENT') void loadSubscription();
   };
 
   return (
@@ -420,9 +511,24 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               }
               loading={loadingSubscription}
               disabled={loadingSubscription || subscriptionError}
-              actionLabel={t('billing.settings.subscriptionCard.action')}
-              onAction={() => openPurchaseDialog('SUBSCRIPTION')}
+              actionLabel={
+                planChangeable
+                  ? t('billing.settings.subscriptionCard.changeAction')
+                  : t('billing.settings.subscriptionCard.action')
+              }
+              onAction={() => {
+                if (planChangeable) openPlanChange();
+                else openPurchaseDialog('SUBSCRIPTION');
+              }}
             />
+            {pendingPlanChange && (
+              <PendingPlanChangeBanner
+                pending={pendingPlanChange}
+                targetName={planNameOf(pendingPlanChange.targetPlan?.product.code)}
+                onResume={() => planChange.resumePending(pendingPlanChange)}
+                onUndo={() => void planChange.cancelChange(pendingPlanChange.planChangeId)}
+              />
+            )}
           </div>
           <div className="border-t border-[var(--border-default)]">
             <BillingSummaryRow
@@ -517,7 +623,85 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         onRetry={() => void checkout.retry()}
         onCancel={() => void checkout.cancel()}
       />
+
+      <PlanChangeTargetDialog
+        open={planChangeTargetOpen}
+        candidates={planChangeCandidates}
+        currentPlanName={currentPlanName}
+        onClose={() => setPlanChangeTargetOpen(false)}
+        onSelect={selectPlanChangeTarget}
+      />
+
+      <PlanChangeStatusDialog
+        state={planChange.state}
+        targetName={planNameOf(planChange.state.targetPlan?.product.code)}
+        onClose={closePlanChangeStatus}
+        onConfirm={() => void planChange.confirm()}
+        onRefresh={() => void planChange.refresh()}
+        onAbandon={() => {
+          const change = planChange.state.planChange;
+          if (change) void planChange.cancelChange(change.planChangeId);
+        }}
+      />
     </>
+  );
+}
+
+function PendingPlanChangeBanner({
+  pending,
+  targetName,
+  onResume,
+  onUndo,
+}: {
+  pending: BillingPendingPlanChange;
+  targetName: string | null;
+  onResume: () => void;
+  onUndo: () => void;
+}) {
+  const { t } = useTranslation();
+  const effectiveDate = useMemo(() => {
+    const timestamp = Date.parse(pending.effectiveAt);
+    if (!Number.isFinite(timestamp)) return pending.effectiveAt;
+    try {
+      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(timestamp);
+    } catch {
+      return pending.effectiveAt;
+    }
+  }, [pending.effectiveAt]);
+  const label =
+    pending.status === 'SCHEDULED'
+      ? t('billing.planChange.pendingDowngrade', {
+          name: targetName ?? t('billing.settings.subscriptionCard.unnamedPlan'),
+          date: effectiveDate,
+        })
+      : pending.status === 'AWAITING_PAYMENT'
+        ? t('billing.planChange.pendingPayment', {
+            name: targetName ?? t('billing.settings.subscriptionCard.unnamedPlan'),
+          })
+        : t('billing.planChange.pendingQuote', {
+            name: targetName ?? t('billing.settings.subscriptionCard.unnamedPlan'),
+          });
+  return (
+    <div className="flex items-center gap-4 border-t border-[var(--border-default)] bg-[var(--surface-chip)] px-5 py-3">
+      <p className="min-w-0 flex-1 text-12 leading-5 text-[var(--text-secondary)]">{label}</p>
+      {pending.status === 'SCHEDULED' ? (
+        <button
+          type="button"
+          onClick={onUndo}
+          className="h-8 shrink-0 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
+        >
+          {t('billing.planChange.undo')}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onResume}
+          className="h-8 shrink-0 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
+        >
+          {t('billing.planChange.resume')}
+        </button>
+      )}
+    </div>
   );
 }
 

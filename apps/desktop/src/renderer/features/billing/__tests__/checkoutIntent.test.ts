@@ -4,10 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   billingCheckoutIntentKey,
+  billingPlanChangeIntentKey,
   clearBillingCheckoutIntent,
+  clearBillingPlanChangeIntent,
   newBillingIdempotencyKey,
   readBillingCheckoutIntent,
+  readBillingPlanChangeIntent,
   writeBillingCheckoutIntent,
+  writeBillingPlanChangeIntent,
 } from '../checkoutIntent';
 
 const ACCOUNT_A = 'account-a';
@@ -110,5 +114,51 @@ describe('billing checkout intent', () => {
 
     expect(readBillingCheckoutIntent(ACCOUNT_A)).toBeNull();
     expect(localStorage.getItem('cindy.billing.checkout-intent.v1')).toBeNull();
+  });
+});
+
+describe('billing plan change intent persistence', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  const intent = {
+    version: 1 as const,
+    targetOfferCode: 'max_month',
+    idempotencyKey: 'desktop:plan-change:fixture-0001',
+    planChangeId: 'plan_change_1',
+    createdAt: '2026-07-24T00:00:00.000Z',
+  };
+
+  it('round-trips a valid intent per account', () => {
+    writeBillingPlanChangeIntent(ACCOUNT_A, intent);
+
+    expect(readBillingPlanChangeIntent(ACCOUNT_A)).toEqual(intent);
+    expect(readBillingPlanChangeIntent(ACCOUNT_B)).toBeNull();
+  });
+
+  it('drops a tampered or extended intent instead of replaying it', () => {
+    localStorage.setItem(
+      billingPlanChangeIntentKey(ACCOUNT_A),
+      JSON.stringify({ ...intent, provider: 'alipay' }),
+    );
+    expect(readBillingPlanChangeIntent(ACCOUNT_A)).toBeNull();
+
+    localStorage.setItem(
+      billingPlanChangeIntentKey(ACCOUNT_A),
+      JSON.stringify({ ...intent, targetOfferCode: 'Bad Code!' }),
+    );
+    expect(readBillingPlanChangeIntent(ACCOUNT_A)).toBeNull();
+    expect(localStorage.getItem(billingPlanChangeIntentKey(ACCOUNT_A))).toBeNull();
+  });
+
+  it('clears only the requested account intent', () => {
+    writeBillingPlanChangeIntent(ACCOUNT_A, intent);
+    writeBillingPlanChangeIntent(ACCOUNT_B, { ...intent, planChangeId: null });
+
+    clearBillingPlanChangeIntent(ACCOUNT_A);
+
+    expect(readBillingPlanChangeIntent(ACCOUNT_A)).toBeNull();
+    expect(readBillingPlanChangeIntent(ACCOUNT_B)).toEqual({ ...intent, planChangeId: null });
   });
 });

@@ -19,6 +19,10 @@ export const BILLING_INVOKE = {
   CREATE_SUBSCRIPTION: 'billing:create-subscription',
   GET_CURRENT_SUBSCRIPTION: 'billing:get-current-subscription',
   REFRESH_SUBSCRIPTION_PURCHASE: 'billing:refresh-subscription-purchase',
+  QUOTE_PLAN_CHANGE: 'billing:quote-plan-change',
+  CONFIRM_PLAN_CHANGE: 'billing:confirm-plan-change',
+  REFRESH_PLAN_CHANGE: 'billing:refresh-plan-change',
+  CANCEL_PLAN_CHANGE: 'billing:cancel-plan-change',
   OPEN_PAYMENT_REDIRECT: 'billing:open-payment-redirect',
 } as const;
 
@@ -90,6 +94,45 @@ export type BillingSubscriptionStatus =
   | 'CANCELED'
   | 'PAUSED';
 
+export type BillingPlanChangeType = 'UPGRADE' | 'DOWNGRADE';
+
+/**
+ * Open plan-change states the client may act on. Terminal states (APPLIED /
+ * CANCELED / FAILED / EXPIRED) are also part of the wire enum because the
+ * plan-change endpoints echo them back after confirm/refresh/cancel.
+ */
+export type BillingPlanChangeStatus =
+  | 'QUOTED'
+  | 'PENDING_PROVIDER'
+  | 'AWAITING_PAYMENT'
+  | 'SCHEDULED'
+  | 'APPLIED'
+  | 'CANCELED'
+  | 'FAILED'
+  | 'EXPIRED';
+
+export type BillingPlanChange = {
+  planChangeId: string;
+  changeType: BillingPlanChangeType;
+  status: BillingPlanChangeStatus;
+  quotedAmountMinor: number | null;
+  quotedCurrency: string | null;
+  quoteExpiresAt: string | null;
+  effectiveAt: string;
+  paymentAction: BillingPaymentAction | null;
+};
+
+export type BillingPlanChangeTargetPlan = {
+  product: { code: string; level: number };
+  offer: { code: string; interval: 'MONTH' | 'YEAR' };
+  terms: { amount: string; currency: string; creditAmount: string };
+};
+
+export type BillingPendingPlanChange = BillingPlanChange & {
+  /** Null when the server could not safely parse the historical snapshot. */
+  targetPlan: BillingPlanChangeTargetPlan | null;
+};
+
 export type BillingSubscription = {
   subscriptionId: string;
   status: BillingSubscriptionStatus;
@@ -121,6 +164,12 @@ export type BillingSubscription = {
   } | null;
   purchaseAttemptId: string | null;
   paymentAction: BillingPaymentAction | null;
+  /**
+   * Server-owned recovery projection of the newest open plan change. `null`
+   * means "no open change"; `undefined` means the server (or endpoint) does
+   * not emit the field, so the client must not treat it as a denial.
+   */
+  pendingPlanChange?: BillingPendingPlanChange | null;
 };
 
 export type BillingOrderList = {
@@ -166,5 +215,12 @@ export interface BillingRendererApi {
   refreshSubscriptionPurchase: (payload: {
     purchaseAttemptId: string;
   }) => Promise<BillingSubscription>;
+  quotePlanChange: (payload: {
+    targetOfferCode: string;
+    idempotencyKey: string;
+  }) => Promise<BillingPlanChange>;
+  confirmPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
+  refreshPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
+  cancelPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
   openPaymentRedirect: (payload: { url: string }) => Promise<{ success: boolean }>;
 }

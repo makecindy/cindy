@@ -3,6 +3,7 @@ import type {
   BillingCurrentSubscription,
   BillingOrderList,
   BillingPaymentOrder,
+  BillingPlanChange,
   BillingSubscription,
   CreateBillingSubscriptionRequest,
   CreateBillingTopupRequest,
@@ -48,6 +49,18 @@ export const billingApi = {
   },
   refreshSubscriptionPurchase(purchaseAttemptId: string): Promise<BillingSubscription> {
     return window.electronAPI.billing.refreshSubscriptionPurchase({ purchaseAttemptId });
+  },
+  quotePlanChange(targetOfferCode: string, idempotencyKey: string): Promise<BillingPlanChange> {
+    return window.electronAPI.billing.quotePlanChange({ targetOfferCode, idempotencyKey });
+  },
+  confirmPlanChange(planChangeId: string): Promise<BillingPlanChange> {
+    return window.electronAPI.billing.confirmPlanChange({ planChangeId });
+  },
+  refreshPlanChange(planChangeId: string): Promise<BillingPlanChange> {
+    return window.electronAPI.billing.refreshPlanChange({ planChangeId });
+  },
+  cancelPlanChange(planChangeId: string): Promise<BillingPlanChange> {
+    return window.electronAPI.billing.cancelPlanChange({ planChangeId });
   },
   openPaymentRedirect(url: string): Promise<{ success: boolean }> {
     return window.electronAPI.billing.openPaymentRedirect({ url });
