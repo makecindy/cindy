@@ -6,13 +6,17 @@
  * 不触发默认 electron 实现)。
  */
 
+import os from 'node:os';
 import path from 'node:path';
+import fsp from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 import { LOCAL_DATA_OWNER_ID, dataOwnerStorageKey } from '../appSessionState';
 import {
   LOCAL_OWNER_ADOPTION_MARKER_FILENAME,
   runLocalOwnerDataAdoption,
+  __testing,
   type LocalAdoptionDecision,
   type LocalAdoptionFsDeps,
   type LocalAdoptionPhase,
@@ -119,6 +123,8 @@ function createMemFs() {
       for (const d of dirs) if (d !== nd && d.startsWith(nd + path.sep)) throw errnoError('ENOTEMPTY', dir);
       dirs.delete(nd);
     },
+    // mem fs 的 rename 本就是「目标存在即 EEXIST」语义,与 renameNoReplace 一致。
+    renameNoReplace: async (src, dest) => fsDeps.rename(src, dest),
   };
 
   return { files, dirs, addDir, addFile, fsDeps, exists };
@@ -128,13 +134,15 @@ interface HarnessOverrides {
   decision?: LocalAdoptionDecision | (() => Promise<LocalAdoptionDecision>);
   /** local 库未删除会话数(默认 3)。 */
   sessionCount?: number | (() => number);
-  /** 账号库未删除会话数(默认 0 = 空置)。 */
-  accountSessionCount?: number;
+  /** 账号库是否被使用过(默认 false = 空置)。 */
+  accountUsed?: boolean;
   accountDbOpen?: boolean;
   passive?: boolean;
   concurrent?: () => boolean;
   countThrows?: boolean;
-  accountCountThrows?: boolean;
+  accountProbeThrows?: boolean;
+  /** now() 每次调用递增的毫秒步长(默认 0 = 固定时钟)。 */
+  nowStepMs?: number;
   fsOverrides?: Partial<LocalAdoptionFsDeps>;
 }
 
@@ -148,20 +156,24 @@ function createHarness(overrides: HarnessOverrides = {}) {
     userDataDir: USER_DATA,
     dbFilePrefix: PREFIX,
     fs: { ...mem.fsDeps, ...overrides.fsOverrides },
-    countDbSessions: vi.fn(async (dbPath: string) => {
-      if (path.normalize(dbPath) === path.normalize(ACCOUNT_DB)) {
-        if (overrides.accountCountThrows) throw new Error('SQLITE_CORRUPT: malformed');
-        return overrides.accountSessionCount ?? 0;
-      }
+    countLocalSessions: vi.fn(async () => {
       if (overrides.countThrows) throw new Error('SQLITE_CORRUPT: malformed');
       const count = overrides.sessionCount;
       return typeof count === 'function' ? count() : (count ?? 3);
+    }),
+    accountDbLooksUsed: vi.fn(async () => {
+      if (overrides.accountProbeThrows) throw new Error('SQLITE_CORRUPT: malformed');
+      return overrides.accountUsed ?? false;
     }),
     passiveSharedUserData: () => overrides.passive ?? false,
     hasConcurrentLiveInstances: overrides.concurrent ?? (() => false),
     closeLocalDbIfOpen: vi.fn(),
     accountDbCurrentlyOpen: () => overrides.accountDbOpen ?? false,
-    now: () => new Date('2026-07-24T00:00:00.000Z'),
+    now: (() => {
+      let tick = 0;
+      const base = new Date('2026-07-24T00:00:00.000Z').getTime();
+      return () => new Date(base + (overrides.nowStepMs ?? 0) * tick++);
+    })(),
     log: { info: vi.fn(), warn: vi.fn() },
     ui: {
       publish: (phase) => {
@@ -199,7 +211,7 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
   });
 
   it('账号库已有会话(真实使用过)时返回 account-db-exists(不做行级合并,local 数据原地保留)', async () => {
-    const { mem, deps, phases } = createHarness({ accountSessionCount: 2 });
+    const { mem, deps, phases } = createHarness({ accountUsed: true });
     mem.addFile(LOCAL_DB);
     mem.addFile(ACCOUNT_DB);
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
@@ -218,7 +230,7 @@ describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', ()
   });
 
   it('账号库不可读时返回 account-db-unreadable,不弹窗、不动文件', async () => {
-    const { mem, deps, phases } = createHarness({ accountCountThrows: true });
+    const { mem, deps, phases } = createHarness({ accountProbeThrows: true });
     mem.addFile(LOCAL_DB);
     mem.addFile(ACCOUNT_DB, 'corrupt');
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
@@ -408,7 +420,7 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
   });
 
   it('空账号库(0 会话)不堵死认领:改名备份让位后并入(Greptile 场景)', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'adopt', accountSessionCount: 0 });
+    const { mem, deps, phases } = createHarness({ decision: 'adopt', accountUsed: false });
     mem.addFile(LOCAL_DB, 'local-data');
     mem.addFile(ACCOUNT_DB, 'empty-account-db');
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
@@ -427,15 +439,15 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     const { mem, deps, phases } = createHarness({ decision: 'adopt' });
     mem.addFile(LOCAL_DB, 'local-data');
     mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
-    const realRename = deps.fs.rename;
+    const realRenameNoReplace = deps.fs.renameNoReplace;
     let failNext = true;
     deps.fs = {
       ...deps.fs,
-      rename: async (src, dest) => {
+      renameNoReplace: async (src, dest) => {
         if (failNext && path.normalize(src) === path.normalize(LOCAL_DB)) {
           throw errnoError('EPERM', src);
         }
-        return realRename(src, dest);
+        return realRenameNoReplace(src, dest);
       },
     };
     const first = await runLocalOwnerDataAdoption(USER_ID, deps);
@@ -457,6 +469,64 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     );
   });
 
+  it('owners 递归合并期间发现并发实例:中断为 deferred,下次登录续跑', async () => {
+    let scans = 0;
+    const { mem, deps, phases } = createHarness({
+      decision: 'adopt',
+      nowStepMs: 600, // 每次取时钟都跨过 500ms 节流窗,abortCheck 每个子项都真扫
+      concurrent: () => {
+        scans += 1;
+        return scans >= 3; // 第 1/2 次(步骤 2 与确认后复查)无并发,合并中途出现
+      },
+    });
+    mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'cindy-brain', 'b.json'), 'brain');
+    // 目标 owners 目录已有内容 → 走逐子项合并路径(整棵 rename 快路径没有中断窗口)。
+    mem.addFile(path.join(ACCOUNT_OWNER_DIR, 'existing.txt'), 'e');
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result).toEqual({ status: 'deferred', reason: 'concurrent-live-instances' });
+    expect(phases).toEqual(['confirm', 'running', 'failed']);
+    // 库改名(提交点)未发生,local 模式数据完好;已搬部分下次续跑。
+    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+  });
+
+  it('拒绝记录写失败:本次拒绝仍生效,弹窗按 done 解除不卡 confirm', async () => {
+    const { mem, deps, phases } = createHarness({ decision: 'keep' });
+    mem.addFile(LOCAL_DB, 'local-data');
+    const realWrite = mem.fsDeps.writeFile;
+    deps.fs = {
+      ...deps.fs,
+      writeFile: async (p, content) => {
+        if (path.normalize(p) === path.normalize(MARKER)) throw errnoError('ENOSPC', p);
+        return realWrite(p, content);
+      },
+    };
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result).toEqual({ status: 'declined' });
+    expect(phases).toEqual(['confirm', 'done']);
+    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
+  });
+
+  it('库改名(提交点)已过后 marker 写失败:按成功收尾,不误报 failed', async () => {
+    const { mem, deps, phases } = createHarness({ decision: 'adopt' });
+    mem.addFile(LOCAL_DB, 'local-data');
+    const realWrite = mem.fsDeps.writeFile;
+    deps.fs = {
+      ...deps.fs,
+      writeFile: async (p, content) => {
+        if (path.normalize(p) === path.normalize(MARKER)) throw errnoError('ENOSPC', p);
+        return realWrite(p, content);
+      },
+    };
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result.status).toBe('adopted');
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+  });
+
   it('弹窗前先关闭本进程持有的 local 库(closeLocalDbIfOpen 在 count 前被调用)', async () => {
     const { mem, deps } = createHarness({ decision: 'keep' });
     mem.addFile(LOCAL_DB);
@@ -464,8 +534,75 @@ describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
     expect(deps.closeLocalDbIfOpen).toHaveBeenCalledTimes(1);
     const closeOrder = (deps.closeLocalDbIfOpen as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
-    const countOrder = (deps.countDbSessions as ReturnType<typeof vi.fn>).mock
+    const countOrder = (deps.countLocalSessions as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
     expect(closeOrder).toBeLessThan(countOrder);
+  });
+});
+
+describe('默认 sqlite 探针(真实 better-sqlite3 临时库)', () => {
+  async function withTempDb(
+    setup: (db: InstanceType<typeof Database>) => void,
+    run: (dbPath: string) => Promise<void>,
+  ): Promise<void> {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-adoption-test-'));
+    const dbPath = path.join(dir, 'probe.db');
+    const db = new Database(dbPath);
+    try {
+      setup(db);
+    } finally {
+      db.close();
+    }
+    try {
+      await run(dbPath);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('countSessionsInClosedDb 只数未删除会话(触发门槛)', async () => {
+    await withTempDb(
+      (db) => {
+        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+        db.exec("INSERT INTO sessions VALUES ('a','active'),('b','archived'),('c','deleted')");
+      },
+      async (dbPath) => {
+        await expect(__testing.countSessionsInClosedDb(dbPath)).resolves.toBe(2);
+      },
+    );
+  });
+
+  it('accountDbLooksUsedInClosedDb:软删除会话也算「使用过」,绝不让位(Greptile 场景)', async () => {
+    await withTempDb(
+      (db) => {
+        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+        db.exec("INSERT INTO sessions VALUES ('a','deleted')");
+      },
+      async (dbPath) => {
+        await expect(__testing.accountDbLooksUsedInClosedDb(dbPath)).resolves.toBe(true);
+      },
+    );
+  });
+
+  it('accountDbLooksUsedInClosedDb:零会话但有 schedules 也算使用过;全空才空置', async () => {
+    await withTempDb(
+      (db) => {
+        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+        db.exec('CREATE TABLE schedules (id TEXT PRIMARY KEY)');
+        db.exec("INSERT INTO schedules VALUES ('s1')");
+      },
+      async (dbPath) => {
+        await expect(__testing.accountDbLooksUsedInClosedDb(dbPath)).resolves.toBe(true);
+      },
+    );
+    await withTempDb(
+      (db) => {
+        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+      },
+      async (dbPath) => {
+        // 其余用量表不存在(老 schema)= 不可能有数据,不算使用过。
+        await expect(__testing.accountDbLooksUsedInClosedDb(dbPath)).resolves.toBe(false);
+      },
+    );
   });
 });

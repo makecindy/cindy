@@ -85,6 +85,13 @@ export interface LocalAdoptionFsDeps extends MoveFsDeps {
   pathExists(p: string): Promise<boolean>;
   readFile(p: string): Promise<string>;
   writeFile(p: string, content: string): Promise<void>;
+  /**
+   * 目标已存在时必须失败(EEXIST)而非覆盖的改名。库文件的提交 rename 必须走
+   * 这条:POSIX rename 会静默替换目标,而提交点若撞上窗口期出现的账号库,
+   * 覆盖即数据丢失。默认实现用 link+unlink(原子 EEXIST),不支持硬链接的
+   * 文件系统退化为「检查 + rename」。
+   */
+  renameNoReplace(source: string, target: string): Promise<void>;
 }
 
 /** UI 桥:main→renderer 弹窗阶段推送 + 等待用户裁决。 */
@@ -100,11 +107,18 @@ export interface LocalOwnerAdoptionDeps {
   dbFilePrefix: string;
   fs: LocalAdoptionFsDeps;
   /**
-   * 统计某个已关闭库文件里未删除会话数;打开失败/表缺失时 throw(调用方按
-   * 不可读跳过)。默认实现顺带完成 wal checkpoint(open+close),让 sidecar
-   * 检查有意义。local 库与「疑似空置的账号库」共用本探针。
+   * 统计 local 库里未删除会话数(认领触发门槛);打开失败/表缺失时 throw
+   * (调用方按不可读跳过)。默认实现顺带完成 wal checkpoint(open+close),
+   * 让 sidecar 检查有意义。
    */
-  countDbSessions(dbPath: string): Promise<number>;
+  countLocalSessions(dbPath: string): Promise<number>;
+  /**
+   * 账号库是否「被实际使用过」。必须比 local 侧探针更保守:任何 sessions 行
+   * (**含软删除**——用户删光会话不等于库空置,里面还有消息/定时任务/绑定)、
+   * schedules、custom providers/MCP、IM 绑定,任一存在即算使用过,不可让位。
+   * 打开失败时 throw(调用方按不可读跳过)。
+   */
+  accountDbLooksUsed(dbPath: string): Promise<boolean>;
   /** 共享 userData 的 passive dev 实例必须保持只读。 */
   passiveSharedUserData(): boolean;
   /** 是否有其它活实例共享本 userData(rename 前的独占确认)。 */
@@ -171,6 +185,13 @@ async function writeAdoptionMarker(
   await deps.fs.writeFile(markerPath, JSON.stringify(marker, null, 2));
 }
 
+/** owners 递归合并期间发现并发实例时的中断信号(转成 deferred,不算失败)。 */
+class AdoptionInterruptedError extends Error {
+  constructor() {
+    super('local owner adoption interrupted by a concurrent instance');
+  }
+}
+
 /** 库文件的 sidecar(-wal/-shm)任一存在 = 仍被持有,不能 rename。 */
 async function dbSidecarsPresent(
   deps: LocalOwnerAdoptionDeps,
@@ -228,15 +249,15 @@ export async function runLocalOwnerDataAdoption(
         // 同账号 ensure-ready 重入(LocalDbGate 重试等):账号库正开着,不动。
         return { status: 'account-db-in-use' };
       }
-      let accountSessionCount: number;
+      let accountUsed: boolean;
       try {
-        accountSessionCount = await deps.countDbSessions(accountDbPath);
+        accountUsed = await deps.accountDbLooksUsed(accountDbPath);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         deps.log.warn('local owner adoption: account db unreadable, skipped: %s', message);
         return { status: 'account-db-unreadable', error: message };
       }
-      if (accountSessionCount > 0) return { status: 'account-db-exists' };
+      if (accountUsed) return { status: 'account-db-exists' };
       if (await dbSidecarsPresent(deps, accountDbPath)) {
         deps.log.info('local owner adoption deferred: account db sidecars still present');
         return { status: 'deferred', reason: 'account-db-busy' };
@@ -250,7 +271,7 @@ export async function runLocalOwnerDataAdoption(
     deps.closeLocalDbIfOpen();
     let sessionCount: number;
     try {
-      sessionCount = await deps.countDbSessions(localDbPath);
+      sessionCount = await deps.countLocalSessions(localDbPath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       deps.log.warn('local owner adoption: local db unreadable, skipped: %s', message);
@@ -266,10 +287,20 @@ export async function runLocalOwnerDataAdoption(
     deps.ui.publish('confirm');
     const decision = await deps.ui.waitForDecision();
     if (decision === 'keep') {
-      await writeAdoptionMarker(deps, markerPath, {
-        version: 1,
-        declinedOwnerKeys: [...(marker?.declinedOwnerKeys ?? []), ownerKey],
-      });
+      try {
+        await writeAdoptionMarker(deps, markerPath, {
+          version: 1,
+          declinedOwnerKeys: [...(marker?.declinedOwnerKeys ?? []), ownerKey],
+        });
+      } catch (err) {
+        // 拒绝记录写失败(磁盘满/权限)只影响「下次是否再问」,本次拒绝依然
+        // 生效;必须继续走 done 解除弹窗,否则 phase 卡在 confirm 且 resolver
+        // 已消费,remount 后弹窗永远清不掉(Copilot/Codex review)。
+        deps.log.warn(
+          'local owner adoption: decline marker write failed (will ask again next login): %s',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
       // done 语义 = 弹窗解除;renderer 对 done 不渲染。
       deps.ui.publish('done');
       deps.log.info('local owner adoption declined by user; local data stays in local mode');
@@ -306,35 +337,61 @@ export async function runLocalOwnerDataAdoption(
       const accountOwnerDir = path.join(deps.userDataDir, OWNERS_DIR_NAME, ownerKey);
       let ownersMoved = 0;
       let ownersConflicts = 0;
+      // owners 树可能很大,递归合并期间新实例可能启动:子项之间做节流(500ms)
+      // 并发复查,发现即中断(与 ownerNamespaceMigration 的 mid-claim 复查同一
+      // 姿势);moveWithoutOverwrite 幂等,中断后下次登录续跑。
+      let lastAbortScanMs = 0;
+      const abortCheck = async (): Promise<void> => {
+        const nowMs = deps.now().getTime();
+        if (nowMs - lastAbortScanMs < 500) return;
+        lastAbortScanMs = nowMs;
+        if (deps.hasConcurrentLiveInstances()) throw new AdoptionInterruptedError();
+      };
       if (await deps.fs.pathExists(localOwnerDir)) {
-        const moveResult = await moveWithoutOverwrite(deps.fs, localOwnerDir, accountOwnerDir);
+        const moveResult = await moveWithoutOverwrite(
+          deps.fs,
+          localOwnerDir,
+          accountOwnerDir,
+          abortCheck,
+        );
         ownersMoved = moveResult.moved;
         ownersConflicts = moveResult.conflicts;
       }
       if (accountDbToDisplace) {
-        // 空账号库(0 会话,前置已验证)改名备份让位:文件保留不删,时间戳后缀
-        // 防多次重试撞名。窗口期内该库可能残留的少量配置随备份保留,可人工找回。
+        // 空账号库(前置已验证未被使用)改名备份让位:文件保留不删,时间戳后缀
+        // 防多次重试撞名。窗口期内该库可能残留的少量非关键数据随备份保留,可找回。
         const stamp = deps
           .now()
           .toISOString()
           .replace(/[-:.TZ]/g, '')
           .slice(0, 14);
         const backupPath = `${accountDbPath}${ACCOUNT_DB_BACKUP_SUFFIX}${stamp}`;
-        await deps.fs.rename(accountDbPath, backupPath);
+        await deps.fs.renameNoReplace(accountDbPath, backupPath);
         deps.log.info(
-          'local owner adoption: empty account db displaced to %s',
+          'local owner adoption: unused account db displaced to %s',
           path.basename(backupPath),
         );
       }
-      await deps.fs.rename(localDbPath, accountDbPath);
-      await writeAdoptionMarker(deps, markerPath, {
-        version: 1,
-        claimedOwnerKey: ownerKey,
-        adoptedAt: deps.now().toISOString(),
-        ...(marker?.declinedOwnerKeys?.length
-          ? { declinedOwnerKeys: marker.declinedOwnerKeys }
-          : {}),
-      });
+      // 提交点:目标已存在(窗口期另一实例创建/打开了账号库)必须失败而非覆盖。
+      await deps.fs.renameNoReplace(localDbPath, accountDbPath);
+      try {
+        await writeAdoptionMarker(deps, markerPath, {
+          version: 1,
+          claimedOwnerKey: ownerKey,
+          adoptedAt: deps.now().toISOString(),
+          ...(marker?.declinedOwnerKeys?.length
+            ? { declinedOwnerKeys: marker.declinedOwnerKeys }
+            : {}),
+        });
+      } catch (err) {
+        // 提交点(库改名)已过,认领事实上已完成:marker 写失败只能按成功收尾
+        // (报 failed 会误导用户「下次会重试」——下次前置探测到 local 库已消失,
+        // 只会静默跳过)。丢失的只是 claimed 终态记录,方向安全。
+        deps.log.warn(
+          'local owner adoption: claimed marker write failed after commit (adoption stands): %s',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
       deps.ui.publish('done');
       deps.log.info(
         'local owner adoption completed: sessions=%d ownersMoved=%d ownersConflicts=%d',
@@ -344,6 +401,11 @@ export async function runLocalOwnerDataAdoption(
       );
       return { status: 'adopted', ownersMoved, ownersConflicts };
     } catch (err) {
+      if (err instanceof AdoptionInterruptedError) {
+        deps.log.info('local owner adoption interrupted: instance appeared mid-move');
+        deps.ui.publish('failed');
+        return { status: 'deferred', reason: 'concurrent-live-instances' };
+      }
       // 搬移阶段失败:不写 marker(下次登录重试)、failed 弹窗、不阻塞登录。
       const message = err instanceof Error ? err.message : String(err);
       deps.log.warn('local owner adoption failed (will retry next login): %s', message);
@@ -398,6 +460,35 @@ const realFsDeps: LocalAdoptionFsDeps = {
   },
   rename: (source, target) => fsp.rename(source, target),
   rmdir: (dir) => fsp.rmdir(dir),
+  renameNoReplace: async (source, target) => {
+    try {
+      await fsp.link(source, target);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') throw err;
+      // 文件系统不支持硬链接(FAT/exFAT 等):退化为「检查 + rename」,窗口
+      // 收窄到毫秒级(上层还有并发实例 gate 兜底)。
+      try {
+        await fsp.access(target);
+      } catch {
+        await fsp.rename(source, target);
+        return;
+      }
+      const eexist = new Error(`EEXIST: file already exists, rename '${source}' -> '${target}'`);
+      (eexist as NodeJS.ErrnoException).code = 'EEXIST';
+      throw eexist;
+    }
+    try {
+      await fsp.unlink(source);
+    } catch (err) {
+      // link 已成功 = 目标已就位;源清理失败只留一个同 inode 的冗余名,不影响
+      // 正确性(下次登录 local 库若仍在,账号库已「被使用」,前置探测自然跳过)。
+      log.warn(
+        'local owner adoption: source cleanup after link failed (harmless duplicate): %s',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  },
 };
 
 /**
@@ -413,6 +504,40 @@ async function countSessionsInClosedDb(dbPath: string): Promise<number> {
       .prepare("SELECT COUNT(*) AS c FROM sessions WHERE status != 'deleted'")
       .get() as { c?: number | bigint } | undefined;
     return Number(row?.c ?? 0);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 账号库「被使用过」的保守探测面:任一表有行即算使用过。sessions 不过滤软删除
+ * ——用户删光会话不等于库空置,消息/定时任务/IM 绑定/自定义供应商仍在
+ * (Greptile review);表不存在(更老 schema)= 不可能有数据,跳过该表。
+ */
+const ACCOUNT_USAGE_TABLES = [
+  'sessions',
+  'schedules',
+  'custom_providers',
+  'custom_mcp_servers',
+  'im_bindings',
+] as const;
+
+async function accountDbLooksUsedInClosedDb(dbPath: string): Promise<boolean> {
+  const db = new Database(dbPath, { fileMustExist: true });
+  try {
+    for (const table of ACCOUNT_USAGE_TABLES) {
+      let count = 0;
+      try {
+        const row = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as
+          | { c?: number | bigint }
+          | undefined;
+        count = Number(row?.c ?? 0);
+      } catch {
+        continue;
+      }
+      if (count > 0) return true;
+    }
+    return false;
   } finally {
     db.close();
   }
@@ -470,7 +595,8 @@ export async function runLocalOwnerDataAdoptionForUser(userId: string): Promise<
     userDataDir: app.getPath('userData'),
     dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
     fs: realFsDeps,
-    countDbSessions: countSessionsInClosedDb,
+    countLocalSessions: countSessionsInClosedDb,
+    accountDbLooksUsed: accountDbLooksUsedInClosedDb,
     passiveSharedUserData: () => process.env.XDT_PASSIVE_SHARED_USER_DATA === '1',
     hasConcurrentLiveInstances: () => hasConcurrentLiveInstancesSharingUserData(),
     closeLocalDbIfOpen: () => {
@@ -487,3 +613,5 @@ export async function runLocalOwnerDataAdoptionForUser(userId: string): Promise<
     inFlight = null;
   }
 }
+
+export const __testing = { countSessionsInClosedDb, accountDbLooksUsedInClosedDb };
