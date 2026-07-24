@@ -1958,21 +1958,42 @@ export class ClaudeCodeAgent extends BaseAgent {
     // local_bash 不调模型(dev server 等长驻进程不能被 Stop 误杀);remote_agent
     // 生命周期不在本进程。q.close() 会连 CLI 子进程一起杀(任务随之死亡),
     // 换代 / teardown / close 时清表。
-    const runningBackgroundTasks = new Map<string, { wake: boolean }>();
+    // 元数据(taskType / toolUseId / title)与 wake 同口径锁存:task_started 全量携带,
+    // 后续 task_updated 补丁可能缺失,补丁不得把已知字段冲掉 —— listBackgroundTasks
+    // 快照(renderer 挂载/重载后重新水合任务卡)依赖这些字段还原展示。
+    const runningBackgroundTasks = new Map<
+      string,
+      { wake: boolean; taskType?: string; toolUseId?: string; title?: string }
+    >();
     function noteBackgroundTaskEvent(e: AgentEvent): void {
       if (e.type !== 'agent_task_update') return;
       const data = e.data as
-        | { taskId?: unknown; status?: unknown; taskType?: unknown }
+        | {
+            taskId?: unknown;
+            status?: unknown;
+            taskType?: unknown;
+            parentToolUseId?: unknown;
+            title?: unknown;
+          }
         | null
         | undefined;
       const taskId = typeof data?.taskId === 'string' ? data.taskId : undefined;
       if (!taskId) return;
       const status = data?.status;
       if (status === 'running') {
+        const prev = runningBackgroundTasks.get(taskId);
         const wake =
-          runningBackgroundTasks.get(taskId)?.wake === true ||
+          prev?.wake === true ||
           (typeof data?.taskType === 'string' && WAKE_BACKGROUND_TASK_TYPES.has(data.taskType));
-        runningBackgroundTasks.set(taskId, { wake });
+        runningBackgroundTasks.set(taskId, {
+          wake,
+          taskType: typeof data?.taskType === 'string' && data.taskType ? data.taskType : prev?.taskType,
+          toolUseId:
+            typeof data?.parentToolUseId === 'string' && data.parentToolUseId
+              ? data.parentToolUseId
+              : prev?.toolUseId,
+          title: typeof data?.title === 'string' && data.title ? data.title : prev?.title,
+        });
       } else if (status === 'completed' || status === 'failed' || status === 'stopped') {
         runningBackgroundTasks.delete(taskId);
       }
@@ -3229,6 +3250,34 @@ export class ClaudeCodeAgent extends BaseAgent {
           turnState.interruptRequested = false;
           log.warn('abort threw', { error: String(e) });
         }
+      },
+
+      async stopBackgroundTask(taskId: string) {
+        // 精确停单个后台任务(UI 对着具体任务卡点停)。与 abort 的全停语义不同:
+        // 不碰当前 turn、不限 wake 型 —— local_bash 也允许(用户明确指着它停,
+        // 不存在 abort 误杀 dev server 的顾虑)。
+        // 幂等:任务已终态 / 未知(UI 点击与 task_notification 天然竞态)→ 静默成功。
+        if (closed) return;
+        if (!runningBackgroundTasks.has(taskId)) return;
+        // 远端老 daemon / 老 SDK 没有 stopTask:明确失败(按钮不该假装成功)。
+        if (typeof q.stopTask !== 'function') {
+          throw new Error('stopTask is not supported by the current Claude SDK or remote daemon');
+        }
+        // 成功后 SDK 会回吐 status:'stopped' 的 task_notification → 现有事件链
+        // 把任务出表并让 UI 收口;这里不主动改表,保持单一事实源。
+        await q.stopTask(taskId);
+      },
+
+      listBackgroundTasks() {
+        // 当前仍在运行的后台任务快照(renderer 挂载 / reloadMessages 后重新水合
+        // 任务卡与状态栏信号)。事件流才是实时源,这里只补「订阅之前已启动」的存量。
+        if (closed) return [];
+        return Array.from(runningBackgroundTasks, ([taskId, info]) => ({
+          taskId,
+          ...(info.taskType ? { taskType: info.taskType } : {}),
+          ...(info.toolUseId ? { toolUseId: info.toolUseId } : {}),
+          ...(info.title ? { title: info.title } : {}),
+        }));
       },
 
       async close() {

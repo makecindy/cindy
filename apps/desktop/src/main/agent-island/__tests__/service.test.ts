@@ -1714,6 +1714,52 @@ describe('AgentIslandService native publishing', () => {
     expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
   });
 
+  it('plays the completion sound when the completed visible session is smart-suppressed', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+    service.setAppFocused(true);
+    service.registerIpc();
+    const focusedWindow = {
+      isDestroyed: () => false,
+      isFocused: () => true,
+    } as unknown as BrowserWindow;
+    mocks.browserWindowFromWebContents.mockReturnValue(focusedWindow);
+    await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+      { sender: {} },
+      's1',
+    );
+    playSound.mockClear();
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+
+    expect(playSound).toHaveBeenNthCalledWith(1, customSound('start.wav'));
+    expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: 's1',
+      phase: 'completed',
+      attention: false,
+    });
+  });
+
   it('keeps an unplanned remote daemon close in error and does not play completion sound', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

@@ -221,7 +221,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(screen.getByText(/chat\.workGroup\.exploration\.search:1/)).toBeTruthy();
   });
 
-  it('expands running actions directly and keeps the same detail after completion', () => {
+  it('offers no toggle while running when the preview already shows everything', () => {
     const childItems = [
       tools('seg-1', [mkTool('t1', 'git status')]),
       thinking(mkThinking('th1', 'checking the current state')),
@@ -236,19 +236,17 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
     expect(screen.getByText('chat.workGroup.working')).toBeTruthy();
     expect(document.querySelector('[data-live-work-preview="true"]')).toBeTruthy();
-    expect(
-      screen.getByText('chat.workGroup.working').closest('button')?.getAttribute('aria-expanded'),
-    ).toBe('true');
-
-    // The first click replaces the compact latest-five window with full details.
-    clickGroup('chat.workGroup.working');
-    expect(document.querySelector('[data-live-work-preview="true"]')).toBeNull();
-    expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
-    expect(screen.getByText('checking the current state')).toBeTruthy();
-    expect(
-      screen.getByText('chat.workGroup.working').closest('button')?.getAttribute('aria-expanded'),
-    ).toBe('true');
     expect(screen.getByTestId('direct-tool').getAttribute('data-show-raw')).toBe('true');
+
+    // ≤5 条活动且没有 preview 之外的子项:展开不会露出更多内容,组头不再
+    // 提供折叠交互 — 无箭头、禁用、点击后预览保持原样。
+    const runningButton = screen.getByText('chat.workGroup.working').closest('button');
+    if (!runningButton) throw new Error('Missing work-group header button');
+    expect(runningButton.hasAttribute('disabled')).toBe(true);
+    expect(runningButton.getAttribute('aria-expanded')).toBeNull();
+    expect(runningButton.querySelector('svg.lucide-chevron-right')).toBeNull();
+    fireEvent.click(runningButton);
+    expect(document.querySelector('[data-live-work-preview="true"]')).toBeTruthy();
 
     rerender(
       createElement(WorkGroupBlock, {
@@ -258,9 +256,42 @@ describe('WorkGroupBlock — running latest-five preview', () => {
         childItems,
       }),
     );
-    expect(screen.getByText('chat.workGroup.worked:12s')).toBeTruthy();
+    // 完成态恢复正常折叠交互:默认收起,点开显示完整明细。
+    const doneButton = screen.getByText('chat.workGroup.worked:12s').closest('button');
+    expect(doneButton?.hasAttribute('disabled')).toBe(false);
+    expect(doneButton?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
+    expect(screen.queryByTestId('direct-tool')).toBeNull();
+    clickGroup('chat.workGroup.worked:12s');
     expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
     expect(screen.getByText('checking the current state')).toBeTruthy();
+  });
+
+  it('keeps the toggle while running when expansion can reveal more than the preview', () => {
+    render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        isStreaming: true,
+        childItems: [
+          tools('seg-1', [
+            mkTool('t1'),
+            mkTool('t2'),
+            mkTool('t3'),
+            mkTool('t4'),
+            mkTool('t5'),
+            mkTool('t6'),
+          ]),
+        ],
+      }),
+    );
+
+    const button = screen.getByText('chat.workGroup.working').closest('button');
+    if (!button) throw new Error('Missing work-group header button');
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(button.querySelector('svg.lucide-chevron-right')).toBeTruthy();
+
+    clickGroup('chat.workGroup.working');
+    expect(screen.getAllByTestId('direct-tool')).toHaveLength(6);
   });
 
   it('keeps full details across remounts and collapses back to latest five', async () => {

@@ -2,9 +2,11 @@
 // =============================================================================
 // build-ios.mjs —— iOS 纯构建(本机出签名 .ipa,不含任何上传 / 分发 / 发布)
 //
-// 流程:git 闸门 → expo prebuild → pod install → xcodebuild archive/export → .ipa
-//       → 从 .ipa 回读内嵌 runtimeVersion(EXUpdates.bundle/fingerprint,仅报告)
+// 流程(--execute):git 闸门 → expo prebuild → pod install → xcodebuild archive/export
+//       → .ipa → 从 .ipa 回读内嵌 runtimeVersion(EXUpdates.bundle/fingerprint,仅报告)
 //       → 产物留在导出目录并打印路径(--out 可另拷一份)。
+// dry-run 纯本地:校验配置 + 打印计划,git 闸门(含 origin/main 远端比对)只在
+// --execute 时执行,分支/离线环境也能直接看计划。
 //
 // 与发布无关:不读写任何远端(无版本基线拉取、无 OSS/CDN、无分发平台),
 // 版本号(app.json 的 expo.version / expo.ios.buildNumber)按仓内现值烤入,
@@ -18,8 +20,11 @@
 //   --region cn|global|dev     必填。从 scripts/self-host-regions.json 取应用身份
 //                              (iosBundleId)与签名描述符(iosSigning)。该文件不入仓
 //                              (gitignore),按 self-host-regions.json.example 复制填写;
-//                              构建只需 authRegion / iosBundleId / iosSigning 四项,
-//                              其余字段可留空。dev 区域还需先按
+//                              构建必填 authRegion / iosBundleId / iosSigning,以及
+//                              selfhost 包烘焙必填的 tapdb 两字段(global 另需 google
+//                              三字段)——prebuild 期 app.config.js 硬校验,本脚本
+//                              dry-run 预告缺失、--execute 前置拦截;商店 ID / OSS /
+//                              npkgExpectBundle 等纯发布字段可留空。dev 区域还需先按
 //                              config/endpoint.dev.json.example 复制出
 //                              config/endpoint.dev.json(同样 gitignore),并把
 //                              cdnBaseUrl 换成实际的无凭据 HTTPS 基址
@@ -28,12 +33,17 @@
 //   --desktop-version x.y.z    可选。配对的桌面产品线版本号(设置页展示用),
 //                              不传则不注入、设置页不显示该行。
 //   --out <dir>                可选。构建完把 .ipa 另拷到该目录。
-//   --skip-git-gate            跳过 main/clean/HEAD 校验(仅本地迭代用)。
+//   --skip-git-gate            跳过 --execute 的 main/clean/HEAD 校验(仅本地迭代用;
+//                              dry-run 本就不校验)。
 //
 // 签名配置(全部本地,仓内零敏感值):
 //   self-host-regions.json 的 <region>.iosSigning:
 //     teamId / profileName / signIdentity   必填(--execute 时校验)
 //     profilePath                           可选;有值时自动安装描述文件到系统目录
+//     exportMethod                          可选;development / ad-hoc / enterprise /
+//                                           app-store,留空默认 development(与旧发布
+//                                           线一致,产物交发布方重签;描述文件为分发
+//                                           类型时填对应值直接出分发签名 .ipa)
 //   证书 p12 / 描述文件本体在仓库外目录,须预先装入本机钥匙串。
 // =============================================================================
 
@@ -53,7 +63,7 @@ import { buildExportOptionsPlist, resolveIosSigningEnv } from './lib/ios-local.m
 import { clearBundlerCache } from './lib/bundler-cache.mjs';
 import { readEmbeddedRuntimeVersionFromIpa } from './lib/embedded-runtime.mjs';
 import { loadEndpointManifestBaseUrl, mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
-import { SELF_HOST_REGIONS, loadSelfHostRegions, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
+import { SELF_HOST_REGIONS, loadSelfHostRegions, missingSelfHostBakeFields, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
 
 const MOBILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
@@ -136,6 +146,9 @@ function buildIpa(env, region) {
     profileName: sign.profileName,
     // 与 archive 的 CODE_SIGN_IDENTITY 同一张证书:避免钥匙串多证书时 export 自选到 profile 外的那张。
     signingCertificate: sign.identity,
+    // 分发方式来自 iosSigning.exportMethod(缺省 development,与旧发布线一致);
+    // 描述文件为 ad-hoc / enterprise / app-store 时须填对应值,export 才能出分发签名 .ipa。
+    method: sign.exportMethod,
   }));
 
   // xcodebuild 的 RN embed 阶段内部触发 expo export:embed 打 JS bundle,无法透传 --clear;
@@ -160,8 +173,9 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   // --region 必填(cn|global|dev):选出本次出包身份 + 签名描述符(见 lib/self-host-region.mjs)。
   // 不走 resolveSelfHostRegion:它对 dev 强校验发布专用的 npkgExpectBundle,与纯构建
-  // 「只需身份 + 签名」的契约不符。这里等价解析 region,装载用 mode 'local'(发布面
-  // 字段——商店 ID / TapDB / Google——允许留空),构建面身份字段自查。
+  // 契约不符。这里等价解析 region,装载用 mode 'local'(纯发布字段——商店 ID / OSS /
+  // npkgExpectBundle——允许留空);构建面身份与 selfhost 烘焙必填字段(tapdb,global
+  // 另有 google)由本脚本自查,口径同 prebuild 期 app.config.js 的硬校验。
   const rawRegion = typeof args.region === 'string' ? args.region.trim() : '';
   if (!rawRegion) {
     throw new Error('必须显式指定 --region cn|global|dev(不提供默认值);例:pnpm mobile:build:ios -- --region global');
@@ -179,11 +193,23 @@ async function main() {
   const version = appJson?.expo?.version ?? '';
   const buildNumber = appJson?.expo?.ios?.buildNumber ?? '';
 
-  if (!args.skipGitGate) assertProductionGitGate();
-  else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
+  // selfhost 烘焙必填字段(prebuild 期 app.config.js 硬校验)提前自查:dry-run 只预告,
+  // --execute 在 prebuild 白跑数分钟之前 fail-fast。
+  const missingBake = missingSelfHostBakeFields(region);
 
-  // 签名描述符预检:dry-run 也提前暴露缺配置(取用值在 buildIpa 内再解析一次)。
-  if (args.execute) resolveIosSigningEnv(region);
+  // git 闸门只管真构建:dry-run 纯本地(不做 origin/main 远端比对,分支/离线可跑)。
+  if (args.execute) {
+    if (!args.skipGitGate) assertProductionGitGate();
+    else log('  warn: --skip-git-gate,跳过 main/clean/HEAD 校验(仅本地迭代用)');
+    if (missingBake.length) {
+      throw new Error(
+        `self-host-regions.json 的 ${region.authRegion} 缺少 selfhost 构建必填字段: ${missingBake.join(', ')} ` +
+          '(prebuild 期 app.config.js 硬校验; tapdb 为包内统计防漏填, global 的 google 为 Google 登录配置)',
+      );
+    }
+    // 签名描述符预检:提前暴露缺配置(取用值在 buildIpa 内再解析一次)。
+    resolveIosSigningEnv(region);
+  }
 
   // 计划打印
   console.log('');
@@ -191,9 +217,18 @@ async function main() {
   console.log(`version / buildNumber: ${version} / ${buildNumber || '(app.json 未填)'}(取 app.json 现值,构建脚本不做版本决策)`);
   const sPreview = (name, value) => value?.trim() || `(${region.authRegion}.iosSigning.${name} 未填,--execute 时必填)`;
   const iosS = region.iosSigning ?? {};
-  console.log(`sign: team=${sPreview('teamId', iosS.teamId)} profile=${sPreview('profileName', iosS.profileName)} identity="${sPreview('signIdentity', iosS.signIdentity)}"(来自 self-host-regions.json 的 ${region.authRegion}.iosSigning)`);
+  console.log(`sign: team=${sPreview('teamId', iosS.teamId)} profile=${sPreview('profileName', iosS.profileName)} identity="${sPreview('signIdentity', iosS.signIdentity)}" export=${iosS.exportMethod?.trim() || 'development'}(来自 self-host-regions.json 的 ${region.authRegion}.iosSigning)`);
   console.log('steps: prebuild → pod-install → xcodebuild archive/export → 从 .ipa 回读 runtimeVersion(仅构建,无上传/发布)');
-  for (const line of formatBakedEnvLines(bakedDisplayEnv(region, desktopVersion))) console.log(line);
+  if (missingBake.length) {
+    console.log(`selfhost 必填缺失: ${missingBake.join(', ')}(--execute 前须在 self-host-regions.json 补齐;prebuild 期 app.config.js 硬校验)`);
+  }
+  const display = bakedDisplayEnv(region, desktopVersion);
+  for (const line of formatBakedEnvLines(display)) console.log(line);
+  // 实际构建 env 从打包机 process.env 起步(微信 AppId 等公开配置本就由打包机 env 注入),
+  // 计划里如实列出将一并烤入的继承键——只列键名不打值,不引机密入日志。
+  const injectedKeys = new Set(Object.keys(display));
+  const inheritedPublicKeys = Object.keys(env).filter((k) => k.startsWith('EXPO_PUBLIC_') && !injectedKeys.has(k)).sort();
+  console.log(`打包机 env 继承的 EXPO_PUBLIC_*(将随构建一并烤入,仅列键名): ${inheritedPublicKeys.join(', ') || '(无)'}`);
   if (!args.execute) {
     console.log('dry-run: 传 --execute 才真正构建(需 macOS + Xcode + 已装证书/描述文件)');
     return;

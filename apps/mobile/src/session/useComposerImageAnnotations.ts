@@ -20,6 +20,7 @@
  * 发送清空时 best-effort 删除。
  */
 import { useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAnnotationBurnIn } from '@/session/AnnotationBurnInWebView';
@@ -120,6 +121,7 @@ async function ensureDir(dir: string): Promise<void> {
 export function useComposerImageAnnotations(
   options: UseComposerImageAnnotationsOptions,
 ): UseComposerImageAnnotationsResult {
+  const { t } = useTranslation();
   const { burnIn, host } = useAnnotationBurnIn();
   const metaRef = useRef<Map<string, AnnotationEditMeta>>(new Map());
   /**
@@ -189,7 +191,7 @@ export function useComposerImageAnnotations(
       ? info.size
       : 0;
     if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-      throw new Error(`图片超过 ${Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB,暂不能发送。`);
+      throw new Error(t('composer.upload.imageTooLargeSend', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
     }
     const head = await FileSystem.readAsStringAsync(fileUri, {
       encoding: FileSystem.EncodingType.Base64,
@@ -197,7 +199,7 @@ export function useComposerImageAnnotations(
       position: 0,
     }).catch(() => '');
     return { fileUri, mimeType: sniffImageMimeFromBase64(head) ?? fallbackMime, size };
-  }, []);
+  }, [t]);
 
   /**
    * 把标注/转发源图物化成本 hook 私有的 file:// 副本。
@@ -231,12 +233,12 @@ export function useComposerImageAnnotations(
       const fileUri = `${srcDir}src-${nextFileTag()}.${extForMime(mimeType)}`;
       const result = await FileSystem.downloadAsync(displayUri, fileUri);
       if (result.status < 200 || result.status >= 300) {
-        throw new Error(`下载原图失败(HTTP ${result.status})。`);
+        throw new Error(t('composer.attachments.downloadOriginalFailed', { status: result.status }));
       }
       return finalizeSource(fileUri, mimeType);
     }
-    throw new Error('这张图片暂不支持标注或转发。');
-  }, [srcDir, finalizeSource, nextFileTag]);
+    throw new Error(t('composer.attachments.imageNotAnnotatable'));
+  }, [srcDir, finalizeSource, nextFileTag, t]);
 
   /**
    * 标注提交主流程(聊天发送到对话 / 托盘再编辑保存共用):
@@ -255,7 +257,7 @@ export function useComposerImageAnnotations(
     const opts = optionsRef.current;
     try {
       if (!replaceAttachmentId && opts.getRemainingAttachmentSlots() <= 0) {
-        throw new Error(`最多添加 ${MOBILE_MAX_ATTACHMENTS} 个附件。`);
+        throw new Error(t('composer.upload.maxAttachments', { count: MOBILE_MAX_ATTACHMENTS }));
       }
       const replacedMeta = replaceAttachmentId ? metaRef.current.get(replaceAttachmentId) : undefined;
       const source = await materializeSource(
@@ -337,10 +339,10 @@ export function useComposerImageAnnotations(
     } catch (err) {
       // 系统 Alert 能盖过全屏 lightbox Modal(composer 错误条此刻被遮挡不可见);
       // lightbox 停留在标注模式,用户可重试或放弃。
-      Alert.alert('标注保存失败', err instanceof Error && err.message ? err.message : '请重试。');
+      Alert.alert(t('composer.attachments.annotationSaveFailed'), err instanceof Error && err.message ? err.message : t('composer.attachments.tryAgain'));
       throw err;
     }
-  }, [materializeSource, burnIn, burnedDir, nextFileTag, isHookGeneratedFile, deleteUnreferencedFiles]);
+  }, [materializeSource, burnIn, burnedDir, nextFileTag, isHookGeneratedFile, deleteUnreferencedFiles, t]);
 
   const decorateUploadedAttachment = useCallback((
     attachment: RemoteSerializedAttachment,
@@ -377,19 +379,19 @@ export function useComposerImageAnnotations(
   }, [isHookGeneratedFile, deleteUnreferencedFiles]);
 
   const chatAnnotation = useMemo<ImageLightboxAnnotationConfig>(() => ({
-    submitLabel: '发送到对话',
+    submitLabel: t('composer.attachments.sendToChat'),
     // 一级直发按钮(对齐桌面):不画笔迹也能把历史图转发进 composer 托盘。
     allowDirectSubmit: true,
     onSubmit: (_image, displayUri, strokes, context) =>
       submitAnnotation(displayUri, strokes, context.mimeType, null),
-  }), [submitAnnotation]);
+  }), [submitAnnotation, t]);
 
   const trayAnnotation = useMemo<ImageLightboxAnnotationConfig>(() => ({
-    submitLabel: '保存',
+    submitLabel: t('composer.attachments.save'),
     initialStrokesFor: (image) => metaRef.current.get(image.key)?.strokes,
     onSubmit: (image, displayUri, strokes, context) =>
       submitAnnotation(displayUri, strokes, context.mimeType, image.key),
-  }), [submitAnnotation]);
+  }), [submitAnnotation, t]);
 
   /**
    * 信箱消费入口:其它路由(文件浏览器 lightbox 画笔)投递的标注提交,由

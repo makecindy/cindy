@@ -86,6 +86,20 @@ export const MAKER_INVOKE = {
    */
   STOP_SESSION_BACKGROUND_TASKS: 'maker:session-background-tasks:stop',
   /**
+   * 精确停止会话内**单个**后台任务(run_in_background 的 Bash / 后台 subagent)。
+   * 入参 (sessionId, taskId)。与 STOP_SESSION_BACKGROUND_TASKS(关闭整个 agent 进程)
+   * 不同:只停指定 taskId,当前 turn 与其他后台任务不受影响。任务已结束 / 会话未
+   * 加载(子进程不存在,后台任务必然已死)→ 幂等成功;旧 SDK / 旧远端 daemon 不支持
+   * → UNSUPPORTED_CAPABILITY。
+   */
+  STOP_AGENT_TASK: 'maker:agent-task:stop',
+  /**
+   * 列出会话当前仍在运行的后台任务({taskId, taskType?, toolUseId?, title?})。只读;
+   * renderer 挂载或 reloadMessages 清空 taskUpdates 后,用它补回「订阅前已启动」的
+   * 存量任务(事件流仍是唯一实时源)。maker 未 init / 未知会话 → { tasks: [] }。
+   */
+  LIST_SESSION_BACKGROUND_TASKS: 'maker:session-background-tasks:list',
+  /**
    * 读取某个 workflow(Workflow 工具的 local_workflow 任务)的逐 agent 进度树。只读。
    * 入参 (sessionId, taskId);main 从活跃会话拿 workDir + sdkSessionId,推导出 Claude Code
    * 的 workflows 记录目录、按 taskId 匹配 wf_*.json 解析。数据源是 SDK 内部产物(无公开契约),

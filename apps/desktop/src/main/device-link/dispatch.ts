@@ -181,9 +181,9 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
 }
 
 /**
- * routing 投影:剥掉每个 agent 路由的**全部执行细节**(upstream / authStrategy / headerDelete /
- * headerOverride / modelIdRewrite / adapter,含自定义供应商 endpoint),只保留 agent 键 + 空对象
- * 以维持 ProviderView.routing 的形状。
+ * routing 投影:剥掉每个 agent 路由的执行细节(upstream / authStrategy / headerDelete /
+ * headerOverride / modelIdRewrite / adapter,含自定义供应商 endpoint),只保留可选
+ * `wireProtocol:'openai-chat'` 展示标记，让手机区分 Cindy 桥接来源。
  *
  * 历史上这里曾保留 `routing.supportsFastMode` 给控制端做 Fast 显隐;现 Fast 能力已收归
  * per-(provider, agent) 的 `models[agent].supportsFastMode`(唯一真相),控制端直接从隧道带来的
@@ -191,10 +191,17 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
  */
 function projectRoutingForDisplay(
   routing: unknown,
-): Record<string, Record<string, never>> | undefined {
+): Record<string, { wireProtocol?: 'openai-chat' }> | undefined {
   if (!routing || typeof routing !== 'object' || Array.isArray(routing)) return undefined;
-  const out: Record<string, Record<string, never>> = {};
-  for (const agent of Object.keys(routing as Record<string, unknown>)) out[agent] = {};
+  const out: Record<string, { wireProtocol?: 'openai-chat' }> = {};
+  for (const [agent, value] of Object.entries(routing as Record<string, unknown>)) {
+    const route = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+    // 只暴露控制端需要展示的「Cindy 桥接」标记。原生协议缺省不回传；endpoint、鉴权、
+    // headers、adapter 等执行字段仍全部留在被控端。
+    out[agent] = route?.wireProtocol === 'openai-chat' ? { wireProtocol: 'openai-chat' } : {};
+  }
   return out;
 }
 

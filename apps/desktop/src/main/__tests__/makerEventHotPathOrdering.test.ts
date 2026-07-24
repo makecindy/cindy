@@ -14,6 +14,8 @@ const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const turnRunnerSourcePath = resolve(__dirname, '..', 'im', 'shared', 'turnRunner.ts');
+const turnRunnerSource = readFileSync(turnRunnerSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
@@ -132,15 +134,41 @@ describe('maker:event hot path ordering', () => {
 
   it('isolates Agent Island interaction updates after renderer delivery', () => {
     const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
+    const releaseBoundaryIndex = interactionListenerSource.indexOf(
+      'await waitForReleasedOutput(session.id);',
+    );
+    const flushIndex = interactionListenerSource.indexOf('flushAssistantBlock(session.id);');
     const broadcastIndex = interactionListenerSource.indexOf('broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST');
     const pendingIndex = interactionListenerSource.indexOf('pendingInteractionResolvers.set(req.requestId, entry);');
     const islandIndex = interactionListenerSource.indexOf('handleAgentIslandInteractionAfterBroadcast(');
 
+    expect(releaseBoundaryIndex).toBeGreaterThanOrEqual(0);
+    expect(flushIndex).toBeGreaterThan(releaseBoundaryIndex);
+    expect(broadcastIndex).toBeGreaterThan(flushIndex);
     expect(broadcastIndex).toBeGreaterThanOrEqual(0);
     expect(pendingIndex).toBeGreaterThan(broadcastIndex);
     expect(islandIndex).toBeGreaterThan(pendingIndex);
     expect(interactionListenerSource.slice(0, broadcastIndex)).not.toContain('handleInteractionRequest(');
     expect(source).toContain('Agent Island interaction update failed after maker interaction broadcast');
+  });
+
+  it('waits for released output before sending an IM interaction card', () => {
+    const start = turnRunnerSource.indexOf('function handleInteractionFor(');
+    const end = turnRunnerSource.indexOf('async function finalizeActiveStream(', start);
+    const interactionSource = turnRunnerSource.slice(start, end);
+    const releaseBoundaryIndex = interactionSource.indexOf(
+      'await waitForReleasedOutput(localSessionId);',
+    );
+    const finalizeIndex = interactionSource.indexOf(
+      'await finalizeActiveStream(localSessionId);',
+    );
+    const sendIndex = interactionSource.indexOf('await im.sendInteractiveCard(');
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(releaseBoundaryIndex).toBeGreaterThanOrEqual(0);
+    expect(finalizeIndex).toBeGreaterThan(releaseBoundaryIndex);
+    expect(sendIndex).toBeGreaterThan(finalizeIndex);
   });
 
   it('clears git snapshot coordinator state when sessions close', () => {

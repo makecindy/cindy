@@ -15,6 +15,13 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  FILE_CHANGE_FILES_I18N_KEY,
+  INTENT_ROW_VERB_KEY,
+  TOOL_ROW_VERB_I18N_KEY,
+  UPDATED_VERB_I18N_KEY,
+} from '../../shared/agentActionVerbKeys';
+
 const locales = ['zh-CN', 'en', 'ja', 'ko'] as const;
 
 const VERBS = ['edited', 'created', 'ran', 'read', 'updated', 'searched', 'fetched', 'used'] as const;
@@ -71,6 +78,31 @@ describe('agent actions i18n', () => {
       expect(row?.status?.done, `${locale} status.done`).toEqual(expect.any(String));
       for (const key of ['deleted', 'renamed', 'files', 'rawData']) {
         expect(row?.fileChange?.[key], `${locale} fileChange.${key}`).toEqual(expect.any(String));
+      }
+    }
+  });
+
+  it('resolves every shared verb-key table entry in every supported locale', () => {
+    // 灵动岛(main 侧 t())与面板共用 src/shared/agentActionVerbKeys.ts;
+    // 表里的 key 是自由字符串,防手滑指向不存在的 key。
+    const lookup = (bundle: Record<string, unknown>, key: string): unknown => {
+      let cur: unknown = bundle;
+      for (const part of key.split('.')) {
+        if (typeof cur !== 'object' || cur === null) return undefined;
+        cur = (cur as Record<string, unknown>)[part];
+      }
+      return cur;
+    };
+    const allKeys = [
+      ...Object.values(INTENT_ROW_VERB_KEY),
+      ...Object.values(TOOL_ROW_VERB_I18N_KEY),
+      UPDATED_VERB_I18N_KEY,
+      FILE_CHANGE_FILES_I18N_KEY,
+    ];
+    for (const locale of locales) {
+      const bundle = readLocale(locale) as Record<string, unknown>;
+      for (const key of allKeys) {
+        expect(lookup(bundle, key), `${locale} ${key}`).toEqual(expect.any(String));
       }
     }
   });

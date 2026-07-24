@@ -74,6 +74,7 @@ import { AuthProvider, useAuth } from '../AuthContext';
 import { LoginBrandStage } from '@/components/login/LoginBrandStage';
 import { SplashScreen } from '@/components/splash/SplashScreen';
 import { LoginPage } from '@/components/login/LoginPage';
+import { brandPlacement, panelPlacement } from '@/components/login/loginScale';
 
 /* ── 探针:抓取 context 值供命令式驱动 ── */
 const probe: { current: LoginHandoffContextValue | null } = { current: null };
@@ -100,6 +101,10 @@ beforeEach(() => {
   setReducedMotion(false);
   probe.current = null;
   svc.env.status = 'passed';
+  svc.loginHook.loginState = {
+    step: 'identifier',
+    providers: { email: true, phone: true, attribution: 'email', social: [] },
+  };
   svc.authListener = null;
   svc.service.initialize.mockReset();
   svc.service.onAuthStateChange.mockReset();
@@ -247,6 +252,21 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     expect(probe.current!.isPlaying).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('登录面板与品牌层通过 context 共享同一 bottom reserve', () => {
+    render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    expect(probe.current!.panelBottomReserve).toBeNull();
+    act(() => probe.current!.reportPanelBottomReserve(124));
+    expect(probe.current!.panelBottomReserve).toBe(124);
+    act(() => probe.current!.reportPanelBottomReserve(0));
+    expect(probe.current!.panelBottomReserve).toBe(0);
+    act(() => probe.current!.reportPanelBottomReserve(null));
+    expect(probe.current!.panelBottomReserve).toBeNull();
+  });
 });
 
 /* ── 冷启动集成(real AuthProvider + LoginBrandStage + SplashScreen + LoginPage) ── */
@@ -296,6 +316,29 @@ function loadBrandAssets() {
 }
 
 describe('冷启动集成(resolved snapshot,禁 mock-reject)', () => {
+  it('browser-redirect 无 footer 时，面板与品牌层统一使用 0 bottom reserve', async () => {
+    svc.loginHook.loginState = { step: 'browser-redirect', label: 'Google' };
+    svc.service.initialize.mockResolvedValue({
+      isAuthenticated: false,
+      isCanary: false,
+      deviceId: 'test-device',
+      user: null,
+    });
+    renderColdStart();
+    await flush();
+
+    expect(probe.current!.panelBottomReserve).toBe(0);
+    expect(screen.queryByTestId('login-stage-footer')).toBeNull();
+
+    const panel = panelPlacement(window.innerWidth, window.innerHeight, 1229, 0);
+    expect(screen.getByTestId('login-stage').style.top).toBe(`${panel.topY}px`);
+
+    const brand = brandPlacement(window.innerWidth, window.innerHeight, 0);
+    expect(screen.getByTestId('login-brand-canvas').style.transform).toBe(
+      `translate(-50%, calc(-50% + ${brand.translateY}px)) scale(${brand.scale})`,
+    );
+  });
+
   it('unauthenticated 冷启动:品牌屏→完整衔接播放;全程单一品牌 DOM/最多一个可见 panel/done 后可点击/overlay 不拦截', async () => {
     // 集成层异常路径口径 = resolved-unauthenticated snapshot(v6.8 消歧)
     svc.service.initialize.mockResolvedValue({

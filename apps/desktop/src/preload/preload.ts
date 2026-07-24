@@ -355,6 +355,12 @@ const fanOutGhostCardUpdated = createIpcFanOut('ghosts:card-updated');
 const fanOutGhostSessionActivity = createIpcFanOut('ghosts:session-activity');
 // 用户消息被意识钩子拦下(卡槽①:renderer 把乐观气泡原地降级为被拦态)。
 const fanOutGhostMessageBlocked = createIpcFanOut('ghosts:user-message-blocked');
+const fanOutContentModerationInputBlocked = createIpcFanOut(
+  'content-moderation:input-blocked',
+);
+const fanOutContentModerationOutputBlocked = createIpcFanOut(
+  'content-moderation:output-blocked',
+);
 // 用户消息被意识钩子改写(卡槽①:renderer 把气泡正文换成改写版并留痕署名)。
 const fanOutGhostMessageRewritten = createIpcFanOut('ghosts:user-message-rewritten');
 // AI 回复被出口钩子(will-assistant-message)改写(renderer 气泡静默换文本)。
@@ -855,6 +861,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:dev-runtime', action, id),
   },
 
+  contentModeration: {
+    onInputBlocked: fanOutContentModerationInputBlocked,
+    onOutputBlocked: fanOutContentModerationOutputBlocked,
+    reviewUserPrompt: (text: string): Promise<'allow' | 'reject' | 'cancelled'> =>
+      ipcRenderer.invoke('content-moderation:review-user-prompt', text),
+  },
+
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('voice-input:prewarm', payload),
@@ -1142,6 +1155,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ── Auth (delegated to main process authManager) ──
+  /** 首启亮色门会话线索:主进程是否持有存量会话(持久化 refresh token / local
+   * 模式)。sendSync——renderer bootstrap 在首帧前判定「真首启」用,异步赶不上。 */
+  authHasPersistedSessionHintSync: (): boolean =>
+    ipcRenderer.sendSync('auth:has-persisted-session-hint-sync') === true,
   authInitialize: (): Promise<{
     user: unknown;
     mode: 'signed-out' | 'local' | 'cloud';
@@ -3501,6 +3518,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:session-background-tasks:stop', sessionId),
     /** 会话后台活动翻转订阅(payload = { sessionId, active },返回 off)。 */
     onSessionBackgroundActivityChanged: fanOutMakerSessionBackgroundActivityChanged,
+    /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
+    stopAgentTask: (sessionId: string, taskId: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:agent-task:stop', sessionId, taskId),
+    /** 会话仍在运行的后台任务快照(挂载 / 重载后补回存量;实时增量走事件流)。 */
+    listSessionBackgroundTasks: (
+      sessionId: string,
+    ): Promise<{ tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }> }> =>
+      ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
     providerOAuthLogin: (providerId: string): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke('maker:provider:oauth:login', providerId),

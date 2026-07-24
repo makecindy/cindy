@@ -3,9 +3,10 @@
  * 元信息行拼接 / effort 标签三级优先 / rowEffortOf 选中 live vs 记忆 / rowFastOn 门控 /
  * budgetRowDisabled 三态)。纯逻辑,node env。
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers/registry';
 
+import { i18n } from '@/i18n';
 import type { MobileAgentCapabilities } from '@/session/agentCapabilities';
 import type { MobileModelMemoryAccessors } from '@/session/draftModelMemory';
 import {
@@ -19,6 +20,11 @@ import {
   rowFastEditable,
   rowFastOn,
 } from '@/session/modelPickerRows';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 const capabilities: MobileAgentCapabilities = {
   availableModels: [],

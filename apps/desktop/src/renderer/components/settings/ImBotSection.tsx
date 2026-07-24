@@ -12,6 +12,10 @@
  * 分栏选择经 ?imGroup= 参数由 SettingsView 驱动(深链可直达某分栏);缺省/非法
  * 时 SettingsView 落到默认分栏(旧「飞书机器人」深链落「个人」,其余落「Cindy」)。
  * Beta 标识用一颗 pill(主题 token,无硬编码 hex),表示整块功能处于 Beta。
+ *
+ * 可见性(imBotVisibility 单点):本地模式与「国区构建 + 个人账号登录」都
+ * 没有 Cindy 分栏(深链/兜底一律落「个人」);国区个人账号的个人分栏进一步
+ * 隐藏 Discord 机器人,只剩飞书(Tips 换 personalFeishuOnly 文案)。
  */
 
 import { Lightbulb } from 'lucide-react';
@@ -19,18 +23,20 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { DiscordBotSection } from './DiscordBotSection';
 import { FeishuBotSection } from './FeishuBotSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { showCindyGroup, showDiscordBot, type ImBotIdentity } from './imBotVisibility';
 
 /** 「IM 机器人」页内分栏 id(tab 与 ?imGroup= 参数共用)。 */
 export type ImBotSettingsGroup = 'cindy' | 'personal';
 
 /** 分栏 tab 的固定顺序(Cindy 在前为默认)。 */
 export const IM_BOT_SETTINGS_GROUPS: readonly ImBotSettingsGroup[] = ['cindy', 'personal'];
-const LOCAL_IM_BOT_SETTINGS_GROUPS: readonly ImBotSettingsGroup[] = ['personal'];
+const PERSONAL_ONLY_IM_BOT_SETTINGS_GROUPS: readonly ImBotSettingsGroup[] = ['personal'];
 
 /** 分栏标题的 i18n key(tab 文案)。 */
 export const IM_BOT_GROUP_LABEL_KEY: Record<ImBotSettingsGroup, string> = {
@@ -48,8 +54,8 @@ export function isImBotSettingsGroup(value: string | null): value is ImBotSettin
   return value === 'cindy' || value === 'personal';
 }
 
-/** 个人栏内容 —— 用户自配凭证的机器人。 */
-function PersonalGroupContent() {
+/** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord)。 */
+function PersonalGroupContent({ showDiscord }: { showDiscord: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-8">
@@ -62,11 +68,15 @@ function PersonalGroupContent() {
         </section>
       </div>
 
-      <div className="h-px w-full bg-[var(--border-default)]" />
+      {showDiscord && (
+        <>
+          <div className="h-px w-full bg-[var(--border-default)]" />
 
-      <section aria-label={t('settings.sections.discordBot')}>
-        <DiscordBotSection />
-      </section>
+          <section aria-label={t('settings.sections.discordBot')}>
+            <DiscordBotSection />
+          </section>
+        </>
+      )}
     </div>
   );
 }
@@ -79,9 +89,18 @@ export function ImBotSection({
   onGroupChange: (group: ImBotSettingsGroup) => void;
 }) {
   const { t } = useTranslation();
-  const { mode, dataOwnerId } = useAuth();
-  const availableGroups = mode === 'local' ? LOCAL_IM_BOT_SETTINGS_GROUPS : IM_BOT_SETTINGS_GROUPS;
-  const effectiveGroup = mode === 'local' ? 'personal' : group;
+  const { mode, dataOwnerId, user } = useAuth();
+  const identity: ImBotIdentity = {
+    region: CURRENT_CINDY_REGION,
+    mode,
+    membershipKind: user?.membershipKind ?? null,
+  };
+  const cindyGroupAvailable = showCindyGroup(identity);
+  const discordVisible = showDiscordBot(identity);
+  const availableGroups = cindyGroupAvailable
+    ? IM_BOT_SETTINGS_GROUPS
+    : PERSONAL_ONLY_IM_BOT_SETTINGS_GROUPS;
+  const effectiveGroup = cindyGroupAvailable ? group : 'personal';
 
   return (
     <div className="flex flex-col gap-2 px-1">
@@ -131,7 +150,11 @@ export function ImBotSection({
       <div className="mt-2 flex items-start gap-2 rounded-lg bg-[var(--surface-chip)] px-3.5 py-2.5">
         <Lightbulb size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" />
         <p className="text-[12.5px] leading-[1.6] text-[var(--text-secondary)]">
-          {t(IM_BOT_GROUP_TIP_KEY[effectiveGroup])}
+          {t(
+            effectiveGroup === 'personal' && !discordVisible
+              ? 'settings.imBot.tips.personalFeishuOnly'
+              : IM_BOT_GROUP_TIP_KEY[effectiveGroup],
+          )}
         </p>
       </div>
 
@@ -149,7 +172,7 @@ export function ImBotSection({
             {/* 新会话默认配置为 IM 全局项,固定放个人分栏顶部 */}
             <ImDefaultSettingsSection />
             <div className="h-px w-full bg-[var(--border-default)]" />
-            <PersonalGroupContent />
+            <PersonalGroupContent showDiscord={discordVisible} />
           </>
         )}
       </div>

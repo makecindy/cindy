@@ -1,0 +1,18 @@
+{
+  "syncFailed": "同步失败",
+  "resync": "重新同步",
+  "resyncing": "正在重新同步",
+  "syncShort": "同步",
+  "connectStep1": "在电脑上安装并打开 {{appName}}",
+  "connectStep2": "用与手机相同的账号登录",
+  "connectStep3": "在「设置 → 远程连接」中开启「允许同账号设备控制本机」",
+  "brandEyebrow": "CINDY 手机版",
+  "cloudTeaserTitle": "云端 {{appName}} 筹备中",
+  "cloudTeaserCopy": "上线后无需电脑，手机版即可直接使用。",
+  "sectionFirstRun": "开始使用",
+  "sectionOffline": "连接过的电脑",
+  "sectionRemoteDisabled": "在电脑上操作",
+  "sectionAccessRevoked": "需要重新允许",
+  "retryAccess": "重试访问",
+  "recheck": "重新检查"
+}

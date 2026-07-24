@@ -1,192 +1,6 @@
 {
-  "billing": {
-    "sidebar": "点数与订阅",
-    "settings": {
-      "title": "使用情况和计费",
-      "subtitle": "查看当前订阅，或按需购买由服务端提供的订阅套餐和点数。",
-      "loading": "正在获取订阅状态…",
-      "subscriptionCard": {
-        "title": "当前套餐",
-        "empty": "当前没有生效中的订阅",
-        "emptyTitle": "无订阅套餐",
-        "unnamedPlan": "订阅套餐",
-        "unavailable": "暂时无法获取订阅状态，请刷新后重试。",
-        "action": "查看套餐",
-        "changeAction": "更改套餐"
-      },
-      "topupCard": {
-        "title": "点数",
-        "description": "购买点数，为按量使用的模型和功能充值。",
-        "cardTitle": "按需购买点数",
-        "cardDescription": "可购买的点数商品由服务端配置。",
-        "action": "购买点数"
-      }
-    },
-    "balance": {
-      "title": "可用额度",
-      "plan": "订阅额度",
-      "purchased": "已购额度",
-      "promotional": "赠送额度",
-      "notProvisioned": "当前账户尚未开通额度。",
-      "notSupported": "当前账户暂不支持额度查询。",
-      "unavailable": "暂时无法获取额度，请刷新后重试。"
-    },
-    "dialogs": {
-      "subscription": {
-        "title": "选择订阅套餐",
-        "description": "仅展示服务端当前配置且可用的订阅套餐。选择套餐后再选择支付方式。"
-      },
-      "topup": {
-        "title": "购买点数",
-        "description": "仅展示服务端当前配置且可用的点数商品。选择商品后再选择支付方式。"
-      }
-    },
-    "eyebrow": "账户与用量",
-    "title": "选择适合你的方案",
-    "subtitle": "套餐和支付方式均由服务端实时下发。先选择方案，再查看该方案当前支持的支付方式。",
-    "steps": {
-      "offer": {
-        "title": "选择套餐",
-        "description": "仅展示当前可购买的充值和订阅方案。"
-      },
-      "channel": {
-        "title": "选择支付方式",
-        "description": "不同套餐支持的支付方式可能不同。",
-        "selectOfferFirst": "选择套餐后，这里会显示该套餐支持的支付方式"
-      },
-      "confirm": {
-        "title": "确认并支付",
-        "description": "核对方案与支付方式后创建支付。",
-        "selectChannelFirst": "选择支付方式后即可确认订单"
-      }
-    },
-    "actions": {
-      "refreshCatalog": "刷新",
-      "retry": "重试",
-      "pay": "确认并支付",
-      "refresh": "刷新状态",
-      "cancelPayment": "取消支付",
-      "close": "关闭"
-    },
-    "catalog": {
-      "errorTitle": "暂时无法获取套餐",
-      "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
-      "emptyTitle": "当前暂无可用套餐",
-      "emptyDescription": "服务端尚未配置可购买的套餐和支付方式。"
-    },
-    "offerKinds": {
-      "topup": "点数充值",
-      "subscription": "订阅套餐"
-    },
-    "amount": {
-      "custom": "自定义金额",
-      "label": "充值金额",
-      "placeholder": "输入金额",
-      "rangeHint": "可输入 {{min}} 至 {{max}}",
-      "rangeError": "金额需在 {{min}} 至 {{max}} 之间",
-      "formatError": "请输入有效金额，最多保留 {{digits}} 位小数"
-    },
-    "intervals": {
-      "MONTH": "月",
-      "YEAR": "年"
-    },
-    "credits": "{{amount}} 点数",
-    "confirm": {
-      "channel": "通过 {{provider}} 支付"
-    },
-    "paymentActions": {
-      "QR_CODE": "扫码支付",
-      "REDIRECT": "跳转支付页面"
-    },
-    "providers": {
-      "alipay": "支付宝",
-      "stripe": "银行卡"
-    },
-    "securityNotice": "支付由所选渠道安全处理，Cindy 不保存你的支付凭证",
-    "currentSubscription": {
-      "title": "当前订阅",
-      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
-    },
-    "subscriptionStatus": {
-      "INCOMPLETE": "等待完成支付",
-      "INCOMPLETE_EXPIRED": "支付已过期",
-      "TRIALING": "试用中",
-      "ACTIVE": "生效中",
-      "PAST_DUE": "付款逾期",
-      "UNPAID": "待付款",
-      "CANCELED": "已取消",
-      "PAUSED": "已暂停"
-    },
-    "recovery": {
-      "title": "发现未完成的支付",
-      "description": "你可以继续上次的支付，状态将从服务端重新确认。",
-      "continueTopup": "继续支付 {{amount}}",
-      "continueSubscription": "继续订阅支付"
-    },
-    "checkout": {
-      "creatingTitle": "正在创建支付",
-      "awaitingTitle": "等待支付",
-      "completedTitle": "支付成功",
-      "failedTitle": "暂时无法完成",
-      "expiredTitle": "支付已过期",
-      "canceledTitle": "支付已取消",
-      "topupSubtitle": "点数充值",
-      "subscriptionSubtitle": "订阅套餐",
-      "creatingBody": "正在向支付服务确认订单…",
-      "qrAlt": "支付二维码",
-      "scanHint": "请使用对应支付应用扫码",
-      "checkingExpiry": "正在确认有效时间…",
-      "expiresIn": "二维码将在 {{minutes}}:{{seconds}} 后过期",
-      "redirectHint": "请在支付页面完成操作，完成后返回 Cindy。",
-      "openPayment": "打开支付页面",
-      "refreshingAction": "正在获取支付方式…",
-      "paymentCompleted": "支付已完成。",
-      "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
-      "expiredBody": "支付链接已过期，请重新创建支付。",
-      "canceledBody": "本次支付已取消。",
-      "failedBody": "支付失败，请稍后重试或联系支持。"
-    },
-    "planChange": {
-      "targetTitle": "更改订阅套餐",
-      "targetDescription": "套餐变更沿用当前支付方式,最终价格与生效时间以下一步确认为准。",
-      "targetDescriptionWithCurrent": "当前套餐:{{plan}}。变更沿用当前支付方式,最终价格与生效时间以下一步确认为准。",
-      "upgradeBadge": "升级",
-      "downgradeBadge": "降级",
-      "emptyTitle": "暂无可切换的套餐",
-      "emptyDescription": "服务端尚未为当前支付方式配置其他可切换套餐。",
-      "quotingTitle": "正在准备套餐变更",
-      "quotingBody": "正在向服务端获取价格与生效时间…",
-      "quoteTitle": "确认套餐变更",
-      "confirmingTitle": "正在提交变更",
-      "confirmingBody": "正在向服务端提交套餐变更…",
-      "awaitingTitle": "支付差价",
-      "scheduledTitle": "降级已排期",
-      "scheduledBody": "新套餐将于 {{date}} 生效,当前套餐在此之前保持不变。",
-      "appliedTitle": "套餐变更已生效",
-      "appliedBody": "新套餐已生效。",
-      "canceledTitle": "变更已撤销",
-      "canceledBody": "套餐变更已撤销,当前套餐保持不变。",
-      "expiredTitle": "报价已过期",
-      "expiredBody": "报价已过期,请重新发起套餐变更获取新报价。",
-      "failedTitle": "套餐变更失败",
-      "failedBody": "套餐变更未完成,当前套餐保持不变。",
-      "requestFailed": "请求失败,请重试。",
-      "upgradeDueNow": "本期需支付差价 {{amount}}",
-      "upgradeNoAmount": "确认后升级立即生效。",
-      "upgradeHint": "支付完成后升级立即生效,后续按新套餐价格续费。",
-      "downgradeAt": "将于 {{date}} 生效",
-      "downgradeHint": "当前套餐将保留至本计费周期结束,期间不产生退款。",
-      "quoteExpiresIn": "报价将在 {{minutes}}:{{seconds}} 后失效",
-      "scanToPay": "扫码支付 {{amount}}",
-      "confirm": "确认变更",
-      "abandon": "放弃",
-      "targetLabel": "目标套餐:{{name}}",
-      "pendingDowngrade": "已排期降级至 {{name}},{{date}} 生效。",
-      "pendingPayment": "升级到 {{name}} 的差价待支付。",
-      "pendingQuote": "有一笔切换到 {{name}} 的套餐变更进行中。",
-      "resume": "继续",
-      "undo": "撤销降级"
-    }
+  "contentModeration": {
+    "blocked": "抱歉，当前问题暂时无法为您解答，请调整提问表述。"
   },
   "ipcError": {
     "SESSION_RUNNING": "当前会话正在执行任务，请稍后再试。",
@@ -1330,6 +1144,7 @@
           "name": "显示名称",
           "namePlaceholder": "我的 AI 提供商",
           "protocols": "Runtime",
+          "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API 密钥",
@@ -1347,11 +1162,17 @@
           "addHeader": "添加请求头",
           "removeRow": "删除该行"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses（原生）",
+          "chat": "Chat Completions（Cindy 桥接）",
+          "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
+          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型,留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 遵循 OpenAI 协议(用 Bearer 鉴权),需要提供支持 Responses API 的模型。填该来源用于 Codex 的 baseURL、密钥与模型,留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接仅支持 Chat Completions 的供应商。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1481,6 +1302,7 @@
         "authorizeFailed": "「{{name}}」授权失败,请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
+        "bridgedNote": "Cindy 桥接（Chat Completions）",
         "docsLink": "查看接入文档",
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加,稍后在详情里刷新",
@@ -1739,7 +1561,8 @@
       "save": "保存",
       "overLimit": " — 已超出长度限制",
       "toast": {
-        "saved": "自定义指令已保存"
+        "saved": "自定义指令已保存",
+        "saveFailed": "自定义指令保存失败"
       }
     },
     "chipMetrics": {
@@ -2253,12 +2076,14 @@
       },
       "tips": {
         "cindy": "Cindy 是官方提供的共享机器人:无需申请任何凭证,连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人机器人用你自己申请的凭证接入飞书 / Discord:机器人完全归你,需要自行创建应用并填写配置。"
+        "personal": "个人机器人用你自己申请的凭证接入飞书 / Discord:机器人完全归你,需要自行创建应用并填写配置。",
+        "personalFeishuOnly": "个人机器人用你自己申请的凭证接入飞书:机器人完全归你,需要自行创建应用并填写配置。"
       },
       "defaults": {
         "title": "新会话配置",
         "description": "从飞书、Slack 或 Discord 发起新会话时，会使用这里的 Agent 和模型配置。修改后只影响新会话；已有 Discord 私聊请发送 /new 才会应用新配置。",
         "localDescription": "从飞书或 Discord 发起新会话时，会使用这里的 Agent 和模型配置。修改后只影响新会话；已有 Discord 私聊请发送 /new 才会应用新配置。",
+        "feishuOnlyDescription": "从飞书发起新会话时，会使用这里的 Agent 和模型配置。修改后只影响新会话。",
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
         "loading": "正在读取新会话配置…",
@@ -3003,11 +2828,10 @@
   "legacyMigration": {
     "title": "迁移旧版本数据",
     "description": "检测到本机存有旧版本的数据。历史会话和媒体文件将迁移到新的数据位置。若旧版应用正在运行，请先完全退出它；迁移期间请保持 {{appName}} 打开。注意：已授权的第三方密钥与凭证无法随数据迁移，迁移完成后需要在设置中重新授权或重新填写。",
-    "confirm": "确定",
+    "confirm": "继续",
     "migrating": "正在迁移数据，请稍候…",
     "failedTitle": "迁移未完成",
-    "failedDescription": "本次数据迁移未能完成。你可以继续使用 {{appName}}，下次登录时会自动重试。",
-    "continue": "继续"
+    "failedDescription": "本次数据迁移未能完成。你可以继续使用 {{appName}}，下次登录时会自动重试。"
   },
   "splash": {
     "tips": {
@@ -4149,7 +3973,8 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
-        "workflow": "Workflow"
+        "workflow": "Workflow",
+        "shell": "后台命令"
       },
       "status": {
         "running": "运行中",
@@ -4157,6 +3982,7 @@
         "failed": "失败",
         "stopped": "已停止"
       },
+      "stop": "停止该任务",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} 次工具调用",
       "toolUses_other": "{{count}} 次工具调用",
@@ -4240,8 +4066,11 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
+      "bashStatus_one": "后台任务运行中（{{count}} 个）…",
+      "bashStatus_other": "后台任务运行中（{{count}} 个）…",
       "stopAll": "全部停止",
       "stopAllTitle": "关闭该会话的后台进程，停止全部后台子任务（会话可继续使用）",
+      "stopBashTitle": "停止该会话仍在运行的后台任务（不关闭会话进程）",
       "stopping": "停止中…"
     },
     "interruptedBanner": {
@@ -6984,6 +6813,195 @@
     "note": {
       "codexStateSkipped": "本机尚未初始化 Codex 环境，会话状态未完全恢复；先运行一次 Codex 会话后即可正常续聊。",
       "workdirKeyInexact": "所选目录路径过长，无法放置历史转录，已降级为仅聊天记录。"
+    }
+  },
+  "billing": {
+    "sidebar": "点数与订阅",
+    "settings": {
+      "title": "使用情况和计费",
+      "subtitle": "查看当前订阅，或按需购买由服务端提供的订阅套餐和点数。",
+      "loading": "正在获取订阅状态…",
+      "subscriptionCard": {
+        "title": "当前套餐",
+        "empty": "当前没有生效中的订阅",
+        "emptyTitle": "无订阅套餐",
+        "unnamedPlan": "订阅套餐",
+        "unavailable": "暂时无法获取订阅状态，请刷新后重试。",
+        "action": "查看套餐",
+        "changeAction": "更改套餐"
+      },
+      "topupCard": {
+        "title": "点数",
+        "description": "购买点数，为按量使用的模型和功能充值。",
+        "cardTitle": "按需购买点数",
+        "cardDescription": "可购买的点数商品由服务端配置。",
+        "action": "购买点数"
+      }
+    },
+    "balance": {
+      "title": "可用额度",
+      "plan": "订阅额度",
+      "purchased": "已购额度",
+      "promotional": "赠送额度",
+      "notProvisioned": "当前账户尚未开通额度。",
+      "notSupported": "当前账户暂不支持额度查询。",
+      "unavailable": "暂时无法获取额度，请刷新后重试。"
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "选择订阅套餐",
+        "description": "仅展示服务端当前配置且可用的订阅套餐。选择套餐后再选择支付方式。"
+      },
+      "topup": {
+        "title": "购买点数",
+        "description": "仅展示服务端当前配置且可用的点数商品。选择商品后再选择支付方式。"
+      }
+    },
+    "eyebrow": "账户与用量",
+    "title": "选择适合你的方案",
+    "subtitle": "套餐和支付方式均由服务端实时下发。先选择方案，再查看该方案当前支持的支付方式。",
+    "steps": {
+      "offer": {
+        "title": "选择套餐",
+        "description": "仅展示当前可购买的充值和订阅方案。"
+      },
+      "channel": {
+        "title": "选择支付方式",
+        "description": "不同套餐支持的支付方式可能不同。",
+        "selectOfferFirst": "选择套餐后，这里会显示该套餐支持的支付方式"
+      },
+      "confirm": {
+        "title": "确认并支付",
+        "description": "核对方案与支付方式后创建支付。",
+        "selectChannelFirst": "选择支付方式后即可确认订单"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "刷新",
+      "retry": "重试",
+      "pay": "确认并支付",
+      "refresh": "刷新状态",
+      "cancelPayment": "取消支付",
+      "close": "关闭"
+    },
+    "catalog": {
+      "errorTitle": "暂时无法获取套餐",
+      "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
+      "emptyTitle": "当前暂无可用套餐",
+      "emptyDescription": "服务端尚未配置可购买的套餐和支付方式。"
+    },
+    "offerKinds": {
+      "topup": "点数充值",
+      "subscription": "订阅套餐"
+    },
+    "amount": {
+      "custom": "自定义金额",
+      "label": "充值金额",
+      "placeholder": "输入金额",
+      "rangeHint": "可输入 {{min}} 至 {{max}}",
+      "rangeError": "金额需在 {{min}} 至 {{max}} 之间",
+      "formatError": "请输入有效金额，最多保留 {{digits}} 位小数"
+    },
+    "intervals": {
+      "MONTH": "月",
+      "YEAR": "年"
+    },
+    "credits": "{{amount}} 点数",
+    "confirm": {
+      "channel": "通过 {{provider}} 支付"
+    },
+    "paymentActions": {
+      "QR_CODE": "扫码支付",
+      "REDIRECT": "跳转支付页面"
+    },
+    "providers": {
+      "alipay": "支付宝",
+      "stripe": "银行卡"
+    },
+    "securityNotice": "支付由所选渠道安全处理，Cindy 不保存你的支付凭证",
+    "currentSubscription": {
+      "title": "当前订阅",
+      "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "等待完成支付",
+      "INCOMPLETE_EXPIRED": "支付已过期",
+      "TRIALING": "试用中",
+      "ACTIVE": "生效中",
+      "PAST_DUE": "付款逾期",
+      "UNPAID": "待付款",
+      "CANCELED": "已取消",
+      "PAUSED": "已暂停"
+    },
+    "recovery": {
+      "title": "发现未完成的支付",
+      "description": "你可以继续上次的支付，状态将从服务端重新确认。",
+      "continueTopup": "继续支付 {{amount}}",
+      "continueSubscription": "继续订阅支付"
+    },
+    "checkout": {
+      "creatingTitle": "正在创建支付",
+      "awaitingTitle": "等待支付",
+      "completedTitle": "支付成功",
+      "failedTitle": "暂时无法完成",
+      "expiredTitle": "支付已过期",
+      "canceledTitle": "支付已取消",
+      "topupSubtitle": "点数充值",
+      "subscriptionSubtitle": "订阅套餐",
+      "creatingBody": "正在向支付服务确认订单…",
+      "qrAlt": "支付二维码",
+      "scanHint": "请使用对应支付应用扫码",
+      "checkingExpiry": "正在确认有效时间…",
+      "expiresIn": "二维码将在 {{minutes}}:{{seconds}} 后过期",
+      "redirectHint": "请在支付页面完成操作，完成后返回 Cindy。",
+      "openPayment": "打开支付页面",
+      "refreshingAction": "正在获取支付方式…",
+      "paymentCompleted": "支付已完成。",
+      "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
+      "expiredBody": "支付链接已过期，请重新创建支付。",
+      "canceledBody": "本次支付已取消。",
+      "failedBody": "支付失败，请稍后重试或联系支持。"
+    },
+    "planChange": {
+      "targetTitle": "更改订阅套餐",
+      "targetDescription": "套餐变更沿用当前支付方式,最终价格与生效时间以下一步确认为准。",
+      "targetDescriptionWithCurrent": "当前套餐:{{plan}}。变更沿用当前支付方式,最终价格与生效时间以下一步确认为准。",
+      "upgradeBadge": "升级",
+      "downgradeBadge": "降级",
+      "emptyTitle": "暂无可切换的套餐",
+      "emptyDescription": "服务端尚未为当前支付方式配置其他可切换套餐。",
+      "quotingTitle": "正在准备套餐变更",
+      "quotingBody": "正在向服务端获取价格与生效时间…",
+      "quoteTitle": "确认套餐变更",
+      "confirmingTitle": "正在提交变更",
+      "confirmingBody": "正在向服务端提交套餐变更…",
+      "awaitingTitle": "支付差价",
+      "scheduledTitle": "降级已排期",
+      "scheduledBody": "新套餐将于 {{date}} 生效,当前套餐在此之前保持不变。",
+      "appliedTitle": "套餐变更已生效",
+      "appliedBody": "新套餐已生效。",
+      "canceledTitle": "变更已撤销",
+      "canceledBody": "套餐变更已撤销,当前套餐保持不变。",
+      "expiredTitle": "报价已过期",
+      "expiredBody": "报价已过期,请重新发起套餐变更获取新报价。",
+      "failedTitle": "套餐变更失败",
+      "failedBody": "套餐变更未完成,当前套餐保持不变。",
+      "requestFailed": "请求失败,请重试。",
+      "upgradeDueNow": "本期需支付差价 {{amount}}",
+      "upgradeNoAmount": "确认后升级立即生效。",
+      "upgradeHint": "支付完成后升级立即生效,后续按新套餐价格续费。",
+      "downgradeAt": "将于 {{date}} 生效",
+      "downgradeHint": "当前套餐将保留至本计费周期结束,期间不产生退款。",
+      "quoteExpiresIn": "报价将在 {{minutes}}:{{seconds}} 后失效",
+      "scanToPay": "扫码支付 {{amount}}",
+      "confirm": "确认变更",
+      "abandon": "放弃",
+      "targetLabel": "目标套餐:{{name}}",
+      "pendingDowngrade": "已排期降级至 {{name}},{{date}} 生效。",
+      "pendingPayment": "升级到 {{name}} 的差价待支付。",
+      "pendingQuote": "有一笔切换到 {{name}} 的套餐变更进行中。",
+      "resume": "继续",
+      "undo": "撤销降级"
     }
   }
 }

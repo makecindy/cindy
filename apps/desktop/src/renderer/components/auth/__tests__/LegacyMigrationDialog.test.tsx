@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LegacyMigrationDialog } from '../LegacyMigrationDialog';
@@ -42,7 +42,17 @@ describe('LegacyMigrationDialog states', () => {
     expect(api.onState).toHaveBeenCalled();
   });
 
-  it('legacy-running:运行态显示禁用 loading 按钮', async () => {
+  it('legacy-confirm:点击容器不关闭(仅 failed 态可解除)', async () => {
+    const api = installLegacyMigrationApi('confirm');
+    render(<LegacyMigrationDialog />);
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(dialog);
+    expect(api.confirm).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('legacy-running:运行态说明保留,按钮进禁用 loading', async () => {
     installLegacyMigrationApi('running');
     render(<LegacyMigrationDialog />);
 
@@ -51,19 +61,52 @@ describe('LegacyMigrationDialog states', () => {
       name: /legacyMigration.migrating/,
     });
     expect((button as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByText('legacyMigration.description')).toBeNull();
+    // figma 567:802:running 期间说明文案保留不变,只有按钮切 loading。
+    expect(screen.getByText('legacyMigration.description')).toBeTruthy();
   });
 
-  it('legacy-failed:失败态使用回调卡样式和继续按钮', async () => {
-    installLegacyMigrationApi('failed');
+  it('legacy-failed:失败态无按钮,点击任意处关闭并清 main 态', async () => {
+    const api = installLegacyMigrationApi('failed');
     render(<LegacyMigrationDialog />);
 
-    expect(await screen.findByRole('dialog')).toBeTruthy();
-    const button = await screen.findByRole('button', {
-      name: 'legacyMigration.continue',
-    });
-    expect((button as HTMLButtonElement).disabled).toBe(false);
+    const dialog = await screen.findByRole('dialog');
+    // figma 567:819/567:776:失败卡没有按钮。
+    expect(screen.queryByRole('button')).toBeNull();
     expect(screen.getByText('legacyMigration.failedTitle')).toBeTruthy();
     expect(screen.getByText('legacyMigration.failedDescription')).toBeTruthy();
+
+    fireEvent.click(dialog);
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('legacy-failed:Escape 关闭并清 main 态', async () => {
+    const api = installLegacyMigrationApi('failed');
+    render(<LegacyMigrationDialog />);
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('legacy-failed:Enter 关闭并清 main 态', async () => {
+    const api = installLegacyMigrationApi('failed');
+    render(<LegacyMigrationDialog />);
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.keyDown(dialog, { key: 'Enter' });
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('legacy-failed:Space 关闭并清 main 态', async () => {
+    const api = installLegacyMigrationApi('failed');
+    render(<LegacyMigrationDialog />);
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.keyDown(dialog, { key: ' ' });
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

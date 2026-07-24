@@ -1209,6 +1209,27 @@ interface ElectronAPI {
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
   };
 
+  contentModeration: {
+    reviewUserPrompt: (text: string) => Promise<'allow' | 'reject' | 'cancelled'>;
+    onInputBlocked: (
+      callback: (payload: {
+        sessionId: string;
+        clientId: string;
+        text: string;
+        files: import('../shared/agentInputQueue').AgentInputSerializedFile[];
+        reason: 'rejected' | 'cancelled';
+      }) => void,
+    ) => () => void;
+    onOutputBlocked: (
+      callback: (payload: {
+        sessionId: string;
+        turnId: string;
+        kind: 'blocked';
+        i18nKey: 'contentModeration.blocked';
+      }) => void,
+    ) => () => void;
+  };
+
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<{ ok: true; path: string; wav: ArrayBuffer } | { ok: false }>;
@@ -1438,6 +1459,8 @@ interface ElectronAPI {
     onStatusChange: (callback: (status: ModelAccessStatusPayload) => void) => () => void;
   };
   // ── Auth (delegated to main process authManager) ──
+  /** 首启亮色门会话线索:主进程是否持有存量会话(sendSync,首帧前判定用)。 */
+  authHasPersistedSessionHintSync: () => boolean;
   authInitialize: () => Promise<{
     user: AuthUser | null;
     mode: 'signed-out' | 'local' | 'cloud';
@@ -3376,6 +3399,7 @@ interface ElectronAPI {
               agent: 'claude-code' | 'codex';
               baseUrl: string;
               modelId: string;
+              wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
               apiKey?: string | null;
               headers?: Record<string, string>;
             };
@@ -3462,6 +3486,12 @@ interface ElectronAPI {
     onSessionBackgroundActivityChanged: (
       cb: (payload: { sessionId: string; active: boolean }) => void,
     ) => () => void;
+    /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
+    stopAgentTask: (sessionId: string, taskId: string) => Promise<{ ok: true }>;
+    /** 会话仍在运行的后台任务快照(挂载 / 重载后补回存量;实时增量走事件流)。 */
+    listSessionBackgroundTasks: (sessionId: string) => Promise<{
+      tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;
+    }>;
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
      * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。fire-and-forget。

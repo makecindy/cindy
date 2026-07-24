@@ -31,6 +31,8 @@ export interface AssistantReplyHookDeps {
   isEligible(sessionId: string): Promise<boolean>;
   /** 网关串行链式裁决(allow/rewrite/render)。 */
   screen(sessionId: string, text: string): Promise<GhostAssistantScreenResult>;
+  /** 对 hook 新生成的最终可见文本做二次输出审核。 */
+  approveReplacement(sessionId: string, clientId: string, text: string): Promise<boolean>;
   /** rewrite:用改写正文覆盖该 assistant 消息内容(落库)。 */
   persistRewrite(sessionId: string, clientId: string, text: string): Promise<void>;
   /**
@@ -74,6 +76,7 @@ export async function runAssistantReplyHook(
     try {
       const result = await deps.screen(sessionId, text);
       if (result.action === 'rewrite') {
+        if (!(await deps.approveReplacement(sessionId, clientId, result.text))) return;
         await deps.persistRewrite(sessionId, clientId, result.text);
         deps.broadcastRewritten({
           sessionId,
@@ -83,6 +86,7 @@ export async function runAssistantReplyHook(
           text: result.text,
         });
       } else if (result.action === 'render') {
+        if (!(await deps.approveReplacement(sessionId, clientId, result.html))) return;
         await deps.applyRenderCard(sessionId, clientId, {
           ghostId: result.ghostId,
           ghostName: result.ghostName,

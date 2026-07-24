@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 
 import { ApiError, type ApiFetchOptions } from '@/api/client';
 import { VOICE_API_BASE_URL } from '@/config/env';
+import { i18n } from '@/i18n';
 import type {
   MobileVoiceCredentialSyncAsr,
   MobileVoiceCredentialSyncRefiner,
@@ -111,7 +112,7 @@ export class MobileCindyVoiceRunContext {
       || session.asr?.provider !== asrProvider
       || !/^wss?:\/\//.test(session.asr.websocketUrl)
     ) {
-      throw new Error('语音服务返回了无效会话。');
+      throw new Error(i18n.t('composer.voice.invalidSession'));
     }
     return session;
   }
@@ -121,9 +122,9 @@ export class MobileCindyVoiceRunContext {
     authorization: string;
   }> {
     if (this.refinerUnavailableOnServer) {
-      throw new Error('当前 Cindy 语音服务暂不支持托管润色。');
+      throw new Error(i18n.t('composer.voice.managedRefineUnsupported'));
     }
-    if (!this.latestSessionId) throw new Error('语音识别会话尚未连接。');
+    if (!this.latestSessionId) throw new Error(i18n.t('composer.voice.sessionNotConnected'));
     const token = await this.requireAccessToken(options?.refreshAccessToken);
     return {
       url: `${requireVoiceBaseUrl()}/api/voice/sessions/${encodeURIComponent(this.latestSessionId)}/refine?provider=${encodeURIComponent(refinerProvider)}`,
@@ -142,10 +143,10 @@ export class MobileCindyVoiceRunContext {
     promptCacheKey: string;
   }): Promise<void> {
     if (this.refinerUnavailableOnServer) {
-      throw new Error('当前 Cindy 语音服务暂不支持托管润色。');
+      throw new Error(i18n.t('composer.voice.managedRefineUnsupported'));
     }
     const sessionId = this.latestSessionId;
-    if (!sessionId) throw new Error('语音识别会话尚未连接。');
+    if (!sessionId) throw new Error(i18n.t('composer.voice.sessionNotConnected'));
     // 非 2xx 由 apiFetch 抛 ApiError;超时同样抛错,由调用方仅记录。
     await this.apiFetch(
       `/api/voice/sessions/${encodeURIComponent(sessionId)}/refine-warmup`,
@@ -166,7 +167,7 @@ export class MobileCindyVoiceRunContext {
 
   private async requireAccessToken(refreshAccessToken = false): Promise<string> {
     const token = await (refreshAccessToken ? this.refreshAccessToken : this.getAccessToken)();
-    if (!token) throw new Error('请先登录 Cindy 后再使用语音输入。');
+    if (!token) throw new Error(i18n.t('composer.voice.loginRequired'));
     return token;
   }
 }
@@ -255,6 +256,6 @@ export function createMobileCindyVoiceCredential(hostDeviceId: string): StoredMo
 }
 
 function requireVoiceBaseUrl(): string {
-  if (!VOICE_API_BASE_URL) throw new Error('当前区域未配置 Cindy 语音服务。');
+  if (!VOICE_API_BASE_URL) throw new Error(i18n.t('composer.voice.serviceUnavailable'));
   return VOICE_API_BASE_URL.replace(/\/+$/, '');
 }

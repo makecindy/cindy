@@ -16,11 +16,8 @@ import {
   LOGIN_DISABLED_TEXT_OPACITY,
   LOGIN_ERROR_TEXT,
   LOGIN_GROUP,
-  LOGIN_INVERTED_BORDER,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
-  LOGIN_PRESSED_OVERLAY,
-  LOGIN_RING_TRACK,
   LOGIN_SOCIAL,
   LOGIN_SPINNER,
   LOGIN_SUBTITLE,
@@ -30,23 +27,25 @@ import {
   resendCountdownRemaining,
 } from '@/auth/loginSkinLayout';
 import { Text, TextInput } from '@/components/AppText';
-import { fontWeight, loginColors, loginSizes, radius } from '@/theme/tokens';
+import { useTheme, useThemedStyles } from '@/theme';
+import { fontWeight, loginSizes, radius, type ThemeColors } from '@/theme/tokens';
 
 /**
  * LoginSkinControls —— 移动端登录皮肤组件库(figma-component-spec §4 RN 重建,
  * PR4a Step 5 WHAT2;与桌面 LoginControls.tsx 同参数源对齐)。
  *
  * 态系(design.md §2,移动无 hover):
- *  - pressed = 叠遮罩不改布局:主钮/圆钮叠黑 50%(247:1542)、浅底控件
- *    (方式行/tabs/返回钮)叠黑 8%(§2.2)——overlay View 挂在内容之上,pointerEvents 穿透;
- *  - disabled = loginColors.disabledButtonOverlay 白 70% 叠层 + 边 controlBorderDisabled
- *    + 文字 opacity 0.8(figma §4.3 disable 态);
+ *  - pressed = 叠遮罩不改布局:主钮/圆钮亮色叠黑 50% / 暗色叠黑 10%(figma
+ *    white_button Pressed)、浅底控件(方式行/tabs/返回钮)两模式叠黑 8%(§2.2)——
+ *    overlay View 挂在内容之上,pointerEvents 穿透;
+ *  - disabled = login.disabledButtonOverlay 白 70% 叠层 + 边 controlBorderDisabled
+ *    + 文字 opacity 0.8(两模式同构,DESIGN.md §16.5 disabled 特例);
  *  - spinner/loading 环动画 = 外层 Animated 旋转 wrapper + 静态 SVG 图形
  *    (仓规 7 的 RN 对应:useNativeDriver transform,compositor-only;仅 loading 期挂载)。
  *
  * 尺寸全部为 750 设计 px(loginSkinLayout 常量),由消费方外层统一 transform 缩放。
- * 颜色只从 loginColors token 取(仓规 16);带注释的字面量仅限 figma 实测非主题参数
- * (pressed 叠层 rgba / 边框白,见 loginSkinLayout 常量注释)。
+ * 颜色只从 `colors.login` 双态色板取(仓规 16;暗色实现 PR 起登录皮随 light/dark
+ * 二态切换,叠层 rgba 已并入色板二态,DESIGN.md §16.1/§16.5)。
  */
 
 /** pressed / disabled 叠层(圆角随宿主传入,盖满整个控件面)。 */
@@ -59,9 +58,10 @@ function StateOverlay({
   pressed: boolean;
   disabled?: boolean;
   cornerRadius: number;
-  /** dark = 主钮/圆钮黑 50%;light = 浅底控件黑 8% */
+  /** dark = 主钮/圆钮(亮黑50%/暗黑10%);light = 浅底控件(两模式黑8%) */
   pressedTone: 'dark' | 'light';
 }) {
+  const { colors } = useTheme();
   if (!pressed && !disabled) return null;
   return (
     <View
@@ -70,8 +70,13 @@ function StateOverlay({
         StyleSheet.absoluteFill,
         { borderRadius: cornerRadius },
         disabled
-          ? { backgroundColor: loginColors.disabledButtonOverlay }
-          : { backgroundColor: LOGIN_PRESSED_OVERLAY[pressedTone] },
+          ? { backgroundColor: colors.login.disabledButtonOverlay }
+          : {
+              backgroundColor:
+                pressedTone === 'dark'
+                  ? colors.login.overlayButtonPressed
+                  : colors.login.overlayControlPressed,
+            },
       ]}
     />
   );
@@ -85,6 +90,7 @@ export function LoginPanel({
   children: ReactNode;
   testID?: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.panel} testID={testID}>
       {children}
@@ -102,6 +108,7 @@ export function LoginTitleBlock({
   subtitle?: string;
   titleTestID?: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <>
       <Text numberOfLines={1} style={styles.title} testID={titleTestID}>
@@ -146,6 +153,8 @@ export function LoginSkinInput({
   'style' | 'value' | 'onChangeText' | 'placeholder' | 'editable'
 >) {
   const [focused, setFocused] = useState(false);
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const filled = value.length > 0;
   const active = focused || filled;
   return (
@@ -156,19 +165,19 @@ export function LoginSkinInput({
       onChangeText={onChangeText}
       onFocus={() => setFocused(true)}
       placeholder={placeholder}
-      placeholderTextColor={loginColors.controlPlaceholder}
+      placeholderTextColor={colors.login.controlPlaceholder}
       style={[
         styles.input,
         {
           top,
           borderColor: error
-            ? loginColors.loginError
+            ? colors.login.loginError
             : active
-              ? loginColors.controlBorderActive
-              : loginColors.controlBorder,
+              ? colors.login.controlBorderActive
+              : colors.login.controlBorder,
           color: active
-            ? loginColors.controlText
-            : loginColors.controlPlaceholder,
+            ? colors.login.controlText
+            : colors.login.controlPlaceholder,
           fontWeight: active ? fontWeight.bold : fontWeight.regular,
         },
         center ? styles.inputCenter : null,
@@ -207,13 +216,15 @@ export function LoginSkinPhoneInput({
   'style' | 'value' | 'onChangeText' | 'placeholder' | 'editable'
 >) {
   const [focused, setFocused] = useState(false);
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const filled = value.length > 0;
   const active = focused || filled;
   const borderColor = error
-    ? loginColors.loginError
+    ? colors.login.loginError
     : active
-      ? loginColors.controlBorderActive
-      : loginColors.controlBorder;
+      ? colors.login.controlBorderActive
+      : colors.login.controlBorder;
   return (
     <View
       style={[styles.phoneInput, { top, borderColor }]}
@@ -234,13 +245,13 @@ export function LoginSkinPhoneInput({
         onChangeText={onChangeText}
         onFocus={() => setFocused(true)}
         placeholder={placeholder}
-        placeholderTextColor={loginColors.controlPlaceholder}
+        placeholderTextColor={colors.login.controlPlaceholder}
         style={[
           styles.phoneInputField,
           {
             color: active
-              ? loginColors.controlText
-              : loginColors.controlPlaceholder,
+              ? colors.login.controlText
+              : colors.login.controlPlaceholder,
             fontWeight: active ? fontWeight.bold : fontWeight.regular,
           },
         ]}
@@ -253,19 +264,20 @@ export function LoginSkinPhoneInput({
 
 /** spinner 图形(静态 SVG,旋转由外层 Animated wrapper 承载——仓规 7 RN 对应)。 */
 function LoginSpinnerGlyph({ box }: { box: number }) {
+  const { colors } = useTheme();
   return (
     <Svg width={box} height={box} viewBox="0 0 24 24" fill="none" aria-hidden>
       <Circle
         cx="12"
         cy="12"
         r="10"
-        stroke={loginColors.primaryButtonText}
+        stroke={colors.login.primaryButtonText}
         strokeOpacity="0.25"
         strokeWidth="3"
       />
       <Path
         d="M22 12a10 10 0 0 0-10-10"
-        stroke={loginColors.primaryButtonText}
+        stroke={colors.login.primaryButtonText}
         strokeWidth="3"
         strokeLinecap="round"
       />
@@ -320,6 +332,8 @@ export function LoginPrimaryButton({
   testID?: string;
 }) {
   const inert = disabled || busy;
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <Pressable
       accessibilityRole="button"
@@ -330,9 +344,13 @@ export function LoginPrimaryButton({
         styles.primaryButton,
         {
           top,
+          // disabled 底/边/字两模式同构(暗色不随 primaryButtonBg 反相为白;figma Disable)
+          backgroundColor: disabled
+            ? colors.login.disabledButtonBg
+            : colors.login.primaryButtonBg,
           borderColor: disabled
-            ? loginColors.controlBorderDisabled
-            : loginColors.primaryButtonBorder,
+            ? colors.login.controlBorderDisabled
+            : colors.login.primaryButtonBorder,
         },
       ]}
       testID={testID}
@@ -343,7 +361,9 @@ export function LoginPrimaryButton({
             numberOfLines={1}
             style={[
               styles.primaryButtonText,
-              disabled ? styles.disabledText : null,
+              disabled
+                ? [styles.disabledText, { color: colors.login.disabledButtonText }]
+                : null,
             ]}
           >
             {label}
@@ -378,6 +398,7 @@ export function LoginSocialRow({
   children: ReactNode;
   count: number;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const left = Math.max(
     0,
     (LOGIN_GROUP.width -
@@ -419,6 +440,8 @@ export function LoginSocialButton({
    */
   busy?: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <Pressable
       accessibilityLabel={label}
@@ -430,7 +453,7 @@ export function LoginSocialButton({
       style={[
         styles.socialButton,
         {
-          borderColor: loginColors.primaryButtonBorder,
+          borderColor: colors.login.primaryButtonBorder,
         },
       ]}
       testID={testID}
@@ -461,6 +484,8 @@ export function LoginBackButton({
   disabled?: boolean;
   testID?: string;
 }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <Pressable
       accessibilityLabel={label}
@@ -483,7 +508,7 @@ export function LoginBackButton({
           >
             <Path
               d="M14.5 5.5 8 12l6.5 6.5"
-              stroke={loginColors.controlText}
+              stroke={colors.login.controlText}
               strokeWidth="2.4"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -508,6 +533,7 @@ export function LoginErrorText({
   children: ReactNode;
   testID?: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <Text
       accessibilityRole="alert"
@@ -544,6 +570,7 @@ export function LoginMethodRow({
   testID?: string;
   accessibilityLabel?: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel ?? title}
@@ -594,6 +621,8 @@ export function LoginMethodRow({
  * 静态 SVG + 外层 Animated 旋转 wrapper,仅挂载期动画)。
  */
 export function LoginLoadingRing({ y, label }: { y: number; label: string }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   return (
     <View
       accessibilityLabel={label}
@@ -612,12 +641,12 @@ export function LoginLoadingRing({ y, label }: { y: number; label: string }) {
             cx="32"
             cy="32"
             r="29"
-            stroke={LOGIN_RING_TRACK}
+            stroke={colors.login.loadingRingTrack}
             strokeWidth="6"
           />
           <Path
             d="M61 32a29 29 0 0 0-29-29"
-            stroke={loginColors.primaryButtonBg}
+            stroke={colors.login.primaryButtonBg}
             strokeWidth="6"
             strokeLinecap="round"
           />
@@ -653,6 +682,7 @@ export function LoginResendCountdown({
   disabled?: boolean;
   testID?: string;
 }) {
+  const styles = useThemedStyles(makeStyles);
   const [now, setNow] = useState(() => Date.now());
   const remaining =
     deadline == null ? 0 : resendCountdownRemaining(deadline, now);
@@ -710,6 +740,7 @@ export function LoginTextLinkSlot({
   top?: number;
   tone?: 'placeholder' | 'secondary';
 }) {
+  const styles = useThemedStyles(makeStyles);
   return (
     <View pointerEvents="none" style={[styles.textLinkSlotBox, top != null && { top }]}>
       <Text
@@ -728,15 +759,18 @@ export function LoginTextLinkSlot({
 }
 
 /* ── 图标(矢量源 = figma 现导 SVG path 内联,登记见 asset-manifest.md;
-      品牌图标 fill 为厂商固定品牌色/白,非主题色——与桌面 assets/login/icons 同源) ── */
+      Google/WeChat fill 为厂商固定品牌色,跨模式不变;Apple/SSO 为单色图标,
+      随圆钮底反相(亮色深圆上白/浅图标,暗色白圆上 #2A2828 深图标——figma
+      white apple 489:676 / white SSO 489:710 核验)——与桌面 assets/login/icons 同源) ── */
 
-/** Apple(247:1692,ic:baseline-apple,白)。 */
+/** Apple(247:1692,ic:baseline-apple;亮白 / 暗 #2A2828 反相)。 */
 function AppleIcon() {
+  const { mode } = useTheme();
   return (
     <Svg width="100%" height="100%" viewBox="0 0 48 48" fill="none" aria-hidden>
       <Path
         d="M33.0984 39.56C31.1384 41.46 28.9984 41.16 26.9384 40.26C24.7584 39.34 22.7584 39.3 20.4584 40.26C17.5784 41.5 16.0584 41.14 14.3384 39.56C4.57837 29.5 6.01838 14.18 17.0984 13.62C19.7984 13.76 21.6784 15.1 23.2584 15.22C25.6184 14.74 27.8784 13.36 30.3984 13.54C33.4184 13.78 35.6984 14.98 37.1984 17.14C30.9584 20.88 32.4384 29.1 38.1584 31.4C37.0184 34.4 35.5384 37.38 33.0784 39.58L33.0984 39.56ZM23.0584 13.5C22.7584 9.04 26.3784 5.36 30.5384 5C31.1184 10.16 25.8584 14 23.0584 13.5Z"
-        fill="#FFFFFF"
+        fill={mode === 'dark' ? '#2A2828' : '#FFFFFF'}
       />
     </Svg>
   );
@@ -782,21 +816,23 @@ function WeChatIcon() {
   );
 }
 
-/** SSO(329:248,「SSO」三字母矢量,#EEEEEE)。 */
+/** SSO(329:248,「SSO」三字母矢量;亮 #EEEEEE / 暗 #2A2828 反相)。 */
 function SsoIcon() {
+  const { mode } = useTheme();
+  const fill = mode === 'dark' ? '#2A2828' : '#EEEEEE';
   return (
     <Svg width="100%" height="100%" viewBox="0 0 48 48" fill="none" aria-hidden>
       <Path
         d="M37.8674 37.1222C35.8843 37.1222 34.3663 36.5591 33.3135 35.4329C32.2608 34.3066 31.7344 32.7152 31.7344 30.6585V17.1434C31.7344 15.0868 32.2608 13.4953 33.3135 12.3691C34.3663 11.2428 35.8843 10.6797 37.8674 10.6797C39.8506 10.6797 41.3685 11.2428 42.4213 12.3691C43.4741 13.4953 44.0005 15.0868 44.0005 17.1434V30.6585C44.0005 32.7152 43.4741 34.3066 42.4213 35.4329C41.3685 36.5591 39.8506 37.1222 37.8674 37.1222ZM37.8674 33.4497C39.263 33.4497 39.9607 32.605 39.9607 30.9156V16.8863C39.9607 15.197 39.263 14.3523 37.8674 14.3523C36.4719 14.3523 35.7741 15.197 35.7741 16.8863V30.9156C35.7741 32.605 36.4719 33.4497 37.8674 33.4497Z"
-        fill="#EEEEEE"
+        fill={fill}
       />
       <Path
         d="M23.6135 37.1222C21.6548 37.1222 20.1736 36.5714 19.1698 35.4696C18.166 34.3433 17.6641 32.7396 17.6641 30.6585V29.1895H21.4834V30.9523C21.4834 32.6172 22.1812 33.4497 23.5768 33.4497C24.2623 33.4497 24.7764 33.2538 25.1192 32.8621C25.4864 32.4458 25.6701 31.7848 25.6701 30.8789C25.6701 29.8016 25.4252 28.8589 24.9356 28.051C24.4459 27.2185 23.54 26.2269 22.2179 25.0762C20.5531 23.6072 19.3901 22.285 18.7291 21.1098C18.068 19.9101 17.7375 18.5635 17.7375 17.07C17.7375 15.0378 18.2517 13.4708 19.28 12.3691C20.3082 11.2428 21.8017 10.6797 23.7604 10.6797C25.6945 10.6797 27.1513 11.2428 28.1306 12.3691C29.1344 13.4708 29.6363 15.0623 29.6363 17.1434V18.2085H25.817V16.8863C25.817 16.0049 25.6456 15.3683 25.3028 14.9766C24.9601 14.5604 24.4581 14.3523 23.7971 14.3523C22.4505 14.3523 21.7772 15.1725 21.7772 16.8129C21.7772 17.7433 22.0221 18.6125 22.5117 19.4204C23.0259 20.2284 23.944 21.2077 25.2661 22.3585C26.9554 23.8275 28.1184 25.1619 28.7549 26.3616C29.3915 27.5613 29.7098 28.9691 29.7098 30.5851C29.7098 32.6907 29.1834 34.3066 28.1306 35.4329C27.1023 36.5591 25.5966 37.1222 23.6135 37.1222Z"
-        fill="#EEEEEE"
+        fill={fill}
       />
       <Path
         d="M9.94942 37.1222C7.99076 37.1222 6.50953 36.5714 5.50572 35.4696C4.50191 34.3433 4 32.7396 4 30.6585V29.1895H7.81938V30.9523C7.81938 32.6172 8.51715 33.4497 9.91269 33.4497C10.5982 33.4497 11.1124 33.2538 11.4551 32.8621C11.8224 32.4458 12.006 31.7848 12.006 30.8789C12.006 29.8016 11.7612 28.8589 11.2715 28.051C10.7818 27.2185 9.87597 26.2269 8.55387 25.0762C6.88902 23.6072 5.72606 22.285 5.06502 21.1098C4.40397 19.9101 4.07345 18.5635 4.07345 17.07C4.07345 15.0378 4.5876 13.4708 5.61589 12.3691C6.64418 11.2428 8.13766 10.6797 10.0963 10.6797C12.0305 10.6797 13.4872 11.2428 14.4666 12.3691C15.4704 13.4708 15.9723 15.0623 15.9723 17.1434V18.2085H12.1529V16.8863C12.1529 16.0049 11.9815 15.3683 11.6388 14.9766C11.296 14.5604 10.7941 14.3523 10.133 14.3523C8.78646 14.3523 8.11318 15.1725 8.11318 16.8129C8.11318 17.7433 8.35801 18.6125 8.84767 19.4204C9.36182 20.2284 10.2799 21.2077 11.602 22.3585C13.2914 23.8275 14.4543 25.1619 15.0909 26.3616C15.7274 27.5613 16.0457 28.9691 16.0457 30.5851C16.0457 32.6907 15.5193 34.3066 14.4666 35.4329C13.4383 36.5591 11.9326 37.1222 9.94942 37.1222Z"
-        fill="#EEEEEE"
+        fill={fill}
       />
     </Svg>
   );
@@ -816,15 +852,16 @@ export function LoginSocialGlyph({
 
 /** 方式行左 icon:carbon:enterprise(figma 现导矢量)。 */
 function EnterpriseIcon() {
+  const { colors } = useTheme();
   return (
     <Svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" aria-hidden>
       <Path
         d="M6 6H7.5V9H6V6ZM6 10.5H7.5V13.5H6V10.5ZM10.5 6H12V9H10.5V6ZM10.5 10.5H12V13.5H10.5V10.5ZM6 15H7.5V18H6V15ZM10.5 15H12V18H10.5V15Z"
-        fill={loginColors.controlText}
+        fill={colors.login.controlText}
       />
       <Path
         d="M22.5 10.5C22.5 10.1022 22.342 9.72064 22.0607 9.43934C21.7794 9.15804 21.3978 9 21 9H16.5V3C16.5 2.60218 16.342 2.22064 16.0607 1.93934C15.7794 1.65804 15.3978 1.5 15 1.5H3C2.60218 1.5 2.22064 1.65804 1.93934 1.93934C1.65804 2.22064 1.5 2.60218 1.5 3V22.5H22.5V10.5ZM3 3H15V21H3V3ZM16.5 21V10.5H21V21H16.5Z"
-        fill={loginColors.controlText}
+        fill={colors.login.controlText}
       />
     </Svg>
   );
@@ -832,11 +869,12 @@ function EnterpriseIcon() {
 
 /** 方式行左 icon:person(18×20,figma 现导矢量)。 */
 function PersonIcon() {
+  const { colors } = useTheme();
   return (
     <Svg width="100%" height="100%" viewBox="0 0 18 20" fill="none" aria-hidden>
       <Path
         d="M9 10C11.76 10 14 7.76 14 5C14 2.24 11.76 0 9 0C6.24 0 4 2.24 4 5C4 7.76 6.24 10 9 10ZM9 2C10.65 2 12 3.35 12 5C12 6.65 10.65 8 9 8C7.35 8 6 6.65 6 5C6 3.35 7.35 2 9 2ZM1 20H17C17.55 20 18 19.55 18 19V18C18 14.14 14.86 11 11 11H7C3.14 11 0 14.14 0 18V19C0 19.55 0.45 20 1 20ZM7 13H11C13.76 13 16 15.24 16 18H2C2 15.24 4.24 13 7 13Z"
-        fill={loginColors.controlText}
+        fill={colors.login.controlText}
       />
     </Svg>
   );
@@ -844,25 +882,26 @@ function PersonIcon() {
 
 /** 方式行右 icon:icon-park:share(18×18,figma 现导矢量)。 */
 function ShareIcon() {
+  const { colors } = useTheme();
   return (
     <Svg width="100%" height="100%" viewBox="0 0 20 20" fill="none" aria-hidden>
       <Path
         d="M12 1H19V8"
-        stroke={loginColors.controlText}
+        stroke={colors.login.controlText}
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <Path
         d="M19 12.7368V17.5C19 18.3285 18.3285 19 17.5 19H2.5C1.67158 19 1 18.3285 1 17.5V2.5C1 1.67158 1.67158 1 2.5 1H7"
-        stroke={loginColors.controlText}
+        stroke={colors.login.controlText}
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <Path
         d="M10.8999 9.09995L18.5499 1.44995"
-        stroke={loginColors.controlText}
+        stroke={colors.login.controlText}
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -872,12 +911,15 @@ function ShareIcon() {
 }
 
 /* ── styles(全部为 750 设计 px;文字排版档为设计稿几何值,不走 typeScale 阶梯——
-      整层由消费方 transform 缩放,故引用 loginSkinLayout 常量而非主题排版 token) ── */
+      整层由消费方 transform 缩放,故引用 loginSkinLayout 常量而非主题排版 token)。
+      工厂形态:登录皮随 light/dark 二态切换(暗色实现 PR),色值经 colors.login
+      进入,useThemedStyles 按 mode 编译缓存(模块级工厂身份稳定,零热路径分配)。 ── */
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
   panel: {
-    backgroundColor: loginColors.panelBg,
-    borderColor: loginColors.panelBorder,
+    backgroundColor: colors.login.panelBg,
+    borderColor: colors.login.panelBorder,
     borderRadius: loginSizes.panelRadius,
     borderWidth: 1,
     height: loginSizes.panelHeight,
@@ -888,7 +930,7 @@ const styles = StyleSheet.create({
     width: loginSizes.panelWidth,
   },
   title: {
-    color: loginColors.titleText,
+    color: colors.login.titleText,
     fontSize: LOGIN_TITLE.font,
     fontWeight: fontWeight.bold,
     left: 0,
@@ -901,7 +943,7 @@ const styles = StyleSheet.create({
     width: loginSizes.panelWidth,
   },
   subtitle: {
-    color: loginColors.secondaryText,
+    color: colors.login.secondaryText,
     fontSize: LOGIN_SUBTITLE.font,
     fontWeight: fontWeight.regular,
     left: LOGIN_SUBTITLE.x,
@@ -912,7 +954,7 @@ const styles = StyleSheet.create({
     width: LOGIN_SUBTITLE.width,
   },
   input: {
-    backgroundColor: loginColors.controlBg,
+    backgroundColor: colors.login.controlBg,
     borderRadius: LOGIN_CONTROL.radius,
     borderWidth: 1,
     fontSize: LOGIN_CONTROL.font,
@@ -930,7 +972,7 @@ const styles = StyleSheet.create({
   },
   phoneInput: {
     alignItems: 'center',
-    backgroundColor: loginColors.controlBg,
+    backgroundColor: colors.login.controlBg,
     borderRadius: LOGIN_CONTROL.radius,
     borderWidth: 1,
     flexDirection: 'row',
@@ -942,7 +984,7 @@ const styles = StyleSheet.create({
     width: LOGIN_CONTROL.width,
   },
   phonePrefix: {
-    color: loginColors.controlText,
+    color: colors.login.controlText,
     fontSize: LOGIN_CONTROL.font,
     fontWeight: fontWeight.bold,
     marginRight: 18,
@@ -957,7 +999,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: loginColors.primaryButtonBg,
+    backgroundColor: colors.login.primaryButtonBg,
     borderRadius: LOGIN_CONTROL.radius,
     borderWidth: 1,
     height: LOGIN_CONTROL.height,
@@ -968,7 +1010,7 @@ const styles = StyleSheet.create({
     width: LOGIN_CONTROL.width,
   },
   primaryButtonText: {
-    color: loginColors.primaryButtonText,
+    color: colors.login.primaryButtonText,
     fontSize: LOGIN_CONTROL.font,
     fontWeight: fontWeight.bold,
   },
@@ -991,7 +1033,7 @@ const styles = StyleSheet.create({
   },
   socialButton: {
     alignItems: 'center',
-    backgroundColor: loginColors.primaryButtonBg,
+    backgroundColor: colors.login.primaryButtonBg,
     borderRadius: radius.pill,
     borderWidth: 1,
     height: LOGIN_SOCIAL.size,
@@ -1005,8 +1047,8 @@ const styles = StyleSheet.create({
   },
   backButton: {
     alignItems: 'center',
-    backgroundColor: loginColors.controlBg,
-    borderColor: LOGIN_INVERTED_BORDER,
+    backgroundColor: colors.login.actionControlBg,
+    borderColor: colors.login.backBorder,
     borderRadius: LOGIN_BACK.radius,
     borderWidth: 1,
     height: LOGIN_BACK.size,
@@ -1019,7 +1061,7 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   errorText: {
-    color: loginColors.loginError,
+    color: colors.login.loginError,
     fontSize: LOGIN_ERROR_TEXT.font,
     fontWeight: fontWeight.regular,
     left: 0,
@@ -1030,8 +1072,8 @@ const styles = StyleSheet.create({
     width: LOGIN_ERROR_TEXT.width,
   },
   methodRow: {
-    backgroundColor: loginColors.controlBg,
-    borderColor: loginColors.controlBorder,
+    backgroundColor: colors.login.actionControlBg,
+    borderColor: colors.login.controlBorder,
     borderRadius: LOGIN_METHOD_ROW.radius,
     borderWidth: 1,
     height: LOGIN_METHOD_ROW.height,
@@ -1064,12 +1106,12 @@ const styles = StyleSheet.create({
     width: LOGIN_METHOD_ROW.textWidth,
   },
   methodRowTitle: {
-    color: loginColors.controlText,
+    color: colors.login.controlText,
     fontSize: LOGIN_METHOD_ROW.titleFont,
     fontWeight: fontWeight.bold,
   },
   methodRowSubtitle: {
-    color: loginColors.secondaryText,
+    color: colors.login.secondaryText,
     fontSize: LOGIN_METHOD_ROW.subtitleFont,
     fontWeight: fontWeight.regular,
   },
@@ -1087,7 +1129,7 @@ const styles = StyleSheet.create({
     width: LOGIN_LOADING_RING.size,
   },
   countdownText: {
-    color: loginColors.controlPlaceholder,
+    color: colors.login.controlPlaceholder,
     fontSize: LOGIN_TEXT_LINK.font,
     fontWeight: fontWeight.regular,
   },
@@ -1105,7 +1147,7 @@ const styles = StyleSheet.create({
     width: LOGIN_TEXT_LINK.width,
   },
   resendLinkText: {
-    color: loginColors.controlText,
+    color: colors.login.linkText,
     fontSize: LOGIN_TEXT_LINK.font,
     fontWeight: fontWeight.regular,
     textDecorationLine: 'underline',
@@ -1117,9 +1159,9 @@ const styles = StyleSheet.create({
     width: LOGIN_TEXT_LINK.width,
   },
   textLinkPlaceholder: {
-    color: loginColors.controlPlaceholder,
+    color: colors.login.controlPlaceholder,
   },
   textLinkSecondary: {
-    color: loginColors.secondaryText,
+    color: colors.login.secondaryText,
   },
 });

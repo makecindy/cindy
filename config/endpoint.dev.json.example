@@ -11,6 +11,8 @@
   "websiteUrl": "http://localhost:3000",
   "modelAccessApiBaseUrl": "http://localhost:3339",
   "voiceApiBaseUrl": "http://localhost:3342",
+  "moderationSignApiBaseUrl": "",
+  "moderationSignTestApiBaseUrl": "http://localhost:3346",
   "githubApiBaseUrl": "http://localhost:3336",
   "skillhubApiBaseUrl": "http://localhost:3341",
   "cdnBaseUrl": "http://localhost:3345/cindy",

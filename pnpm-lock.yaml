@@ -57,6 +57,9 @@ importers:
       '@cindy/browser-control-runtime':
         specifier: workspace:*
         version: link:../../packages/browser-control-runtime
+      '@cindy/content-moderation-protocol':
+        specifier: workspace:*
+        version: link:../../cindy-protocol/packages/content-moderation-protocol
       '@cindy/device-link':
         specifier: workspace:*
         version: link:../../packages/device-link
@@ -102,6 +105,9 @@ importers:
       '@cindy/remote-file-service':
         specifier: workspace:*
         version: link:../../packages/remote-file-service
+      '@cindy/responses-chat-bridge':
+        specifier: workspace:*
+        version: link:../../packages/responses-chat-bridge
       '@cindy/slack-hook-protocol':
         specifier: workspace:*
         version: link:../../cindy-protocol/packages/slack-hook-protocol
@@ -619,6 +625,9 @@ importers:
       expo-web-browser:
         specifier: ^56.0.5
         version: 56.0.5(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))
+      i18next:
+        specifier: ^26.3.6
+        version: 26.3.6(typescript@6.0.3)
       lucide-react-native:
         specifier: 0.468.0
         version: 0.468.0(react-native-svg@15.15.4(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
@@ -631,6 +640,9 @@ importers:
       react-dom:
         specifier: 19.2.3
         version: 19.2.3(react@19.2.3)
+      react-i18next:
+        specifier: ^17.0.10
+        version: 17.0.10(i18next@26.3.6(typescript@6.0.3))(react-dom@19.2.3(react@19.2.3))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@6.0.3)
       react-native:
         specifier: 0.85.3
         version: 0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
@@ -680,6 +692,15 @@ importers:
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  cindy-protocol/packages/content-moderation-protocol:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
@@ -1248,6 +1269,27 @@ importers:
       esbuild:
         specifier: ^0.27.0
         version: 0.27.7
+      eslint:
+        specifier: ^9.0.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.0.0
+        version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/responses-chat-bridge:
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.0.0
+        version: 9.39.5
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
       eslint:
         specifier: ^9.0.0
         version: 9.39.5(jiti@2.7.0)
@@ -13952,7 +13994,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
@@ -17746,6 +17790,10 @@ snapshots:
     optionalDependencies:
       typescript: 5.9.3
 
+  i18next@26.3.6(typescript@6.0.3):
+    optionalDependencies:
+      typescript: 6.0.3
+
   iconv-corefoundation@1.1.7:
     dependencies:
       cli-truncate: 2.1.0
@@ -19665,6 +19713,18 @@ snapshots:
     optionalDependencies:
       react-dom: 19.2.3(react@19.2.3)
       typescript: 5.9.3
+
+  react-i18next@17.0.10(i18next@26.3.6(typescript@6.0.3))(react-dom@19.2.3(react@19.2.3))(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@6.0.3):
+    dependencies:
+      '@babel/runtime': 7.29.7
+      html-parse-stringify: 3.0.1
+      i18next: 26.3.6(typescript@6.0.3)
+      react: 19.2.3
+      use-sync-external-store: 1.6.0(react@19.2.3)
+    optionalDependencies:
+      react-dom: 19.2.3(react@19.2.3)
+      react-native: 0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
+      typescript: 6.0.3
 
   react-is@17.0.2: {}
 

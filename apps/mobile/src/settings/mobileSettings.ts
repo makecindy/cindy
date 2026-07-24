@@ -1,5 +1,6 @@
 import type { DeviceLinkStatus } from '@cindy/device-link';
-import { relayStatusHint, relayStatusLabel } from '@cindy/maker-shared/device-link-contract';
+
+import { i18n } from '@/i18n';
 
 export interface MobileSettingsOverviewInput {
   authBaseUrl: string;
@@ -58,8 +59,8 @@ export interface MobileSettingsOverview {
 export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput): MobileSettingsOverview {
   const relayLabel = relayStatusLabel(input.relayStatus);
   const relayDetail = relayStatusHint(input.relayStatus, input.lastSyncedAt ?? null);
-  const name = input.userName?.trim() || input.userEmail?.trim() || '未登录';
-  const deviceName = input.deviceName.trim() || '当前手机';
+  const name = input.userName?.trim() || input.userEmail?.trim() || i18n.t('settings.header.notSignedIn');
+  const deviceName = input.deviceName.trim() || i18n.t('settings.header.thisPhone');
   const email = input.userEmail?.trim();
   return {
     header: {
@@ -73,53 +74,53 @@ export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput):
     sections: [
       {
         id: 'about',
-        title: '关于这台手机',
+        title: i18n.t('settings.about.sectionTitle'),
         rows: compactRows([
           {
             id: 'about.deviceName',
-            label: '设备名称',
+            label: i18n.t('settings.about.deviceName'),
             value: deviceName,
-            detail: '电脑端授权列表会显示这个名称。',
+            detail: i18n.t('settings.about.deviceNameDetail'),
           },
           {
             id: 'about.platform',
-            label: '平台',
+            label: i18n.t('settings.about.platform'),
             value: platformLabel(input.platform),
           },
           {
             id: 'about.remoteControl',
-            label: '被控权限',
-            value: '电脑端管理',
-            detail: '手机只作为控制端。允许被控、撤销和恢复权限仍在电脑端设置里完成。',
+            label: i18n.t('settings.about.remoteControl'),
+            value: i18n.t('settings.about.remoteControlValue'),
+            detail: i18n.t('settings.about.remoteControlDetail'),
           },
         ]),
       },
       {
         id: 'debug',
-        title: '调试 / 开发者',
+        title: i18n.t('settings.debug.sectionTitle'),
         collapsible: true,
         rows: compactRows([
           {
             id: 'debug.userId',
-            label: '用户 ID',
-            value: input.userId?.trim() || '未同步',
+            label: i18n.t('settings.debug.userId'),
+            value: input.userId?.trim() || i18n.t('settings.debug.notSynced'),
             copyValue: input.userId?.trim() || undefined,
           },
           {
             id: 'debug.deviceId',
-            label: '设备 ID',
-            value: input.deviceId?.trim() || '初始化中',
+            label: i18n.t('settings.debug.deviceId'),
+            value: input.deviceId?.trim() || i18n.t('settings.debug.initializing'),
             copyValue: input.deviceId?.trim() || undefined,
           },
           {
             id: 'debug.authBaseUrl',
-            label: 'Auth Server',
+            label: i18n.t('settings.debug.authServer'),
             value: input.authBaseUrl,
             copyValue: input.authBaseUrl,
           },
           {
             id: 'debug.authRegion',
-            label: '登录区域',
+            label: i18n.t('settings.debug.authRegion'),
             value: input.authRegion === 'global' ? 'Global' : 'CN',
           },
         ]),
@@ -132,6 +133,33 @@ export function relayStatusTone(status: DeviceLinkStatus): 'ready' | 'busy' | 'o
   if (status === 'online') return 'ready';
   if (status === 'connecting') return 'busy';
   return 'off';
+}
+
+// Relay 状态文案:原来消费 @cindy/maker-shared 的中文直出 helper(桌面端不用那组),
+// mobile i18n 化后改在本层用 catalog key 组装,逻辑与共享包版本保持一致。
+function relayStatusLabel(status: DeviceLinkStatus): string {
+  if (status === 'online') return i18n.t('settings.relay.online');
+  if (status === 'connecting') return i18n.t('settings.relay.connecting');
+  return i18n.t('settings.relay.stopped');
+}
+
+function relayStatusHint(status: DeviceLinkStatus, lastSyncedAt: number | null): string {
+  if (status === 'online') {
+    return lastSyncedAt
+      ? i18n.t('settings.relay.lastSynced', { time: formatClock(lastSyncedAt) })
+      : i18n.t('settings.relay.canSync');
+  }
+  if (status === 'connecting') return i18n.t('settings.relay.reconnectHint');
+  return i18n.t('settings.relay.resumeHint');
+}
+
+function formatClock(timestamp: number): string {
+  const date = new Date(timestamp);
+  return [
+    date.getHours().toString().padStart(2, '0'),
+    date.getMinutes().toString().padStart(2, '0'),
+    date.getSeconds().toString().padStart(2, '0'),
+  ].join(':');
 }
 
 function compactRows(rows: MobileSettingsRow[]): MobileSettingsRow[] {

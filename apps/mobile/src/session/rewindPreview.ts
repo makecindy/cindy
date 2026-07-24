@@ -1,4 +1,5 @@
 import type { ChatQuote } from '@cindy/maker-shared/chat-quotes';
+import { i18n } from '@/i18n';
 import type { ComposerDocument } from '@/session/composerDocument';
 
 export interface RewindPreviewPayload {
@@ -70,7 +71,7 @@ export function buildRewindPreviewState(
       draftQuotes,
       ...orderedDraft,
       ...documentDraft,
-      errorText: '无法读取回退预览结果，请重新同步后再试。',
+      errorText: i18n.t('interaction.rewind.readError'),
     };
   }
 
@@ -100,7 +101,7 @@ export function buildRewindPreviewState(
     draftQuotes,
     ...orderedDraft,
     ...documentDraft,
-    note: payload.error || '没有可回滚的文件，将只截断这条消息之后的对话历史。',
+    note: payload.error || i18n.t('interaction.rewind.noFilesNote'),
   };
 }
 

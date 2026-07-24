@@ -1,0 +1,113 @@
+{
+  "title": "設定",
+  "language": {
+    "title": "言語",
+    "hint": "アプリの UI のみに影響します。Agent の応答言語は Agent 側の設定に従います。",
+    "options": {
+      "system": "自動 (システムに従う)",
+      "zh-CN": "简体中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어"
+    }
+  },
+  "version": {
+    "sectionTitle": "バージョン",
+    "currentLabel": "現在のバージョン",
+    "bundleVersion": "アプリ本体 {{version}}",
+    "otaVersion": "OTA バージョン {{version}}",
+    "desktopVersion": "デスクトップ版 {{version}}",
+    "devNoOta": "開発ビルドのため OTA 更新は利用できません",
+    "checkAction": "更新を確認",
+    "checking": "確認中",
+    "updating": "更新中",
+    "checkingAccessibility": "更新を確認しています",
+    "bundleUpdateFound": "アプリ本体の更新があります",
+    "upToDate": "すでに最新の状態です",
+    "bundleUpToDateNoOta": "アプリ本体は最新です。このバージョンは OTA 更新に対応していません",
+    "downloadedRestarting": "更新をダウンロードしました。再起動しています",
+    "bundleCheckFailed": "アプリ本体の更新を確認できませんでした。しばらくしてからもう一度お試しください。",
+    "checkFailedDetail": "更新の確認に失敗しました：{{detail}}",
+    "checkFailed": "更新の確認に失敗しました。しばらくしてからもう一度お試しください。"
+  },
+  "notifications": {
+    "sectionTitle": "通知",
+    "taskDone": "タスク完了通知",
+    "taskDoneHint": "パソコン側のタスクが完了・失敗・返信待ちになったとき、このスマートフォンに通知します。完了時と返信待ち時は最新の返信内容も含まれます。",
+    "permissionDenied": "システムの通知が許可されていません。iOS の「設定 → 通知 → {{appName}}」で通知を許可してから、もう一度お試しください。",
+    "unregisterQueued": "オフにしました。現在のネットワークでは登録解除が完了していません。次回オンライン時に自動で完了します。"
+  },
+  "about": {
+    "sectionTitle": "このスマートフォンについて",
+    "deviceName": "デバイス名",
+    "deviceNameDetail": "パソコン側の承認リストにこの名前が表示されます。",
+    "platform": "プラットフォーム",
+    "remoteControl": "リモート制御権限",
+    "remoteControlValue": "パソコン側で管理",
+    "remoteControlDetail": "このスマートフォンは操作する側としてのみ動作します。被操作の許可・取り消し・復元はパソコン側の設定で行います。",
+    "editAccessibility": "{{label}}を変更"
+  },
+  "relay": {
+    "online": "Relay 接続済み",
+    "connecting": "Relay に接続中",
+    "stopped": "Relay 未接続",
+    "lastSynced": "最終同期 {{time}}",
+    "canSync": "リモートセッションを同期できます。",
+    "reconnectHint": "ネットワーク回復後、リモートセッションは自動的に再購読されます。",
+    "resumeHint": "アプリに戻るか再ログインすると接続が回復します。"
+  },
+  "header": {
+    "notSignedIn": "未ログイン",
+    "thisPhone": "このスマートフォン"
+  },
+  "debug": {
+    "sectionTitle": "デバッグ / 開発者",
+    "userId": "ユーザー ID",
+    "notSynced": "未同期",
+    "deviceId": "デバイス ID",
+    "initializing": "初期化中",
+    "authServer": "Auth Server",
+    "authRegion": "ログインリージョン"
+  },
+  "updateInfo": {
+    "embedded": "アプリ本体と同梱",
+    "unknown": "不明",
+    "source": "実行ソース",
+    "sourceEmbedded": "内蔵バージョン (同梱)",
+    "sourceOta": "OTA 更新",
+    "updateId": "更新 ID",
+    "updatedAt": "更新日時",
+    "channel": "Channel",
+    "runtime": "Runtime",
+    "otaMarker": "OTA マーカー"
+  },
+  "legal": {
+    "sectionTitle": "法的情報",
+    "privacyPolicy": "プライバシーポリシー",
+    "view": "表示",
+    "openPrivacyPolicy": "プライバシーポリシーを開く",
+    "appFilingNumber": "アプリ届出番号"
+  },
+  "account": {
+    "logoutHint": "ログアウトすると、このスマートフォン上のログイン状態とローカルのリモートミラーだけが削除されます。パソコン側のセッションには影響しません。",
+    "logout": "ログアウト",
+    "loggingOut": "ログアウト中",
+    "loggingOutAccessibility": "ログアウトしています"
+  },
+  "copyRow": {
+    "action": "コピー",
+    "done": "コピー済み",
+    "accessibility": "{{label}}をコピー"
+  },
+  "deviceNameEditor": {
+    "screenTitle": "デバイス名",
+    "placeholder": "この端末の名前",
+    "resetAccessibility": "デフォルトの端末名に戻す",
+    "emptyError": "デバイス名を入力してください。",
+    "deviceInitializing": "デバイスを初期化しています。しばらくしてからもう一度お試しください。",
+    "saving": "保存中…",
+    "saved": "保存しました。",
+    "restoringDefault": "デフォルト名に戻しています…",
+    "restoredDefault": "デフォルト名に戻しました。"
+  }
+}

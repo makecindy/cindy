@@ -34,6 +34,31 @@ pnpm install
 新 worktree 不共享 `node_modules`。确认 checkout 已完成且根 `package.json` 存在后，
 在该 worktree 内重新运行 `pnpm install`。
 
+## Linux：Electron SUID sandbox 权限
+
+较新的 Ubuntu（23.10+ 默认用 AppArmor 限制非特权 user namespace）上，Electron 会退回
+SUID sandbox，dev 启动时报
+`The SUID sandbox helper binary was found, but is not configured correctly`。修复：
+
+```bash
+cd node_modules/electron/dist
+# 先原位复制一次，断开与 pnpm store 的硬链接——pnpm 的 side-effects cache 会把
+# electron postinstall 产物 hardlink 进共享 store，直接 chown/chmod 会把 store 副本
+# 一并改成 root+setuid，波及本机其它复用同版本 Electron 的项目/worktree。
+cp chrome-sandbox chrome-sandbox.tmp && mv -f chrome-sandbox.tmp chrome-sandbox
+sudo chown root:root chrome-sandbox
+sudo chmod 4755 chrome-sandbox
+```
+
+注意：
+
+- `node_modules/electron/dist` 由 electron postinstall 解包／从 store 链接，**每次重装
+  依赖或 electron 升版本后该权限都会被重置**，每个 worktree 需要各自重跑上面的步骤
+  （包括断链那一步）。
+- 只做上述针对性修复；不要放开系统级 user namespace 限制，更不要用 `--no-sandbox`
+  绕过（违反 Electron 安全边界，参见
+  [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)）。
+
 ## 不变量
 
 - submodule 版本由父仓 gitlink 锁定；普通同步不得使用 `git submodule update --remote`。

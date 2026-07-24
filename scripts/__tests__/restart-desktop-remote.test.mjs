@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+	applyDesktopDevEnvOverrides,
 	devEnvPrefix,
 	isRepositoryDesktopDevProcess,
 	formatDesktopStartupFailure,
@@ -387,4 +388,45 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 
 test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () => {
 	assert.equal(devEnvPrefix({}, "darwin"), "");
+});
+
+test("devEnvPrefix passes the content moderation dev switch to Electron", () => {
+	assert.equal(
+		devEnvPrefix({ XDT_CONTENT_MODERATION: "1" }, "win32"),
+		'set "XDT_CONTENT_MODERATION=1" && ',
+	);
+});
+
+test("desktop .env allowlists local moderation dev overrides without replacing explicit env", () => {
+	const env = {
+		XDT_ENDPOINT_MANIFEST_FILE: "C:\\explicit\\endpoint.json",
+	};
+	applyDesktopDevEnvOverrides(
+		[
+			"XDT_CONTENT_MODERATION=1",
+			"XDT_ENDPOINT_MANIFEST_FILE=C:\\local\\moderation.json",
+			"MODERATION_APP_SECRET=must-not-be-loaded",
+		].join("\n"),
+		env,
+	);
+	assert.deepEqual(env, {
+		XDT_CONTENT_MODERATION: "1",
+		XDT_ENDPOINT_MANIFEST_FILE: "C:\\explicit\\endpoint.json",
+	});
+});
+
+test("desktop .env overrides respect explicit empty-string env values", () => {
+	const env = {
+		XDT_CONTENT_MODERATION: "",
+	};
+	applyDesktopDevEnvOverrides(
+		["XDT_CONTENT_MODERATION=1", "XDT_ENDPOINT_MANIFEST_FILE=/some/path"].join(
+			"\n",
+		),
+		env,
+	);
+	assert.deepEqual(env, {
+		XDT_CONTENT_MODERATION: "",
+		XDT_ENDPOINT_MANIFEST_FILE: "/some/path",
+	});
 });

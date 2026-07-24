@@ -39,6 +39,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
@@ -153,6 +154,7 @@ export function SessionMenuSheet({
 }: SessionMenuSheetProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -286,11 +288,11 @@ export function SessionMenuSheet({
   }, [markCopied]);
 
   /** 复制按钮 / 行的反馈文案:成功「已复制」、失败「复制失败」,1.5s 后还原。 */
-  const copyLabel = useCallback((base: string, key: string, copiedText = '已复制') => {
+  const copyLabel = useCallback((base: string, key: string, copiedText = t('session.menu.copied')) => {
     if (copiedKey === key) return copiedText;
-    if (copiedKey === `${key}:error`) return '复制失败';
+    if (copiedKey === `${key}:error`) return t('session.menu.copyFailed');
     return base;
-  }, [copiedKey]);
+  }, [copiedKey, t]);
 
   const writeDisabled = busy || !!readOnlyReason;
   const header = buildSessionMenuHeader(session, { readOnlyReason });
@@ -337,29 +339,29 @@ export function SessionMenuSheet({
       if (trimmed) {
         setTitleDraft(trimmed);
       } else {
-        setRenameError('自动起名失败，请重试。');
+        setRenameError(t('session.menu.aiRenameFailed'));
       }
     } catch (err) {
       if (renameSeqRef.current !== seq) return;
       setRenameError(aiRenameFailureText(err));
     }
     setRenameGenerating(false);
-  }, [onRegenerateTitle, renameGenerating]);
+  }, [onRegenerateTitle, renameGenerating, t]);
 
   // 删除确认后先关 sheet 再发删除(会话删除后本页会整体退出,不留悬空 overlay)。
   const confirmDelete = useCallback(() => {
-    Alert.alert('删除会话？', '删除后不可恢复。', [
-      { style: 'cancel', text: '取消' },
+    Alert.alert(t('session.menu.deleteConfirmTitle'), t('session.menu.deleteConfirmBody'), [
+      { style: 'cancel', text: t('session.common.cancel') },
       {
         onPress: () => {
           onClose();
           onDelete();
         },
         style: 'destructive',
-        text: '删除',
+        text: t('session.common.delete'),
       },
     ]);
-  }, [onClose, onDelete]);
+  }, [onClose, onDelete, t]);
 
   // 置顶 / 归档执行即收起菜单(手机菜单惯例);复制链接留在菜单展示「已复制」反馈,
   // 重命名进入原地编辑态。
@@ -395,12 +397,12 @@ export function SessionMenuSheet({
   const addExtraDir = useCallback((path: string) => {
     const next = addSessionExtraDir(session.extraDirs, path);
     if (!next.changed) {
-      setExtraDirsNotice('这个目录已经在列表里。');
+      setExtraDirsNotice(t('session.menu.dirAlreadyAdded'));
       return;
     }
     setExtraDirsNotice(null);
     onSetExtraDirs(next.dirs);
-  }, [onSetExtraDirs, session.extraDirs]);
+  }, [onSetExtraDirs, session.extraDirs, t]);
   const removeExtraDir = useCallback((path: string) => {
     setExtraDirsNotice(null);
     onSetExtraDirs(removeSessionExtraDir(session.extraDirs, path));
@@ -431,14 +433,14 @@ export function SessionMenuSheet({
       codexRateLimits?.account.planType,
     ].filter(Boolean).join(' · ');
     Alert.alert(
-      '重置 Codex 用量？',
-      `将为 ${account || '当前 Codex 账号'} 消耗 1 次重置。额度窗口会立即重开，此操作不能撤销。`,
+      t('session.menu.resetCodexTitle'),
+      t('session.menu.resetCodexBody', { account: account || t('session.menu.currentCodexAccount') }),
       [
-        { text: '取消', style: 'cancel' },
-        { text: '消耗 1 次重置', onPress: onResetCodexRateLimits },
+        { text: t('session.common.cancel'), style: 'cancel' },
+        { text: t('session.menu.resetConsumeOnce'), onPress: onResetCodexRateLimits },
       ],
     );
-  }, [codexRateLimits, codexResetBusy, onResetCodexRateLimits, resetSummary]);
+  }, [codexRateLimits, codexResetBusy, onResetCodexRateLimits, resetSummary, t]);
 
   const menuContent = (
     <View style={styles.menuBody} testID="session.menuSheetBody">
@@ -458,7 +460,7 @@ export function SessionMenuSheet({
                 setRenameError(null);
               }}
               onSubmitEditing={submitRename}
-              placeholder="会话标题"
+              placeholder={t('session.menu.titlePlaceholder')}
               placeholderTextColor={colors.textTertiary}
               returnKeyType="done"
               selectTextOnFocus
@@ -467,7 +469,7 @@ export function SessionMenuSheet({
               value={titleDraft}
             />
             <Pressable
-              accessibilityLabel="AI 自动起名"
+              accessibilityLabel={t('session.menu.aiRenameLabel')}
               accessibilityRole="button"
               accessibilityState={{ busy: renameGenerating }}
               hitSlop={6}
@@ -508,7 +510,7 @@ export function SessionMenuSheet({
             ) : null}
             {header.usageSummary ? (
               <Pressable
-                accessibilityLabel="查看会话用量详情"
+                accessibilityLabel={t('session.menu.viewUsageDetail')}
                 accessibilityRole="button"
                 onPress={openInfo}
                 style={({ pressed }) => [styles.usageRow, pressed && styles.pressed]}
@@ -527,7 +529,7 @@ export function SessionMenuSheet({
                 disabled={action.disabled}
                 icon={menuActionIcon(action, session)}
                 label={action.id === 'copyLink'
-                  ? copyLabel(action.label, 'copyLink', '链接已复制')
+                  ? copyLabel(action.label, 'copyLink', t('session.menu.linkCopied'))
                   : action.label}
                 onPress={() => handleAction(action)}
                 testID={action.testID}
@@ -538,7 +540,7 @@ export function SessionMenuSheet({
           <View style={styles.actionGroup}>
             <MenuActionRow
               icon={Info}
-              label="会话信息"
+              label={t('session.menu.sessionInfo')}
               onPress={openInfo}
               testID="session.infoButton"
               trailing={<ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
@@ -566,9 +568,9 @@ export function SessionMenuSheet({
     <View style={styles.infoBody} testID="session.infoSheetBody">
       <View style={styles.infoSection}>
         <View style={styles.infoSectionHeader}>
-          <Text style={styles.infoSectionTitle}>用量</Text>
+          <Text style={styles.infoSectionTitle}>{t('session.menu.usageSection')}</Text>
           <Pressable
-            accessibilityLabel="刷新上下文用量"
+            accessibilityLabel={t('session.menu.refreshContextUsage')}
             accessibilityRole="button"
             disabled={contextLoading}
             onPress={onRefreshContextUsage}
@@ -582,8 +584,8 @@ export function SessionMenuSheet({
             )}
           </Pressable>
         </View>
-        <InfoRow label="本次会话" value={spend.available ? spend.detail : '暂无会话用量'} />
-        <InfoRow label="上下文" value={usage.detail} />
+        <InfoRow label={t('session.menu.currentSessionSpend')} value={spend.available ? spend.detail : t('session.menu.noSessionSpend')} />
+        <InfoRow label={t('session.menu.contextLabel')} value={usage.detail} />
         {usage.rows.length > 0 ? (
           <View style={styles.usageRows} testID="session.contextRows">
             {usage.rows.map((row) => (
@@ -595,7 +597,7 @@ export function SessionMenuSheet({
 
       {accountLimits || resetSummary ? (
         <View style={styles.infoSection} testID="session.accountLimitsSection">
-          <Text style={styles.infoSectionTitle}>账号限额</Text>
+          <Text style={styles.infoSectionTitle}>{t('session.menu.accountLimits')}</Text>
           {accountLimits?.rows.map((row, index) => (
             // 两个窗口都缺时长数据时 label 会同为「限额」,key 需带 index 去重。
             <InfoRow key={`${row.label}:${index}`} label={row.label} value={row.value} />
@@ -606,12 +608,12 @@ export function SessionMenuSheet({
           {resetSummary?.canReset ? (
             <>
               <Text style={styles.infoCaption}>
-                当前额度已耗尽。重置会立即消耗 1 次，且不能撤销。
+                {t('session.menu.quotaExhaustedResettable')}
               </Text>
               <View style={styles.infoActionRow}>
                 <MenuPillButton
                   disabled={codexResetBusy}
-                  label={codexResetBusy ? '正在重置…' : '重置 Codex 用量'}
+                  label={codexResetBusy ? t('session.menu.resetting') : t('session.menu.resetCodexUsage')}
                   onPress={confirmCodexReset}
                   testID="session.codexRateLimitResetButton"
                   tone="primary"
@@ -619,7 +621,7 @@ export function SessionMenuSheet({
               </View>
             </>
           ) : resetSummary?.shouldPrompt && resetSummary.availableCount === 0 ? (
-            <Text style={styles.infoCaption}>当前额度已耗尽，但没有可用重置次数。</Text>
+            <Text style={styles.infoCaption}>{t('session.menu.quotaExhaustedNoCredit')}</Text>
           ) : null}
         </View>
       ) : null}
@@ -630,12 +632,12 @@ export function SessionMenuSheet({
           <InfoRow label={workspace.name} mono value={workspace.path} />
           <View style={styles.infoActionRow}>
             <MenuPillButton
-              label="打开目录"
+              label={t('session.menu.openDir')}
               onPress={onOpenWorkspace}
               testID="session.openWorkspaceButton"
             />
             <MenuPillButton
-              label={copyLabel('复制路径', 'workspacePath')}
+              label={copyLabel(t('session.menu.copyPath'), 'workspacePath')}
               onPress={() => copyValue('workspacePath', workspace.path)}
               testID="session.copyWorkspacePath"
             />
@@ -645,10 +647,10 @@ export function SessionMenuSheet({
 
       {showExtraDirs ? (
         <View style={styles.infoSection} testID="session.extraDirsSection">
-          <Text style={styles.infoSectionTitle}>附加引用目录</Text>
+          <Text style={styles.infoSectionTitle}>{t('session.menu.extraDirsSection')}</Text>
           {currentExtraDirs.length === 0 ? (
             <Text style={styles.infoCaption} testID="session.extraDirsStatus">
-              当前没有附加目录。附加目录会作为额外上下文提供给被控电脑上的 agent。
+              {t('session.menu.noExtraDirs')}
             </Text>
           ) : (
             <View style={styles.extraDirList}>
@@ -657,7 +659,7 @@ export function SessionMenuSheet({
                   <Text numberOfLines={1} style={styles.extraDirPath}>{dir}</Text>
                   <MenuPillButton
                     disabled={writeDisabled}
-                    label="移除"
+                    label={t('session.menu.remove')}
                     onPress={() => removeExtraDir(dir)}
                     testID="session.extraDirRemoveButton"
                   />
@@ -671,7 +673,7 @@ export function SessionMenuSheet({
           <View style={styles.infoActionRow}>
             <MenuPillButton
               disabled={writeDisabled || !!extraDirBrowser?.loading}
-              label={extraDirBrowser?.open ? '收起远程目录' : '浏览远程目录'}
+              label={extraDirBrowser?.open ? t('session.menu.collapseRemoteDir') : t('session.menu.browseRemoteDir')}
               onPress={onToggleExtraDirBrowser}
               testID="session.extraDirsBrowseToggle"
             />
@@ -684,18 +686,18 @@ export function SessionMenuSheet({
                 style={styles.browsePath}
                 testID="session.extraDirsBrowseCurrentPath"
               >
-                {extraDirBrowser.path || '正在读取…'}
+                {extraDirBrowser.path || t('session.menu.reading')}
               </Text>
               <View style={styles.infoActionRow}>
                 <MenuPillButton
                   disabled={writeDisabled || extraDirBrowser.loading || !extraDirBrowser.parent}
-                  label="上级"
+                  label={t('session.menu.parentDir')}
                   onPress={() => extraDirBrowser.parent && onLoadExtraDirPath(extraDirBrowser.parent)}
                   testID="session.extraDirsBrowseParentButton"
                 />
                 <MenuPillButton
                   disabled={writeDisabled || extraDirBrowser.loading || !extraDirBrowser.path}
-                  label="添加当前目录"
+                  label={t('session.menu.addCurrentDir')}
                   onPress={() => addExtraDir(extraDirBrowser.path)}
                   testID="session.extraDirsBrowseAddCurrent"
                 />
@@ -707,7 +709,7 @@ export function SessionMenuSheet({
                 {extraDirBrowser.entries.slice(0, 30).map((entry) => (
                   <View key={entry.path} style={styles.browseRow} testID="session.extraDirsBrowseEntry">
                     <Pressable
-                      accessibilityLabel={`进入远程目录 ${entry.name}`}
+                      accessibilityLabel={t('session.menu.enterRemoteDir', { name: entry.name })}
                       accessibilityRole="button"
                       disabled={writeDisabled || extraDirBrowser.loading}
                       onPress={() => onLoadExtraDirPath(entry.path)}
@@ -720,17 +722,17 @@ export function SessionMenuSheet({
                     </Pressable>
                     <MenuPillButton
                       disabled={writeDisabled || extraDirBrowser.loading}
-                      label="添加"
+                      label={t('session.menu.add')}
                       onPress={() => addExtraDir(entry.path)}
                       testID="session.extraDirsBrowseAddEntry"
                     />
                   </View>
                 ))}
                 {!extraDirBrowser.loading && extraDirBrowser.entries.length === 0 && !extraDirBrowser.error ? (
-                  <Text style={styles.infoCaption}>这个目录下没有可进入的子目录。</Text>
+                  <Text style={styles.infoCaption}>{t('session.menu.noSubDirs')}</Text>
                 ) : null}
                 {extraDirBrowser.entries.length > 30 ? (
-                  <Text style={styles.infoCaption}>仅显示前 30 个目录，可进入更具体的目录继续选择。</Text>
+                  <Text style={styles.infoCaption}>{t('session.menu.dirLimitNotice')}</Text>
                 ) : null}
               </View>
             </View>
@@ -756,15 +758,15 @@ export function SessionMenuSheet({
         footer={renaming ? (
           <MainWindowActionGroup
             primaryActions={[{
-              accessibilityLabel: '确认重命名',
-              label: '确定',
+              accessibilityLabel: t('session.menu.confirmRename'),
+              label: t('session.menu.confirm'),
               onPress: submitRename,
               testID: 'session.renameButton',
               tone: 'primary',
             }]}
             cancelAction={{
-              accessibilityLabel: '取消重命名',
-              label: '取消',
+              accessibilityLabel: t('session.menu.cancelRename'),
+              label: t('session.common.cancel'),
               onPress: cancelRename,
               testID: 'session.renameCancelButton',
             }}
@@ -787,14 +789,14 @@ export function SessionMenuSheet({
           testID="session.infoLayer"
         >
           <Pressable
-            accessibilityLabel="返回会话菜单"
+            accessibilityLabel={t('session.menu.backToMenu')}
             accessibilityRole="button"
             onPress={backToMenu}
             style={styles.secondaryBackdrop}
             testID="session.infoBackdrop"
           />
           <SheetSurface
-            backAccessibilityLabel="返回会话菜单"
+            backAccessibilityLabel={t('session.menu.backToMenu')}
             bottomInset={insets.bottom}
             heights={heights}
             onBack={backToMenu}
@@ -802,7 +804,7 @@ export function SessionMenuSheet({
             onSnapChange={setSecondarySnap}
             snap={secondarySnap}
             testID="session.infoSheet"
-            title="会话信息"
+            title={t('session.menu.sessionInfo')}
           >
             {infoContent}
           </SheetSurface>

@@ -99,6 +99,7 @@ import { sanitizeGhostCardHtml } from './cardSanitizer.js';
 import { getGhostCard, listGhostCardsBySession, reassignGhostCards, updateGhostCardHeight, upsertGhostCard } from './cardStoreDb.js';
 import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
+import { reviewPostProcessedOutput } from '../content-moderation/postProcessedOutput.js';
 import { GATEWAY_IMAGE_MODELS, GATEWAY_VIDEO_MODELS } from '../cindy-proxy-media/types.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
@@ -1017,6 +1018,11 @@ export function runGhostAssistantReplyHook(sessionId: string, clientId: string, 
       hasHook: hasEnabledGhostAssistantHook,
       isEligible: async (sid) => (await isGhostEligibleSession(sid)).outcome === 'eligible',
       screen: (sid, t) => getGhostSubscriptionGateway().screenAssistantMessage({ sessionId: sid, text: t }),
+      approveReplacement: (sid, cid, replacement) => reviewPostProcessedOutput(
+        sid,
+        `ghost:${cid}`,
+        replacement,
+      ),
       persistRewrite: async (sid, cid, t) => {
         await updateMessageContent(sid, cid, t);
       },

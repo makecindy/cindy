@@ -92,6 +92,18 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(routing.codex).toEqual({});
   });
 
+  it('只保留 openai-chat 兼容展示标记，仍不泄漏执行细节', () => {
+    const provider = xdProviderWithFullRouting() as ReturnType<typeof xdProviderWithFullRouting> & {
+      routing: { codex: Record<string, unknown>; 'claude-code': Record<string, unknown> };
+    };
+    provider.routing.codex.wireProtocol = 'openai-chat';
+    const { providers } = project({ providers: [provider] });
+    const routing = providers[0].routing as Record<string, Record<string, unknown>>;
+    expect(routing.codex).toEqual({ wireProtocol: 'openai-chat' });
+    expect(routing.codex).not.toHaveProperty('upstream');
+    expect(routing.codex).not.toHaveProperty('authStrategy');
+  });
+
   it('models[agent] 原样透传（Fast 显隐数据源:per-provider supportsFastMode）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const models = providers[0].models as Record<string, { id: string; supportsFastMode?: boolean }[]>;

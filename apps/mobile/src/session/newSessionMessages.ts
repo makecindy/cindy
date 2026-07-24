@@ -1,5 +1,7 @@
 import { getLocales } from 'expo-localization';
 
+import { getManualLocaleOverride } from '@/i18n/appLanguage';
+
 export type NewSessionLocale = 'zh-CN' | 'en' | 'ja' | 'ko';
 
 const messages = {
@@ -40,6 +42,8 @@ export function resolveNewSessionLocale(
 }
 
 export function newSessionText(key: NewSessionMessageKey): string {
-  const locale = resolveNewSessionLocale(getLocales()[0]?.languageTag);
+  // 设置里的手动语言选择优先,未选择时跟随系统语言。
+  const locale =
+    getManualLocaleOverride() ?? resolveNewSessionLocale(getLocales()[0]?.languageTag);
   return newSessionMessages[locale][key];
 }

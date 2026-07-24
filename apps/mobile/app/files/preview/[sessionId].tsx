@@ -15,6 +15,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ArrowDownToLine, Copy, Database, File as FileIcon, Info, MessageSquarePlus, Share as ShareIcon } from 'lucide-react-native';
 import {
   ActivityIndicator,
@@ -85,6 +86,7 @@ function avKindFor(name: string): 'video' | 'audio' | null {
 export default function RemoteFilePreviewScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
     deviceId?: string;
@@ -268,14 +270,14 @@ export default function RemoteFilePreviewScreen() {
 
   const downloadAndShare = useCallback(async (item: FileBrowserGridItem) => {
     if (busyLabel) return;
-    setBusyLabel('正在从电脑导出…');
+    setBusyLabel(t('files.preview.exporting'));
     try {
       const url = await exportToUrl(item.relPath, item.mtimeMs);
       // 传原始文件名:分享单按真实扩展名识别类型(PDF/视频等非图片 mime 不在
       // extOfMime 映射里,不带名字会落成 .img 让接收方无法预览)。
       const mime = shareMimeForFileName(item.name);
       const localUri = await downloadRemoteMediaShareTemp(url, mime, item.name);
-      if (!localUri) throw new Error('下载失败');
+      if (!localUri) throw new Error(t('files.preview.downloadFailed'));
       const sharing = await import('expo-sharing');
       await sharing.shareAsync(localUri, { mimeType: mime });
     } catch (err) {
@@ -283,12 +285,12 @@ export default function RemoteFilePreviewScreen() {
     } finally {
       setBusyLabel(null);
     }
-  }, [busyLabel, exportToUrl, showNotice]);
+  }, [busyLabel, exportToUrl, showNotice, t]);
 
   const copyPath = useCallback(async (item: FileBrowserGridItem) => {
     await Clipboard.setStringAsync(absolutePathOf(item.relPath));
-    showNotice('已复制路径');
-  }, [absolutePathOf, showNotice]);
+    showNotice(t('files.preview.copiedPath'));
+  }, [absolutePathOf, showNotice, t]);
 
   const sendToSession = useCallback((item: FileBrowserGridItem) => {
     const merged = mergePathIntoComposerDraft(sessionId, item.relPath);
@@ -399,14 +401,14 @@ export default function RemoteFilePreviewScreen() {
         <ToolbarButton
           disabled={!!busyLabel}
           Icon={Copy}
-          label="复制路径"
+          label={t('files.preview.copyPath')}
           onPress={() => void copyPath(current)}
           testID="filePreview.copyPath"
         />
         <ToolbarButton
           disabled={!!busyLabel}
           Icon={MessageSquarePlus}
-          label="发送到会话"
+          label={t('files.preview.sendToSession')}
           onPress={() => sendToSession(current)}
           testID="filePreview.sendToSession"
         />
@@ -441,17 +443,18 @@ function PreviewNav({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   return (
     <View style={styles.navRow}>
-      <Pressable accessibilityLabel="完成" hitSlop={10} onPress={onDone} testID="filePreview.done">
-        <Text style={styles.doneText}>完成</Text>
+      <Pressable accessibilityLabel={t('files.preview.done')} hitSlop={10} onPress={onDone} testID="filePreview.done">
+        <Text style={styles.doneText}>{t('files.preview.done')}</Text>
       </Pressable>
       <View style={styles.navTitleCol}>
         <Text numberOfLines={1} style={styles.navTitle} testID="filePreview.title">{title}</Text>
         {meta ? <Text numberOfLines={1} style={styles.navMeta}>{meta}</Text> : null}
       </View>
       {onShare ? (
-        <Pressable accessibilityLabel="导出分享" hitSlop={10} onPress={onShare} testID="filePreview.share">
+        <Pressable accessibilityLabel={t('files.preview.a11yShare')} hitSlop={10} onPress={onShare} testID="filePreview.share">
           <ShareIcon color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
         </Pressable>
       ) : (
@@ -485,6 +488,7 @@ function FilePreviewPage({
   targetLine: number | null;
   workdir: string;
 }) {
+  const { t } = useTranslation();
   if (item.thumb === 'image') {
     return (
       <ImagePreviewPage
@@ -507,7 +511,7 @@ function FilePreviewPage({
   if (item.thumb === 'doc') {
     return <TextPreviewPage active={active} item={item} onDownload={onDownload} onQuoteSelection={onQuoteSelection} readTextFile={readTextFile} targetLine={targetLine} workdir={workdir} />;
   }
-  return <UnsupportedPage item={item} onDownload={onDownload} reason="此类型暂不支持在手机上预览" />;
+  return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.unsupportedType')} />;
 }
 
 /** 音视频页:导出→presign→复用消息同款播放器(切后台/换页自动暂停)。 */
@@ -528,6 +532,7 @@ function AvPreviewPage({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const requestedRef = useRef(false);
@@ -551,13 +556,13 @@ function AvPreviewPage({
   }, [active, exportToUrl, item.mtimeMs, item.relPath, workdir]);
 
   if (failure) {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={`取回失败:${failure}`} />;
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.fetchAvFailed', { detail: failure })} />;
   }
   if (!url) {
     return (
       <View style={styles.centerFill} testID="filePreview.avLoading">
         <ActivityIndicator color={colors.textTertiary} />
-        <Text style={styles.hintText}>正在从电脑取回{kind === 'video' ? '视频' : '音频'}…</Text>
+        <Text style={styles.hintText}>{kind === 'video' ? t('files.preview.fetchingVideo') : t('files.preview.fetchingAudio')}</Text>
       </View>
     );
   }
@@ -590,6 +595,7 @@ function PdfPreviewPage({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const requestedRef = useRef(false);
@@ -615,13 +621,13 @@ function PdfPreviewPage({
   }, [active, exportToUrl, item.mtimeMs, item.relPath, workdir]);
 
   if (failure) {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={`取回 PDF 失败:${failure}`} />;
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.fetchPdfFailed', { detail: failure })} />;
   }
   if (!url) {
     return (
       <View style={styles.centerFill} testID="filePreview.pdfLoading">
         <ActivityIndicator color={colors.textTertiary} />
-        <Text style={styles.hintText}>正在从电脑取回 PDF…</Text>
+        <Text style={styles.hintText}>{t('files.preview.fetchingPdf')}</Text>
       </View>
     );
   }
@@ -650,6 +656,7 @@ function TextPreviewPage({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const markdown = isMarkdownFile(item.name);
   // absPath 单文件模式(item.relPath 为绝对路径)没有可靠 mtime(恒 0),
   // 缓存键无法随文件覆写失效,读写一律跳过缓存。
@@ -686,12 +693,14 @@ function TextPreviewPage({
             setState({
               status: 'unavailable',
               oversize: true,
-              reason: `文件超过预览上限(${res.stat ? formatByteSize(res.stat.size) : '过大'}),可下载原文件查看`,
+              reason: t('files.preview.oversize', {
+                size: res.stat ? formatByteSize(res.stat.size) : t('files.preview.oversizeUnknown'),
+              }),
             });
           } else if (res.code === 'BINARY_FILE') {
-            setState({ status: 'unavailable', reason: '二进制文件,无法以文本预览' });
+            setState({ status: 'unavailable', reason: t('files.preview.binaryFile') });
           } else {
-            setState({ status: 'unavailable', reason: res.message ?? '读取失败' });
+            setState({ status: 'unavailable', reason: res.message ?? t('files.preview.readFailed') });
           }
           return;
         }
@@ -717,7 +726,7 @@ function TextPreviewPage({
     return () => {
       cancelled = true;
     };
-  }, [active, cacheable, item.relPath, markdown, readTextFile, workdir]);
+  }, [active, cacheable, item.relPath, markdown, readTextFile, t, workdir]);
 
   if (state.status === 'loading') {
     return (
@@ -741,15 +750,15 @@ function TextPreviewPage({
         <View style={styles.truncBar} testID="filePreview.truncBanner">
           <Info color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           <Text style={styles.truncText}>
-            {state.truncated ? '文件超过 2 MB,仅显示前 2 MB 内容' : `仅显示前 ${MAX_RENDERED_LINES} 行`}
+            {state.truncated ? t('files.preview.truncated2mb') : t('files.preview.truncatedLines', { lines: MAX_RENDERED_LINES })}
           </Text>
         </View>
       ) : null}
       {canRenderMarkdown ? (
         <View style={styles.mdToggleRow}>
-          {([['rendered', '渲染'], ['source', '源码']] as const).map(([value, label]) => (
+          {([['rendered', t('files.preview.mdRendered')], ['source', t('files.preview.mdSource')]] as const).map(([value, label]) => (
             <Pressable
-              accessibilityLabel={`${label}视图`}
+              accessibilityLabel={t('files.preview.mdViewA11y', { view: label })}
               key={value}
               onPress={() => setMdView(value)}
               style={[styles.mdTogglePill, mdView === value && styles.mdTogglePillActive]}
@@ -817,6 +826,7 @@ function ImagePreviewPage({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   // absPath 单文件模式(item.relPath 为绝对路径):thumbnail op 只认 workdir
   // 内 relPath,禁用缩略图,直接等原图(media:fetch 通道)。
   const thumbUri = useFileThumbnail(
@@ -853,7 +863,7 @@ function ImagePreviewPage({
   const displayUri = fullUrl ?? thumbUri;
   return (
     <Pressable
-      accessibilityLabel={`查看大图 ${item.name}`}
+      accessibilityLabel={t('files.preview.a11yViewImage', { name: item.name })}
       disabled={!displayUri}
       onPress={() => displayUri && onOpenLightbox(fullUrl ?? displayUri)}
       style={styles.imagePage}
@@ -864,25 +874,25 @@ function ImagePreviewPage({
       ) : failure ? (
         <View style={styles.imageStateWrap} testID="filePreview.imageError">
           <GenericGlyph name={item.name} />
-          <Text style={styles.hintText}>取回原图失败:{failure}</Text>
+          <Text style={styles.hintText}>{t('files.preview.fetchOriginalFailed', { detail: failure })}</Text>
           <Pressable
-            accessibilityLabel="重试取回原图"
+            accessibilityLabel={t('files.preview.a11yRetryOriginal')}
             onPress={() => setAttempt((n) => n + 1)}
             style={({ pressed }) => [styles.retryBtn, pressed && styles.pressed]}
             testID="filePreview.imageRetry"
           >
-            <Text style={styles.retryLabel}>重试</Text>
+            <Text style={styles.retryLabel}>{t('files.preview.retry')}</Text>
           </Pressable>
         </View>
       ) : (
         <View style={styles.imageStateWrap} testID="filePreview.imageLoading">
           <ActivityIndicator color={colors.textTertiary} />
-          <Text style={styles.hintText}>正在从电脑取回原图…</Text>
+          <Text style={styles.hintText}>{t('files.preview.fetchingOriginal')}</Text>
         </View>
       )}
       {displayUri && !fullUrl ? (
         <Text style={styles.imageUpgradeHint}>
-          {failure ? '原图取回失败,当前为缩略图' : '缩略图 · 正在取回原图…'}
+          {failure ? t('files.preview.originalFailedThumb') : t('files.preview.fetchingOriginalHint')}
         </Text>
       ) : null}
     </Pressable>
@@ -900,6 +910,7 @@ function UnsupportedPage({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   return (
     <View style={styles.centerFill} testID="filePreview.unsupported">
       <View style={styles.bigPage}>
@@ -909,13 +920,13 @@ function UnsupportedPage({
       <Text style={styles.bigMeta}>{item.metaLabel}</Text>
       <Text style={styles.hintText}>{reason}</Text>
       <Pressable
-        accessibilityLabel="导出分享原文件"
+        accessibilityLabel={t('files.preview.a11yExportShareFile')}
         onPress={onDownload}
         style={({ pressed }) => [styles.ctaBtn, pressed && styles.pressed]}
         testID="filePreview.unsupportedDownload"
       >
         <ArrowDownToLine color={colors.ctaText} size={iconSize.md} strokeWidth={iconStroke.regular} />
-        <Text style={styles.ctaLabel}>导出 / 分享</Text>
+        <Text style={styles.ctaLabel}>{t('files.preview.exportShare')}</Text>
       </Pressable>
     </View>
   );

@@ -14,7 +14,7 @@ import type {
 } from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import { createMobileVoiceControllerSession } from '@/session/mobileVoiceController';
-import { MOBILE_VOICE_EMPTY_TRANSCRIPT_ERROR } from '@/session/mobileVoiceInput';
+import { mobileVoiceEmptyTranscriptError } from '@/session/mobileVoiceInput';
 
 vi.mock('@/session/mobileRealtimeAudio', () => ({
   startMobileRealtimeAudio: vi.fn(),
@@ -171,8 +171,8 @@ describe('mobileVoiceController', () => {
       trace: { capturedAt: 1, convertedAt: 2, chunkIndex: 0, sampleRate: 16_000, durationMs: 20 },
     });
 
-    await expect(session.stop()).rejects.toThrow(MOBILE_VOICE_EMPTY_TRANSCRIPT_ERROR);
-    expect(errors).toEqual([MOBILE_VOICE_EMPTY_TRANSCRIPT_ERROR]);
+    await expect(session.stop()).rejects.toThrow(mobileVoiceEmptyTranscriptError());
+    expect(errors).toEqual([mobileVoiceEmptyTranscriptError()]);
     expect(states).toContain('error');
     expect(states).not.toContain('done');
   });

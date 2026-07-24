@@ -11,7 +11,6 @@ import { StatusBar } from 'expo-status-bar';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import {
-  LOGIN_RING_TRACK,
   resolveLoginStage,
   resolveLoginSurface,
   type LoginStageBox,
@@ -25,8 +24,8 @@ import {
   loginHandoffSloganDelayMs,
 } from '@/auth/loginHandoff';
 import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
-import { useTheme } from '@/theme';
-import { loginColors } from '@/theme/tokens';
+import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
+import { ThemeOverrideProvider, useTheme } from '@/theme';
 
 /**
  * MobileLoginHandoffStage —— 白底体系登录/闸门**唯一 full-viewport 品牌宿主**
@@ -49,10 +48,14 @@ import { loginColors } from '@/theme/tokens';
  *    useNativeDriver(compositor-only,规则 7);spinner 仅 splash/handoff 期挂载。
  */
 
-// 品牌资产(asset-manifest 登记;@2x/@3x 由 Metro 按设备 scale 解析)
+// 品牌资产(asset-manifest 登记;@2x/@3x 由 Metro 按设备 scale 解析)。
+// 暗色画布用白字版字标/slogan(figma 532:585 CINDY_Standard_White / SLOGAN #FBFBFB),
+// 立绘两模式同资产。
 const heroAsset = require('../../assets/login/login-hero.png');
 const sloganAsset = require('../../assets/login/login-slogan.png');
+const sloganDarkAsset = require('../../assets/login/login-slogan-dark.png');
 const wordmarkAsset = require('../../assets/login/login-wordmark.png');
+const wordmarkDarkAsset = require('../../assets/login/login-wordmark-dark.png');
 // iPad/平板双构图专属立绘裁切(§3.6;slogan/字标与手机共用同一资产,demo 同源)
 const heroPadPortraitAsset = require('../../assets/login/login-hero-pad-portrait.png');
 const heroPadLandscapeAsset = require('../../assets/login/login-hero-pad-landscape.png');
@@ -92,6 +95,7 @@ function SplashSpinner({
   size: number;
   opacity: Animated.Value;
 }) {
+  const { colors } = useTheme();
   const rotation = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -114,10 +118,16 @@ function SplashSpinner({
       style={{ width: size, height: size, opacity, transform: [{ rotate: spin }] }}
     >
       <Svg width={size} height={size} viewBox="0 0 64 64" fill="none" aria-hidden>
-        <Circle cx="32" cy="32" r="29" stroke={LOGIN_RING_TRACK} strokeWidth="6" />
+        <Circle
+          cx="32"
+          cy="32"
+          r="29"
+          stroke={colors.login.loadingRingTrack}
+          strokeWidth="6"
+        />
         <Path
           d="M61 32a29 29 0 0 0-29-29"
-          stroke={loginColors.primaryButtonBg}
+          stroke={colors.login.primaryButtonBg}
           strokeWidth="6"
           strokeLinecap="round"
         />
@@ -131,7 +141,30 @@ function SplashSpinner({
  * (登录页在其中自行铺设 stage 缩放的 Log_in 组;闸门屏放退化后的内容层)。
  * Provider 缺席时按静态终态渲染(PR4a 行为不变)。
  */
-export function MobileLoginHandoffStage({
+export function MobileLoginHandoffStage(props: {
+  children?: ReactNode;
+  /** handoff 动画期品牌层由本宿主状态机驱动;静态调用方恒显 */
+  showBrand?: boolean;
+  /** 键盘位移(物理 px,向上为正;只作用品牌层——children 位移由登录页自管) */
+  keyboardShiftPx?: number;
+  testID?: string;
+  accessibilityLabel?: string;
+}) {
+  // 首启亮色门在品牌宿主层消费(DESIGN.md §16.5 主题跟随):splash/闸门/登录
+  // 共享同一覆盖,首启不出现「舞台暗 → 登录亮」闪变;覆盖仅限本宿主子树。
+  const firstLaunchGate = useLoginFirstLaunchLight();
+  // pending(AsyncStorage 未决,eager kick 下近零时长且宿主在 auth.initialized
+  // 后才挂载,实际几乎不会命中)时不渲染品牌内容:按任何主题渲染都可能产出
+  // 错误主题帧(真首启透传系统暗色 → 判定后切亮),等判定完成再上。
+  if (firstLaunchGate === 'pending') return null;
+  return (
+    <ThemeOverrideProvider mode={firstLaunchGate === 'light' ? 'light' : null}>
+      <MobileLoginHandoffStageInner {...props} />
+    </ThemeOverrideProvider>
+  );
+}
+
+function MobileLoginHandoffStageInner({
   children,
   showBrand = true,
   keyboardShiftPx = 0,
@@ -227,11 +260,14 @@ export function MobileLoginHandoffStage({
       : stage.mode === 'pad-landscape'
         ? heroPadLandscapeAsset
         : heroAsset;
+  // 暗色画布用白字版字标/slogan;立绘两模式同资产(figma 532:585)
+  const wordmarkSource = mode === 'dark' ? wordmarkDarkAsset : wordmarkAsset;
+  const sloganSource = mode === 'dark' ? sloganDarkAsset : sloganAsset;
 
   return (
     <View
       accessibilityLabel={accessibilityLabel}
-      style={[styles.root, { backgroundColor: colors.surface }]}
+      style={[styles.root, { backgroundColor: colors.login.bgBase }]}
       testID={testID}
     >
       {/* 白底体系:状态栏随主题模式(旧红底 splash 的恒 light 样式随之退役) */}
@@ -270,7 +306,7 @@ export function MobileLoginHandoffStage({
             <Image
               accessibilityIgnoresInvertColors
               resizeMode="contain"
-              source={wordmarkAsset}
+              source={wordmarkSource}
               style={boxStyle(stage.word)}
             />
           </Animated.View>
@@ -281,7 +317,7 @@ export function MobileLoginHandoffStage({
             <Image
               accessibilityIgnoresInvertColors
               resizeMode="contain"
-              source={sloganAsset}
+              source={sloganSource}
               style={styles.sloganImage}
             />
           </Animated.View>

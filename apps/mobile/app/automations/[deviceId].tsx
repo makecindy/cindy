@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { ConnectionBanner } from '@/components/ConnectionBanner';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
@@ -110,6 +111,7 @@ interface DeleteRunState {
 export default function AutomationsScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const params = useLocalSearchParams<{ deviceId: string; name?: string }>();
   const deviceId = String(params.deviceId ?? '');
   const deviceName = String(params.name ?? deviceId);
@@ -516,7 +518,7 @@ export default function AutomationsScreen() {
     try {
       if (target.source === 'project') {
         if (!isProjectAutomationSchedule(target)) {
-          throw new Error('项目自动化缺少 projectConfigId，请在桌面端删除');
+          throw new Error(t('devices.automations.error.projectMissingConfig'));
         }
         await maker.projectAutomation.removeSchedule({
           workingDir: target.workingDir!,
@@ -545,7 +547,7 @@ export default function AutomationsScreen() {
       setSelectedId((prev) => (prev === schedule.id ? null : prev));
       setDeleteState(null);
       if (failedSessionIds.length > 0) {
-        setError(`自动化已删除，但 ${failedSessionIds.length} 个生成会话未能更新状态。请在桌面端检查这些会话。`);
+        setError(t('devices.automations.error.deletePartial', { count: failedSessionIds.length }));
       }
       await loadSchedules();
     } catch (err) {
@@ -553,7 +555,7 @@ export default function AutomationsScreen() {
     } finally {
       setBusyAction(null);
     }
-  }, [busyAction, deleteState, deviceId, loadSchedules, maker]);
+  }, [busyAction, deleteState, deviceId, loadSchedules, maker, t]);
 
   const requestDeleteSchedule = useCallback((schedule: RemoteSchedule) => {
     if (busyAction) return;
@@ -726,14 +728,14 @@ export default function AutomationsScreen() {
     <SafeAreaView style={styles.safeArea} testID="automations.screen">
       <ScreenHeader
         action={{
-          label: '新建',
+          label: t('devices.common.create'),
           onPress: busyAction ? undefined : startCreateSchedule,
           testID: 'automations.createButton',
         }}
         backTestID="automations.backButton"
         eyebrow="Remote Automations"
         onBack={() => goBackGuarded(router)}
-        subtitle={`${overview.activeCount} 个运行中 · ${overview.totalCount} 个任务`}
+        subtitle={t('devices.automations.subtitle', { active: overview.activeCount, total: overview.totalCount })}
         title={deviceName}
         titleTestID="automations.title"
       />
@@ -757,20 +759,20 @@ export default function AutomationsScreen() {
       >
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
-            label="运行中"
+            label={t('devices.automations.metric.running')}
             style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
             value={overview.activeCount}
             valueSize="large"
           />
           <MainWindowMetric
-            label="未读结果"
+            label={t('devices.automations.metric.unreadResults')}
             style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
             urgent={overview.unreadRunCount > 0}
             value={overview.unreadRunCount}
             valueSize="large"
           />
           <MainWindowMetric
-            label="执行中"
+            label={t('devices.automations.metric.executing')}
             style={{ minHeight: windowLayout.metricMinHeight, minWidth: windowLayout.metricMinWidth }}
             urgent={overview.runningRunCount > 0}
             value={overview.runningRunCount}
@@ -779,8 +781,8 @@ export default function AutomationsScreen() {
         </View>
         <Text style={styles.summaryCopy} numberOfLines={2}>
           {overview.pausedCount > 0
-            ? `${overview.pausedCount} 个任务已暂停。选择任务后可以运行、暂停、编辑或打开最近会话。`
-            : '选择任务后可以运行、暂停、编辑或打开最近会话。'}
+            ? t('devices.automations.summary.paused', { count: overview.pausedCount })
+            : t('devices.automations.summary.default')}
         </Text>
       </SummaryStrip>
 
@@ -862,20 +864,20 @@ export default function AutomationsScreen() {
             <RemoteListSyncingPlaceholder testID="automations.syncing" />
           ) : (
           <MainWindowEmptyState
-            copy="可以直接从手机创建第一条自动化任务，或在桌面端创建后同步到这里。"
+            copy={t('devices.automations.empty.copy')}
             style={{
               minHeight: windowLayout.emptyMinHeight,
               padding: windowLayout.emptyPadding,
             }}
             testID="automations.empty"
-            title="这台电脑暂无自动化"
+            title={t('devices.automations.empty.title')}
           >
             <MainWindowActionGroup
               primaryActions={[
                 {
-                  accessibilityLabel: '新建自动化',
+                  accessibilityLabel: t('devices.automations.createAutomation'),
                   disabled: !!busyAction,
-                  label: '新建自动化',
+                  label: t('devices.automations.createAutomation'),
                   onPress: startCreateSchedule,
                   testID: 'automations.emptyCreateButton',
                   tone: 'primary',
@@ -922,14 +924,14 @@ export default function AutomationsScreen() {
                 />
 
                 <View style={styles.runsHeader}>
-                  <Text style={styles.sectionTitle}>最近执行</Text>
+                  <Text style={styles.sectionTitle}>{t('devices.automations.recentRuns')}</Text>
                   {runsLoading ? <ActivityIndicator color={colors.textSecondary} /> : null}
                 </View>
                 {displayedRuns.length === 0 ? (
                   <MainWindowEmptyState
-                    copy="点击 Run now 后会在这里看到新 run。"
+                    copy={t('devices.automations.runs.emptyCopy')}
                     style={styles.emptyInline}
-                    title="还没有执行记录"
+                    title={t('devices.automations.runs.emptyTitle')}
                   />
                 ) : (
                   <View style={styles.runList} testID="automations.runList">
@@ -995,6 +997,7 @@ function ScheduleFormCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const setField = <K extends keyof MobileScheduleDraft>(key: K, value: MobileScheduleDraft[K]) => {
     onChange({ ...draft, [key]: value });
   };
@@ -1014,17 +1017,17 @@ function ScheduleFormCard({
     [boundSessionInputValue, sessions],
   );
   const sessionModeCopy = sessionMode === 'bound'
-    ? '绑定已有会话后,目录、worktree、Agent 和 Fast 模式跟随该会话。'
+    ? t('devices.automations.form.sessionMode.bound')
     : sessionMode === 'persistent'
-      ? '首次触发会创建持续会话,后续触发继续接在同一会话里。'
-      : '每次触发都会创建新的会话。';
+      ? t('devices.automations.form.sessionMode.persistent')
+      : t('devices.automations.form.sessionMode.fresh');
 
   return (
     <View style={styles.formCard} testID="automations.form">
       <View style={styles.formHeader}>
         <View>
           <Text style={styles.sectionTitle}>{mode === 'edit' ? 'Edit Automation' : 'New Automation'}</Text>
-          <Text style={styles.formTitle}>{mode === 'edit' ? '编辑自动化' : '新建自动化'}</Text>
+          <Text style={styles.formTitle}>{mode === 'edit' ? t('devices.automations.form.title.edit') : t('devices.automations.form.title.create')}</Text>
         </View>
         {busy ? <ActivityIndicator color={colors.textSecondary} /> : null}
       </View>
@@ -1046,12 +1049,12 @@ function ScheduleFormCard({
       ) : null}
 
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>名称</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.name')}</Text>
         <TextInput
           autoCapitalize="none"
           editable={!busy}
           onChangeText={(value) => setField('name', value)}
-          placeholder="例如：每日项目巡检"
+          placeholder={t('devices.automations.form.namePlaceholder')}
           placeholderTextColor={colors.textTertiary}
           style={styles.input}
           testID="automations.form.nameInput"
@@ -1061,16 +1064,16 @@ function ScheduleFormCard({
 
       {draft.executionMode === 'script' ? (
         <Text style={styles.fieldHint} testID="automations.form.scriptModeHint">
-          这是一个仅运行脚本任务,脚本配置只能在桌面端编辑;此处可以改动名称、触发方式、通知等其它字段。
+          {t('devices.automations.form.scriptHint')}
         </Text>
       ) : (
         <View style={styles.fieldGroup}>
-          <Text style={styles.fieldLabel}>提示词</Text>
+          <Text style={styles.fieldLabel}>{t('devices.automations.form.field.prompt')}</Text>
           <TextInput
             editable={!busy}
             multiline
             onChangeText={onPromptChange}
-            placeholder="写清楚每次自动执行要让 Cindy 做什么"
+            placeholder={t('devices.automations.form.promptPlaceholder')}
             placeholderTextColor={colors.textTertiary}
             style={[styles.input, styles.textArea]}
             testID="automations.form.promptInput"
@@ -1081,19 +1084,19 @@ function ScheduleFormCard({
       )}
 
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>触发方式</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.trigger')}</Text>
         <View style={styles.segmentRow}>
           <SegmentButton
             active={draft.runMode === 'recurring'}
             disabled={busy}
-            label="周期"
+            label={t('devices.automations.form.trigger.recurring')}
             onPress={() => onChange(updateDraftRunMode(draft, 'recurring'))}
             testID="automations.form.runModeRecurring"
           />
           <SegmentButton
             active={draft.runMode === 'manual'}
             disabled={busy}
-            label="手动"
+            label={t('devices.automations.form.trigger.manual')}
             onPress={() => onChange(updateDraftRunMode(draft, 'manual'))}
             testID="automations.form.runModeManual"
           />
@@ -1102,26 +1105,26 @@ function ScheduleFormCard({
 
       {!isScriptTask ? (
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>运行会话</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.runSession')}</Text>
         <View style={styles.segmentRow} testID="automations.form.sessionMode">
           <SegmentButton
             active={sessionMode === 'fresh'}
             disabled={busy}
-            label="新会话"
+            label={t('devices.automations.form.session.fresh')}
             onPress={() => onChange(updateDraftSessionMode(draft, 'fresh'))}
             testID="automations.form.sessionModeFresh"
           />
           <SegmentButton
             active={sessionMode === 'persistent'}
             disabled={busy}
-            label="持续"
+            label={t('devices.automations.form.session.persistent')}
             onPress={() => onChange(updateDraftSessionMode(draft, 'persistent'))}
             testID="automations.form.sessionModePersistent"
           />
           <SegmentButton
             active={sessionMode === 'bound'}
             disabled={busy}
-            label="绑定"
+            label={t('devices.automations.form.session.bound')}
             onPress={() => onChange(updateDraftSessionMode(draft, 'bound'))}
             testID="automations.form.sessionModeBound"
           />
@@ -1134,12 +1137,12 @@ function ScheduleFormCard({
 
       {!isScriptTask && sessionMode === 'bound' ? (
         <View style={styles.fieldGroup} testID="automations.form.boundSession">
-          <Text style={styles.fieldLabel}>绑定会话</Text>
+          <Text style={styles.fieldLabel}>{t('devices.automations.form.field.boundSession')}</Text>
           {boundSessionOptions.length ? (
             <View style={styles.boundSessionOptions} testID="automations.form.boundSessionOptions">
               {boundSessionOptions.map((session) => (
                 <MainWindowRowButton
-                  accessibilityLabel={`绑定会话 ${session.title || session.id}`}
+                  accessibilityLabel={t('devices.automations.form.boundSessionA11y', { name: session.title || session.id })}
                   accessibilityRole="radio"
                   accessibilityState={{ checked: session.id === boundSessionInputValue.trim() }}
                   disabled={busy}
@@ -1177,12 +1180,12 @@ function ScheduleFormCard({
       {draft.runMode === 'recurring' ? (
         <>
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>间隔分钟</Text>
+            <Text style={styles.fieldLabel}>{t('devices.automations.form.field.intervalMinutes')}</Text>
             <TextInput
               editable={!busy}
               keyboardType="number-pad"
               onChangeText={(value) => setField('intervalMinutes', value)}
-              placeholder="留空则使用 cron"
+              placeholder={t('devices.automations.form.intervalPlaceholder')}
               placeholderTextColor={colors.textTertiary}
               style={styles.input}
               testID="automations.form.intervalInput"
@@ -1207,19 +1210,19 @@ function ScheduleFormCard({
 
       {!isScriptTask ? (
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>工作区</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.workspace')}</Text>
         <View style={styles.segmentRow}>
           <SegmentButton
             active={draft.workspaceKind === 'project'}
             disabled={busy}
-            label="项目"
+            label={t('devices.automations.form.workspace.project')}
             onPress={() => onChange(updateDraftWorkspaceKind(draft, 'project'))}
             testID="automations.form.workspaceProject"
           />
           <SegmentButton
             active={draft.workspaceKind === 'dialogue'}
             disabled={busy}
-            label="对话"
+            label={t('devices.automations.form.workspace.dialogue')}
             onPress={() => onChange(updateDraftWorkspaceKind(draft, 'dialogue'))}
             testID="automations.form.workspaceDialogue"
           />
@@ -1230,7 +1233,7 @@ function ScheduleFormCard({
       {(isScriptTask || draft.workspaceKind === 'project') && !hideWorkspaceFields ? (
         <>
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>项目目录</Text>
+            <Text style={styles.fieldLabel}>{t('devices.automations.form.field.projectDir')}</Text>
             <TextInput
               autoCapitalize="none"
               editable={!busy}
@@ -1246,7 +1249,7 @@ function ScheduleFormCard({
           <ToggleRow
             active={draft.useWorktree}
             disabled={busy}
-            label="使用 worktree"
+            label={t('devices.automations.form.useWorktree')}
             onPress={() => setField('useWorktree', !draft.useWorktree)}
             testID="automations.form.worktreeToggle"
           />
@@ -1277,12 +1280,12 @@ function ScheduleFormCard({
       </View>
 
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>模型</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.model')}</Text>
         <TextInput
           autoCapitalize="none"
           editable={!busy}
           onChangeText={(value) => setField('model', value)}
-          placeholder={hasRealBinding ? '跟随会话' : draft.agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6'}
+          placeholder={hasRealBinding ? t('devices.automations.form.modelPlaceholderBound') : draft.agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6'}
           placeholderTextColor={colors.textTertiary}
           style={styles.input}
           testID="automations.form.modelInput"
@@ -1291,7 +1294,7 @@ function ScheduleFormCard({
       </View>
 
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>推理强度</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.effort')}</Text>
         <TextInput
           autoCapitalize="none"
           editable={!busy}
@@ -1308,7 +1311,7 @@ function ScheduleFormCard({
         <ToggleRow
           active={draft.fastMode}
           disabled={busy}
-          label="Fast 模式"
+          label={t('devices.automations.form.fastMode')}
           onPress={() => setField('fastMode', !draft.fastMode)}
           testID="automations.form.fastModeToggle"
         />
@@ -1317,7 +1320,7 @@ function ScheduleFormCard({
       ) : null}
 
       <View style={styles.fieldGroup}>
-        <Text style={styles.fieldLabel}>时区</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.form.field.timezone')}</Text>
         <TextInput
           autoCapitalize="none"
           editable={!busy}
@@ -1333,7 +1336,7 @@ function ScheduleFormCard({
       <ToggleRow
         active={draft.notifyDesktop}
         disabled={busy}
-        label="桌面通知"
+        label={t('devices.automations.form.notifyDesktop')}
         onPress={() => setField('notifyDesktop', !draft.notifyDesktop)}
         testID="automations.form.notifyDesktopToggle"
       />
@@ -1341,7 +1344,7 @@ function ScheduleFormCard({
       <ToggleRow
         active={draft.notifyFeishu}
         disabled={busy}
-        label="飞书通知"
+        label={t('devices.automations.form.notifyFeishu')}
         onPress={() => setField('notifyFeishu', !draft.notifyFeishu)}
         testID="automations.form.notifyFeishuToggle"
       />
@@ -1349,18 +1352,18 @@ function ScheduleFormCard({
       <MainWindowActionGroup
         primaryActions={[
           {
-            accessibilityLabel: busy ? '正在保存自动化' : '保存自动化',
+            accessibilityLabel: busy ? t('devices.automations.form.savingA11y') : t('devices.automations.form.saveA11y'),
             disabled: busy,
-            label: busy ? '保存中' : '保存',
+            label: busy ? t('devices.common.saving') : t('devices.common.save'),
             onPress: onSubmit,
             testID: 'automations.form.saveButton',
             tone: 'primary',
           },
         ]}
         cancelAction={{
-          accessibilityLabel: '取消编辑自动化',
+          accessibilityLabel: t('devices.automations.form.cancelA11y'),
           disabled: busy,
-          label: '取消',
+          label: t('devices.common.cancel'),
           onPress: onCancel,
           testID: 'automations.form.cancelButton',
         }}
@@ -1385,61 +1388,62 @@ function ScheduleDeleteCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const previewText = state.loading
-    ? '正在统计由这条自动化生成的会话...'
+    ? t('devices.automations.delete.counting')
     : describeScheduleDeletePreview({
         sessionIds: state.sessionIds ?? [],
         sessionCount: state.sessionIds?.length ?? 0,
         inflightCount: state.inflightCount ?? 0,
       });
   const confirmText = state.disposition === 'delete'
-    ? '删除任务和会话'
+    ? t('devices.automations.delete.confirmDeleteBoth')
     : state.disposition === 'archive'
-      ? '删除任务并归档会话'
-      : '只删除任务';
+      ? t('devices.automations.delete.confirmArchive')
+      : t('devices.automations.delete.confirmTaskOnly');
 
   return (
     <View style={styles.deleteCard} testID="automations.deleteDialog">
       <View style={styles.deleteHeader}>
         <View style={styles.deleteHeaderText}>
           <Text style={styles.sectionTitle}>Delete Automation</Text>
-          <Text style={styles.deleteTitle} numberOfLines={2}>删除 {state.schedule.name}</Text>
+          <Text style={styles.deleteTitle} numberOfLines={2}>{t('devices.automations.delete.title', { name: state.schedule.name })}</Text>
         </View>
         {state.loading || busy ? <ActivityIndicator color={colors.textSecondary} /> : null}
       </View>
       <Text style={styles.deleteCopy}>
-        删除自动化任务不会中断已经开始的执行。生成过的会话按下面的选项处理,和桌面端保持一致。
+        {t('devices.automations.delete.copy')}
       </Text>
       <Text style={styles.deletePreview} testID="automations.delete.preview">
         {previewText}
       </Text>
       {state.error ? <Text style={styles.formError}>{state.error}</Text> : null}
       <View
-        accessibilityLabel="选择生成会话处理方式"
+        accessibilityLabel={t('devices.automations.delete.optionsA11y')}
         accessibilityRole="radiogroup"
         style={styles.deleteOptions}
         testID="automations.delete.options"
       >
         <DeleteDispositionOption
-          description="只删除这条自动化任务,历史会话继续保留在原列表里。"
+          description={t('devices.automations.delete.keepDesc')}
           disabled={busy}
-          label="保留生成会话"
+          label={t('devices.automations.delete.keepLabel')}
           onPress={() => onDispositionChange('keep')}
           selected={state.disposition === 'keep'}
           testID="automations.delete.option.keep"
         />
         <DeleteDispositionOption
-          description="删除任务后,把由它生成的会话移到归档,后续仍可搜索。"
+          description={t('devices.automations.delete.archiveDesc')}
           disabled={busy}
-          label="归档生成会话"
+          label={t('devices.automations.delete.archiveLabel')}
           onPress={() => onDispositionChange('archive')}
           selected={state.disposition === 'archive'}
           testID="automations.delete.option.archive"
         />
         <DeleteDispositionOption
-          description="删除任务后,把由它生成的会话也标记为删除。这个操作不可从手机端撤销。"
+          description={t('devices.automations.delete.deleteDesc')}
           disabled={busy}
-          label="删除生成会话"
+          label={t('devices.automations.delete.deleteLabel')}
           onPress={() => onDispositionChange('delete')}
           selected={state.disposition === 'delete'}
           testID="automations.delete.option.delete"
@@ -1447,17 +1451,17 @@ function ScheduleDeleteCard({
       </View>
       <MainWindowActionGroup
         cancelAction={{
-          accessibilityLabel: '取消删除自动化',
+          accessibilityLabel: t('devices.automations.delete.cancelA11y'),
           disabled: busy,
-          label: '取消',
+          label: t('devices.common.cancel'),
           onPress: onCancel,
           testID: 'automations.delete.cancelButton',
         }}
         dangerActions={[
           {
-            accessibilityLabel: '确认删除自动化',
+            accessibilityLabel: t('devices.automations.delete.confirmA11y'),
             disabled: busy || state.loading,
-            label: busy ? '删除中' : confirmText,
+            label: busy ? t('devices.common.deleting') : confirmText,
             onPress: onConfirm,
             testID: 'automations.delete.confirmButton',
             tone: 'danger',
@@ -1482,6 +1486,7 @@ function SchedulePauseCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const confirmation = buildSchedulePauseConfirmation(state.schedule, state.inflightCount);
   return (
     <View style={styles.pauseCard} testID="automations.pauseDialog">
@@ -1489,33 +1494,33 @@ function SchedulePauseCard({
         <View style={styles.deleteHeaderText}>
           <Text style={styles.sectionTitle}>Pause Automation</Text>
           <Text style={styles.deleteTitle} numberOfLines={2}>
-            {confirmation?.title ?? `暂停 ${state.schedule.name || state.schedule.id}`}
+            {confirmation?.title ?? t('devices.automations.pause.title', { name: state.schedule.name || state.schedule.id })}
           </Text>
         </View>
         {busy ? <ActivityIndicator color={colors.textSecondary} /> : null}
       </View>
       <Text style={styles.deleteCopy}>
-        {confirmation?.detail ?? '暂停会阻止这条自动化继续触发。'}
+        {confirmation?.detail ?? t('devices.automations.pause.detailFallback')}
       </Text>
       <Text style={styles.deletePreview} testID="automations.pause.preview">
-        {confirmation?.preview ?? '没有正在执行的 run'}
+        {confirmation?.preview ?? t('devices.automations.pause.previewFallback')}
       </Text>
       {state.error ? <Text style={styles.formError}>{state.error}</Text> : null}
       <MainWindowActionGroup
         primaryActions={[
           {
-            accessibilityLabel: '确认暂停自动化',
+            accessibilityLabel: t('devices.automations.pause.confirmA11y'),
             disabled: busy,
-            label: busy ? '暂停中' : '确认暂停',
+            label: busy ? t('devices.automations.pause.pausing') : t('devices.automations.pause.confirm'),
             onPress: onConfirm,
             testID: 'automations.pause.confirmButton',
             tone: 'primary',
           },
         ]}
         cancelAction={{
-          accessibilityLabel: '取消暂停自动化',
+          accessibilityLabel: t('devices.automations.pause.cancelA11y'),
           disabled: busy,
-          label: '取消',
+          label: t('devices.common.cancel'),
           onPress: onCancel,
           testID: 'automations.pause.cancelButton',
         }}
@@ -1538,6 +1543,7 @@ function RunDeleteCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const summary = summarizeRun(state.run);
   return (
     <View style={styles.pauseCard} testID="automations.runDeleteDialog">
@@ -1545,13 +1551,13 @@ function RunDeleteCard({
         <View style={styles.deleteHeaderText}>
           <Text style={styles.sectionTitle}>Delete Run</Text>
           <Text style={styles.deleteTitle} numberOfLines={2}>
-            删除这条执行记录
+            {t('devices.automations.runDelete.title')}
           </Text>
         </View>
         {busy ? <ActivityIndicator color={colors.textSecondary} /> : null}
       </View>
       <Text style={styles.deleteCopy}>
-        只会删除这条自动化执行记录,不会删除它打开过的会话,也不会影响后续自动触发。
+        {t('devices.automations.runDelete.copy')}
       </Text>
       <Text style={styles.deletePreview} testID="automations.runDelete.preview">
         {summary.title} · {summary.subtitle}
@@ -1560,18 +1566,18 @@ function RunDeleteCard({
       <MainWindowActionGroup
         dangerActions={[
           {
-            accessibilityLabel: '确认删除执行记录',
+            accessibilityLabel: t('devices.automations.runDelete.confirmA11y'),
             disabled: busy,
-            label: busy ? '删除中' : '删除记录',
+            label: busy ? t('devices.common.deleting') : t('devices.automations.runDelete.confirm'),
             onPress: onConfirm,
             testID: 'automations.runDelete.confirmButton',
             tone: 'danger',
           },
         ]}
         cancelAction={{
-          accessibilityLabel: '取消删除执行记录',
+          accessibilityLabel: t('devices.automations.runDelete.cancelA11y'),
           disabled: busy,
-          label: '取消',
+          label: t('devices.common.cancel'),
           onPress: onCancel,
           testID: 'automations.runDelete.cancelButton',
         }}
@@ -1641,16 +1647,17 @@ function TemplatePicker({
   templates: readonly RemoteScheduleTemplate[];
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const selected = templates.find((template) => template.id === selectedTemplateId) ?? null;
   return (
     <View style={styles.templateSection} testID="automations.templateSection">
       <View style={styles.templateHeader}>
-        <Text style={styles.fieldLabel}>模板</Text>
+        <Text style={styles.fieldLabel}>{t('devices.automations.template.label')}</Text>
         <MainWindowActionButton
           action={{
-            accessibilityLabel: loading ? '模板加载中' : '刷新自动化模板',
+            accessibilityLabel: loading ? t('devices.automations.template.loadingA11y') : t('devices.automations.template.refreshA11y'),
             disabled: busy || loading,
-            label: loading ? '加载中' : '刷新',
+            label: loading ? t('devices.automations.template.loading') : t('devices.automations.template.refresh'),
             onPress: onReload,
             testID: 'automations.templateReloadButton',
           }}
@@ -1704,9 +1711,10 @@ function TemplateCard({
   template: RemoteScheduleTemplate;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   return (
     <MainWindowCardButton
-      accessibilityLabel={`自动化模板 ${template.name}`}
+      accessibilityLabel={t('devices.automations.template.cardA11y', { name: template.name })}
       disabled={disabled}
       onPress={onPress}
       selected={selected}
@@ -1716,7 +1724,7 @@ function TemplateCard({
       <Text style={styles.templateName} numberOfLines={1}>{template.name}</Text>
       <Text style={styles.templateDescription} numberOfLines={3}>{template.description}</Text>
       <Text style={styles.templateMeta} numberOfLines={1}>
-        {template.cronExpr ? template.cronExpr : '手动配置'}
+        {template.cronExpr ? template.cronExpr : t('devices.automations.template.manualConfig')}
       </Text>
     </MainWindowCardButton>
   );
@@ -1858,10 +1866,11 @@ function ScheduleRow({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const summary = summarizeSchedule(schedule, runs);
   return (
     <MainWindowRowButton
-      accessibilityLabel={`自动化任务 ${summary.title}`}
+      accessibilityLabel={t('devices.automations.scheduleRowA11y', { title: summary.title })}
       onPress={onPress}
       selected={selected}
       style={styles.scheduleRow}
@@ -1903,6 +1912,7 @@ function ScheduleDetail({
   schedule: RemoteSchedule;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const summary = summarizeSchedule(schedule, runs);
   const paused = schedule.status === 'paused';
   const actionBusy = !!busyAction || runsLoading;
@@ -1917,36 +1927,36 @@ function ScheduleDetail({
         </Text>
       ) : null}
       <Text style={styles.detailPrompt} numberOfLines={4}>
-        {schedule.prompt || (schedule.executionMode === 'script' ? '仅运行脚本任务,配置只能在桌面端编辑' : '没有保存任务提示词')}
+        {schedule.prompt || (schedule.executionMode === 'script' ? t('devices.automations.detail.promptScriptFallback') : t('devices.automations.detail.promptEmpty'))}
       </Text>
       <MainWindowActionGroup
         dangerActions={[{
-          accessibilityLabel: '删除自动化',
+          accessibilityLabel: t('devices.automations.detail.deleteA11y'),
           disabled: actionBusy,
-          label: '删除',
+          label: t('devices.common.delete'),
           onPress: onDelete,
           testID: 'automations.deleteButton',
           tone: 'danger',
         }]}
         primaryActions={[{
-          accessibilityLabel: '立即执行自动化',
+          accessibilityLabel: t('devices.automations.detail.runNowA11y'),
           disabled: actionBusy,
-          label: busyAction === `run:${schedule.id}` ? '执行中' : 'Run now',
+          label: busyAction === `run:${schedule.id}` ? t('devices.automations.detail.running') : 'Run now',
           onPress: onRunNow,
           testID: 'automations.runNowButton',
           tone: 'primary',
         }]}
         secondaryActions={[{
-          accessibilityLabel: paused ? '恢复自动化' : '暂停自动化',
+          accessibilityLabel: paused ? t('devices.automations.detail.resumeA11y') : t('devices.automations.detail.pauseA11y'),
           disabled: pauseDisabled,
-          label: paused ? '恢复' : '暂停',
+          label: paused ? t('devices.automations.detail.resume') : t('devices.automations.detail.pause'),
           onPress: paused ? onResume : onPause,
           testID: paused ? 'automations.resumeButton' : 'automations.pauseButton',
           tone: 'secondary',
         }, {
-          accessibilityLabel: '编辑自动化',
+          accessibilityLabel: t('devices.automations.detail.editA11y'),
           disabled: actionBusy,
-          label: '编辑',
+          label: t('devices.automations.detail.edit'),
           onPress: onEdit,
           testID: 'automations.editButton',
           tone: 'secondary',
@@ -1975,6 +1985,7 @@ function RunRow({
   run: RemoteScheduleRun;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
   const summary = summarizeRun(run);
   const actionBusy = !!busyAction || opening;
   const hasActions = summary.canOpenSession || summary.canRestart || summary.canMarkRead || summary.canDelete;
@@ -1998,10 +2009,10 @@ function RunRow({
           {summary.canOpenSession ? (
             <MainWindowActionButton
               action={{
-                accessibilityLabel: '打开自动化会话',
+                accessibilityLabel: t('devices.automations.run.openSessionA11y'),
                 busy: opening,
                 disabled: actionBusy,
-                label: opening ? '打开中' : (summary.openSessionLabel ?? '会话'),
+                label: opening ? t('devices.automations.run.opening') : (summary.openSessionLabel ?? t('devices.automations.run.session')),
                 onPress: onOpenSession,
                 testID: 'automations.openRunSessionButton',
               }}
@@ -2012,10 +2023,10 @@ function RunRow({
           {summary.canRestart ? (
             <MainWindowActionButton
               action={{
-                accessibilityLabel: '重新执行自动化',
+                accessibilityLabel: t('devices.automations.run.restartA11y'),
                 busy: busyAction === `run-restart:${run.id}`,
                 disabled: actionBusy,
-                label: busyAction === `run-restart:${run.id}` ? '重跑中' : (summary.restartLabel ?? '重跑'),
+                label: busyAction === `run-restart:${run.id}` ? t('devices.automations.run.restarting') : (summary.restartLabel ?? t('devices.automations.run.restart')),
                 onPress: onRestart,
                 testID: 'automations.restartRunButton',
               }}
@@ -2026,10 +2037,10 @@ function RunRow({
           {summary.canMarkRead ? (
             <MainWindowActionButton
               action={{
-                accessibilityLabel: '标记执行记录已读',
+                accessibilityLabel: t('devices.automations.run.markReadA11y'),
                 busy: busyAction === `run-read:${run.id}`,
                 disabled: actionBusy,
-                label: busyAction === `run-read:${run.id}` ? '标记中' : (summary.markReadLabel ?? '已读'),
+                label: busyAction === `run-read:${run.id}` ? t('devices.automations.run.marking') : (summary.markReadLabel ?? t('devices.automations.run.markRead')),
                 onPress: onMarkRead,
                 testID: 'automations.markRunReadButton',
               }}
@@ -2040,10 +2051,10 @@ function RunRow({
           {summary.canDelete ? (
             <MainWindowActionButton
               action={{
-                accessibilityLabel: '删除执行记录',
+                accessibilityLabel: t('devices.automations.run.deleteA11y'),
                 busy: busyAction === `run-delete:${run.id}`,
                 disabled: actionBusy,
-                label: busyAction === `run-delete:${run.id}` ? '删除中' : (summary.deleteLabel ?? '删除'),
+                label: busyAction === `run-delete:${run.id}` ? t('devices.common.deleting') : (summary.deleteLabel ?? t('devices.common.delete')),
                 onPress: onDelete,
                 testID: 'automations.deleteRunButton',
                 tone: 'danger',

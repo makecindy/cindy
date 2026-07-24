@@ -132,6 +132,9 @@ export function replaceBuildNumberInAppJson(rawText, nextBuildNumber) {
   return String(rawText).replace(/("buildNumber"\s*:\s*")[^"]*(")/, `$1${nextBuildNumber}$2`);
 }
 
+/** xcodebuild -exportArchive 支持的分发方式;缺省 development 与旧发布线一致(产物交发布方重签)。 */
+export const IOS_EXPORT_METHODS = Object.freeze(['development', 'ad-hoc', 'enterprise', 'app-store']);
+
 /**
  * 解析 iOS 本地签名描述符(供 xcodebuild archive/export 消费)。
  * iOS 签名不含任何机密(无口令),故 teamId / profileName / signIdentity / profilePath **全部从
@@ -143,8 +146,10 @@ export function replaceBuildNumberInAppJson(rawText, nextBuildNumber) {
  * 部分名("Apple Development: Jane Doe")走 CODE_SIGN_IDENTITY 子串匹配同样有歧义,
  * 多证书钥匙串下都钉不住证书,必须在预检就拒掉(security find-identity -v -p codesigning 可查完整名)。
  * 签名套件本体(profile + p12)在打包机的仓库外目录,不入仓。
- * @param {{ authRegion?: string, iosSigning?: { teamId?: string, profileName?: string, signIdentity?: string, profilePath?: string } }} regionConfig
- * @returns {{ teamId: string, profileName: string, identity: string, profilePath: string }}
+ * exportMethod 可选:xcodebuild -exportArchive 的分发方式,白名单校验,留空默认
+ * development(与旧发布线一致,产物交发布方重签)。
+ * @param {{ authRegion?: string, iosSigning?: { teamId?: string, profileName?: string, signIdentity?: string, profilePath?: string, exportMethod?: string } }} regionConfig
+ * @returns {{ teamId: string, profileName: string, identity: string, profilePath: string, exportMethod: string }}
  */
 export function resolveIosSigningEnv(regionConfig) {
   const s = regionConfig?.iosSigning ?? {};
@@ -153,6 +158,12 @@ export function resolveIosSigningEnv(regionConfig) {
   const profileName = String(s.profileName ?? '').trim();
   const identity = String(s.signIdentity ?? '').trim();
   const profilePath = String(s.profilePath ?? '').trim();
+  const exportMethod = String(s.exportMethod ?? '').trim() || 'development';
+  if (!IOS_EXPORT_METHODS.includes(exportMethod)) {
+    throw new Error(
+      `self-host-regions.json 的 ${region}.iosSigning.exportMethod 只能是 ${IOS_EXPORT_METHODS.join(' / ')}(留空默认 development),收到 ${JSON.stringify(exportMethod)}`,
+    );
+  }
   const missing = [];
   if (!teamId) missing.push('teamId');
   if (!profileName) missing.push('profileName');
@@ -171,7 +182,7 @@ export function resolveIosSigningEnv(regionConfig) {
       `self-host-regions.json 的 ${region}.iosSigning.signIdentity 必须是完整证书名(形如 "Apple Development: 姓名 (TEAMID)",末尾括号 ID 不能省)或 40 位 SHA-1,收到 ${JSON.stringify(identity)}——裸类型名/部分名对 xcodebuild 是自动选择器或模糊匹配,多证书钥匙串下钉不住证书(完整名用 security find-identity -v -p codesigning 查)`,
     );
   }
-  return { teamId, profileName, identity, profilePath };
+  return { teamId, profileName, identity, profilePath, exportMethod };
 }
 
 /** plist <string> 值的 XML 转义(证书名等来自配置的外部输入,防意外特殊字符产出坏 plist)。 */

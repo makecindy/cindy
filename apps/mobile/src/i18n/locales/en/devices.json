@@ -1,0 +1,328 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving",
+    "delete": "Delete",
+    "deleting": "Deleting",
+    "create": "New"
+  },
+  "list": {
+    "thisComputer": "This computer",
+    "allConversations": "All Conversations",
+    "syncFailed": "Sync failed",
+    "requestFailed": "Request failed",
+    "loading": "Loading available computers",
+    "untitled": "Untitled conversation",
+    "connection": {
+      "connecting": "Connecting",
+      "disconnected": "Disconnected"
+    },
+    "error": {
+      "sessionDeviceNotFound": "Can't find the computer this conversation belongs to. Sync again and retry.",
+      "taskDeviceNotFound": "Can't find the computer this task belongs to. Sync again and retry.",
+      "noDevice": "No computer available. Turn on remote control on the desktop, then sync again."
+    },
+    "alert": {
+      "actionFailed": "Action failed",
+      "renameFailed": "Rename failed",
+      "deleteTitle": "Delete conversation?",
+      "deleteMessage": "This deletes \"{{title}}\" and can't be undone."
+    },
+    "a11y": {
+      "selectScope": "Select conversation scope",
+      "openSettings": "Open settings",
+      "syncing": "Syncing",
+      "sync": "Sync again",
+      "pinnedConversations": "{{count}} pinned conversations",
+      "newRemoteConversation": "New remote conversation",
+      "renameDevice": "Rename {{label}}",
+      "project": "Project {{title}}",
+      "openAutomationLatest": "Open the latest session of automation {{title}}",
+      "automationTask": "Automation {{title}}",
+      "openConversation": "Open conversation {{title}}",
+      "collapse": "Collapse {{title}}",
+      "expand": "Expand {{title}}",
+      "taskError": "Task failed",
+      "awaitingYou": "Waiting for you",
+      "doneUnread": "Completed, unread",
+      "running": "Running",
+      "close": "Close",
+      "cancelRename": "Cancel rename"
+    },
+    "menu": {
+      "groupByProject": "Group by Project"
+    },
+    "renameDevice": {
+      "title": "Rename Device",
+      "placeholder": "Device name",
+      "savingA11y": "Saving device name",
+      "saveA11y": "Save device name"
+    },
+    "renameSession": {
+      "title": "Rename Conversation",
+      "placeholder": "Conversation title",
+      "savingA11y": "Saving conversation title",
+      "saveA11y": "Save conversation title"
+    },
+    "revoked": {
+      "title": "Access revoked",
+      "body": "\"{{deviceName}}\" revoked this device's remote access. Re-authorize this device in {{appName}} settings on that computer, then tap \"Retry Access.\"",
+      "retry": "Retry Access"
+    },
+    "viewAllConversations": "View all {{count}} conversations",
+    "viewAllRuns": "View all {{count}} runs",
+    "preview": {
+      "needAttention": "{{count}} need attention",
+      "waiting": "{{count}} waiting",
+      "automationRunning": "Automation running",
+      "totalRuns": "{{count}} runs total"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "Active",
+      "waiting": "Pending",
+      "automation": "Automation",
+      "archived": "Archived",
+      "all": "All",
+      "a11y": "Filter {{label}} conversations"
+    },
+    "group": {
+      "project": "Project",
+      "date": "Date",
+      "label": "Group",
+      "a11y": "Group by {{label}}"
+    },
+    "metric": {
+      "active": "Active",
+      "waiting": "Pending",
+      "automation": "Automation",
+      "activeA11y": "Filter active conversations",
+      "waitingA11y": "Filter pending conversations",
+      "automationA11y": "Filter automation conversations"
+    },
+    "plan": "Schedule",
+    "automationsButtonA11y": "Open remote automations",
+    "search": {
+      "openA11y": "Search remote conversations",
+      "closeA11y": "Close remote conversation search",
+      "label": "Search",
+      "placeholder": "Search titles, projects, models, messages",
+      "clearA11y": "Clear search",
+      "closeInputA11y": "Close search",
+      "clear": "Clear",
+      "close": "Close"
+    },
+    "filters": {
+      "collapseA11y": "Collapse conversation filters",
+      "expandA11y": "Expand conversation filters",
+      "label": "Filter"
+    },
+    "selection": {
+      "count": "{{count}} conversations selected",
+      "canAct": "Actions available",
+      "cannotAct": "No actions available",
+      "clearA11y": "Clear conversation selection"
+    },
+    "bulk": {
+      "pinning": "Pinning",
+      "unpinning": "Unpinning",
+      "archiving": "Archiving",
+      "restoring": "Restoring",
+      "deleting": "Deleting",
+      "pinA11y": "Pin selected conversations",
+      "unpinA11y": "Unpin selected conversations",
+      "archiveA11y": "Archive selected conversations",
+      "restoreA11y": "Restore selected conversations",
+      "deleteA11y": "Delete selected conversations",
+      "cancelA11y": "Cancel bulk action",
+      "partialFailure": "Processed {{done}}, {{failed}} failed (restored, you can retry).",
+      "noArchivable": "No archivable active conversations in the selection.",
+      "noPinnable": "No pinnable active conversations in the selection.",
+      "noRestorable": "No restorable archived conversations in the selection.",
+      "noUnpinnable": "No pinned conversations in the selection.",
+      "noDeletable": "No deletable conversations in the selection.",
+      "noneModifiable": "None of the selected conversations can be changed."
+    },
+    "automationScope": {
+      "eyebrow": "Automation",
+      "title": "Automation",
+      "emptyCopy": "After the task runs, each run's session shows up here.",
+      "emptyTitle": "This task has no run history yet"
+    },
+    "projectScope": {
+      "eyebrow": "Project",
+      "emptyCopy": "Start a new conversation in this project.",
+      "emptyTitle": "This project has no conversations yet"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · {{count}} active conversations",
+      "activeAndProjects": "{{count}} active conversations · {{projects}} projects"
+    },
+    "row": {
+      "a11yAutomationGroup": "Automation group {{title}}",
+      "a11ySession": "Conversation {{title}}",
+      "a11yCollapse": "Collapse {{title}}",
+      "a11yExpand": "Expand {{title}}",
+      "collapse": "Collapse",
+      "expand": "Expand"
+    },
+    "badge": {
+      "waiting": "Pending {{count}}",
+      "automationPrefix": "Automation",
+      "sessionCount": "{{count}} conversations",
+      "aggregate": "Grouped",
+      "running": "Running",
+      "unread": "Unread {{count}}"
+    },
+    "child": {
+      "openA11y": "Open automation conversation {{title}}"
+    },
+    "viewAllRuns": "View all {{count}} runs"
+  },
+  "automations": {
+    "error": {
+      "projectMissingConfig": "This project automation is missing projectConfigId. Delete it on the desktop.",
+      "deletePartial": "Automation deleted, but {{count}} generated conversations couldn't be updated. Check them on the desktop."
+    },
+    "subtitle": "{{active}} running · {{total}} tasks",
+    "metric": {
+      "running": "Running",
+      "unreadResults": "Unread Results",
+      "executing": "In Progress"
+    },
+    "summary": {
+      "paused": "{{count}} tasks paused. Select a task to run, pause, edit, or open its latest session.",
+      "default": "Select a task to run, pause, edit, or open its latest session."
+    },
+    "empty": {
+      "copy": "Create your first automation right from your phone, or create one on the desktop and sync it here.",
+      "title": "No automations on this computer"
+    },
+    "createAutomation": "New Automation",
+    "recentRuns": "Recent Runs",
+    "runs": {
+      "emptyCopy": "After you tap Run now, new runs show up here.",
+      "emptyTitle": "No runs yet"
+    },
+    "form": {
+      "title": {
+        "create": "New Automation",
+        "edit": "Edit Automation"
+      },
+      "sessionMode": {
+        "bound": "Once bound to an existing session, the directory, worktree, Agent, and Fast mode follow that session.",
+        "persistent": "The first trigger creates a persistent session; later triggers continue in the same one.",
+        "fresh": "Each trigger creates a new session."
+      },
+      "field": {
+        "name": "Name",
+        "prompt": "Prompt",
+        "trigger": "Trigger",
+        "runSession": "Run Session",
+        "boundSession": "Bound Session",
+        "intervalMinutes": "Interval (minutes)",
+        "workspace": "Workspace",
+        "projectDir": "Project Directory",
+        "model": "Model",
+        "effort": "Reasoning Effort",
+        "timezone": "Time Zone"
+      },
+      "namePlaceholder": "e.g. Daily project check",
+      "scriptHint": "This is a script-only task; its script config can only be edited on the desktop. Here you can change the name, trigger, notifications, and other fields.",
+      "promptPlaceholder": "Describe clearly what {{appName}} should do on each run",
+      "trigger": {
+        "recurring": "Recurring",
+        "manual": "Manual"
+      },
+      "session": {
+        "fresh": "New Session",
+        "persistent": "Persistent",
+        "bound": "Bound"
+      },
+      "boundSessionA11y": "Bind session {{name}}",
+      "intervalPlaceholder": "Leave empty to use cron",
+      "workspace": {
+        "project": "Project",
+        "dialogue": "Conversation"
+      },
+      "useWorktree": "Use worktree",
+      "modelPlaceholderBound": "Follow session",
+      "fastMode": "Fast Mode",
+      "notifyDesktop": "Desktop Notifications",
+      "notifyFeishu": "Feishu Notifications",
+      "savingA11y": "Saving automation",
+      "saveA11y": "Save automation",
+      "cancelA11y": "Cancel editing automation"
+    },
+    "delete": {
+      "counting": "Counting the conversations this automation generated...",
+      "confirmDeleteBoth": "Delete Task and Conversations",
+      "confirmArchive": "Delete Task and Archive Conversations",
+      "confirmTaskOnly": "Delete Task Only",
+      "title": "Delete {{name}}",
+      "copy": "Deleting an automation task doesn't interrupt runs already in progress. Generated conversations are handled by the option below, matching the desktop.",
+      "optionsA11y": "Choose how to handle generated conversations",
+      "keepDesc": "Delete only this automation task; past conversations stay in their original list.",
+      "keepLabel": "Keep Generated Conversations",
+      "archiveDesc": "After deleting the task, move its generated conversations to the archive, still searchable later.",
+      "archiveLabel": "Archive Generated Conversations",
+      "deleteDesc": "After deleting the task, also mark its generated conversations as deleted. This can't be undone from your phone.",
+      "deleteLabel": "Delete Generated Conversations",
+      "cancelA11y": "Cancel deleting automation",
+      "confirmA11y": "Confirm deleting automation"
+    },
+    "pause": {
+      "title": "Pause {{name}}",
+      "detailFallback": "Pausing stops this automation from triggering.",
+      "previewFallback": "No runs in progress",
+      "confirmA11y": "Confirm pausing automation",
+      "pausing": "Pausing",
+      "confirm": "Confirm Pause",
+      "cancelA11y": "Cancel pausing automation"
+    },
+    "runDelete": {
+      "title": "Delete this run record",
+      "copy": "This deletes only this automation run record. It won't delete the conversations it opened, and it won't affect future automatic triggers.",
+      "confirmA11y": "Confirm deleting run record",
+      "confirm": "Delete Record",
+      "cancelA11y": "Cancel deleting run record"
+    },
+    "template": {
+      "label": "Template",
+      "loadingA11y": "Loading templates",
+      "refreshA11y": "Refresh automation templates",
+      "loading": "Loading",
+      "refresh": "Refresh",
+      "cardA11y": "Automation template {{name}}",
+      "manualConfig": "Manual config"
+    },
+    "scheduleRowA11y": "Automation task {{title}}",
+    "detail": {
+      "promptScriptFallback": "Script-only task; config can only be edited on the desktop",
+      "promptEmpty": "No task prompt saved",
+      "deleteA11y": "Delete automation",
+      "runNowA11y": "Run automation now",
+      "running": "Running",
+      "resumeA11y": "Resume automation",
+      "pauseA11y": "Pause automation",
+      "resume": "Resume",
+      "pause": "Pause",
+      "editA11y": "Edit automation",
+      "edit": "Edit"
+    },
+    "run": {
+      "openSessionA11y": "Open automation session",
+      "opening": "Opening",
+      "session": "Session",
+      "restartA11y": "Re-run automation",
+      "restarting": "Re-running",
+      "restart": "Re-run",
+      "markReadA11y": "Mark run record as read",
+      "marking": "Marking",
+      "markRead": "Read",
+      "deleteA11y": "Delete run record"
+    }
+  }
+}

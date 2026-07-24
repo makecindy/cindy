@@ -19,6 +19,8 @@ describe('mobile files page connection banner noise budget', () => {
 
   it('keeps the footer realtime-sync line as the only resident connection hint', () => {
     const source = readFileSync(resolve(process.cwd(), 'app/files/[sessionId].tsx'), 'utf8');
-    expect(source).toContain("已连接 · 实时同步");
+    // 文案已 i18n 化:常驻 footer 提示改由 catalog key 渲染(footerOnline / footerConnecting)。
+    expect(source).toContain("t('files.browser.footerOnline')");
+    expect(source).toContain("t('files.browser.footerConnecting')");
   });
 });

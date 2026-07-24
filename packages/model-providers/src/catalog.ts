@@ -17,6 +17,11 @@ export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 
 const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat'] as const;
+
+function isWireProtocol(value: unknown): value is (typeof WIRE_PROTOCOLS)[number] {
+  return typeof value === 'string' && (WIRE_PROTOCOLS as readonly string[]).includes(value);
+}
 
 function isAgentKind(v: unknown): v is AgentKind {
   return typeof v === 'string' && (AGENT_KINDS as readonly string[]).includes(v);
@@ -108,6 +113,26 @@ function validateProvider(p: Provider): void {
   for (const agent of p.agents) {
     const routing = p.routing[agent];
     assert(routing, `provider '${p.id}' declares agent '${agent}' but no routing[${agent}]`);
+    if (routing.wireProtocol !== undefined) {
+      assert(
+        isWireProtocol(routing.wireProtocol),
+        `provider '${p.id}' routing[${agent}].wireProtocol invalid`,
+      );
+      if (agent === 'claude-code') {
+        assert(
+          routing.wireProtocol !== 'openai-chat',
+          `provider '${p.id}' routing[${agent}] cannot use openai-chat`,
+        );
+      }
+      // Codex host 只实现原生 Responses 与本地 Responses→Chat 桥;anthropic-messages 会掉进
+      // 透明路由、把 Responses body 直发上游 → 确定性 4xx。热更目录里的坏 runtime 在此拦下。
+      if (agent === 'codex') {
+        assert(
+          routing.wireProtocol !== 'anthropic-messages',
+          `provider '${p.id}' routing[${agent}] cannot use anthropic-messages`,
+        );
+      }
+    }
     // modelPrefixes（路由服务范围）提供了就必须是命名空间前缀形态（`xai/` 这类,以 `/` 结尾）——
     // 结构上保证 claude-* 等裸 wire model 永远不会命中,防止把 scope 声明成误伤辅助请求的形状。
     if (routing.modelPrefixes !== undefined) {
@@ -243,6 +268,9 @@ function isValidPreset(v: unknown): v is ProviderPreset {
         && (typeof mm.contextWindow !== 'number' || !Number.isFinite(mm.contextWindow) || mm.contextWindow <= 0)
       ) return false;
     }
+    if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
+    if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
+    if (agent === 'codex' && r.wireProtocol === 'anthropic-messages') return false;
     if (r.headers !== undefined) {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;

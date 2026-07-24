@@ -36,6 +36,7 @@ import type {
   CustomProviderConfig,
   ProviderPreset,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
 } from '@cindy/model-providers';
 
 const AGENTS: AgentKind[] = ['claude-code', 'codex'];
@@ -71,6 +72,7 @@ interface HeaderRow {
 interface RuntimeFields {
   baseUrl: string;
   apiKey: string;
+  wireProtocol: ProviderWireProtocol;
   models: ModelRow[];
   headers: HeaderRow[];
   /** 隐藏字段：列模型端点（预设 / 已存配置快照进来），「获取模型列表」用；不在表单展示。 */
@@ -86,10 +88,11 @@ interface TestState {
 }
 const IDLE_TEST: TestState = { status: 'idle' };
 
-function emptyRuntime(): RuntimeFields {
+function emptyRuntime(agent: AgentKind): RuntimeFields {
   return {
     baseUrl: '',
     apiKey: '',
+    wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses',
     models: [{ id: '', name: '' }],
     headers: [{ name: '', value: '' }],
     modelsUrl: '',
@@ -98,8 +101,8 @@ function emptyRuntime(): RuntimeFields {
 
 function initRuntimes(initial?: CustomProviderConfig): Record<AgentKind, RuntimeFields> {
   const out: Record<AgentKind, RuntimeFields> = {
-    'claude-code': emptyRuntime(),
-    codex: emptyRuntime(),
+    'claude-code': emptyRuntime('claude-code'),
+    codex: emptyRuntime('codex'),
   };
   if (initial) {
     for (const a of AGENTS) {
@@ -108,6 +111,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<AgentKind, Runtime
       out[a] = {
         baseUrl: rc.baseUrl,
         apiKey: '',
+        wireProtocol: rc.wireProtocol ?? (a === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
         models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
@@ -344,12 +348,13 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
       for (const a of AGENTS) {
         const rc = p.runtimes[a];
         if (!rc) {
-          next[a] = emptyRuntime();
+          next[a] = emptyRuntime(a);
           continue;
         }
         next[a] = {
           baseUrl: rc.baseUrl,
           apiKey: prev[a].apiKey, // 已填的 key 保留
+          wireProtocol: rc.wireProtocol ?? (a === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
           models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
           headers:
             rc.headers && Object.keys(rc.headers).length > 0
@@ -403,6 +408,18 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
     [setRtSynced],
   );
 
+  /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
+  const changeCodexWireProtocol = useCallback(
+    (wireProtocol: 'openai-responses' | 'openai-chat') => {
+      setRtSynced((prev) => ({
+        ...prev,
+        codex: { ...prev.codex, wireProtocol },
+      }));
+      setTest((prev) => ({ ...prev, codex: IDLE_TEST }));
+    },
+    [setRtSynced],
+  );
+
   const f = rt[activeTab];
 
   /** 测试当前 Tab 的表单值（未保存也能测；key 仅内存透传给 main，不落盘）。 */
@@ -428,6 +445,7 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
           agent,
           baseUrl,
           modelId: firstModel,
+          wireProtocol: rf.wireProtocol,
           apiKey: rf.apiKey.trim() || null,
           ...(Object.keys(headers).length > 0 ? { headers } : {}),
         },
@@ -622,8 +640,10 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
         const n = h.name.trim();
         if (n) headers[n] = h.value.trim();
       }
+      const defaultProtocol = a === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
+        ...(rf.wireProtocol !== defaultProtocol ? { wireProtocol: rf.wireProtocol } : {}),
         models,
         ...(Object.keys(headers).length > 0 ? { headers } : {}),
         ...(rf.modelsUrl.trim() ? { modelsUrl: rf.modelsUrl.trim() } : {}),
@@ -852,6 +872,33 @@ export function CustomProviderDialog({ initial, existingIds, onSaved, onClose }:
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
+            {activeTab === 'codex' && (
+              <div className="flex flex-col gap-[7px]">
+                <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
+                <div className="flex gap-1.5">
+                  {(['openai-responses', 'openai-chat'] as const).map((protocol) => (
+                    <button
+                      key={protocol}
+                      type="button"
+                      onClick={() => changeCodexWireProtocol(protocol)}
+                      className={cn(
+                        'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
+                        f.wireProtocol === protocol
+                          ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
+                          : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+                      )}
+                      style={f.wireProtocol === protocol ? { backgroundColor: 'var(--surface-elevated)' } : undefined}
+                    >
+                      {t(`settings.providers.custom.wireProtocol.${protocol === 'openai-responses' ? 'responses' : 'chat'}`)}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
+                  {t(`settings.providers.custom.wireProtocol.${f.wireProtocol === 'openai-chat' ? 'chatHelp' : 'responsesHelp'}`)}
+                </span>
+              </div>
+            )}
+
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
               <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>

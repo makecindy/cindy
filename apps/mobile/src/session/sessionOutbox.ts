@@ -16,6 +16,7 @@
  * 本模块只做纯数据变换(node 可单测);上传路由、enqueue RPC、React state 接线
  * 在 [sessionId].tsx。
  */
+import { i18n } from '@/i18n';
 import type { MobileSessionReference } from '@/session/sessionReferences';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
@@ -364,7 +365,7 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     failed: item.phase === 'failed',
     errorText: item.phase !== 'failed'
       ? null
-      : (item.enqueueError ?? (item.failedIds.length > 0 ? '附件上传失败,可重试或删除这条消息。' : null)),
+      : (item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),
   };
 }
 

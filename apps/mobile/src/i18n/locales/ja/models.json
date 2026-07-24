@@ -1,0 +1,36 @@
+{
+  "picker": {
+    "title": "モデル",
+    "permissionTitle": "権限",
+    "searchAccessibility": "モデルを検索",
+    "searchPlaceholder": "モデルを検索...",
+    "noResults": "一致するモデルがありません",
+    "emptyDefault": "利用可能なモデルがありません",
+    "loadingDefault": "モデルを読み込み中…",
+    "subscriptionBadge": "サブスク",
+    "backToModels": "モデル一覧に戻る",
+    "agentSwitchHint": "モデルを選択すると、次のメッセージから {{agent}} に切り替わります",
+    "crossAgentEmptyHint": "先に操作対象のパソコンで {{agent}} のモデルソースを接続してください",
+    "permissionModeAccessibility": "権限モード:{{mode}}",
+    "selectProviderModelAccessibility": "{{provider}} のモデル {{model}} を選択",
+    "selectModelAccessibility": "モデル {{model}} を選択",
+    "configureAccessibility": "{{model}} を設定",
+    "budgetDisabledHint": "このモデルを使うには、先に操作対象のパソコンで API キーを設定してください",
+    "priceLine": "入力 {{input}} · 出力 {{output}} / 100万トークン",
+    "contextSuffix": "{{size}} コンテキスト",
+    "fastTag": "高速"
+  },
+  "options": {
+    "fastMode": "高速モード",
+    "fastModeAccessibility": "高速モード {{model}}",
+    "reasoningEffort": "推論の強度",
+    "reasoningEffortAccessibility": "推論の強度 {{label}}"
+  },
+  "agentSwitch": {
+    "browseAccessibility": "{{agent}} のモデルを表示",
+    "confirmTitle": "{{agent}} に切り替えますか?",
+    "confirmMessage": "次のメッセージを送信すると、{{appName}} は現在のセッションを {{agent}} に引き継ぎます。2つのエージェントはコンテキストやツールの理解が異なる場合があります。確認してから対象のモデルを選択してください。",
+    "cancel": "キャンセル",
+    "confirm": "続けて選択"
+  }
+}

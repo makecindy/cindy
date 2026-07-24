@@ -20,13 +20,16 @@
  *
  * 文案 i18n(issue #450):聚合短语 / 行级动词都走 i18n key。CJK 语序与英文
  * 不同,所以 key 是「整短语」粒度(如 "edited {{count}} files" / "编辑
- * {{count}} 个文件"),不拆 verb/noun 两段拼接。key 集中在下方两张映射表 —
- * i18nCompleteness 静态扫描认不出 `t(变量)`,这些 key 的 4 语言齐全性由
- * `agentActionsI18n.test.ts` 显式断言兜底。
+ * {{count}} 个文件"),不拆 verb/noun 两段拼接。聚合/行级 key 在下方映射表,
+ * command intent 的动词 key 表在 `src/shared/agentActionVerbKeys.ts`(与
+ * main 灵动岛措辞共享)— i18nCompleteness 静态扫描认不出 `t(变量)`,这些
+ * key 的 4 语言齐全性由 `agentActionsI18n.test.ts` 显式断言兜底。
  */
 
 import type { TFunction } from 'i18next';
 import type { CommandIntentAction } from '@cindy/maker-shared';
+
+import { INTENT_ROW_VERB_KEY } from '../../../shared/agentActionVerbKeys';
 
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -106,107 +109,10 @@ const ROW_VERB_KEY: Record<Verb, string> = {
 };
 
 /**
- * command intent（代码解析的命令意图,issue #450 codex 人话）→ 行级动词 key。
- * read / search / fetch 复用既有动词档,其余是本表新增 key —— 与 ROW_VERB_KEY
- * 一样属于 `t(变量)` 动态 key,4 语言齐全性由 agentActionsI18n.test.ts 钉住。
+ * command intent 的行级动词 label key;消费端自行 `t()`。key 表已下沉到
+ * `src/shared/agentActionVerbKeys.ts`(main 灵动岛措辞与面板共用同一事实源),
+ * 本函数保留为薄委托,面板消费端(AgentActionRow 等)零改动。
  */
-const INTENT_ROW_VERB_KEY: Record<CommandIntentAction, string> = {
-  read: 'chat.agentActionRow.verb.read',
-  list: 'chat.agentActionRow.verb.listed',
-  search: 'chat.agentActionRow.verb.searched',
-  inspect: 'chat.agentActionRow.verb.inspect',
-  inspectRepository: 'chat.agentActionRow.verb.inspectRepository',
-  inspectEnvironment: 'chat.agentActionRow.verb.inspectEnvironment',
-  modifyRepository: 'chat.agentActionRow.verb.modifyRepository',
-  verify: 'chat.agentActionRow.verb.verify',
-  fetch: 'chat.agentActionRow.verb.fetched',
-  install: 'chat.agentActionRow.verb.installedDeps',
-  test: 'chat.agentActionRow.verb.ranTests',
-  build: 'chat.agentActionRow.verb.built',
-  lint: 'chat.agentActionRow.verb.linted',
-  typecheck: 'chat.agentActionRow.verb.typechecked',
-  runScript: 'chat.agentActionRow.verb.runScript',
-  runNodeScript: 'chat.agentActionRow.verb.runNodeScript',
-  runPythonScript: 'chat.agentActionRow.verb.runPythonScript',
-  runPerlScript: 'chat.agentActionRow.verb.runPerlScript',
-  runSwiftScript: 'chat.agentActionRow.verb.runSwiftScript',
-  checkSyntax: 'chat.agentActionRow.verb.checkSyntax',
-  showVersion: 'chat.agentActionRow.verb.showVersion',
-  checkFormatting: 'chat.agentActionRow.verb.checkFormatting',
-  parseJson: 'chat.agentActionRow.verb.parseJson',
-  count: 'chat.agentActionRow.verb.count',
-  showCurrentDirectory: 'chat.agentActionRow.verb.showCurrentDirectory',
-  showDateTime: 'chat.agentActionRow.verb.showDateTime',
-  locateCommand: 'chat.agentActionRow.verb.locateCommand',
-  inspectProcesses: 'chat.agentActionRow.verb.inspectProcesses',
-  inspectPorts: 'chat.agentActionRow.verb.inspectPorts',
-  queryDatabase: 'chat.agentActionRow.verb.queryDatabase',
-  gitStatus: 'chat.agentActionRow.verb.gitStatus',
-  gitDiff: 'chat.agentActionRow.verb.gitDiff',
-  gitLog: 'chat.agentActionRow.verb.gitLog',
-  gitShow: 'chat.agentActionRow.verb.gitShow',
-  gitAdd: 'chat.agentActionRow.verb.gitAdd',
-  gitCommit: 'chat.agentActionRow.verb.gitCommit',
-  gitFetch: 'chat.agentActionRow.verb.gitFetch',
-  gitPull: 'chat.agentActionRow.verb.gitPull',
-  gitPush: 'chat.agentActionRow.verb.gitPush',
-  gitRebase: 'chat.agentActionRow.verb.gitRebase',
-  gitMerge: 'chat.agentActionRow.verb.gitMerge',
-  gitCherryPick: 'chat.agentActionRow.verb.gitCherryPick',
-  gitStash: 'chat.agentActionRow.verb.gitStash',
-  gitRestore: 'chat.agentActionRow.verb.gitRestore',
-  gitSubmodule: 'chat.agentActionRow.verb.gitSubmodule',
-  gitRemote: 'chat.agentActionRow.verb.gitRemote',
-  gitRevParse: 'chat.agentActionRow.verb.gitRevParse',
-  gitBranch: 'chat.agentActionRow.verb.gitBranch',
-  gitGrep: 'chat.agentActionRow.verb.gitGrep',
-  gitMergeBase: 'chat.agentActionRow.verb.gitMergeBase',
-  gitLsFiles: 'chat.agentActionRow.verb.gitLsFiles',
-  gitRevList: 'chat.agentActionRow.verb.gitRevList',
-  gitLsRemote: 'chat.agentActionRow.verb.gitLsRemote',
-  gitWorktreeList: 'chat.agentActionRow.verb.gitWorktreeList',
-  gitWorktreeAdd: 'chat.agentActionRow.verb.gitWorktreeAdd',
-  gitWorktreeRemove: 'chat.agentActionRow.verb.gitWorktreeRemove',
-  gitWorktreeMove: 'chat.agentActionRow.verb.gitWorktreeMove',
-  gitWorktreePrune: 'chat.agentActionRow.verb.gitWorktreePrune',
-  ghPrList: 'chat.agentActionRow.verb.ghPrList',
-  ghPrView: 'chat.agentActionRow.verb.ghPrView',
-  ghPrChecks: 'chat.agentActionRow.verb.ghPrChecks',
-  ghPrStatus: 'chat.agentActionRow.verb.ghPrStatus',
-  ghPrDiff: 'chat.agentActionRow.verb.ghPrDiff',
-  ghPrCreate: 'chat.agentActionRow.verb.ghPrCreate',
-  ghPrEdit: 'chat.agentActionRow.verb.ghPrEdit',
-  ghPrComment: 'chat.agentActionRow.verb.ghPrComment',
-  ghPrReview: 'chat.agentActionRow.verb.ghPrReview',
-  ghPrMerge: 'chat.agentActionRow.verb.ghPrMerge',
-  ghPrClose: 'chat.agentActionRow.verb.ghPrClose',
-  ghPrReopen: 'chat.agentActionRow.verb.ghPrReopen',
-  ghPrCheckout: 'chat.agentActionRow.verb.ghPrCheckout',
-  ghIssueList: 'chat.agentActionRow.verb.ghIssueList',
-  ghIssueView: 'chat.agentActionRow.verb.ghIssueView',
-  ghIssueStatus: 'chat.agentActionRow.verb.ghIssueStatus',
-  ghIssueCreate: 'chat.agentActionRow.verb.ghIssueCreate',
-  ghIssueEdit: 'chat.agentActionRow.verb.ghIssueEdit',
-  ghIssueComment: 'chat.agentActionRow.verb.ghIssueComment',
-  ghIssueClose: 'chat.agentActionRow.verb.ghIssueClose',
-  ghIssueReopen: 'chat.agentActionRow.verb.ghIssueReopen',
-  ghAuthStatus: 'chat.agentActionRow.verb.ghAuthStatus',
-  ghAuthLogin: 'chat.agentActionRow.verb.ghAuthLogin',
-  ghAuthLogout: 'chat.agentActionRow.verb.ghAuthLogout',
-  ghAuthRefresh: 'chat.agentActionRow.verb.ghAuthRefresh',
-  ghAuthSwitch: 'chat.agentActionRow.verb.ghAuthSwitch',
-  ghRunList: 'chat.agentActionRow.verb.ghRunList',
-  ghRunView: 'chat.agentActionRow.verb.ghRunView',
-  ghRunWatch: 'chat.agentActionRow.verb.ghRunWatch',
-  ghSearch: 'chat.agentActionRow.verb.ghSearch',
-  ghRepoList: 'chat.agentActionRow.verb.ghRepoList',
-  ghRepoView: 'chat.agentActionRow.verb.ghRepoView',
-  ghApiQuery: 'chat.agentActionRow.verb.ghApiQuery',
-  ghApiMutation: 'chat.agentActionRow.verb.ghApiMutation',
-  ghApiCall: 'chat.agentActionRow.verb.ghApiCall',
-};
-
-/** command intent 的行级动词 label key;消费端自行 `t()`。 */
 export function verbLabelKeyForIntent(action: CommandIntentAction): string {
   return INTENT_ROW_VERB_KEY[action];
 }

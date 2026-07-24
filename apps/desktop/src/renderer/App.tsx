@@ -14,6 +14,7 @@ import { EnvCheckProvider, EnvCheckGuard } from '@/contexts/EnvCheckContext';
 import { WorktreeProvider } from '@/contexts/WorktreeContext';
 import { PrRefsProvider } from '@/contexts/PrRefsContext';
 import { SplashScreen } from '@/components/splash/SplashScreen';
+import { LoginFirstLaunchLightGateBridge } from '@/components/login/LoginFirstLaunchLightGateBridge';
 import { LoginBrandStage } from '@/components/login/LoginBrandStage';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
@@ -67,6 +68,13 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
       authResolved={!isInitializing}
       authenticated={isAuthenticated || canEnterApp}
     >
+      {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
+          避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
+          被永久锁亮色;未登录场景仍由 LoginPage 卸载结束门(见组件头注释)。 */}
+      <LoginFirstLaunchLightGateBridge
+        authResolved={!isInitializing}
+        canEnterApp={canEnterApp}
+      />
       {children}
     </LoginHandoffProvider>
   );

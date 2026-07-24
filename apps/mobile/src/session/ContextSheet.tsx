@@ -9,6 +9,7 @@
  * 会话页与新建会话页共用本组件（同 MobileComposerInputRow 的共享约定）。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react-native';
 import {
   ActivityIndicator,
@@ -59,6 +60,7 @@ export function ContextSheet({
   testID,
 }: ContextSheetProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
+  const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [snap, setSnap] = useState<ContextSheetSnap>('half');
@@ -87,7 +89,7 @@ export function ContextSheet({
       visible={visible}
     >
       <SheetSurface
-        backAccessibilityLabel="返回上下文面板"
+        backAccessibilityLabel={t('interaction.contextSheet.backAccessibility')}
         bottomInset={insets.bottom}
         footer={footer}
         heights={heights}

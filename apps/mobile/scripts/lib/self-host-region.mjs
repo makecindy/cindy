@@ -250,6 +250,29 @@ export function resolveSelfHostRegion(args, options = {}) {
 }
 
 /**
+ * selfhost 构建(EXPO_PUBLIC_XDT_OTA_SELFHOST=1 的 prebuild)在 app.config.js 装载
+ * region 配置时硬校验的烘焙字段:TapDB 两字段全区域必填(防漏填统计静默发出无统计
+ * 正式包),global 另需 google 三字段(Google 登录)。返回缺失字段名列表(空数组 =
+ * 齐全),供纯构建脚本 dry-run 预告、--execute 在 prebuild 前 fail-fast;校验口径以
+ * apps/mobile/app.config.js 的 loadRegionBuildConfig 为准,此处只查非空,格式校验
+ * (google client id 后缀 / iosUrlScheme 反写)仍由 app.config.js 把关。
+ */
+export function missingSelfHostBakeFields(regionConfig) {
+  const missing = [];
+  const tapdb = regionConfig?.tapdb ?? {};
+  for (const key of REQUIRED_TAPDB_KEYS) {
+    if (!String(tapdb[key] ?? '').trim()) missing.push(`tapdb.${key}`);
+  }
+  if (regionConfig?.authRegion === 'global') {
+    const google = regionConfig?.google ?? {};
+    for (const key of REQUIRED_GOOGLE_KEYS) {
+      if (!String(google[key] ?? '').trim()) missing.push(`google.${key}`);
+    }
+  }
+  return missing;
+}
+
+/**
  * 判定 iOS 自建 canary 冷更的安装入口模式(显式配置优先):
  *   - iosAppStoreId 是纯数字(任何 region)→ App Store 模式,record 写商店网页 + deep link;
  *   - 为空且 region=dev → 企业重签模式,record 写 NPKG 企业重签后上传 OSS 的安装页 + itms-services 链接

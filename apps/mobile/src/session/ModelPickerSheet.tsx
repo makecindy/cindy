@@ -14,6 +14,7 @@
  * 关浮窗);选中行 effort/Fast 改 live,非选中行写注入记忆(见 ModelOptionsSheetView)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronDown, Search } from 'lucide-react-native';
 import {
   Animated,
@@ -144,6 +145,7 @@ export function ModelPickerSheet({
 }: ModelPickerSheetProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const { height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -297,11 +299,11 @@ export function ModelPickerSheet({
     <View style={styles.searchRow}>
       <Search color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       <TextInput
-        accessibilityLabel="搜索模型"
+        accessibilityLabel={t('models.picker.searchAccessibility')}
         autoCapitalize="none"
         autoCorrect={false}
         onChangeText={setQuery}
-        placeholder="搜索模型..."
+        placeholder={t('models.picker.searchPlaceholder')}
         placeholderTextColor={colors.textTertiary}
         style={styles.searchInput}
         testID={`${testID}.search`}
@@ -327,7 +329,7 @@ export function ModelPickerSheet({
           />
           {browsingOtherAgent ? (
             <Text style={styles.agentSwitchHint} testID={`${testID}.agentSwitchHint`}>
-              选择模型后，下一条消息将切换到 {mobileAgentLabel(agentSwitch.browsingAgentKind)}
+              {t('models.picker.agentSwitchHint', { agent: mobileAgentLabel(agentSwitch.browsingAgentKind) })}
             </Text>
           ) : null}
         </>
@@ -342,7 +344,7 @@ export function ModelPickerSheet({
   const permissionColor = permissionAccentColor(permission.accent, colors);
   const permissionTrigger = (
     <Pressable
-      accessibilityLabel={`权限模式:${permissionLabel}`}
+      accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: permissionLabel })}
       accessibilityRole="button"
       accessibilityState={{ disabled: permissionDisabled || browsingOtherAgent }}
       disabled={permissionDisabled || browsingOtherAgent}
@@ -385,10 +387,10 @@ export function ModelPickerSheet({
         scrollRef={scrollRef}
         snap={primarySnap}
         testID={testID}
-        title="模型"
+        title={t('models.picker.title')}
       >
         {noResults ? (
-          <Text style={styles.noResults} testID={`${testID}.noResults`}>没有匹配的模型</Text>
+          <Text style={styles.noResults} testID={`${testID}.noResults`}>{t('models.picker.noResults')}</Text>
         ) : (
           <MobileModelPickerList
             activeModelId={activeModelId}
@@ -398,7 +400,7 @@ export function ModelPickerSheet({
             capabilities={capabilities}
             disabled={disabled}
             emptyHint={browsingOtherAgent
-              ? `请先在被控电脑连接 ${mobileAgentLabel(agentSwitch!.browsingAgentKind)} 的模型来源`
+              ? t('models.picker.crossAgentEmptyHint', { agent: mobileAgentLabel(agentSwitch!.browsingAgentKind) })
               : emptyHint}
             flatOptions={effectiveFlatOptions}
             loading={loading}
@@ -421,14 +423,14 @@ export function ModelPickerSheet({
           testID={`${testID}.secondaryLayer`}
         >
           <Pressable
-            accessibilityLabel="返回模型列表"
+            accessibilityLabel={t('models.picker.backToModels')}
             accessibilityRole="button"
             onPress={backToModels}
             style={styles.secondaryBackdrop}
             testID={`${testID}.secondaryBackdrop`}
           />
           <SheetSurface
-            backAccessibilityLabel="返回模型列表"
+            backAccessibilityLabel={t('models.picker.backToModels')}
             bottomInset={insets.bottom}
             heights={heights}
             onBack={backToModels}

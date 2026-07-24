@@ -173,15 +173,13 @@ export function AskUserQuestionPrompt({
   const snapshotButtons = useCallback(() => {
     // Capture a static copy of the current button bar's DOM via a frozen JSX snapshot.
     // This uses the current values at call time, not reactive state.
-    const btnClass = 'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium';
-    const skipClass = cn(btnClass, 'bg-[var(--ask-skip-bg)] text-[var(--ask-skip-text)]');
+    const btnClass = 'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium pointer-events-none';
+    const skipClass = cn(btnClass, 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]');
     const showNext = isMultiSelect || (existingAnswer !== undefined && !isMultiSelect) || isLastQuestion;
     const nextDisabled = isMultiSelect
       ? selectedLabels.size === 0 && !customInput.trim()
       : existingAnswer === undefined;
-    const nextClass = cn(btnClass, nextDisabled
-      ? 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]'
-      : 'bg-[var(--ask-next-bg)] text-[var(--ask-next-text)]');
+    const nextClass = cn(btnClass, nextDisabled ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50' : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]');
 
     buttonsSnapshotRef.current = (
       <>
@@ -428,7 +426,7 @@ export function AskUserQuestionPrompt({
         <div className="flex h-[32px] items-center justify-between">
           <div className="flex items-center">
             {currentQ?.header && (
-              <span className="inline-block rounded-[6px] bg-[var(--ask-badge-bg)] px-[8px] py-[2px] text-[12px] font-medium text-[var(--ask-badge-text)]">
+              <span className="inline-block rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-[12px] font-medium text-[var(--ask-badge-text)]">
                 {currentQ.header}
               </span>
             )}
@@ -440,8 +438,10 @@ export function AskUserQuestionPrompt({
             aria-label="Minimize question prompt"
             className={cn(
               'flex h-[28px] w-[28px] cursor-pointer items-center justify-center rounded-[6px]',
-              'text-[var(--plan-toolbar-btn-icon)] transition-colors',
-              'hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
+              // 线框图标钮(2026-07-23 用户拍板): 与 Skip/Submit 同描边族,静默透明底
+              'border border-[var(--confirm-btn-secondary-border)] bg-transparent',
+              'text-[var(--confirm-btn-secondary-text)] transition-colors',
+              'hover:bg-[var(--confirm-btn-secondary-hover)]',
               isAnimating && 'cursor-not-allowed opacity-40 hover:bg-transparent',
             )}
           >
@@ -467,7 +467,7 @@ export function AskUserQuestionPrompt({
 
           {/* Options Container */}
           {options.length > 0 && (
-            <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)]">
+            <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
               {options.map((opt, idx) => (
                 <div key={opt.label}>
                   {idx > 0 && (
@@ -661,7 +661,7 @@ export function AskUserQuestionPrompt({
                   onClick={handleBack}
                   className={cn(
                     'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                    'bg-[var(--ask-skip-bg)] text-[var(--ask-skip-text)]',
+                    'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
                   )}
                 >
                   <span className="flex items-center gap-[6px]">
@@ -676,7 +676,7 @@ export function AskUserQuestionPrompt({
                 onClick={handleSkip}
                 className={cn(
                   'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                  'bg-[var(--ask-skip-bg)] text-[var(--ask-skip-text)]',
+                  'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
                 )}
               >
                 Skip
@@ -700,8 +700,8 @@ export function AskUserQuestionPrompt({
                   className={cn(
                     'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
                     (isMultiSelect ? (selectedLabels.size === 0 && !customInput.trim()) : existingAnswer === undefined)
-                      ? 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]'
-                      : 'bg-[var(--ask-next-bg)] text-[var(--ask-next-text)]',
+                      ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50'
+                      : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
                   )}
                 >
                   {isLastQuestion ? 'Submit' : 'Next'}

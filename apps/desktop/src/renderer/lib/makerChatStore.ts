@@ -120,6 +120,7 @@ const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:input:projection',
   'maker:interaction-request',
   'maker:interaction-dismissed',
+  'content-moderation:output-blocked',
   'local-db:messages:created',
   'usage:message-turn-cost',
   'maker:session-model-pref:changed',
@@ -166,7 +167,11 @@ import {
   parseUserContent,
   stringifyUserContent,
 } from '@/lib/imageRef';
-import { saveDraft as saveComposerDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
+import {
+  getDraft as getComposerDraft,
+  saveDraft as saveComposerDraft,
+  plainTextToTiptapDoc,
+} from '@/lib/composerDraftStore';
 import {
   canStartComposerSteer,
   canStartQueuedSteer,
@@ -3617,6 +3622,9 @@ function initGlobalListeners(): void {
         case 'maker:interaction-dismissed':
           handleInteractionDismissedRaw(push.payload);
           break;
+        case 'content-moderation:output-blocked':
+          handleContentModerationOutputBlocked(push.payload);
+          break;
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload);
@@ -3830,6 +3838,78 @@ function initGlobalListeners(): void {
       });
     },
     'ghosts-user-message-blocked',
+  );
+
+  bindIpc(
+    (cb) => window.electronAPI.contentModeration?.onInputBlocked?.(cb),
+    (raw: unknown) => {
+      const payload = raw as {
+        sessionId?: string;
+        clientId?: string;
+        text?: string;
+        files?: SerializedAttachedFile[];
+        reason?: 'rejected' | 'cancelled';
+      } | null;
+      if (!payload?.sessionId || !payload.clientId || typeof payload.text !== 'string') return;
+
+      setState(payload.sessionId, (state) => ({
+        ...state,
+        messages: state.messages.filter(
+          (message) => !(message.clientId === payload.clientId && message.isPendingPersist),
+        ),
+      }));
+
+      const existing = getComposerDraft(payload.sessionId);
+      const restoredText = plainTextToTiptapDoc(payload.text);
+      const text = existing?.text?.content?.length
+        ? {
+            type: 'doc',
+            content: [
+              ...(restoredText.content ?? []),
+              { type: 'paragraph' },
+              ...existing.text.content,
+            ],
+          }
+        : restoredText;
+
+      const restoredFiles = (payload.files ?? []) as AttachedFile[];
+      const seen = new Set<string>();
+      const attachments = [...restoredFiles, ...(existing?.attachments ?? [])].filter((file) => {
+        const key = file.id || file.url || file.path;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      saveComposerDraft(payload.sessionId, { text, attachments });
+      if (payload.reason === 'rejected') {
+        toast.error(i18n.t('contentModeration.blocked'));
+      }
+    },
+    'content-moderation-input-blocked',
+  );
+
+  const handleContentModerationOutputBlocked = (raw: unknown): void => {
+    const payload = raw as {
+      sessionId?: string;
+      kind?: string;
+      i18nKey?: string;
+    } | null;
+    if (
+      !payload?.sessionId
+      || payload.kind !== 'blocked'
+      || payload.i18nKey !== 'contentModeration.blocked'
+      || !_activeViewSessions.has(payload.sessionId)
+    ) {
+      return;
+    }
+    toast.error(i18n.t('contentModeration.blocked'));
+  };
+
+  bindIpc(
+    (cb) => window.electronAPI.contentModeration?.onOutputBlocked?.(cb),
+    handleContentModerationOutputBlocked,
+    'content-moderation-output-blocked',
   );
 
   // ── 意识改写(订阅槽①):用户消息正文被钩子优化 ──
@@ -7324,6 +7404,42 @@ export const makerChatStore = {
   setAskUserDraft,
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
+  /**
+   * 后台任务快照水合:把 main 的 listSessionBackgroundTasks 结果补进 taskUpdates。
+   * 只补「store 里完全没见过」的任务 —— 事件流是唯一实时源,快照可能落后于刚到
+   * 的终态事件,已存在的条目(无论何状态)绝不用快照的 running 覆盖复活。
+   * 消费方:useBackgroundBashTasks(会话挂载 / reloadMessages 清空 taskUpdates 后)。
+   */
+  seedBackgroundTaskSnapshots: (
+    sessionId: string,
+    tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>,
+  ): void => {
+    if (!tasks.length) return;
+    setState(sessionId, (s) => {
+      let next = s;
+      for (const t of tasks) {
+        if (!t || typeof t.taskId !== 'string' || !t.taskId) continue;
+        const seen =
+          next.taskUpdates?.has(t.taskId) ||
+          (t.toolUseId ? next.taskUpdates?.has(t.toolUseId) : false);
+        if (seen) continue;
+        next = handleStreamEvent(next, {
+          sessionId,
+          type: 'agent_task_update',
+          source: 'claude-code',
+          data: {
+            provider: 'claude-code',
+            taskId: t.taskId,
+            status: 'running',
+            ...(t.taskType ? { taskType: t.taskType } : {}),
+            ...(t.toolUseId ? { parentToolUseId: t.toolUseId } : {}),
+            ...(t.title ? { title: t.title } : {}),
+          },
+        } as CCAgentStreamEvent);
+      }
+      return next;
+    });
+  },
   /** Exposed for tests only. */
   __teardownGlobalListeners,
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */

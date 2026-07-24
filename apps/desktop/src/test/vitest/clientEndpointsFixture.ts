@@ -32,6 +32,8 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   websiteUrl: 'https://website.test.invalid',
   modelAccessApiBaseUrl: 'https://model-access.test.invalid',
   voiceApiBaseUrl: 'https://voice.test.invalid',
+  moderationSignApiBaseUrl: 'https://moderation-sign.test.invalid',
+  moderationSignTestApiBaseUrl: 'https://moderation-sign-dev.test.invalid',
   githubApiBaseUrl: 'https://github-api.test.invalid',
   skillhubApiBaseUrl: 'https://skillhub.test.invalid',
   cdnBaseUrl: TEST_CDN_BASE_URL,

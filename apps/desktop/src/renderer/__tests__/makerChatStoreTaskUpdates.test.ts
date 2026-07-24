@@ -435,6 +435,51 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
     }
   });
 
+  it('seedBackgroundTaskSnapshots 只补未见过的任务,绝不复活已终态条目', () => {
+    const sid = `seed-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      // b1 已经走完整生命周期(running → completed),快照(可能落后)仍报 running。
+      applyTask(sid, { taskId: 'b1', status: 'running', taskType: 'local_bash' });
+      applyTask(sid, { taskId: 'b1', status: 'completed' });
+
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [
+        { taskId: 'b1', taskType: 'local_bash', title: 'stale snapshot' },
+        { taskId: 'b2', taskType: 'local_bash', toolUseId: 'tu-b2', title: 'pnpm test:unit' },
+      ]);
+
+      const tasks = makerChatStore.getSnapshot(sid).taskUpdates;
+      // 已存在的 b1 不被快照的 running 复活
+      expect(tasks?.get('b1')?.status).toBe('completed');
+      // 未见过的 b2 补进来,taskId / toolUseId 双 key 命中
+      expect(tasks?.get('b2')?.status).toBe('running');
+      expect(tasks?.get('b2')?.taskType).toBe('local_bash');
+      expect(tasks?.get('b2')?.title).toBe('pnpm test:unit');
+      expect(tasks?.get('tu-b2')?.taskId).toBe('b2');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('seedBackgroundTaskSnapshots 按 toolUseId 命中已存在条目时同样跳过', () => {
+    const sid = `seed2-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      applyTask(sid, {
+        taskId: 'b1',
+        parentToolUseId: 'tu-b1',
+        status: 'stopped',
+        taskType: 'local_bash',
+      });
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [
+        { taskId: 'b1-renamed', toolUseId: 'tu-b1', taskType: 'local_bash' },
+      ]);
+      const tasks = makerChatStore.getSnapshot(sid).taskUpdates;
+      expect(tasks?.get('tu-b1')?.status).toBe('stopped');
+      expect(tasks?.has('b1-renamed')).toBe(false);
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
   it('session closed 兜底(finalizeStuckRemoteTurn → forceFinalize):running 任务全收口、桥接清零', () => {
     const sid = `remote-closed-${Math.random().toString(36).slice(2, 8)}`;
     try {

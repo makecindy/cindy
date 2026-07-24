@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -114,5 +114,76 @@ describe('AgentTaskCard', () => {
       }),
     );
     expect(modelChip(container)).toBeNull();
+  });
+
+  // bash-task-card + 停止按钮 ---------------------------------------------------
+  const stopButton = (container: HTMLElement) =>
+    container.querySelector<HTMLButtonElement>('[data-agent-task-stop="true"]');
+
+  it('renders local_bash tasks as a background command with a stop button while running', async () => {
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    (window as unknown as { electronAPI?: unknown }).electronAPI = {
+      maker: { stopAgentTask },
+    };
+    try {
+      const { container } = render(
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          update: {
+            provider: 'claude-code',
+            taskId: 'bash-1',
+            status: 'running',
+            title: 'pnpm test:unit',
+            taskType: 'local_bash',
+          },
+        }),
+      );
+      expect(container.textContent).toContain('chat.agentTask.provider.shell');
+      const btn = stopButton(container);
+      expect(btn).not.toBeNull();
+      // stop 的 finally(setStopping)在微任务里落地,await 到位避免 act 泄漏警告。
+      await act(async () => {
+        btn!.click();
+        await Promise.resolve();
+      });
+      expect(stopAgentTask).toHaveBeenCalledWith('session-1', 'bash-1');
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
+  });
+
+  it('hides the stop button for terminal tasks, codex tasks, and when sessionId is missing', () => {
+    const terminal = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'session-1',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-1',
+          status: 'completed',
+          taskType: 'local_bash',
+        },
+      }),
+    );
+    expect(stopButton(terminal.container)).toBeNull();
+
+    const codex = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'session-1',
+        update: { provider: 'codex', taskId: 'c1', status: 'running' },
+      }),
+    );
+    expect(stopButton(codex.container)).toBeNull();
+
+    const noSession = render(
+      React.createElement(AgentTaskCard, {
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-1',
+          status: 'running',
+          taskType: 'local_bash',
+        },
+      }),
+    );
+    expect(stopButton(noSession.container)).toBeNull();
   });
 });

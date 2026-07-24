@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useCallback } from 'react';
+import { Fragment, useMemo, useCallback, useState } from 'react';
 import {
   AlertCircle,
   Bot,
@@ -6,6 +6,8 @@ import {
   ChevronRight,
   CircleStop,
   LoaderCircle,
+  Square,
+  SquareTerminal,
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -14,6 +16,7 @@ import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import { isRemoteSession } from '@/lib/makerTransport';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { WorkflowAgentTree } from './WorkflowAgentTree';
@@ -98,7 +101,11 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   // workflowName、头像换 Workflow 图标、provider 标签显示 "Workflow";其余(状态 / 聚合
   // usage / 展开详情)复用本卡既有逻辑。
   const isWorkflow = update?.taskType === 'local_workflow' || toolCall?.toolName === 'Workflow';
-  const AvatarIcon = isWorkflow ? Workflow : Bot;
+  // bash-task-card: 后台 Bash(run_in_background)与子 Agent 共用本卡,但视觉上
+  // 是「后台命令」—— 终端图标 + shell provider 标签,避免用户把跑测试的 bash
+  // 误读成一个子 Agent。
+  const isBash = update?.taskType === 'local_bash';
+  const AvatarIcon = isWorkflow ? Workflow : isBash ? SquareTerminal : Bot;
   const title = compactText(
     (isWorkflow ? update?.workflowName : undefined) ??
       update?.title ??
@@ -115,9 +122,35 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   const provider = update?.provider ?? (toolCall?.toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
   const providerLabel = isWorkflow
     ? t('chat.agentTask.provider.workflow')
-    : provider === 'codex'
-      ? t('chat.agentTask.provider.codex')
-      : t('chat.agentTask.provider.claude');
+    : isBash
+      ? t('chat.agentTask.provider.shell')
+      : provider === 'codex'
+        ? t('chat.agentTask.provider.codex')
+        : t('chat.agentTask.provider.claude');
+
+  // 停止按钮:running + 本会话可定位 + claude-code(codex 无 stopTask 通道)。
+  // 点击后交给 main 的 stopAgentTask;成功与否都由 task_notification 事件流收口
+  // (状态翻 stopped → 按钮自然消失),这里只管在飞态防连点。失败静默恢复 ——
+  // 任务恰好自然结束时 stop 是幂等成功,真失败(不支持等)保持 running 状态可重试。
+  const [stopping, setStopping] = useState(false);
+  const canStop =
+    status === 'running' &&
+    Boolean(sessionId) &&
+    Boolean(update?.taskId) &&
+    update?.provider === 'claude-code' &&
+    // device-link 镜像会话:session 活在被控端,本地 stopAgentTask 会假成功 —— 不给按钮。
+    !(sessionId && isRemoteSession(sessionId));
+  const handleStop = useCallback(() => {
+    const api = window.electronAPI?.maker;
+    if (!sessionId || !update?.taskId || !api?.stopAgentTask) return;
+    setStopping(true);
+    void api
+      .stopAgentTask(sessionId, update.taskId)
+      .catch(() => {
+        // 静默:失败时卡片仍显示 running,用户可重试;不弹打断式错误。
+      })
+      .finally(() => setStopping(false));
+  }, [sessionId, update?.taskId]);
 
   const meta = useMemo(() => {
     const parts: Array<{ key: string; text: string }> = [
@@ -149,10 +182,13 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
           : {})}
         className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
       >
+        {/* 折叠头 = 展开 toggle + 可选的停止按钮。button 不能嵌套,停止按钮以
+            兄弟节点挂在 toggle 右侧(仅 running 时出现)。 */}
+        <div className="flex w-full items-start gap-2">
         <button
           type="button"
           onClick={toggle}
-          className="flex w-full items-start gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           aria-expanded={expanded}
           aria-label={expanded ? t('chat.agentTask.hideDetails') : t('chat.agentTask.showDetails')}
         >
@@ -201,6 +237,25 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
             aria-hidden="true"
           />
         </button>
+        {canStop && (
+          <button
+            type="button"
+            onClick={handleStop}
+            disabled={stopping}
+            title={t('chat.agentTask.stop')}
+            aria-label={t('chat.agentTask.stop')}
+            data-agent-task-stop="true"
+            className={cn(
+              'mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px]',
+              'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
+              'transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            )}
+          >
+            <Square size={11} aria-hidden="true" />
+          </button>
+        )}
+        </div>
 
         <Collapse open={expanded}>
           <div className="mt-2 border-l-2 border-[var(--agent-actions-rail)] pl-3 text-13 leading-5 text-[var(--text-secondary)]">

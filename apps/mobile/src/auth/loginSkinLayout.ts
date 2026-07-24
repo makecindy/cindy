@@ -385,25 +385,11 @@ export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size
 /** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20)。 */
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20 } as const;
 
-/**
- * 态叠层参数(figma §2.1 实测,rgba 字面值非主题色——与桌面 LoginControls 同款随行注:
- * dark = pressed 黑 50% 叠层(247:1542,主钮/圆钮);light = pressed 黑 8% 叠层
- * (§2.2 浅底控件:方式行/tabs/返回钮)。disabled 叠层走 loginColors.disabledButtonOverlay token。
- */
-export const LOGIN_PRESSED_OVERLAY = {
-  dark: 'rgba(0, 0, 0, 0.5)',
-  light: 'rgba(0, 0, 0, 0.08)',
-} as const;
-
-/**
- * 浅底钮白描边(figma §4.6 返回钮 247:1636 边框白)。mobile loginColors 无同值 token
- * (桌面为 login-inverted-button-border token,#FFFFFF 双主题恒定);此值是 figma 边框白、
- * 非主题色,按 PR4a 交付口径以注释锚定字面量。
- */
-export const LOGIN_INVERTED_BORDER = '#FFFFFF';
-
-/** 大 loading 环底圈色(桌面 LoginControls.LoginLoadingRing 同款 rgba(42,40,40,0.18) 字面参数)。 */
-export const LOGIN_RING_TRACK = 'rgba(42, 40, 40, 0.18)';
+// 态叠层 / 浅底钮白描边 / loading 环底圈色:原 LOGIN_PRESSED_OVERLAY /
+// LOGIN_INVERTED_BORDER / LOGIN_RING_TRACK 字面常量已随暗色实现 PR 并入
+// `LoginSkinColors` 双态色板(overlayButtonPressed / overlayControlPressed /
+// invertedButtonBorder / loadingRingTrack,@/theme/tokens loginPalettes)——
+// 叠层方向随 light/dark 反转,单值字面量无法承载,消费一律走 colors.login.*。
 
 /** disabled 态文字不透明度(figma §4.3 disable 态文字 80%)。 */
 export const LOGIN_DISABLED_TEXT_OPACITY = 0.8;

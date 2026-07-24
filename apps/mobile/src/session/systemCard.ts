@@ -9,6 +9,7 @@ import {
   type SystemCardPresentation,
   type SystemCardType,
 } from '@cindy/maker-shared/system-card';
+import { i18n } from '@/i18n';
 
 /**
  * 手机端系统卡类型 = 共享 slash 命令卡 + goal 持久记录卡 + silent-stop 自动续跑卡。
@@ -35,7 +36,7 @@ function formatGoalCompleteCard(data: Record<string, unknown> | undefined): Syst
   const elapsedMs = typeof data?.elapsedMs === 'number' ? data.elapsedMs : 0;
   const reason = typeof data?.reason === 'string' ? data.reason : '';
   return {
-    title: `目标已达成 · ${turns} 轮 · 耗时 ${formatGoalDuration(elapsedMs)}`,
+    title: i18n.t('message.systemCard.goalComplete', { turns, duration: formatGoalDuration(elapsedMs) }),
     ...(reason ? { body: reason } : {}),
     rows: [],
   };
@@ -86,8 +87,8 @@ export function formatMobileSystemCard(
   data: Record<string, unknown> | undefined,
 ): MobileSystemCardPresentation {
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
-  if (type === 'goal-resumed') return { title: '用量已恢复，继续目标', rows: [] };
-  if (type === 'auto-resume') return { title: '连接中断，已自动继续', rows: [] };
+  if (type === 'goal-resumed') return { title: i18n.t('message.systemCard.goalResumed'), rows: [] };
+  if (type === 'auto-resume') return { title: i18n.t('message.systemCard.autoResume'), rows: [] };
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);
   return formatSystemCard(type, data);
@@ -104,11 +105,11 @@ function formatAgentSwitchCard(data: Record<string, unknown> | undefined): Syste
   const from = engineLabel(data?.fromAgentKind);
   const to = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
-  const rows = toModel ? [{ label: '模型', value: toModel }] : [];
+  const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
   // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。
-  if (data?.resumed === true) rows.push({ label: '会话', value: '已续接' });
+  if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
   return {
-    title: `已从 ${from} 切换到 ${to}`,
+    title: i18n.t('message.systemCard.agentSwitch', { from, to }),
     rows,
   };
 }
@@ -121,17 +122,17 @@ function formatLearnCard(data: Record<string, unknown> | undefined): SystemCardP
   const runId = typeof data?.runId === 'string' ? data.runId : '';
   if (runId) {
     return {
-      title: '技能学习已启动',
+      title: i18n.t('message.systemCard.learnStarted'),
       rows: [{ label: 'run', value: runId.slice(0, 8) }],
-      body: '蒸馏在桌面端后台进行,完成后请到桌面端查看并评审技能草案。',
+      body: i18n.t('message.systemCard.learnStartedBody'),
     };
   }
   const error = typeof data?.error === 'string' ? data.error : 'learn-failed';
   return {
-    title: '技能学习未能启动',
+    title: i18n.t('message.systemCard.learnFailed'),
     rows: [],
     body: error === 'learn-busy'
-      ? '已有一个学习任务在进行中,等它完成后再试。'
-      : `启动失败:${typeof data?.detail === 'string' && data.detail ? data.detail : '未知错误'}`,
+      ? i18n.t('message.systemCard.learnBusyBody')
+      : i18n.t('message.systemCard.learnFailedBody', { detail: typeof data?.detail === 'string' && data.detail ? data.detail : i18n.t('message.systemCard.unknownError') }),
   };
 }

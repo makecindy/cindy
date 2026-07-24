@@ -61,9 +61,10 @@ describe('resolveIosSigningEnv（从 region JSON 的 iosSigning 取值,非机密
     iosSigning: { teamId: 'TEAM123456', profileName: 'some_profile', signIdentity: FULL_IDENTITY },
   };
   const withSigning = (patch) => ({ ...REGION, iosSigning: { ...REGION.iosSigning, ...patch } });
-  it('三项齐全 → 透传;profilePath 可选缺省为空串', () => {
+  it('三项齐全 → 透传;profilePath 可选缺省为空串,exportMethod 缺省 development', () => {
     expect(resolveIosSigningEnv(REGION)).toEqual({
       teamId: 'TEAM123456', profileName: 'some_profile', identity: FULL_IDENTITY, profilePath: '',
+      exportMethod: 'development',
     });
     expect(resolveIosSigningEnv(withSigning({ profilePath: '/tmp/p.mobileprovision' })).profilePath)
       .toBe('/tmp/p.mobileprovision');
@@ -90,6 +91,16 @@ describe('resolveIosSigningEnv（从 region JSON 的 iosSigning 取值,非机密
   it('signIdentity 是 40 位 SHA-1 → 放行', () => {
     const sha1 = 'A1B2C3D4E5F60718293A4B5C6D7E8F9012345678';
     expect(resolveIosSigningEnv(withSigning({ signIdentity: sha1 })).identity).toBe(sha1);
+  });
+  it('exportMethod 留空 → development;白名单值透传', () => {
+    expect(resolveIosSigningEnv(withSigning({ exportMethod: '' })).exportMethod).toBe('development');
+    expect(resolveIosSigningEnv(withSigning({ exportMethod: 'enterprise' })).exportMethod).toBe('enterprise');
+    expect(resolveIosSigningEnv(withSigning({ exportMethod: 'app-store' })).exportMethod).toBe('app-store');
+    expect(resolveIosSigningEnv(withSigning({ exportMethod: 'ad-hoc' })).exportMethod).toBe('ad-hoc');
+  });
+  it('exportMethod 非白名单值 → 拒(防拼错被 xcodebuild 晚期才报)', () => {
+    expect(() => resolveIosSigningEnv(withSigning({ exportMethod: 'adhoc' }))).toThrow(/exportMethod/);
+    expect(() => resolveIosSigningEnv(withSigning({ exportMethod: 'AppStore' }))).toThrow(/exportMethod/);
   });
 });
 
@@ -123,6 +134,13 @@ describe('buildExportOptionsPlist', () => {
   });
   it('缺参抛错', () => {
     expect(() => buildExportOptionsPlist({ teamId: 'x', bundleId: 'y' })).toThrow();
+  });
+  it('传 method 时使用指定分发方式(纯构建 exportMethod 直通)', () => {
+    const plist = buildExportOptionsPlist({
+      teamId: 'TEAMID1234', bundleId: 'com.xd.cindycn', profileName: 'cindycn_dist', method: 'enterprise',
+    });
+    expect(plist).toContain('<string>enterprise</string>');
+    expect(plist).not.toContain('<string>development</string>');
   });
 });
 

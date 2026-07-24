@@ -6,6 +6,7 @@
  * (新建页 in-flow panel,会话内 composer 浮层)。
  */
 import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Check } from 'lucide-react-native';
 
@@ -56,6 +57,7 @@ export function MobilePermissionPickerList({
 }: MobilePermissionPickerListProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   // 计划模式已迁移到 + 号 Context 面板的专属入口(点击即进入),权限下拉不再展示 plan;
   // 当前模式为 plan 时列表无高亮行,从这里选任意模式即退出计划模式。
   const visibleOptions = options.filter((option) => option.id !== 'plan');
@@ -68,7 +70,7 @@ export function MobilePermissionPickerList({
         const tinted = selected && presentation.accent !== 'neutral';
         return (
           <Pressable
-            accessibilityLabel={`选择权限模式 ${presentation.label}`}
+            accessibilityLabel={t('interaction.permission.pickerSelect', { mode: presentation.label })}
             accessibilityRole="button"
             accessibilityState={{ selected, disabled }}
             disabled={disabled}

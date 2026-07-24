@@ -1,192 +1,6 @@
 {
-  "billing": {
-    "sidebar": "Credits & plans",
-    "settings": {
-      "title": "Usage and billing",
-      "subtitle": "Review your current subscription or purchase server-provided plans and credits.",
-      "loading": "Loading subscription status…",
-      "subscriptionCard": {
-        "title": "Current plan",
-        "empty": "No active subscription",
-        "emptyTitle": "No subscription plan",
-        "unnamedPlan": "Subscription plan",
-        "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
-        "action": "View plans",
-        "changeAction": "Change plan"
-      },
-      "topupCard": {
-        "title": "Credits",
-        "description": "Purchase credits for usage-based models and features.",
-        "cardTitle": "Buy credits as needed",
-        "cardDescription": "Available credit products are configured by the server.",
-        "action": "Buy credits"
-      }
-    },
-    "balance": {
-      "title": "Available balance",
-      "plan": "Plan credits",
-      "purchased": "Purchased credits",
-      "promotional": "Promotional credits",
-      "notProvisioned": "Credits have not been enabled for this account.",
-      "notSupported": "Balance lookup is not supported for this account.",
-      "unavailable": "Balance is temporarily unavailable. Refresh to try again."
-    },
-    "dialogs": {
-      "subscription": {
-        "title": "Choose a subscription plan",
-        "description": "Only currently configured server plans are shown. Choose a plan before selecting its payment method."
-      },
-      "topup": {
-        "title": "Buy credits",
-        "description": "Only currently configured server credit products are shown. Choose a product before selecting its payment method."
-      }
-    },
-    "eyebrow": "Account & usage",
-    "title": "Choose the plan that fits",
-    "subtitle": "Plans and payment methods are delivered by the server. Choose a plan first to see its currently supported payment methods.",
-    "steps": {
-      "offer": {
-        "title": "Choose a plan",
-        "description": "Only currently purchasable credit and subscription offers are shown."
-      },
-      "channel": {
-        "title": "Choose a payment method",
-        "description": "Supported payment methods can differ by plan.",
-        "selectOfferFirst": "Choose a plan to see its supported payment methods"
-      },
-      "confirm": {
-        "title": "Review and pay",
-        "description": "Review the plan and payment method before creating payment.",
-        "selectChannelFirst": "Choose a payment method to continue"
-      }
-    },
-    "actions": {
-      "refreshCatalog": "Refresh",
-      "retry": "Retry",
-      "pay": "Review and pay",
-      "refresh": "Refresh status",
-      "cancelPayment": "Cancel payment",
-      "close": "Close"
-    },
-    "catalog": {
-      "errorTitle": "Plans are temporarily unavailable",
-      "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
-      "emptyTitle": "No plans are available",
-      "emptyDescription": "The server has not configured a purchasable plan and payment method yet."
-    },
-    "offerKinds": {
-      "topup": "Credit top-up",
-      "subscription": "Subscription"
-    },
-    "amount": {
-      "custom": "Custom amount",
-      "label": "Top-up amount",
-      "placeholder": "Enter an amount",
-      "rangeHint": "Enter between {{min}} and {{max}}",
-      "rangeError": "Amount must be between {{min}} and {{max}}",
-      "formatError": "Enter a valid amount with no more than {{digits}} decimal places"
-    },
-    "intervals": {
-      "MONTH": "month",
-      "YEAR": "year"
-    },
-    "credits": "{{amount}} credits",
-    "confirm": {
-      "channel": "Pay with {{provider}}"
-    },
-    "paymentActions": {
-      "QR_CODE": "Scan to pay",
-      "REDIRECT": "Open payment page"
-    },
-    "providers": {
-      "alipay": "Alipay",
-      "stripe": "Card"
-    },
-    "securityNotice": "Payments are securely handled by the selected provider; Cindy does not store payment credentials",
-    "currentSubscription": {
-      "title": "Current subscription",
-      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
-    },
-    "subscriptionStatus": {
-      "INCOMPLETE": "Awaiting payment",
-      "INCOMPLETE_EXPIRED": "Payment expired",
-      "TRIALING": "Trial",
-      "ACTIVE": "Active",
-      "PAST_DUE": "Past due",
-      "UNPAID": "Unpaid",
-      "CANCELED": "Canceled",
-      "PAUSED": "Paused"
-    },
-    "recovery": {
-      "title": "Unfinished payment found",
-      "description": "Continue the previous payment and confirm its latest state with the server.",
-      "continueTopup": "Continue {{amount}} payment",
-      "continueSubscription": "Continue subscription payment"
-    },
-    "checkout": {
-      "creatingTitle": "Creating payment",
-      "awaitingTitle": "Awaiting payment",
-      "completedTitle": "Payment successful",
-      "failedTitle": "Unable to complete",
-      "expiredTitle": "Payment expired",
-      "canceledTitle": "Payment canceled",
-      "topupSubtitle": "Credit top-up",
-      "subscriptionSubtitle": "Subscription",
-      "creatingBody": "Confirming the order with the payment service…",
-      "qrAlt": "Payment QR code",
-      "scanHint": "Scan with the corresponding payment app",
-      "checkingExpiry": "Checking expiration…",
-      "expiresIn": "QR code expires in {{minutes}}:{{seconds}}",
-      "redirectHint": "Complete payment on the provider page, then return to Cindy.",
-      "openPayment": "Open payment page",
-      "refreshingAction": "Loading payment instructions…",
-      "paymentCompleted": "Your payment was completed.",
-      "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
-      "expiredBody": "This payment link expired. Create a new payment to continue.",
-      "canceledBody": "This payment was canceled.",
-      "failedBody": "Payment failed. Try again later or contact support."
-    },
-    "planChange": {
-      "targetTitle": "Change subscription plan",
-      "targetDescription": "Plan changes keep your current payment method. The final price and effective time are confirmed on the next step.",
-      "targetDescriptionWithCurrent": "Current plan: {{plan}}. Plan changes keep your current payment method; the final price and effective time are confirmed on the next step.",
-      "upgradeBadge": "Upgrade",
-      "downgradeBadge": "Downgrade",
-      "emptyTitle": "No plans available to switch to",
-      "emptyDescription": "The server has not configured another plan for your current payment method.",
-      "quotingTitle": "Preparing plan change",
-      "quotingBody": "Fetching the price and effective time from the server…",
-      "quoteTitle": "Confirm plan change",
-      "confirmingTitle": "Submitting plan change",
-      "confirmingBody": "Submitting your plan change to the server…",
-      "awaitingTitle": "Pay the difference",
-      "scheduledTitle": "Downgrade scheduled",
-      "scheduledBody": "The new plan takes effect on {{date}}. Your current plan stays active until then.",
-      "appliedTitle": "Plan change applied",
-      "appliedBody": "Your new plan is now active.",
-      "canceledTitle": "Plan change canceled",
-      "canceledBody": "The plan change was canceled. Your current plan is unchanged.",
-      "expiredTitle": "Quote expired",
-      "expiredBody": "The quote expired. Start the plan change again to get a new quote.",
-      "failedTitle": "Plan change failed",
-      "failedBody": "The plan change did not complete. Your current plan is unchanged.",
-      "requestFailed": "The request failed. Please try again.",
-      "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
-      "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",
-      "upgradeHint": "The upgrade takes effect immediately after payment. The renewal price becomes the new plan price.",
-      "downgradeAt": "Takes effect on {{date}}",
-      "downgradeHint": "Your current plan stays active until the end of this billing period. No refund is issued now.",
-      "quoteExpiresIn": "Quote expires in {{minutes}}:{{seconds}}",
-      "scanToPay": "Scan to pay {{amount}}",
-      "confirm": "Confirm change",
-      "abandon": "Discard",
-      "targetLabel": "Target plan: {{name}}",
-      "pendingDowngrade": "Downgrade to {{name}} is scheduled for {{date}}.",
-      "pendingPayment": "The upgrade to {{name}} is waiting for payment.",
-      "pendingQuote": "A plan change to {{name}} is in progress.",
-      "resume": "Continue",
-      "undo": "Undo downgrade"
-    }
+  "contentModeration": {
+    "blocked": "Sorry, we can't answer this question right now. Please rephrase your question."
   },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
@@ -1330,6 +1144,7 @@
           "name": "Display name",
           "namePlaceholder": "My AI provider",
           "protocols": "Runtime",
+          "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API key",
@@ -1347,11 +1162,17 @@
           "addHeader": "Add header",
           "removeRow": "Remove row"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses (native)",
+          "chat": "Chat Completions (Cindy bridge)",
+          "responsesHelp": "The provider supports the Responses API natively, so Cindy forwards its event stream unchanged.",
+          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable."
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
           "codex": "Codex",
-          "codexDesc": "Codex follows the OpenAI protocol (auth via Bearer). Requires models that support the Responses API. Enter this source's baseURL, key, and models for Codex; leave blank to skip Codex for this source."
+          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose a native Responses upstream or let Cindy bridge a provider that only supports Chat Completions. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
         },
         "errors": {
           "nameRequired": "Display name is required",
@@ -1482,6 +1303,7 @@
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
+        "bridgedNote": "Cindy bridge (Chat Completions)",
         "docsLink": "View setup docs",
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
@@ -1715,7 +1537,8 @@
       "save": "Save",
       "overLimit": " — over limit",
       "toast": {
-        "saved": "Custom instructions saved"
+        "saved": "Custom instructions saved",
+        "saveFailed": "Failed to save custom instructions"
       }
     },
     "chipMetrics": {
@@ -2254,12 +2077,14 @@
       },
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal bots connect to Feishu / Discord with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself."
+        "personal": "Personal bots connect to Feishu / Discord with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself.",
+        "personalFeishuOnly": "Personal bots connect to Feishu with your own credentials — the bot is fully yours, but you create the app and fill in its config yourself."
       },
       "defaults": {
         "title": "New Conversation Configuration",
         "description": "New conversations started from Feishu, Slack, or Discord use this agent and model configuration. Changes apply only to new conversations; send /new in an existing Discord DM to apply them.",
         "localDescription": "New conversations started from Feishu or Discord use this agent and model configuration. Changes apply only to new conversations; send /new in an existing Discord DM to apply them.",
+        "feishuOnlyDescription": "New conversations started from Feishu use this agent and model configuration. Changes apply only to new conversations.",
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
         "loading": "Loading new conversation configuration…",
@@ -3004,11 +2829,10 @@
   "legacyMigration": {
     "title": "Migrate data from the previous version",
     "description": "Data from a previous version was found on this device. Your chat history and media files will be migrated to the new data location. If the old app is still running, please quit it completely first, and keep {{appName}} open during the migration. Note: authorized third-party keys and credentials cannot be migrated — after the migration you will need to re-authorize or re-enter them in Settings.",
-    "confirm": "OK",
+    "confirm": "Continue",
     "migrating": "Migrating data, please wait…",
     "failedTitle": "Migration incomplete",
-    "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in.",
-    "continue": "Continue"
+    "failedDescription": "The data migration could not be completed this time. You can keep using {{appName}} — it will retry automatically the next time you sign in."
   },
   "splash": {
     "tips": {
@@ -4150,7 +3974,8 @@
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
-        "workflow": "Workflow"
+        "workflow": "Workflow",
+        "shell": "Background command"
       },
       "status": {
         "running": "Running",
@@ -4158,6 +3983,7 @@
         "failed": "Failed",
         "stopped": "Stopped"
       },
+      "stop": "Stop this task",
       "tokens": "{{count}} tokens",
       "toolUses_one": "{{count}} tool use",
       "toolUses_other": "{{count}} tool uses",
@@ -4241,8 +4067,11 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
+      "bashStatus_one": "{{count}} background task running…",
+      "bashStatus_other": "{{count}} background tasks running…",
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
+      "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
       "stopping": "Stopping…"
     },
     "interruptedBanner": {
@@ -6995,6 +6824,195 @@
     "note": {
       "codexStateSkipped": "Codex has not been initialized on this machine, so session state was not fully restored. Run any Codex session once, then continuing will work.",
       "workdirKeyInexact": "The chosen directory path is too long to place transcripts; downgraded to chat history only."
+    }
+  },
+  "billing": {
+    "sidebar": "Credits & plans",
+    "settings": {
+      "title": "Usage and billing",
+      "subtitle": "Review your current subscription or purchase server-provided plans and credits.",
+      "loading": "Loading subscription status…",
+      "subscriptionCard": {
+        "title": "Current plan",
+        "empty": "No active subscription",
+        "emptyTitle": "No subscription plan",
+        "unnamedPlan": "Subscription plan",
+        "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
+        "action": "View plans",
+        "changeAction": "Change plan"
+      },
+      "topupCard": {
+        "title": "Credits",
+        "description": "Purchase credits for usage-based models and features.",
+        "cardTitle": "Buy credits as needed",
+        "cardDescription": "Available credit products are configured by the server.",
+        "action": "Buy credits"
+      }
+    },
+    "balance": {
+      "title": "Available balance",
+      "plan": "Plan credits",
+      "purchased": "Purchased credits",
+      "promotional": "Promotional credits",
+      "notProvisioned": "Credits have not been enabled for this account.",
+      "notSupported": "Balance lookup is not supported for this account.",
+      "unavailable": "Balance is temporarily unavailable. Refresh to try again."
+    },
+    "dialogs": {
+      "subscription": {
+        "title": "Choose a subscription plan",
+        "description": "Only currently configured server plans are shown. Choose a plan before selecting its payment method."
+      },
+      "topup": {
+        "title": "Buy credits",
+        "description": "Only currently configured server credit products are shown. Choose a product before selecting its payment method."
+      }
+    },
+    "eyebrow": "Account & usage",
+    "title": "Choose the plan that fits",
+    "subtitle": "Plans and payment methods are delivered by the server. Choose a plan first to see its currently supported payment methods.",
+    "steps": {
+      "offer": {
+        "title": "Choose a plan",
+        "description": "Only currently purchasable credit and subscription offers are shown."
+      },
+      "channel": {
+        "title": "Choose a payment method",
+        "description": "Supported payment methods can differ by plan.",
+        "selectOfferFirst": "Choose a plan to see its supported payment methods"
+      },
+      "confirm": {
+        "title": "Review and pay",
+        "description": "Review the plan and payment method before creating payment.",
+        "selectChannelFirst": "Choose a payment method to continue"
+      }
+    },
+    "actions": {
+      "refreshCatalog": "Refresh",
+      "retry": "Retry",
+      "pay": "Review and pay",
+      "refresh": "Refresh status",
+      "cancelPayment": "Cancel payment",
+      "close": "Close"
+    },
+    "catalog": {
+      "errorTitle": "Plans are temporarily unavailable",
+      "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
+      "emptyTitle": "No plans are available",
+      "emptyDescription": "The server has not configured a purchasable plan and payment method yet."
+    },
+    "offerKinds": {
+      "topup": "Credit top-up",
+      "subscription": "Subscription"
+    },
+    "amount": {
+      "custom": "Custom amount",
+      "label": "Top-up amount",
+      "placeholder": "Enter an amount",
+      "rangeHint": "Enter between {{min}} and {{max}}",
+      "rangeError": "Amount must be between {{min}} and {{max}}",
+      "formatError": "Enter a valid amount with no more than {{digits}} decimal places"
+    },
+    "intervals": {
+      "MONTH": "month",
+      "YEAR": "year"
+    },
+    "credits": "{{amount}} credits",
+    "confirm": {
+      "channel": "Pay with {{provider}}"
+    },
+    "paymentActions": {
+      "QR_CODE": "Scan to pay",
+      "REDIRECT": "Open payment page"
+    },
+    "providers": {
+      "alipay": "Alipay",
+      "stripe": "Card"
+    },
+    "securityNotice": "Payments are securely handled by the selected provider; Cindy does not store payment credentials",
+    "currentSubscription": {
+      "title": "Current subscription",
+      "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
+    },
+    "subscriptionStatus": {
+      "INCOMPLETE": "Awaiting payment",
+      "INCOMPLETE_EXPIRED": "Payment expired",
+      "TRIALING": "Trial",
+      "ACTIVE": "Active",
+      "PAST_DUE": "Past due",
+      "UNPAID": "Unpaid",
+      "CANCELED": "Canceled",
+      "PAUSED": "Paused"
+    },
+    "recovery": {
+      "title": "Unfinished payment found",
+      "description": "Continue the previous payment and confirm its latest state with the server.",
+      "continueTopup": "Continue {{amount}} payment",
+      "continueSubscription": "Continue subscription payment"
+    },
+    "checkout": {
+      "creatingTitle": "Creating payment",
+      "awaitingTitle": "Awaiting payment",
+      "completedTitle": "Payment successful",
+      "failedTitle": "Unable to complete",
+      "expiredTitle": "Payment expired",
+      "canceledTitle": "Payment canceled",
+      "topupSubtitle": "Credit top-up",
+      "subscriptionSubtitle": "Subscription",
+      "creatingBody": "Confirming the order with the payment service…",
+      "qrAlt": "Payment QR code",
+      "scanHint": "Scan with the corresponding payment app",
+      "checkingExpiry": "Checking expiration…",
+      "expiresIn": "QR code expires in {{minutes}}:{{seconds}}",
+      "redirectHint": "Complete payment on the provider page, then return to Cindy.",
+      "openPayment": "Open payment page",
+      "refreshingAction": "Loading payment instructions…",
+      "paymentCompleted": "Your payment was completed.",
+      "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
+      "expiredBody": "This payment link expired. Create a new payment to continue.",
+      "canceledBody": "This payment was canceled.",
+      "failedBody": "Payment failed. Try again later or contact support."
+    },
+    "planChange": {
+      "targetTitle": "Change subscription plan",
+      "targetDescription": "Plan changes keep your current payment method. The final price and effective time are confirmed on the next step.",
+      "targetDescriptionWithCurrent": "Current plan: {{plan}}. Plan changes keep your current payment method; the final price and effective time are confirmed on the next step.",
+      "upgradeBadge": "Upgrade",
+      "downgradeBadge": "Downgrade",
+      "emptyTitle": "No plans available to switch to",
+      "emptyDescription": "The server has not configured another plan for your current payment method.",
+      "quotingTitle": "Preparing plan change",
+      "quotingBody": "Fetching the price and effective time from the server…",
+      "quoteTitle": "Confirm plan change",
+      "confirmingTitle": "Submitting plan change",
+      "confirmingBody": "Submitting your plan change to the server…",
+      "awaitingTitle": "Pay the difference",
+      "scheduledTitle": "Downgrade scheduled",
+      "scheduledBody": "The new plan takes effect on {{date}}. Your current plan stays active until then.",
+      "appliedTitle": "Plan change applied",
+      "appliedBody": "Your new plan is now active.",
+      "canceledTitle": "Plan change canceled",
+      "canceledBody": "The plan change was canceled. Your current plan is unchanged.",
+      "expiredTitle": "Quote expired",
+      "expiredBody": "The quote expired. Start the plan change again to get a new quote.",
+      "failedTitle": "Plan change failed",
+      "failedBody": "The plan change did not complete. Your current plan is unchanged.",
+      "requestFailed": "The request failed. Please try again.",
+      "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
+      "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",
+      "upgradeHint": "The upgrade takes effect immediately after payment. The renewal price becomes the new plan price.",
+      "downgradeAt": "Takes effect on {{date}}",
+      "downgradeHint": "Your current plan stays active until the end of this billing period. No refund is issued now.",
+      "quoteExpiresIn": "Quote expires in {{minutes}}:{{seconds}}",
+      "scanToPay": "Scan to pay {{amount}}",
+      "confirm": "Confirm change",
+      "abandon": "Discard",
+      "targetLabel": "Target plan: {{name}}",
+      "pendingDowngrade": "Downgrade to {{name}} is scheduled for {{date}}.",
+      "pendingPayment": "The upgrade to {{name}} is waiting for payment.",
+      "pendingQuote": "A plan change to {{name}} is in progress.",
+      "resume": "Continue",
+      "undo": "Undo downgrade"
     }
   }
 }

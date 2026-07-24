@@ -17,6 +17,8 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { useAuth } from '@/contexts/AuthContext';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { showDiscordBot } from './imBotVisibility';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -52,7 +54,13 @@ function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' {
 
 export function ImDefaultSettingsSection() {
   const { t } = useTranslation();
-  const { mode, dataOwnerId } = useAuth();
+  const { mode, dataOwnerId, user } = useAuth();
+  // 国区个人账号既没有 Cindy(Slack)分栏也没有 Discord —— 描述只提飞书。
+  const feishuOnly = !showDiscordBot({
+    region: CURRENT_CINDY_REGION,
+    mode,
+    membershipKind: user?.membershipKind ?? null,
+  });
   const { providers } = useProviders();
   const cc = useAgentCapabilities('claude-code');
   const codex = useAgentCapabilities('codex');
@@ -209,9 +217,11 @@ export function ImDefaultSettingsSection() {
             </h3>
             <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
               {t(
-                mode === 'local'
-                  ? 'settings.imBot.defaults.localDescription'
-                  : 'settings.imBot.defaults.description',
+                feishuOnly
+                  ? 'settings.imBot.defaults.feishuOnlyDescription'
+                  : mode === 'local'
+                    ? 'settings.imBot.defaults.localDescription'
+                    : 'settings.imBot.defaults.description',
               )}
             </p>
           </div>

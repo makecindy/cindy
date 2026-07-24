@@ -36,7 +36,7 @@ import type {
 } from './types/events.js';
 import { isTerminalAgentErrorEvent } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
-import type { AgentSessionHandle, SendOptions } from './agents/base-agent.js';
+import type { AgentSessionHandle, BackgroundTaskSnapshot, SendOptions } from './agents/base-agent.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -337,6 +337,28 @@ export class Session {
         this.setStatus('active');
       }
     }
+  }
+
+  /**
+   * 停止本会话内单个后台任务(run_in_background 的 Bash / 后台 subagent 等)。
+   * 与 abort() 不同:不中断当前 turn,只停指定 taskId;任务已到终态时幂等成功。
+   * 会话已关闭 / 出错时静默返回 —— 此时子进程已死,后台任务必然随之终止。
+   */
+  async stopBackgroundTask(taskId: string): Promise<void> {
+    if (this.status === 'closed' || this.status === 'error') return;
+    if (!this.handle.stopBackgroundTask) {
+      throw new NotSupportedError('stopBackgroundTask', { supported: false, reason: 'not-implemented' });
+    }
+    await this.handle.stopBackgroundTask(taskId);
+  }
+
+  /**
+   * 当前仍在运行的后台任务快照。不支持的 agent / 已关闭会话 → 空数组(此时
+   * 子进程不存在,后台任务必然已死,空数组即事实)。
+   */
+  listBackgroundTasks(): BackgroundTaskSnapshot[] {
+    if (this.status === 'closed' || this.status === 'error') return [];
+    return this.handle.listBackgroundTasks?.() ?? [];
   }
 
   close(): Promise<void> {

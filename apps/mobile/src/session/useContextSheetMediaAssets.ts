@@ -4,6 +4,7 @@ import { Linking, Platform } from 'react-native';
 // 这里走官方保留的 legacy 入口,批量拿 uri/filename 一次到位。
 import * as MediaLibrary from 'expo-media-library/legacy';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { i18n } from '@/i18n';
 import { MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE } from '@/session/mobileImagePreprocess';
 
 /** Context 面板媒体列表的单个资产(展示 + 附加所需的最小字段)。 */
@@ -164,9 +165,6 @@ const HEIC_JPEG_COMPRESS = 0.9;
  */
 const ASSET_INFO_TIMEOUT_MS = 60_000;
 
-const ICLOUD_DOWNLOAD_TIMEOUT_MESSAGE = '照片还在从 iCloud 下载,等待超时了。请检查网络,稍后重试。';
-const ASSET_NOT_READABLE_MESSAGE = '这张照片暂时无法读取(可能还没从 iCloud 下载完成),请稍后重试。';
-
 async function getAssetInfoWithTimeout(assetId: string): Promise<MediaLibrary.AssetInfo> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   // 竞速输家旁路兜底:超时赢了之后底层 getAssetInfoAsync 稍后 reject 的话,
@@ -177,7 +175,7 @@ async function getAssetInfoWithTimeout(assetId: string): Promise<MediaLibrary.As
     return await Promise.race([
       info,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(ICLOUD_DOWNLOAD_TIMEOUT_MESSAGE)), ASSET_INFO_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new Error(i18n.t('interaction.contextSheet.icloudTimeout'))), ASSET_INFO_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -201,7 +199,7 @@ export async function resolveContextSheetMediaAssetForUpload(
   const info = await getAssetInfoWithTimeout(asset.id);
   const localUri = info.localUri?.trim();
   if (!localUri && Platform.OS === 'ios') {
-    throw new Error(ASSET_NOT_READABLE_MESSAGE);
+    throw new Error(i18n.t('interaction.contextSheet.photoNotReadable'));
   }
   const uri = localUri || asset.uri;
   if (!HEIC_EXT_PATTERN.test(asset.filename) && !HEIC_EXT_PATTERN.test(uri)) {

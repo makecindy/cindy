@@ -69,6 +69,7 @@ import {
   ErrorTailErrorBanner,
   InterruptedTurnBanner,
 } from '@/components/chat/InterruptedTurnBanner';
+import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import {
@@ -1155,10 +1156,17 @@ export function CCAgentSessionView({
   // 消耗用量)。main 侧按 proxy 活动信号判定并推送;消费点是 RunningStatusBar 的
   // 后台模式(呼吸 + 「全部停止」);「全部停止」= 关闭常驻子进程(会话可续)。
   const backgroundActivity = useSessionBackgroundActivity(sessionId);
+  // 后台 Bash 任务(run_in_background 的 Bash,taskType=local_bash):不调模型,
+  // proxy 活动信号覆盖不到 —— 从 taskUpdates 事件流折算,并在挂载/重载后用 main
+  // 快照补回存量。与上面的 proxy 信号一起点亮状态栏后台模式。
+  const backgroundBash = useBackgroundBashTasks(sessionId, taskUpdates, historyLoaded);
   // 与运行态互斥(turn 一开跑 main 即广播熄灭,这里再加一道渲染守卫防瞬时竞态):
   // 只在「无 turn 在跑」时才把状态栏切到后台子任务模式。
   const backgroundTasksActive =
-    backgroundActivity.active && !agentStatus.isRunning && !isStreaming && Boolean(sessionId);
+    (backgroundActivity.active || backgroundBash.tasks.length > 0) &&
+    !agentStatus.isRunning &&
+    !isStreaming &&
+    Boolean(sessionId);
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
@@ -2823,8 +2831,17 @@ export function CCAgentSessionView({
                 inputWidth={inputWidth}
                 sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                 backgroundTasksRunning={backgroundTasksActive}
-                backgroundStopping={backgroundActivity.stopping}
-                onStopBackgroundTasks={() => void backgroundActivity.stopAll()}
+                // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
+                // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
+                // (关子进程止损,bash 任务随之终止,无需再逐个停)。
+                backgroundBashOnlyCount={
+                  backgroundActivity.active ? 0 : backgroundBash.tasks.length
+                }
+                backgroundStopping={backgroundActivity.stopping || backgroundBash.stopping}
+                onStopBackgroundTasks={() => {
+                  if (backgroundActivity.active) void backgroundActivity.stopAll();
+                  else void backgroundBash.stopAll();
+                }}
                 // 被控端可见性 chip 嵌进状态栏中央槽位,与 thinking / 时间 token 同行
                 // (不再单独占一行)。中央槽位独立于状态栏淡入淡出 → 空闲时仍显示。
                 centerSlot={showInlineControlledBanner ? <ControlledBanner placement="statusbar" /> : null}
@@ -3466,6 +3483,7 @@ function RunningStatusBar({
   inputWidth,
   sideTaskRunning = false,
   backgroundTasksRunning = false,
+  backgroundBashOnlyCount = 0,
   backgroundStopping = false,
   onStopBackgroundTasks,
   centerSlot = null,
@@ -3489,6 +3507,12 @@ function RunningStatusBar({
    * 计数在此语义下都是误导信息。替代原独立横幅(2026-07-13 假停止治理)。
    */
   backgroundTasksRunning?: boolean;
+  /**
+   * 后台模式细分:>0 表示当前只有后台 Bash 任务在跑(无模型调用)。左段换
+   * 「后台任务运行中(N 个)」文案,「全部停止」tooltip 换成逐任务停止语义
+   * (不关常驻子进程)。0 = 维持原「仍在调模型」文案与止损语义。
+   */
+  backgroundBashOnlyCount?: number;
   /** 全停请求在飞(按钮禁用,防连点)。 */
   backgroundStopping?: boolean;
   /** 「全部停止」入口(关闭常驻 CC 子进程,会话可续)。 */
@@ -3549,8 +3573,13 @@ function RunningStatusBar({
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
   const isDone = status === 'Done' && !sideTaskRunning && !backgroundTasksRunning;
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
-  // 误导信息,整体替换为后台运行提示。
-  const displayStatus = backgroundTasksRunning ? t('chat.backgroundActivity.status') : status;
+  // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
+  // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
+  const displayStatus = backgroundTasksRunning
+    ? backgroundBashOnlyCount > 0
+      ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
+      : t('chat.backgroundActivity.status')
+    : status;
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -3668,7 +3697,11 @@ function RunningStatusBar({
               'text-[var(--text-primary)] hover:opacity-70 transition-opacity',
               'disabled:opacity-50 disabled:cursor-not-allowed',
             )}
-            title={t('chat.backgroundActivity.stopAllTitle')}
+            title={t(
+              backgroundBashOnlyCount > 0
+                ? 'chat.backgroundActivity.stopBashTitle'
+                : 'chat.backgroundActivity.stopAllTitle',
+            )}
           >
             <Square size={12} />
             {backgroundStopping

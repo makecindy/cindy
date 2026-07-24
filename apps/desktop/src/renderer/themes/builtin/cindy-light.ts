@@ -48,6 +48,7 @@ const overrides = {
   accent: '0.0 0.0% 94.5%', // 裁决: shadcn 中性 hover
   'agent-actions-rail': '#DCDFE3', // 边框/rail
   'ask-checkbox-border': '#686B72', // AA checkbox border
+  'ask-option-list-bg': '#FFFFFF', // ask 卡选项列表面: 纯白浮在 #F8F8F8 卡底上(2026-07-23 ask 卡整改)
   background: '0.0 0.0% 92.9%', // 背景 -> HSL
   'chat-input-bg': '#F8F8F8', // 输入框
   'chat-input-border-focus': 'rgba(104, 107, 114, 0.30)', // 用户改稿 2026-07-20:输入框聚焦描边降至 30%
@@ -82,7 +83,7 @@ const overrides = {
   'perm-code-bg': '#F5F5F5', // code bg
   'perm-item-selected-bg': '#F1F1F1', // selected bg
   'plan-outline-active-bg': '#F1F1F1', // active bg
-  'plan-toolbar-btn-hover-bg': '#F1F1F1', // hover bg
+  'plan-toolbar-btn-hover-bg': '#E2E2E2', // hover bg: 原 #F1F1F1 与 chip 静默底同色无反馈、在 #F8F8F8 卡底上也近不可辨,借 settings-menu-bg-hover 同档往暗压(2026-07-23 ask 卡整改)
   popover: '0.0 0.0% 97.3%', // elevated -> HSL
   'primary-foreground': '0.0 0.0% 100.0%', // 白前景
   'search-match-fg': '214.3 5.5% 24.9%', // search fg

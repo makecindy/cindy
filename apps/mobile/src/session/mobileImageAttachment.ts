@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n';
 import { MOBILE_MAX_ATTACHMENT_BYTES, extractRemoteFileExt } from '@/session/attachments';
 import type { MobileAttachmentUploadCandidate } from '@/session/mobileAttachmentUpload';
 
@@ -21,7 +22,7 @@ export function buildMobileImageAttachmentCandidate(
   index: number,
 ): MobileImageAttachmentCandidate {
   const uri = asset.uri?.trim();
-  if (!uri) throw new Error('没有读取到可上传的图片。');
+  if (!uri) throw new Error(i18n.t('composer.upload.noImageRead'));
   const mimeType = normalizeImageMimeType(asset.mimeType, uri);
   const name = normalizeImageFileName(asset.fileName, uri, mimeType, index);
   const size = Number(asset.fileSize ?? 0);
@@ -37,10 +38,10 @@ export function buildMobileImageAttachmentCandidate(
 
 export function assertMobileImageSize(size: number): void {
   if (!Number.isFinite(size) || size <= 0) {
-    throw new Error('这个图片为空，不能作为附件发送。');
+    throw new Error(i18n.t('composer.upload.emptyImage'));
   }
   if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-    throw new Error(`图片超过 ${Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB，暂不能作为附件发送。`);
+    throw new Error(i18n.t('composer.upload.imageTooLarge', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
   }
 }
 

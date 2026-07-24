@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { i18n } from '@/i18n';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
@@ -51,14 +52,14 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain('width: 50');
     expect(source).toContain('RefreshCw');
     expect(source).toContain('homeConnectionTitle');
-    expect(source).toContain("if (status === 'connecting') return '连接中';");
-    expect(source).toContain("if (status === 'stopped') return '连接断开';");
+    expect(source).toContain("if (status === 'connecting') return t('devices.list.connection.connecting');");
+    expect(source).toContain("if (status === 'stopped') return t('devices.list.connection.disconnected');");
     expect(source).toContain('styles.connectionIconButton');
     expect(source).toContain('const [deviceMenuOpen, setDeviceMenuOpen]');
     expect(source).toContain('const [groupByProject, setGroupByProject]');
     expect(source).toContain('testID="home.deviceMenu"');
-    expect(source).toContain('label="所有对话"');
-    expect(source).toContain('label="按项目分组"');
+    expect(source).toContain("label={t('devices.list.allConversations')}");
+    expect(source).toContain("label={t('devices.list.menu.groupByProject')}");
     // 注:首页分区构造逻辑(buildMixedHomeRows / buildGroupedHomeRows / buildHomeSections)
     // 已抽到 @/session/homeSections,并由 homeSections.test.ts 做行为测试,这里不再做源码字符串断言。
     expect(source).toContain('styles.sessionListRow');
@@ -354,10 +355,10 @@ describe('mobile home desktop-first surface', () => {
     // 首次 loadHome 落地前(含失败态)FAB 只认 live 设备:首页列表缓存画出的会话会合成出
     // 「可用」的 primaryDevice,但缓存设备不能当 live 设备开新会话(settle 后回归 primaryDevice 语义)。
     expect(source).toContain('const newSessionDisabled = !home.primaryDevice || (!initialHomeSettled && !hasOpenableLiveDevice);');
-    expect(source).toContain("const emptyStateTitle = initialHomeError ? '同步失败' : home.emptyTitle;");
+    expect(source).toContain("const emptyStateTitle = initialHomeError ? t('devices.list.syncFailed') : home.emptyTitle;");
     expect(source).toContain("testID={initialHomeError ? 'home.syncError' : 'home.empty'}");
     expect(source).toContain('testID="home.loading"');
-    expect(source).toContain('正在读取可控制电脑');
+    expect(source).toContain("t('devices.list.loading')");
   });
 
   it('renders the remote-access onboarding guide for the no-device empty state', () => {
@@ -375,18 +376,20 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('{showRemoteGuide ? null : (');
 
     const guideSource = readSource('src/components/RemoteAccessGuide.tsx');
+    // 文案已 i18n 化,断言改查 zh-CN catalog(单一事实源);源码只保留结构/交互契约。
+    const t = i18n.getFixedT('zh-CN');
     // 步骤三的路径和开关名必须与桌面端设置页一致,避免用户按指引找不到开关。
-    expect(guideSource).toContain('在电脑上安装并打开 Cindy');
-    expect(guideSource).toContain('用与手机相同的账号登录');
-    expect(guideSource).toContain('「设置 → 远程连接」');
-    expect(guideSource).toContain('允许同账号设备控制本机');
+    expect(t('deviceLink.connectStep1')).toBe('在电脑上安装并打开 Cindy');
+    expect(t('deviceLink.connectStep2')).toBe('用与手机相同的账号登录');
+    expect(t('deviceLink.connectStep3')).toContain('「设置 → 远程连接」');
+    expect(t('deviceLink.connectStep3')).toContain('允许同账号设备控制本机');
     // 分场景交互:离线/开关未开可手动重新检查,被撤销访问有重试 CTA(Lock 图标对齐设备列表语义)。
     expect(guideSource).toContain("reason === 'firstRun'");
     expect(guideSource).toContain('home.remoteGuide.recheck');
     expect(guideSource).toContain('home.remoteGuide.retryAccess');
     expect(guideSource).toContain('<Lock');
     // 未来形态预告:云端 Cindy 上线后手机版可脱离电脑直接使用。
-    expect(guideSource).toContain('云端 Cindy 筹备中');
-    expect(guideSource).toContain('上线后无需电脑，手机版即可直接使用。');
+    expect(t('deviceLink.cloudTeaserTitle')).toBe('云端 Cindy 筹备中');
+    expect(t('deviceLink.cloudTeaserCopy')).toBe('上线后无需电脑，手机版即可直接使用。');
   });
 });

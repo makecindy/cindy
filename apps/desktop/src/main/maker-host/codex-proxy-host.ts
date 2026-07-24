@@ -31,6 +31,10 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import {
+  createResponsesChatHandler,
+  type ChatBridgeCapabilities,
+} from '@cindy/responses-chat-bridge';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -38,7 +42,10 @@ import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-
 import { getActiveCatalog } from './active-catalog.js';
 import {
   gatewayDefaultRouteDecision,
+  getSessionRoutingDescriptor,
+  resolveSessionRoute,
   resolveSessionRouteDecision,
+  buildLocalHandlerHeaders,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
   isUserProviderSession,
@@ -51,7 +58,7 @@ import {
 } from './provider-route.js';
 import { getSessionProvider } from './session-provider-store.js';
 import { composeResponseObservers } from './claude-rate-limit-headers-observer.js';
-import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
+import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
@@ -176,6 +183,77 @@ function createCodexTransform(): RequestTransform {
 function sessionIdFromTransformCtx(ctx: RequestTransformCtx): string | undefined {
   const threadId = selectedThreadIdFromHeaders(ctx.headers);
   return threadId ? threadToSession.get(threadId) : undefined;
+}
+
+// 通用 Chat Completions 上游(DeepSeek/GLM/Kimi 等非 OpenAI o-series)的兼容默认。
+// 依据 cc-switch / opencodex 的 per-provider 处理归纳:
+//   - maxTokensField='max_tokens':只有 OpenAI o-series 用 max_completion_tokens,国产厂商用 max_tokens;
+//   - toolCallReasoningPlaceholder:思考模型要求 tool_call assistant 消息带非空 reasoning_content;
+//   - forceAutoToolChoice:思考模型拒绝强制 tool_choice(DeepSeek reasoner)。
+const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
+  developerRole: 'system',
+  parallelToolCalls: true,
+  maxTokensField: 'max_tokens',
+  reasoningField: 'none',
+  streamUsage: true,
+  toolCallReasoningPlaceholder: true,
+  forceAutoToolChoice: true,
+};
+
+/**
+ * Chat bridge 上游只收 host 明确构造的 header。绝不把 Codex/ChatGPT 请求 header
+ * 原样透传，防止账号 id、OpenAI OAuth bearer 或内部 session 元数据泄漏给第三方。
+ */
+function createChatBridgeDecision(
+  route: Awaited<ReturnType<typeof resolveSessionRoute>>,
+  instructions: string | undefined,
+): RoutingDecision | null {
+  if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
+  const { headers } = buildLocalHandlerHeaders(route, 'codex');
+  const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  // localHandler 绕过 proxy 的 responseObserver,自定义(user)供应商的上游错误不会被
+  // createProviderUpstreamErrorObserver 看到。这里显式把非 2xx 上游错误喂回同一广播通道,
+  // 让 Chat 桥接会话与透明自定义供应商一样弹结构化 providerError.* 提示。内置来源不广播
+  // (与 observer 的 user-only 语义一致)。
+  const providerId = route.providerId;
+  const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
+  const onUpstreamError = route.providerSource === 'user'
+    ? ({ status, body }: { status: number; body: string }): void => {
+        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
+      }
+    : undefined;
+  const handler = createResponsesChatHandler({
+    upstreamBase: route.routing.upstream,
+    buildHeaders: async () => headers,
+    rewriteModel: (model: string) => stripPrefix && model.startsWith(stripPrefix)
+      ? model.slice(stripPrefix.length)
+      : model,
+    capabilities: CHAT_BRIDGE_DEFAULT_CAPABILITIES,
+    ...(onUpstreamError ? { onUpstreamError } : {}),
+  }, { logger: log });
+  return {
+    localHandler: ({ rawBody, parsedBody, res }) => {
+      let body = parsedBody;
+      const strippedBody = stripImageGenerationItemsWithoutIdFromBody(rawBody);
+      if (strippedBody) {
+        try {
+          body = JSON.parse(strippedBody.toString('utf8'));
+        } catch {
+          // Keep the already parsed body if the defensive strip result cannot be parsed.
+        }
+      }
+      if (instructions && isPlainObject(body)) {
+        const existing = typeof body.instructions === 'string' ? body.instructions : '';
+        body = {
+          ...body,
+          instructions: existing.includes(instructions)
+            ? existing
+            : [existing, instructions].filter(Boolean).join('\n\n'),
+        };
+      }
+      return handler.handle({ parsedBody: body, res });
+    },
+  };
 }
 
 function moveInstructionsIntoInput(body: Record<string, unknown>): Record<string, unknown> | null {
@@ -806,6 +884,11 @@ export function createModelRoutingTransform(): RoutingTransform {
       isUserProviderSession(sessionId) ||
       isHostInjectedAuthSession(sessionId, 'codex')
     )) {
+      const selectedRouting = getSessionRoutingDescriptor(sessionId, 'codex', model || undefined);
+      if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
+        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
+          createChatBridgeDecision(localRoute, threadId ? registry.get(threadId) : undefined));
+      }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
       const perSession = resolveSessionRouteDecision(sessionId, 'codex', gatewayKey, model || undefined);

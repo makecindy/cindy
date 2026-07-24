@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { i18n } from '@/i18n';
 import {
   createMobileLocalAttachmentUploadController,
   isCameraUnavailableOnSimulator,
@@ -7,6 +8,11 @@ import {
   type PendingLocalAttachmentUpload,
 } from '@/session/mobileLocalAttachmentUpload';
 import type { RemoteSerializedAttachment } from '@/session/types';
+
+// 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function candidate(name: string, kind: 'image' | 'file' = 'image'): MobileLocalAttachmentUploadCandidate {
   return {

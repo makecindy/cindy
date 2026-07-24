@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type CSSProperties,
@@ -13,12 +14,20 @@ import { isValidEmail } from '@cindy/auth-client';
 import { cn } from '@/lib/utils';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useLogin } from '@/hooks/useLogin';
+import {
+  endLoginFirstLaunchLightGate,
+  loginFirstLaunchLightActive,
+} from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
 
+import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
+
 import appleIcon from '@/assets/login/icons/apple.svg';
+import appleIconDark from '@/assets/login/icons/apple-dark.svg';
 import googleIcon from '@/assets/login/icons/google.svg';
 import wechatIcon from '@/assets/login/icons/wechat.svg';
 import ssoIcon from '@/assets/login/icons/sso.svg';
+import ssoIconDark from '@/assets/login/icons/sso-dark.svg';
 
 import { LoginStage } from './LoginStage';
 import {
@@ -37,7 +46,13 @@ import {
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { resolveIdentifierMethod } from '../../../shared/loginIdentifierMethod';
-import { DRAG_BAR_HEIGHT, LOADING_RING, LOGIN_COLORS, TEXT_LINK } from './loginDesignTokens';
+import {
+  DRAG_BAR_HEIGHT,
+  LOADING_RING,
+  LOGIN_COLORS,
+  LOGIN_LOCAL_MODE,
+  TEXT_LINK,
+} from './loginDesignTokens';
 
 /**
  * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库,PR1 stage 框架)。
@@ -61,6 +76,17 @@ export function LoginPage() {
   } = useLogin();
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
+
+  // 主题跟随(DESIGN.md §16.5):首次打开 Cindy → 亮色登录界面(默认);第二次起
+  // → 跟随用户上一次使用的主题。首启亮色门在 bootstrap 已生效(品牌舞台首帧即
+  // 亮色,无暗→亮闪变),此处只负责登录页卸载(登录完成/离开)时结束门并恢复
+  // 存储主题解析,不改用户 theme 偏好。
+  useEffect(() => {
+    if (!loginFirstLaunchLightActive()) return;
+    return () => {
+      endLoginFirstLaunchLightGate();
+    };
+  }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [localModePending, setLocalModePending] = useState(false);
 
@@ -84,6 +110,16 @@ export function LoginPage() {
     reportLoginPanelMounted();
     return () => reportLoginPanelUnmounted();
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
+  const showLocalModeFooter =
+    loginState?.step !== 'browser-redirect' && loginState?.step !== 'completed';
+  const panelBottomReserve = showLocalModeFooter ? LOGIN_LOCAL_MODE.reservedHeight : 0;
+  const { reportPanelBottomReserve } = handoff;
+  useLayoutEffect(() => {
+    reportPanelBottomReserve(panelBottomReserve);
+  }, [panelBottomReserve, reportPanelBottomReserve]);
+  useLayoutEffect(() => {
+    return () => reportPanelBottomReserve(null);
+  }, [reportPanelBottomReserve]);
   const isGlobalBuild = import.meta.env.VITE_CINDY_AUTH_REGION === 'global';
   // identifier 形态 = 构建区域确定性推导(用户拍板 2026-07-21:手机/邮箱分区互斥,
   // 双 tab 切换移除);providers 仅兜底区域首选方式未下发的场景。
@@ -763,13 +799,41 @@ export function LoginPage() {
       ? `opacity ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}, transform ${LOGIN_HANDOFF_TIMINGS.panelMs}ms ${LOGIN_HANDOFF_TIMINGS.panelEasing}`
       : undefined,
   };
+  const localModeFooter =
+    showLocalModeFooter ? (
+      <>
+        <button
+          data-testid="login-local-mode"
+          type="button"
+          disabled={localModePending || isLoading}
+          onClick={() => void openLocalMode()}
+          aria-describedby="login-local-mode-description"
+          className="select-none rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-6 py-2.5 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ minHeight: 40 }}
+        >
+          {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
+        </button>
+        <span
+          id="login-local-mode-description"
+          className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
+          style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
+        >
+          {t('login.localModeDescription')}
+        </span>
+      </>
+    ) : null;
 
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
     // (LoginBrandStage z-[9980])、低于 SplashScreen(z-[9999]);内部 stage(z-auto)
     // / 窗框描边(z-30)/ 拖拽条(z-40)沿 PR2a 相对层序不变(PR2b handoff 合流)。
     <div className="relative z-[9990] min-h-screen">
-      <LoginStage ssoOrgGroupY={ssoOrgGroupY} groupStyle={groupStyle}>
+      <LoginStage
+        ssoOrgGroupY={ssoOrgGroupY}
+        groupStyle={groupStyle}
+        footer={localModeFooter}
+        bottomReserve={panelBottomReserve}
+      >
         {accountDeletionStatus && (
           <AccountDeletionStatusPanel
             status={accountDeletionStatus}
@@ -799,21 +863,6 @@ export function LoginPage() {
           </div>
         )}
       </div>
-      {loginState?.step !== 'browser-redirect' && (
-        <div className="absolute bottom-8 left-0 right-0 z-30 flex flex-col items-center gap-2">
-          <button
-            type="button"
-            disabled={localModePending || isLoading}
-            onClick={() => void openLocalMode()}
-            className="rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-2 text-13 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {localModePending ? t('login.localModeOpening') : t('login.localModeEntry')}
-          </button>
-          <span className="text-12 text-[var(--text-secondary)]">
-            {t('login.localModeDescription')}
-          </span>
-        </div>
-      )}
     </div>
   );
 }
@@ -823,16 +872,19 @@ export function LoginPage() {
  * Apple 247:1692 / Google 247:1714 / WeChat 247:1724(服务端 providers.social
  * 驱动显隐,资产备好、无返回不渲染——design §5)/ SSO 329:248。
  */
-const SOCIAL_ICON_SRC: Record<SocialProvider, string> = {
-  apple: appleIcon,
-  google: googleIcon,
-  wechat: wechatIcon,
+// Apple 为单色图标,随圆钮底反相(亮色深圆白标 / 暗色白圆 #2A2828 深标,
+// figma white apple 489:676 核验);Google/WeChat 厂商品牌色跨模式不变。
+const SOCIAL_ICON_SRC: Record<SocialProvider, { light: string; dark: string }> = {
+  apple: { light: appleIcon, dark: appleIconDark },
+  google: { light: googleIcon, dark: googleIcon },
+  wechat: { light: wechatIcon, dark: wechatIcon },
 };
 
 function SocialProviderIcon({ provider }: { provider: SocialProvider }) {
+  const isDark = useIsDarkMode();
   return (
     <img
-      src={SOCIAL_ICON_SRC[provider]}
+      src={SOCIAL_ICON_SRC[provider][isDark ? 'dark' : 'light']}
       alt=""
       aria-hidden
       draggable={false}
@@ -897,9 +949,10 @@ function formatAccountDeletionDate(value: string): string {
 }
 
 function SsoGlyph() {
+  const isDark = useIsDarkMode();
   return (
     <img
-      src={ssoIcon}
+      src={isDark ? ssoIconDark : ssoIcon}
       alt=""
       aria-hidden
       draggable={false}

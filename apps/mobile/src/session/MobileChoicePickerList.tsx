@@ -4,6 +4,7 @@
  * (MobileModelPickerList / MobilePermissionPickerList),本组件只覆盖纯文字选项。
  */
 import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Check } from 'lucide-react-native';
 
@@ -53,13 +54,14 @@ export function MobileChoicePickerList({
 }: MobileChoicePickerListProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   return (
     <>
       {options.map((option) => {
         const selected = option.id === activeId;
         return (
           <Pressable
-            accessibilityLabel={`选择 ${option.label}`}
+            accessibilityLabel={t('shared.selectOption', { label: option.label })}
             accessibilityRole="button"
             accessibilityState={{ selected, disabled }}
             disabled={disabled}
