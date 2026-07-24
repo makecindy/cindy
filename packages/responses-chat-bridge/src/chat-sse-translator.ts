@@ -263,7 +263,7 @@ export class ChatSseTranslator {
     if (callId && !state.added) state.callId = callId;
     const fn = isPlainObject(raw.function) ? raw.function : {};
     const name = stringField(fn.name);
-    if (name) state.name += name;
+    if (name && !state.added) state.name += name;
     if (!state.added && state.name) {
       state.added = true;
       out.push({

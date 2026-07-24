@@ -1397,8 +1397,9 @@ export function ChatInput({
   );
 
   // 空態(设计 Q7NYAD「ChatInput 空态 · 模型选择器」):当前模型一个已连接来源都没有 →
-  // 模型选择器 trigger 化成「连接来源」CTA、Send 禁用。「有没有来源」走统一判定 hook
-  // useConnectedSource —— 与 ModelSelector trigger / send 门禁同一条规则,不再各算(避免漂移)。
+  // 模型选择器 trigger 化成「连接来源」CTA、Send 禁用。useConnectedSource 仅用于
+  // loading 态判定；实际「有没有可发送来源」独立走 sendProviders（已过滤 SSH remote
+  // 排除项），两者职责分离以保留 remote guard。
   // providersLoading 期间不判,避免有缓存的老用户首帧闪 CTA / 禁用态(规则 7)。
   const { loading: providersLoading } = useConnectedSource(
     currentModelAgentKind,
