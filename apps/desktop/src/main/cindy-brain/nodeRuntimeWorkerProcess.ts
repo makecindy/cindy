@@ -31,6 +31,7 @@ import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
 interface ParentPortLike {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
+  off(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -179,7 +180,7 @@ function spawnEntry(entry: string, args?: string[]): Promise<unknown> {
 
 /* ── parentPort 分发与就绪握手 ─────────────────────────────────────── */
 
-parentPort.on('message', (event) => {
+function handleParentMessage(event: { data: unknown }): void {
   const data = event.data;
   if (!isRecord(data)) return;
   if (data.type === 'stdin' && typeof data.chunk === 'string') {
@@ -193,6 +194,9 @@ parentPort.on('message', (event) => {
   }
   if (data.type === 'stdin-end') {
     virtualStdin.end();
+    // Electron ParentPort 没有 unref()。child mode 收到 EOF 后已不再需要任何
+    // 上行控制帧，解除监听才能像普通 Node 子进程一样在任务完成后自然退出。
+    if (childMode) parentPort!.off('message', handleParentMessage);
     return;
   }
   if (!childMode && typeof data.type === 'string' && data.type.startsWith('child-')) {
@@ -202,7 +206,9 @@ parentPort.on('message', (event) => {
   if (!childMode && data.type === 'spawn-child-result') {
     handleChildControlMessage(data as unknown as GhostNodeChildToWorkerMessage);
   }
-});
+}
+
+parentPort.on('message', handleParentMessage);
 
 // 主机只等这条固定就绪消息;普通模式下引导层继续私用 parentPort 走子进程
 // 控制帧,但随后把公开引用从 process 上拿掉——插件代码的正式通信面只剩
