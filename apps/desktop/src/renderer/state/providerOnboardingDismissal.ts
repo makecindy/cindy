@@ -69,7 +69,10 @@ export function subscribeProviderOnboardingDismissal(cb: Subscriber): () => void
   subscribers.add(cb);
 
   const storageHandler = (e: StorageEvent) => {
-    if (e.key !== STORAGE_KEY) return;
+    // key === null 是其他窗口 localStorage.clear(),同样可能清掉本 key;
+    // storageArea 过滤掉 sessionStorage 事件。
+    if (e.storageArea !== localStorage) return;
+    if (e.key !== null && e.key !== STORAGE_KEY) return;
     cb();
   };
   window.addEventListener('storage', storageHandler);

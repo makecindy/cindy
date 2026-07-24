@@ -328,12 +328,14 @@ export function AddProviderWizard({
     [i18n.language],
   );
 
-  // entry(preset 直达):presets 异步载入,到位后一次性消费;找不到该预设则留在目录页。
-  const presetEntryConsumedRef = useRef(false);
+  // entry(preset 直达):presets 异步载入,到位后消费;找不到该预设则留在目录页。
+  // 按 presetId 记录已消费值(而非布尔):同一挂载期内 entry 换成另一个 preset
+  // (如深链二次进入)仍能直达,同一 entry 不重复触发。
+  const presetEntryConsumedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (entry?.kind !== 'preset' || presetEntryConsumedRef.current) return;
+    if (entry?.kind !== 'preset' || presetEntryConsumedRef.current === entry.presetId) return;
     if (presets.length === 0) return;
-    presetEntryConsumedRef.current = true;
+    presetEntryConsumedRef.current = entry.presetId;
     const preset = presets.find((p) => p.id === entry.presetId);
     if (preset) pickPreset(preset);
   }, [entry, presets, pickPreset]);
