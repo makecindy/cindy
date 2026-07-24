@@ -2548,8 +2548,9 @@ describe('provider-specific not-connected 映射(issue #279)', () => {
   it('IPC 文案随 provider 区分: Telegram 不再复用 Slack 文案', () => {
     expect(hookNotConnectedIpcMessage('telegram')).toBe('Telegram provider is not connected');
     expect(hookNotConnectedIpcMessage('slack')).toBe('slack hook is not connected');
-    // 未指定 provider 的通用 Hook 失败保留原 Slack 语义(不回归旧调用点)。
-    expect(hookNotConnectedIpcMessage(null)).toBe('slack hook is not connected');
+    // 未指定 provider(null = 通用 Hook 失败)返回中性文案, 不把非 Slack 失败
+    // 误报成 Slack —— 与 HookNotConnectedError 的 null 语义一致(issue #279 review)。
+    expect(hookNotConnectedIpcMessage(null)).toBe('hook is not connected');
   });
 
   it('Telegram 未启用: getProviderWorkspacePrefs 拒绝 HookNotConnectedError(provider=telegram)', async () => {

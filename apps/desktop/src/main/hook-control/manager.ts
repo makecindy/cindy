@@ -328,13 +328,17 @@ export class HookNotConnectedError extends Error {
 
 /**
  * not-connected 失败的 IPC 面向文案(provider-specific)。Telegram 走独立服务,
- * 失败必须明确指向 Telegram provider 而不是 Slack Hook; Slack / 未指定 provider
- * 保留原 Slack 语义。抽成纯函数以便在 IPC 组装层复用并单测(不牵扯 electron)。
+ * 失败必须明确指向 Telegram provider 而不是 Slack Hook; Slack 保留原 Slack 语义;
+ * provider 未指定(null = 通用 Hook 失败, 见 HookNotConnectedError)返回中性文案,
+ * 避免任何默认参数或未来新增调用点又把非 Slack 失败误报成 Slack(issue #279)。
+ * 抽成纯函数以便在 IPC 组装层复用并单测(不牵扯 electron)。
  */
 export function hookNotConnectedIpcMessage(provider: HookProvider | null): string {
   return provider === 'telegram'
     ? 'Telegram provider is not connected'
-    : 'slack hook is not connected';
+    : provider === 'slack'
+      ? 'slack hook is not connected'
+      : 'hook is not connected';
 }
 
 /** prefs 往返超时 —— server 大概率是不认识 prefs.* 帧的旧版本(丢帧不应答)。 */

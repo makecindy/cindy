@@ -111,9 +111,15 @@ describe('useHookWorkspacePrefs provider isolation', () => {
 
     // Telegram disabled/unbound: 不发起无意义的 provider prefs IPC(issue #279)——
     // 否则会以 HOOK_NOT_CONNECTED 失败并在 Main 侧打出误导性的 Slack ERROR。
-    await waitFor(() => expect(result.current.editable).toBe(false));
+    // 用 effect 侧信号(imDefaultSettingsGet 在挂载 effect 内无条件调用)确认 effect
+    // 已 flush 再做否定断言 —— editable 首帧即为 false, 直接 waitFor 它会在 effect
+    // 跑之前 resolve, 捕捉不到「挂载即发 IPC」的回归(issue #279 review)。
+    await waitFor(() =>
+      expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalled(),
+    );
     expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
     expect(getWorkspacePrefs).not.toHaveBeenCalled();
+    expect(result.current.editable).toBe(false);
 
     rerender({ hook: TELEGRAM_CONFIRMED });
     await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledTimes(1));
