@@ -16,7 +16,6 @@ afterEach(() => {
   fetchMock.mockReset();
   for (const file of files.splice(0)) fs.rmSync(file, { force: true });
 });
-
 function target(): string {
   const file = path.join(
     os.tmpdir(),
@@ -80,4 +79,3 @@ describe('downloadVerifiedPlugin', () => {
     ).rejects.toThrow('超过');
   });
 });
-

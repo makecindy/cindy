@@ -68,4 +68,3 @@ describe('PluginMarketApi', () => {
     await expect(api.listAll()).rejects.toThrow('游标未前进');
   });
 });
-

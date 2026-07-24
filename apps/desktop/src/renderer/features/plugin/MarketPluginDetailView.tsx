@@ -13,7 +13,6 @@ interface MarketPluginDetailViewProps {
   onBack: () => void;
   onInstall: () => void;
 }
-
 /** 尚未安装的市场 Plugin 详情；只展示协议事实，不创建 renderer 侧安装逻辑。 */
 export function MarketPluginDetailView({
   detail,
@@ -139,4 +138,3 @@ export function MarketPluginDetailView({
     </main>
   );
 }
-

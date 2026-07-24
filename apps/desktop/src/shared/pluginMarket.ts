@@ -23,7 +23,6 @@ export interface PluginMarketItem {
   installState: PluginMarketInstallState;
   enabled: boolean | null;
 }
-
 /** 市场快照。服务不可用时 renderer 保留本地插件并只展示非阻断提示。 */
 export interface PluginMarketSnapshot {
   items: PluginMarketItem[];
@@ -34,4 +33,3 @@ export interface PluginMarketSnapshot {
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
 }
-
