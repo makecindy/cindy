@@ -22,8 +22,12 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import {
+  isAppSessionBoundaryPending,
+} from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
+import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import {
   clearBuiltinTombstone,
   listBuiltinSeedIds,
@@ -195,6 +199,24 @@ function currentGhostAppContext() {
 }
 
 let managerSingleton: GhostManager | null = null;
+const ghostMutationCoordinator = new GhostMutationCoordinator();
+
+/**
+ * Acquire a lease for a market/local Ghost filesystem mutation. New leases
+ * fail closed once an account boundary starts; teardown waits for existing
+ * leases before switching the active owner.
+ */
+function beginGhostMutation(): () => void {
+  if (isAppSessionBoundaryPending()) {
+    throw new Error('账号切换中，已取消本次 Plugin 操作');
+  }
+  return ghostMutationCoordinator.acquire();
+}
+
+/** Wait until all owner-bound Ghost filesystem mutations have finished. */
+export function waitForGhostMutations(): Promise<void> {
+  return ghostMutationCoordinator.waitForIdle();
+}
 
 /** Account-managed built-ins are unavailable outside a verified cloud session. */
 export function isGhostAvailableForActiveSession(id: string): boolean {
@@ -1782,58 +1804,63 @@ export async function installOrUpdateMarketGhostPackage(
     initiallyEnabled?: boolean;
   },
 ): Promise<InstalledGhost> {
-  const manager = getGhostManager();
-  const inspected = await manager.inspect(cindyFilePath);
-  if ('rejection' in inspected) throwInstallError(inspected.rejection);
-  if (
-    inspected.manifest.id !== expected.ghostId ||
-    inspected.manifest.version !== expected.version
-  ) {
-    throwIpcError(
-      'GHOST_FILE_INVALID',
-      '下载包清单与市场 Release 不一致',
-    );
-  }
-  requireGhostAvailableForActiveSession(expected.ghostId);
-  rejectUnauthorizedTokenBroker(inspected.manifest);
-
-  const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
-  if (!installed) {
-    // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
-    return installAndDock(manager, cindyFilePath, {
-      enable: expected.initiallyEnabled === true,
-    });
-  }
-
-  const runtime = getGhostRuntime();
-  runtime.stop(expected.ghostId);
-  getGhostNodeRuntimeBroker().stop(expected.ghostId);
-  getGhostAgentSlot().clearGhost(expected.ghostId);
-  let result: Awaited<ReturnType<typeof manager.update>>;
+  const releaseMutation = beginGhostMutation();
   try {
-    result = await manager.update(cindyFilePath);
-  } catch (error) {
-    spawnIfResident(installed);
-    throw error;
-  }
-  if ('rejection' in result) {
-    spawnIfResident(installed);
-    throwInstallError(result.rejection);
-  }
-  runtime.resetFuse(expected.ghostId);
-  const store = getLayoutStore();
-  const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
-  if (docked) {
-    const applied = store.setLayout(docked);
-    if ('rejection' in applied) {
-      log.warn('market ghost panel dock rejected', {
-        id: result.ghost.manifest.id,
-        reason: applied.rejection,
+    const manager = getGhostManager();
+    const inspected = await manager.inspect(cindyFilePath);
+    if ('rejection' in inspected) throwInstallError(inspected.rejection);
+    if (
+      inspected.manifest.id !== expected.ghostId ||
+      inspected.manifest.version !== expected.version
+    ) {
+      throwIpcError(
+        'GHOST_FILE_INVALID',
+        '下载包清单与市场 Release 不一致',
+      );
+    }
+    requireGhostAvailableForActiveSession(expected.ghostId);
+    rejectUnauthorizedTokenBroker(inspected.manifest);
+
+    const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
+    if (!installed) {
+      // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
+      return installAndDock(manager, cindyFilePath, {
+        enable: expected.initiallyEnabled === true,
       });
     }
+
+    const runtime = getGhostRuntime();
+    runtime.stop(expected.ghostId);
+    getGhostNodeRuntimeBroker().stop(expected.ghostId);
+    getGhostAgentSlot().clearGhost(expected.ghostId);
+    let result: Awaited<ReturnType<typeof manager.update>>;
+    try {
+      result = await manager.update(cindyFilePath);
+    } catch (error) {
+      spawnIfResident(installed);
+      throw error;
+    }
+    if ('rejection' in result) {
+      spawnIfResident(installed);
+      throwInstallError(result.rejection);
+    }
+    runtime.resetFuse(expected.ghostId);
+    const store = getLayoutStore();
+    const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+    if (docked) {
+      const applied = store.setLayout(docked);
+      if ('rejection' in applied) {
+        log.warn('market ghost panel dock rejected', {
+          id: result.ghost.manifest.id,
+          reason: applied.rejection,
+        });
+      }
+    }
+    spawnIfResident(result.ghost);
+    return result.ghost;
+  } finally {
+    releaseMutation();
   }
-  spawnIfResident(result.ghost);
-  return result.ghost;
 }
 
 type GhostUninstallLedgerCompletion = () => Promise<void>;
@@ -1861,64 +1888,69 @@ export async function uninstallGhostAndCleanup(
   id: string,
   options?: { skipMarketLedger?: boolean },
 ): Promise<void> {
-  requireGhostAvailableForActiveSession(id);
-  const completeLedger =
-    options?.skipMarketLedger === true
-      ? null
-      : (prepareGhostUninstallLedgerCompletion?.(id) ?? null);
-  const manager = getGhostManager();
-  const runtime = getGhostRuntime();
-  runtime.stop(id);
-  getGhostNodeRuntimeBroker().stop(id);
-  getGhostAgentSlot().clearGhost(id);
-  getGhostSubscriptionGateway().dropGhost(id);
-  const result = await manager.uninstall(id, { notify: false });
-  if ('rejection' in result) throwUninstallError(result.rejection);
-  removeGhostSecrets(id);
-  removeGhostKvBestEffort(
-    createGhostKvStore({
-      getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
+  const releaseMutation = beginGhostMutation();
+  try {
+    requireGhostAvailableForActiveSession(id);
+    const completeLedger =
+      options?.skipMarketLedger === true
+        ? null
+        : (prepareGhostUninstallLedgerCompletion?.(id) ?? null);
+    const manager = getGhostManager();
+    const runtime = getGhostRuntime();
+    runtime.stop(id);
+    getGhostNodeRuntimeBroker().stop(id);
+    getGhostAgentSlot().clearGhost(id);
+    getGhostSubscriptionGateway().dropGhost(id);
+    const result = await manager.uninstall(id, { notify: false });
+    if ('rejection' in result) throwUninstallError(result.rejection);
+    removeGhostSecrets(id);
+    removeGhostKvBestEffort(
+      createGhostKvStore({
+        getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
+        log,
+      }),
+      id,
       log,
-    }),
-    id,
-    log,
-  );
-  if (isValidGhostId(id)) {
+    );
+    if (isValidGhostId(id)) {
+      try {
+        await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', id), {
+          recursive: true,
+          force: true,
+        });
+      } catch (err) {
+        log.warn('ghost-fs 私有目录回收失败', {
+          id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
+      recordBuiltinTombstone(brainRootDir(), id, log);
+    }
+    let recentIds: string[] | null = null;
     try {
-      await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', id), {
-        recursive: true,
-        force: true,
-      });
-    } catch (err) {
-      log.warn('ghost-fs 私有目录回收失败', {
+      recentIds = forgetGhostRecentUsage(id);
+    } catch (error) {
+      log.warn('ghost recent usage 清理失败', {
         id,
-        error: err instanceof Error ? err.message : String(err),
+        error: error instanceof Error ? error.message : String(error),
       });
     }
-  }
-  if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
-    recordBuiltinTombstone(brainRootDir(), id, log);
-  }
-  let recentIds: string[] | null = null;
-  try {
-    recentIds = forgetGhostRecentUsage(id);
-  } catch (error) {
-    log.warn('ghost recent usage 清理失败', {
-      id,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-  broadcastGhostsChanged(manager.list());
-  if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
-  try {
-    await completeLedger?.();
-  } catch (error) {
-    // The package is already gone; a session switch must not report uninstall
-    // as failed. The next market snapshot reconciles the ledger conservatively.
-    log.warn('market ledger uninstall reconciliation deferred', {
-      id,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    broadcastGhostsChanged(manager.list());
+    if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
+    try {
+      await completeLedger?.();
+    } catch (error) {
+      // The package is already gone; a session switch must not report uninstall
+      // as failed. The next market snapshot reconciles the ledger conservatively.
+      log.warn('market ledger uninstall reconciliation deferred', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } finally {
+    releaseMutation();
   }
 }
 

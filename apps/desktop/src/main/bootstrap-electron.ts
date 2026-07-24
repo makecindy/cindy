@@ -531,7 +531,11 @@ import {
 } from './app-shortcuts/index.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
-import { registerGhostIpc, suspendAllGhosts } from './cindy-brain/index.js';
+import {
+  registerGhostIpc,
+  suspendAllGhosts,
+  waitForGhostMutations,
+} from './cindy-brain/index.js';
 import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
@@ -795,6 +799,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
+  await waitForGhostMutations();
   suspendAllGhosts();
   // Personal IM channels have the same DB boundary. Relogin restarts them via
   // app:ready-for-bot after the new DbClient is ready.

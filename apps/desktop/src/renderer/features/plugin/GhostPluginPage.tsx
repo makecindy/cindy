@@ -481,7 +481,11 @@ export function GhostPluginPage() {
       }
       toast.success(t('settings.ghosts.toast.uninstalled', { name: selectedDetail.name }));
     } catch (error) {
-      toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
+      toast.error(
+        selectedMarketInstall
+          ? marketErrorMessage(error, t('settings.ghosts.errors.generic'))
+          : t(ghostInstallErrorKey(extractIpcError(error)?.code)),
+      );
     }
   }, [confirm, refreshMarket, selectedDetail, selectedMarketInstall, t]);
 
