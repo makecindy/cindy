@@ -551,16 +551,19 @@ describe('mobile session composer desktop-first surface', () => {
 
     expect(voiceSource).toContain('readCurrentDraft: () => draftRef.current');
     expect(source).toContain('const voiceStartupInFlightRef = useRef(false);');
+    expect(source).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(voiceSource).toContain('|| voiceStopInFlightRef.current');
-    expect(voiceSource.indexOf('voiceStartupInFlightRef.current = true;')).toBeLessThan(
-      voiceSource.indexOf('const permission = await requestRecordingPermissionsAsync();'),
+    expect(voiceSource.indexOf('resolveMobileVoiceRecordingPermission({')).toBeLessThan(
+      voiceSource.indexOf('voiceStartupInFlightRef.current = true;'),
     );
+    expect(voiceSource).toContain('getPermission: getRecordingPermissionsAsync');
+    expect(voiceSource).toContain("isAppActive: () => AppState.currentState === 'active'");
     expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;');
     expect(voiceSource).toContain('onDraftChanged: setComposerDraft');
     expect(voiceSource).toContain('isMobileRealtimeAudioAvailable()');
     expect(voiceSource.indexOf('isMobileRealtimeAudioAvailable()')).toBeLessThan(
-      voiceSource.indexOf('requestRecordingPermissionsAsync()'),
+      voiceSource.indexOf('resolveMobileVoiceRecordingPermission({'),
     );
     expect(voiceSource).toContain('mobileVoiceRealtimeAudioUnavailableError()');
     expect(voiceSource).toContain('const documentBeforeStop = composerDocumentRef.current;');

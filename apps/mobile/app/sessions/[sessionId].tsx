@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react-native';
 import {
+  getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
 } from 'expo-audio';
@@ -311,6 +312,10 @@ import {
   takePrewarmedMobileVoiceAsr,
   type PrewarmedMobileVoiceAsr,
 } from '@/session/mobileVoicePrewarm';
+import {
+  resolveMobileVoiceRecordingPermission,
+  shouldCancelMobileVoiceForBackground,
+} from '@/session/mobileVoiceStartup';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
   createMobileCindyVoiceCredential,
@@ -1123,6 +1128,8 @@ export default function SessionScreen() {
     }), [deleteRemoteMediaObject]);
   remoteMediaQueueRef.current ??= createRemoteMediaQueue();
   const voiceRecordingActiveRef = useRef(false);
+  const voicePermissionRequestInFlightRef = useRef(false);
+  const voicePermissionRequestSeqRef = useRef(0);
   const voiceStartupInFlightRef = useRef(false);
   // Increments whenever a startup is superseded (screen unmount / session
   // switch). startVoiceRecording re-checks it after each await so a startup
@@ -3331,7 +3338,8 @@ export default function SessionScreen() {
 
   const startVoiceRecording = useCallback(async () => {
     if (
-      voiceStartupInFlightRef.current
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
       || voiceStopInFlightRef.current
       || voiceRecordingActiveRef.current
       || voiceState === 'listening'
@@ -3341,6 +3349,7 @@ export default function SessionScreen() {
     setVoiceError(null);
     setVoiceReleaseToSendActive(false);
     let claimedPrewarm: PrewarmedMobileVoiceAsr | null = null;
+    let permissionRequestSeq: number | null = null;
     let startupSeq: number | null = null;
     // The controller THIS startup created. Stale-teardown paths must only touch
     // this one: by the time a superseded continuation resumes, the shared ref
@@ -3359,24 +3368,33 @@ export default function SessionScreen() {
         setVoiceError(mobileVoiceRealtimeAudioUnavailableError());
         return;
       }
-      startupSeq = voiceStartupSeqRef.current + 1;
-      voiceStartupSeqRef.current = startupSeq;
-      voiceStartupInFlightRef.current = true;
-      const permission = await requestRecordingPermissionsAsync();
-      if (voiceStartupSeqRef.current !== startupSeq) {
-        // Unmounted / superseded while the permission prompt was up: bail out
-        // before touching audio mode so a stale continuation can't re-enable
-        // recording mode on a dead screen.
-        return;
+      permissionRequestSeq = voicePermissionRequestSeqRef.current + 1;
+      voicePermissionRequestSeqRef.current = permissionRequestSeq;
+      voicePermissionRequestInFlightRef.current = true;
+      let permissionResult;
+      try {
+        permissionResult = await resolveMobileVoiceRecordingPermission({
+          getPermission: getRecordingPermissionsAsync,
+          requestPermission: requestRecordingPermissionsAsync,
+          isRequestCurrent: () => voicePermissionRequestSeqRef.current === permissionRequestSeq,
+          isAppActive: () => AppState.currentState === 'active',
+        });
+      } finally {
+        if (voicePermissionRequestSeqRef.current === permissionRequestSeq) {
+          voicePermissionRequestInFlightRef.current = false;
+        }
       }
-      if (!permission.granted) {
-        voiceStartupInFlightRef.current = false;
+      if (permissionResult === 'cancelled') return;
+      if (permissionResult === 'denied') {
         voiceRecordingActiveRef.current = false;
         voiceStopAfterStartRef.current = false;
         setVoiceState('error');
         setVoiceError(mobileVoiceMicPermissionError());
         return;
       }
+      startupSeq = voiceStartupSeqRef.current + 1;
+      voiceStartupSeqRef.current = startupSeq;
+      voiceStartupInFlightRef.current = true;
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
@@ -3492,6 +3510,10 @@ export default function SessionScreen() {
       // (e.g. session construction threw); closing it again after the
       // controller's own teardown is harmless — provider stop is idempotent.
       void claimedPrewarm?.asr.stop().catch(() => undefined);
+      if (
+        permissionRequestSeq !== null
+        && voicePermissionRequestSeqRef.current !== permissionRequestSeq
+      ) return;
       if (startupSeq !== null && voiceStartupSeqRef.current !== startupSeq) {
         // Superseded: tear down only what THIS startup created; the shared ref
         // may already belong to a newer session's recording.
@@ -3520,11 +3542,12 @@ export default function SessionScreen() {
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
-    const ownsActiveRun = Boolean(
-      controller
-      || voiceStartupInFlightRef.current
-      || voiceRecordingActiveRef.current,
-    );
+    const ownsActiveRun = shouldCancelMobileVoiceForBackground({
+      permissionRequestInFlight: voicePermissionRequestInFlightRef.current,
+      startupInFlight: voiceStartupInFlightRef.current,
+      recordingActive: voiceRecordingActiveRef.current,
+      hasController: Boolean(controller),
+    });
     if (!ownsActiveRun) {
       // pressIn may have opened a speculative ASR connection without creating
       // a controller yet; backgrounding must not leave that parked connection.
@@ -3552,7 +3575,8 @@ export default function SessionScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       // iOS permission sheets and Control Center can briefly report `inactive`.
-      // Only a real background transition owns the foreground-only voice teardown.
+      // Android permission sheets can report `background`, but permission
+      // resolution has not claimed audio resources and must survive that event.
       if (nextState !== 'background') return;
       cancelVoiceForAppBackground();
     });
@@ -3565,6 +3589,8 @@ export default function SessionScreen() {
       voiceControllerSessionRef.current = null;
       // Supersede any in-flight startup so its post-await re-checks tear down
       // the resources it acquired for this now-dead screen.
+      voicePermissionRequestSeqRef.current += 1;
+      voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
