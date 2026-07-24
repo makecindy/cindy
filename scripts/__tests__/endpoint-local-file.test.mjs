@@ -46,8 +46,6 @@ test('localhost 七件套覆写,其余字段照抄 cn 正本,返回绝对路径'
   assert.equal(local.authApiBaseUrl, 'http://localhost:3344');
   assert.equal(local.deviceLinkApiBaseUrl, 'http://localhost:3335');
   assert.equal(local.ossApiBaseUrl, 'http://localhost:3340');
-  assert.equal(local.moderationSignApiBaseUrl, 'http://localhost:3346');
-  assert.equal(local.moderationSignTestApiBaseUrl, 'http://localhost:3346');
   assert.equal(local.githubApiBaseUrl, 'http://localhost:3336');
   assert.equal(local.skillhubApiBaseUrl, 'http://localhost:3341');
   // 其余字段与正本一致(oauth broker 等本地不起的服务沿用远程值)
@@ -84,8 +82,6 @@ test('生成物能过客户端 parser 的 allowHttp 校验(与仓内正本同一
     'heartbeatUrl',
     'slackHookWsUrl',
     'websiteUrl',
-    'moderationSignApiBaseUrl',
-    'moderationSignTestApiBaseUrl',
     'githubApiBaseUrl',
     'skillhubApiBaseUrl',
     'cdnBaseUrl',

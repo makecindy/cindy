@@ -60,9 +60,9 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     expect(loginSource).toContain('testID="login.identifierInput"');
     expect(loginSource).toContain('testID="login.continueButton"');
     expect(loginSource).toContain('testID="login.ssoEntryButton"');
-    expect(loginSource).toContain(
-      '<LoginSocialRow count={nonAppleProviders.length + 1}>',
-    );
+    // Apple 圆钮(iOS)计入行 count:apple 1 + nonAppleProviders + SSO 1
+    expect(loginSource).toContain("socialProviders.includes('apple') ? 1 : 0");
+    expect(loginSource).toContain('nonAppleProviders.length');
     expect(loginSource).toContain(
       "void auth.dispatchLoginAction({ type: 'discover', email: value })",
     );

@@ -62,6 +62,9 @@ import {
   type AccountRateLimitsUpdatedNotification,
   type ThreadStatusChangedNotification,
   type ThreadSettingsUpdatedNotification,
+  type ItemGuardianApprovalReviewStartedNotification,
+  type ItemGuardianApprovalReviewCompletedNotification,
+  type GuardianWarningNotification,
 } from './protocol.js';
 
 /**
@@ -88,6 +91,9 @@ const SUBSCRIBED_METHODS = [
   'thread/status/changed',           // 线程级 active_flags (waiting on approval / user input) — turn lifecycle 部分我们自己拼
   'thread/settings/updated',         // 中途 thread/settings/update 后 server 回带的权威设置快照 (serviceTier / model / effort)
   'serverRequest/resolved',          // 原生 requestUserInput / approval 请求被 server 端自动清理
+  'item/autoApprovalReview/started',
+  'item/autoApprovalReview/completed',
+  'guardianWarning',
   'error',
 ] as const;
 
@@ -147,6 +153,10 @@ export interface ThreadEventHandlers {
    */
   threadSettingsUpdated?: (params: ThreadSettingsUpdatedNotification['params']) => void;
   serverRequestResolved?: (params: ServerRequestResolvedNotification['params']) => void;
+  /** Codex built-in Guardian auto-review lifecycle (Auto permission mode). */
+  autoApprovalReviewStarted?: (params: ItemGuardianApprovalReviewStartedNotification) => void;
+  autoApprovalReviewCompleted?: (params: ItemGuardianApprovalReviewCompletedNotification) => void;
+  guardianWarning?: (params: GuardianWarningNotification) => void;
   error?: (params: ErrorNotification['params']) => void;
 
   // ── ServerRequest (Phase 2 approval) ─────────────────────────────────────
@@ -213,6 +223,11 @@ export interface AppServerHostOptions {
    * 本机 codex proxy。session 级 prompt gate 只读这个值,不再 live 读取全局状态。
    */
   codexProxyActive?: boolean;
+  /**
+   * Host 创建时冻结的事实:spawn args 里定义的 OpenAI 身份 provider id(仅
+   * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
+   */
+  remoteCompactionProviderId?: string;
 }
 
 interface BufferedNotification {
@@ -252,6 +267,11 @@ export class AppServerHost {
 
   isCodexProxyActive(): boolean {
     return this.opts.codexProxyActive === true;
+  }
+
+  /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
+  getRemoteCompactionProviderId(): string | null {
+    return this.opts.remoteCompactionProviderId ?? null;
   }
 
   getConnectionId(): string {
@@ -637,6 +657,9 @@ export class AppServerHost {
       case 'thread/status/changed': fn = handlers.threadStatusChanged as (p: never) => void; break;
       case 'thread/settings/updated': fn = handlers.threadSettingsUpdated as (p: never) => void; break;
       case 'serverRequest/resolved': fn = handlers.serverRequestResolved as (p: never) => void; break;
+      case 'item/autoApprovalReview/started': fn = handlers.autoApprovalReviewStarted as (p: never) => void; break;
+      case 'item/autoApprovalReview/completed': fn = handlers.autoApprovalReviewCompleted as (p: never) => void; break;
+      case 'guardianWarning': fn = handlers.guardianWarning as (p: never) => void; break;
       case 'error': fn = handlers.error as (p: never) => void; break;
     }
     if (!fn) {

@@ -26,6 +26,7 @@
     "@types/node": "*",
     "esbuild": "^0.27.0",
     "eslint": "^9.0.0",
+    "selfsigned": "^5.5.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.2.4"

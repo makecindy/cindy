@@ -1,11 +1,11 @@
 /**
- * sessionsUpdateTranscriptRelocation.test.ts — 会话移动触发 CLI 转录迁移的接线。
- * ------------------------------------------------------------------------------------
- * `local-db:sessions:update` 在 patch 导致 workingDir 实际变化、且会话是本机 cc 会话时,
- * 必须在查询返回行之前调用 relocateClaudeTranscriptsForSessionMove(旧值 → 新值),
- * 且迁移中持久化的最新 sdkSessionId 要并入返回行与广播 patch(renderer 不能留旧
- * resume id,PR #472 Codex review);以下情况一律不调用:workingDir 未变 / patch 不含
- * workingDir / codex 会话 / remote 会话。
+ * sessionsUpdate.test.ts — `local-db:sessions:update` handler 集成接线。
+ * -------------------------------------------------------------------
+ * 覆盖持久化后需要广播的增量字段，以及会话移动触发 CLI 转录迁移的边界：
+ * workingDir 实际变化、且会话是本机 cc 会话时，必须在查询返回行之前调用
+ * relocateClaudeTranscriptsForSessionMove(旧值 → 新值)，并把迁移中持久化的最新
+ * sdkSessionId 并入返回行与广播 patch；其它会话或未实际移动时不得调用。
+ *
  * 通过 mock electron ipcMain 捕获真实 handler + 内存 sqlite 全列 sessions 表做集成断言。
  */
 import Database from 'better-sqlite3';
@@ -137,7 +137,23 @@ beforeEach(() => {
   registerSessionIpc();
 });
 
-describe('local-db:sessions:update transcript relocation wiring', () => {
+describe('local-db:sessions:update handler wiring', () => {
+  it('persists and broadcasts title-only patches to device-link subscribers', async () => {
+    await invokeUpdate('codex-local', { title: '排查远程标题同步' });
+
+    const persisted = h.sqlite!
+      .prepare('SELECT title FROM sessions WHERE id = ?')
+      .get('codex-local') as { title: string };
+    expect(persisted.title).toBe('排查远程标题同步');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({
+        sessionId: 'codex-local',
+        patch: expect.objectContaining({ title: '排查远程标题同步' }),
+      }),
+    );
+  });
+
   it('broadcasts permission setting patches to every mounted client', async () => {
     await invokeUpdate('codex-local', { permissionMode: 'ask' });
 

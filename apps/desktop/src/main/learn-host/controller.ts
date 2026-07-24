@@ -29,10 +29,6 @@ import {
 import type { FileChange } from '../skillhub/snapshot';
 import { getSkillInstallLockOwner, tryAcquireSkillInstallLock } from '../skillhub/installLock';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
-import {
-  cancelReleasedOutput,
-  onReleasedAgentEvent,
-} from '../content-moderation/outputHub.js';
 import type { EvidenceSearchFn } from './evidence';
 import { collectEvidence } from './evidence';
 import { extractKeywords } from './evidence.pure';
@@ -492,7 +488,6 @@ export class LearnController {
     // update 的终态保护会拒绝 cancelled → distilling,此处按返回值收口,把刚建的
     // 会话中止掉,不再白跑一轮模型调用。
     if (afterCreate.status !== 'distilling' || this.disposed) {
-      cancelReleasedOutput(session.id);
       void session.abort().catch(() => undefined);
       // dispose 窗口里 'distilling' 已被持久化 —— 必须收口成终态,否则 runs.json
       // 留着非终态 run,重启前 startLearn 永远 LEARN_BUSY(Codex review)。cancel
@@ -529,7 +524,7 @@ export class LearnController {
     let assistantText = '';
     const turnFinished = new Promise<void>((resolve, reject) => {
       let off: () => void = () => undefined;
-      off = onReleasedAgentEvent(session, (ev) => {
+      off = session.onEvent((ev) => {
         if (ev.type === 'text') {
           const data = ev.data as { text?: string; isFinal?: boolean } | null;
           if (data && typeof data.text === 'string') {
@@ -553,7 +548,6 @@ export class LearnController {
     const timeoutMs = this.deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
     const timedOut = new Promise<never>((_resolve, reject) => {
       const handle = setTimeout(() => {
-        cancelReleasedOutput(session.id);
         void session.abort().catch(() => undefined);
         reject(new Error(`distillation timed out after ${Math.round(timeoutMs / 1000)}s`));
       }, timeoutMs);
@@ -700,7 +694,7 @@ export class LearnController {
       this.revisionRescans.set(runId, rescan);
       void rescan;
     };
-    const off = onReleasedAgentEvent(session, (ev) => {
+    const off = session.onEvent((ev) => {
       // 回合活跃跟踪只认真实 turn 事件:account_usage / interaction_dismissed
       // 这类全局通知不能把 apply 永久卡在 LEARN_BUSY。
       if (this.deps.isTerminalErrorEvent(ev)) {
@@ -988,7 +982,6 @@ export class LearnController {
         throw new LearnError('LEARN_INVALID_STATE', `run ${runId} is not awaiting review (${run.status})`);
       }
       const watcher = this.detachWatcher(runId);
-      if (watcher) cancelReleasedOutput(watcher.session.id);
       await watcher?.session.abort().catch(() => undefined);
       await this.revisionRescans.get(runId)?.catch(() => undefined);
       await this.deps.staging.cleanup(runId);
@@ -1048,7 +1041,6 @@ export class LearnController {
     }
     let rejectTurn: ((err: Error) => void) | undefined;
     if (this.active?.runId === runId) {
-      cancelReleasedOutput(this.active.session.id);
       void this.active.session.abort().catch(() => undefined);
       rejectTurn = this.active.rejectTurn;
     }
@@ -1069,7 +1061,6 @@ export class LearnController {
       // 登出/切账号时活跃蒸馏必须真正中止(Codex review):只摘监听不 abort 的话,
       // bypassPermissions 的模型进程会带着旧账号状态继续跑、烧 token;pipeline
       // promise 也会永久 pending。abort + rejectTurn 与 cancel() 同语义。
-      cancelReleasedOutput(this.active.session.id);
       aborts.push(this.active.session.abort().catch(() => undefined));
       rejectActiveTurn = this.active.rejectTurn;
       this.active.stopListening?.();
@@ -1080,7 +1071,6 @@ export class LearnController {
       // awaiting-review 后的修订 turn 只由 watcher 观察,不在 this.active 里。
       // 切账号/登出时必须中止这些会话,否则模型会继续用旧 controller deps 写
       // staging、消耗 token(Codex review)。
-      cancelReleasedOutput(watcher.session.id);
       aborts.push(watcher.session.abort().catch(() => undefined));
       watcher.stopListening();
     }

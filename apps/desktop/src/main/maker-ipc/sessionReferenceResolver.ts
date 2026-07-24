@@ -6,7 +6,7 @@
  */
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
-import { remoteInvoke as invokeRemote } from '../device-link/index.js';
+import { getSelfDeviceId, remoteInvoke as invokeRemote } from '../device-link/index.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
 import { messageToCamel } from '../localDb/mapper.js';
@@ -691,8 +691,14 @@ export async function resolveSessionReferences(
     const refsLeft = refs.length - index;
     const messageLimit = Math.max(1, Math.floor(remainingMessages / refsLeft));
     const tokenBudget = Math.max(1, Math.floor(remainingTokens / refsLeft));
-    const resolved = ref.deviceId
-      ? await resolveRemote(ref, messageLimit, tokenBudget)
+    // 深链是可复制的字符串:控制端生成的 `?device=` 链接可能被带回归属设备
+    // 本机粘贴发送,此时 deviceId 指向本机自己——按本地会话解析,不能对自己
+    // 发起 device-link 隧道(本机不是自己的控制端,必然失败)。
+    const remoteDeviceId = ref.deviceId && ref.deviceId !== getSelfDeviceId()
+      ? ref.deviceId
+      : undefined;
+    const resolved = remoteDeviceId
+      ? await resolveRemote({ ...ref, deviceId: remoteDeviceId }, messageLimit, tokenBudget)
       : await resolveLocal(ref, messageLimit, tokenBudget);
     contexts.push(resolved.context);
     remainingMessages -= resolved.context.messageCount;

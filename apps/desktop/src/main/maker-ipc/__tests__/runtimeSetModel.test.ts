@@ -219,7 +219,9 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('openai');
   });
 
-  it('hot-switches an idle proxy-active Codex session from subscription to XD', async () => {
+  it('closes an idle proxy-active Codex session when switching from subscription to XD (远端压缩身份边界)', async () => {
+    // 订阅直连 thread 以 OpenAI 身份 provider 创建(远端压缩,thread 级冻结);
+    // 切到网关路由必须关会话、下一次发送按新路由重建,不能热切。
     const sessionId = rememberSession('runtime-set-model-idle-oauth-to-xd-superset');
     setSessionProvider(sessionId, 'openai');
     const setModel = vi.fn(async () => {});
@@ -243,17 +245,53 @@ describe('applyRuntimeSetModelChange', () => {
       model: 'codex/gpt-5.5',
       providerId: 'xd',
       registerPendingCredentialSwitch,
+      codexAuthInjection: 'oauth-bearer',
     });
 
     expect(result).toEqual({ status: 'applied' });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
-    expect(closeSession).not.toHaveBeenCalled();
-    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
-  it('fails closed on a busy hot-reusable Codex switch without a pending channel', async () => {
+  it('defers a busy subscription-to-XD Codex switch to the turn boundary (远端压缩身份边界)', async () => {
     const sessionId = rememberSession('runtime-set-model-busy-superset-no-channel');
+    setSessionProvider(sessionId, 'openai');
+    const setModel = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex', remoteHostId: null, codexProxyActive: true,
+        model: 'gpt-5.4', setModel,
+      }),
+      listActiveSessions: () => [{
+        id: sessionId, agentKind: 'codex', remoteHostId: null,
+        isTurnRunning: () => true,
+      }],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      registerPendingCredentialSwitch,
+      codexAuthInjection: 'oauth-bearer',
+    });
+
+    expect(result).toEqual({ status: 'deferred' });
+    expect(registerPendingCredentialSwitch).toHaveBeenCalledWith(sessionId, {
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+    });
+    expect(setModel).not.toHaveBeenCalled();
+    expect(getSessionProvider(sessionId)).toBe('openai');
+  });
+
+  it('fails closed on a busy subscription-to-XD Codex switch without a pending channel', async () => {
+    const sessionId = rememberSession('runtime-set-model-busy-boundary-no-channel');
     setSessionProvider(sessionId, 'openai');
     const setModel = vi.fn(async () => {});
     const maker: RuntimeSetModelMaker = {
@@ -273,7 +311,8 @@ describe('applyRuntimeSetModelChange', () => {
       sessionId,
       model: 'codex/gpt-5.5',
       providerId: 'xd',
-    })).rejects.toThrow(/provider route.*busy/i);
+      codexAuthInjection: 'oauth-bearer',
+    })).rejects.toThrow(/busy/i);
 
     expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('openai');
@@ -310,7 +349,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
-  it('hot-reuses a proxy-active default-source Codex session when switching into xAI provider OAuth routing', async () => {
+  it('hot-reuses a proxy-active env-key default-source Codex session when switching into xAI provider OAuth routing', async () => {
     const sessionId = rememberSession('runtime-set-model-hot-default-xai');
     const setModel = vi.fn(async () => {});
     const closeSession = vi.fn(async () => {});
@@ -335,15 +374,54 @@ describe('applyRuntimeSetModelChange', () => {
 
     expect(getSessionProvider(sessionId)).toBeNull();
 
+    // env-key spawn:隐式来源解析为 gateway 家族,不涉及远端压缩身份,保持热切。
     await applyRuntimeSetModelChange({
       maker,
       sessionId,
       model: 'xai/grok-4.3',
       providerId: 'xai',
+      codexAuthInjection: 'env-key',
     });
 
     expect(closeSession).not.toHaveBeenCalled();
     expect(setModel).toHaveBeenCalledWith('xai/grok-4.3');
+    expect(getSessionProvider(sessionId)).toBe('xai');
+  });
+
+  it('closes a proxy-active oauth default-source Codex session when switching into xAI provider OAuth routing', async () => {
+    const sessionId = rememberSession('runtime-set-model-close-oauth-default-xai');
+    const setModel = vi.fn(async () => {});
+    const closeSession = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        codexProxyActive: true,
+        model: 'gpt-5.4',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        {
+          id: sessionId,
+          agentKind: 'codex',
+          remoteHostId: null,
+          isTurnRunning: () => false,
+        },
+      ],
+      closeSession,
+    };
+
+    // oauth spawn:隐式来源解析为订阅家族(thread 是 OpenAI 远端压缩身份)→ 关会话重建。
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'xai/grok-4.3',
+      providerId: 'xai',
+      codexAuthInjection: 'oauth-bearer',
+    });
+
+    expect(closeSession).toHaveBeenCalledWith(sessionId);
+    expect(setModel).not.toHaveBeenCalled();
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
 

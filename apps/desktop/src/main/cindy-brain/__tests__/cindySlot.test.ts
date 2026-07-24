@@ -481,3 +481,218 @@ describe('改图代办(edit_image)', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 });
+
+describe('管子续命挂钩(同步视频代办 hold/release)', () => {
+  it('署名视频代办 hold 预算 = expected×3;完成后 release', async () => {
+    const holdPipeCall = vi.fn();
+    const releasePipeCall = vi.fn();
+    const { slot } = makeSlot({
+      holdPipeCall,
+      releasePipeCall,
+      videoExpectedSeconds: vi.fn(() => 300),
+    } as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: '一只猫奔跑',
+      callId: 'call-9',
+    });
+    expect(r).toMatchObject({ ok: true });
+    expect(holdPipeCall).toHaveBeenCalledWith('art', 'call-9', 900_000);
+    expect(releasePipeCall).toHaveBeenCalledWith('art', 'call-9');
+  });
+
+  it('生成失败同样 release;未署名(无 callId)与图片代办不 hold', async () => {
+    const holdPipeCall = vi.fn();
+    const releasePipeCall = vi.fn();
+    const { slot } = makeSlot({
+      holdPipeCall,
+      releasePipeCall,
+      generateVideo: vi.fn(async () => {
+        throw new Error('通道爆炸');
+      }),
+    } as Partial<CindySlotDeps>);
+    const failed = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: 'x',
+      callId: 'call-f',
+    });
+    expect(failed).toMatchObject({ ok: false });
+    expect(holdPipeCall).toHaveBeenCalledWith('art', 'call-f', 120 * 3 * 1000); // 未注入 expected → 缺省 120s
+    expect(releasePipeCall).toHaveBeenCalledWith('art', 'call-f');
+
+    holdPipeCall.mockClear();
+    await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'gen_video', prompt: 'x' });
+    expect(holdPipeCall).not.toHaveBeenCalled(); // 未署名单不 hold
+
+    await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'gen_image', prompt: 'x', callId: 'c' });
+    expect(holdPipeCall).not.toHaveBeenCalled(); // 图片代办不 hold
+  });
+});
+
+describe('异步任务(mode:submit / query_job)', () => {
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const SUBMIT_REQ = {
+    type: 'cindy-request',
+    kind: 'gen_video',
+    prompt: '一只猫奔跑',
+    mode: 'submit',
+    callId: 'call-a',
+  };
+
+  it('submit 受理即返回 running + jobId;完成后 query 取件,记账带归因号', async () => {
+    const d = deferred<{ buffer: Uint8Array; mimeType: string }>();
+    const { slot, saveGhostMedia } = makeSlot({
+      generateVideo: vi.fn(() => d.promise),
+      videoExpectedSeconds: vi.fn(() => 300),
+    } as Partial<CindySlotDeps>);
+
+    const r = await slot.handleModelRequest('art', SUBMIT_REQ);
+    expect(r).toMatchObject({ ok: true, status: 'running', expectedSeconds: 300 });
+    const jobId = (r as { jobId: string }).jobId;
+    expect(jobId.length).toBeGreaterThan(10);
+
+    const q1 = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId });
+    expect(q1).toMatchObject({ ok: true, status: 'running' });
+
+    d.resolve({ buffer: new Uint8Array([7, 8, 9]), mimeType: 'video/mp4' });
+    await vi.waitFor(async () => {
+      const q = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId });
+      expect(q).toMatchObject({ ok: true, status: 'done', url: 'cindy-media://blobs/abc.png' });
+    });
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ ghostId: 'art', callId: 'call-a' }));
+    // 完成结果 TTL 内可反复查(幂等)。
+    const again = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId });
+    expect(again).toMatchObject({ ok: true, status: 'done' });
+  });
+
+  it('别的意识查不到我的任务(统一话术不泄露存在性)', async () => {
+    const d = deferred<{ buffer: Uint8Array; mimeType: string }>();
+    const { slot } = makeSlot({ generateVideo: vi.fn(() => d.promise) } as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', SUBMIT_REQ);
+    const jobId = (r as { jobId: string }).jobId;
+
+    const q = await slot.handleModelRequest('other', { type: 'cindy-request', kind: 'query_job', jobId });
+    expect(q).toMatchObject({ ok: false });
+    expect((q as { message: string }).message).toContain('查无此任务');
+    d.resolve({ buffer: new Uint8Array([1]), mimeType: 'video/mp4' });
+  });
+
+  it('后台生成失败 → query 返回结构化失败(人话动词 + 原因)', async () => {
+    const d = deferred<{ buffer: Uint8Array; mimeType: string }>();
+    const { slot } = makeSlot({ generateVideo: vi.fn(() => d.promise) } as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', SUBMIT_REQ);
+    const jobId = (r as { jobId: string }).jobId;
+
+    d.reject(new Error('通道爆炸'));
+    await vi.waitFor(async () => {
+      const q = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId });
+      expect(q).toMatchObject({ ok: false });
+      expect((q as { message: string }).message).toContain('生成视频失败:通道爆炸');
+    });
+  });
+
+  it('后台在途上限:第 3 单拒;完成一单后放行', async () => {
+    const d1 = deferred<{ buffer: Uint8Array; mimeType: string }>();
+    const d2 = deferred<{ buffer: Uint8Array; mimeType: string }>();
+    const gen = vi
+      .fn<() => Promise<{ buffer: Uint8Array; mimeType: string }>>()
+      .mockImplementationOnce(() => d1.promise)
+      .mockImplementationOnce(() => d2.promise);
+    const { slot } = makeSlot({ generateVideo: gen } as Partial<CindySlotDeps>);
+
+    expect(await slot.handleModelRequest('art', SUBMIT_REQ)).toMatchObject({ ok: true });
+    expect(await slot.handleModelRequest('art', SUBMIT_REQ)).toMatchObject({ ok: true });
+    const third = await slot.handleModelRequest('art', SUBMIT_REQ);
+    expect(third).toMatchObject({ ok: false });
+    expect((third as { message: string }).message).toContain('上限');
+
+    d1.resolve({ buffer: new Uint8Array([1]), mimeType: 'video/mp4' });
+    await vi.waitFor(async () => {
+      expect(await slot.handleModelRequest('art', SUBMIT_REQ)).toMatchObject({ ok: true });
+    });
+    d2.resolve({ buffer: new Uint8Array([2]), mimeType: 'video/mp4' });
+  });
+
+  it('图像代办不支持 submit;mode 乱值拒;jobId 形状不合法拒', async () => {
+    const { slot, generateImage } = makeSlot();
+    const img = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_image',
+      prompt: 'x',
+      mode: 'submit',
+    });
+    expect(img).toMatchObject({ ok: false });
+    expect((img as { message: string }).message).toContain('视频类');
+    expect(generateImage).not.toHaveBeenCalled();
+
+    expect(
+      await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'gen_video', prompt: 'x', mode: 'async' }),
+    ).toMatchObject({ ok: false });
+    expect(
+      await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId: '' }),
+    ).toMatchObject({ ok: false });
+    expect(
+      await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId: 'x'.repeat(65) }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('完成态记录按意识限额淘汰最旧(快速失败循环不无限堆表)', async () => {
+    const { slot } = makeSlot({
+      generateVideo: vi.fn(async () => {
+        throw new Error('立即失败');
+      }),
+    } as Partial<CindySlotDeps>);
+
+    const jobIds: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const r = await slot.handleModelRequest('art', SUBMIT_REQ);
+      expect(r).toMatchObject({ ok: true, status: 'running' });
+      jobIds.push((r as { jobId: string }).jobId);
+      // 让后台链落定(失败出 running 态),下一单才不会被在途闸拦。
+      await vi.waitFor(async () => {
+        const q = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId: jobIds[i] });
+        expect(q).toMatchObject({ ok: false });
+      });
+    }
+
+    // 最早的记录已被限额淘汰(话术与过期一致:查无此任务)。
+    const oldest = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId: jobIds[0] });
+    expect((oldest as { message: string }).message).toContain('查无此任务');
+    // 最近完成的仍在保留窗内可查(失败原因原样返回)。
+    const latest = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId: jobIds[19] });
+    expect((latest as { message: string }).message).toContain('立即失败');
+  });
+
+  it('完成结果过 TTL 清理 → 查无此任务', async () => {
+    vi.useFakeTimers();
+    try {
+      const d = deferred<{ buffer: Uint8Array; mimeType: string }>();
+      const { slot } = makeSlot({ generateVideo: vi.fn(() => d.promise) } as Partial<CindySlotDeps>);
+      const r = await slot.handleModelRequest('art', SUBMIT_REQ);
+      const jobId = (r as { jobId: string }).jobId;
+
+      d.resolve({ buffer: new Uint8Array([1]), mimeType: 'video/mp4' });
+      await vi.advanceTimersByTimeAsync(0); // flush 后台链 microtasks
+      const done = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId });
+      expect(done).toMatchObject({ ok: true, status: 'done' });
+
+      vi.advanceTimersByTime(31 * 60_000);
+      const gone = await slot.handleModelRequest('art', { type: 'cindy-request', kind: 'query_job', jobId });
+      expect(gone).toMatchObject({ ok: false });
+      expect((gone as { message: string }).message).toContain('查无此任务');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

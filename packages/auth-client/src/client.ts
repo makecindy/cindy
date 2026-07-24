@@ -184,6 +184,8 @@ export class CindyAuthClient {
           authorizationCode?: string;
           rawNonce: string;
           user?: { name?: string };
+          // Apple 首次授权的明文 email(客户端补传,消除 Guideline 4.2 索要 email)。
+          email?: string | null;
         }
       | { code: string },
   ): Promise<LoginOutcome> {

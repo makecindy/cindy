@@ -13,8 +13,9 @@
 
 - 开发与工程规则统一放在 `docs/dev-rules/`。
 - 产品行为与体验规则统一放在 `docs/product-rules/`。
-- UI 视觉、交互与内容设计规则的入口与配套说明统一放在 `docs/design-rules/`，
-  权威视觉规范正文为根目录 `DESIGN.md`。
+- UI 视觉、交互与内容设计规则统一放在 `docs/design-rules/`，权威视觉规范正文为
+  `docs/design-rules/DESIGN.md`（根目录 `DESIGN.md` 仅为跳转入口），目录索引为
+  `docs/design-rules/cindy-design-system.md`。
 - 根 `AGENTS.md` 只保留所有任务都适用的规则、风险入口和文档索引。
 - 目录或模块专属规则优先放到对应目录的嵌套 `AGENTS.md`；需要跨目录复用的
   专题说明放在 `docs/`，并由本文件写明触发条件。
@@ -38,9 +39,11 @@
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
-  `DESIGN.md`；`docs/design-rules/cindy-design-system.md` 仅为历史引用兼容入口。
+  `docs/design-rules/DESIGN.md`；设计文档索引见
+  `docs/design-rules/cindy-design-system.md`。
 - 所有新增或修改的 UI 必须同时完成 Light 与 Dark 两种模式；只实现或只验证一种模式，
-  视为未完成。具体实现与验收要求以 `DESIGN.md` 的双模式交付门槛为准。
+  视为未完成。具体实现与验收要求以 `docs/design-rules/DESIGN.md` 的双模式交付门槛
+  为准。
 - 修改 Orca 多 Agent 协同时，必须先读
   `docs/dev-rules/orca-team-architecture.md`。
 - 修改 `packages/maker-core` 的 Agent 编排、prompt 组装、tool／MCP 暴露、translator、

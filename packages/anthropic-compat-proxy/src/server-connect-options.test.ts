@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import type { ProxyHandle } from './types.js';
 
 // 捕获 proxy → upstream 转发请求的 options(测试客户端用 fetch/undici,不走 node:http,
@@ -35,10 +36,8 @@ describe('anthropic-compat-proxy upstream connect options', () => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
-    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const port = await listenOnAvailableLoopbackPort(upstream);
     closeUpstream = () => new Promise<void>((r) => upstream.close(() => r()));
-    const addr = upstream.address();
-    const port = typeof addr === 'object' && addr ? addr.port : 0;
 
     proxy = await createAnthropicCompatProxy({
       upstream: `http://127.0.0.1:${port}`,

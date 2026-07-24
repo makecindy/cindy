@@ -427,6 +427,7 @@ export function LoginSocialButton({
   children,
   testID,
   busy,
+  variant = 'default',
 }: {
   label: string;
   onPress: () => void;
@@ -439,9 +440,14 @@ export function LoginSocialButton({
    * 与本组件对称的桌面 LoginSocialButton `aria-disabled` 语义一致。
    */
   busy?: boolean;
+  /** 'apple' = ADR 官方配色圆钮(纯黑/白底 appleCircleBg、无描边 borderWidth 0);
+   *  'default' = 常规皮肤圆钮(primaryButtonBg 底 + primaryButtonBorder 描边)。
+   *  apple 变体 pressed 叠层与 default 同款(StateOverlay 黑 50%)。 */
+  variant?: 'default' | 'apple';
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
+  const isApple = variant === 'apple';
   return (
     <Pressable
       accessibilityLabel={label}
@@ -452,9 +458,12 @@ export function LoginSocialButton({
       onPress={onPress}
       style={[
         styles.socialButton,
-        {
-          borderColor: colors.login.primaryButtonBorder,
-        },
+        isApple
+          ? {
+              backgroundColor: colors.login.appleCircleBg,
+              borderWidth: 0,
+            }
+          : { borderColor: colors.login.primaryButtonBorder },
       ]}
       testID={testID}
     >
@@ -534,15 +543,18 @@ export function LoginErrorText({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  // 外层定高容器承载垂直居中(iOS Text 不支持 textAlignVertical,统一用 View 布局)
   return (
-    <Text
-      accessibilityRole="alert"
-      numberOfLines={2}
-      style={styles.errorText}
-      testID={testID}
-    >
-      {children}
-    </Text>
+    <View pointerEvents="none" style={styles.errorText}>
+      <Text
+        accessibilityRole="alert"
+        numberOfLines={2}
+        style={styles.errorTextLabel}
+        testID={testID}
+      >
+        {children}
+      </Text>
+    </View>
   );
 }
 
@@ -759,22 +771,11 @@ export function LoginTextLinkSlot({
 }
 
 /* ── 图标(矢量源 = figma 现导 SVG path 内联,登记见 asset-manifest.md;
-      Google/WeChat fill 为厂商固定品牌色,跨模式不变;Apple/SSO 为单色图标,
+      Google/WeChat fill 为厂商固定品牌色,跨模式不变;SSO 为单色图标,
       随圆钮底反相(亮色深圆上白/浅图标,暗色白圆上 #2A2828 深图标——figma
-      white apple 489:676 / white SSO 489:710 核验)——与桌面 assets/login/icons 同源) ── */
-
-/** Apple(247:1692,ic:baseline-apple;亮白 / 暗 #2A2828 反相)。 */
-function AppleIcon() {
-  const { mode } = useTheme();
-  return (
-    <Svg width="100%" height="100%" viewBox="0 0 48 48" fill="none" aria-hidden>
-      <Path
-        d="M33.0984 39.56C31.1384 41.46 28.9984 41.16 26.9384 40.26C24.7584 39.34 22.7584 39.3 20.4584 40.26C17.5784 41.5 16.0584 41.14 14.3384 39.56C4.57837 29.5 6.01838 14.18 17.0984 13.62C19.7984 13.76 21.6784 15.1 23.2584 15.22C25.6184 14.74 27.8784 13.36 30.3984 13.54C33.4184 13.78 35.6984 14.98 37.1984 17.14C30.9584 20.88 32.4384 29.1 38.1584 31.4C37.0184 34.4 35.5384 37.38 33.0784 39.58L33.0984 39.56ZM23.0584 13.5C22.7584 9.04 26.3784 5.36 30.5384 5C31.1184 10.16 25.8584 14 23.0584 13.5Z"
-        fill={mode === 'dark' ? '#2A2828' : '#FFFFFF'}
-      />
-    </Svg>
-  );
-}
+      white SSO 489:710 核验)——与桌面 assets/login/icons 同源)。Apple logo 不在
+      本图标集:由 AppleLogoGlyph 承载(ADR 官方 Logo-only path 逐字节原样,
+      App Store Guideline 4;见该组件注释)。 ── */
 
 /** Google(247:1714,material-icon-theme:google 四色品牌 mark)。 */
 function GoogleIcon() {
@@ -838,13 +839,32 @@ function SsoIcon() {
   );
 }
 
-/** 第三方圆钮图标分发(figma §4.5 icon 48;providers.social 驱动显隐,无返回不渲染)。 */
+/** Apple logo(ADR 官方「SIWA Logo-only」变体,path d 逐字节原样未改动,与桌面端
+ *  apps/desktop/src/renderer/assets/login/icons/apple.svg 同源同值,由单测逐字节对比
+ *  防漂移;黑白两版 path 相同仅 fill 不同,这里 fill 随圆钮底反相 = colors.login.appleLogoInk)。
+ *  HIG 允许 logo-only 自定义按钮(圆形),artwork 来自 Apple Design Resources 未改动,
+ *  对齐 App Store Guideline 4(用户标准图 2026-07-24);viewBox 15.7 13.2 24.6 24.6
+ *  按 logo 光学中心裁切,logo≈圆钮 46% 高,与桌面端同口径。供后续苹果审核回复引用。 */
+export function AppleLogoGlyph() {
+  const { colors } = useTheme();
+  return (
+    <Svg width="100%" height="100%" viewBox="15.7 13.2 24.6 24.6" fill="none" aria-hidden>
+      <Path
+        d="M28.2226562,20.3846154 C29.0546875,20.3846154 30.0976562,19.8048315 30.71875,19.0317864 C31.28125,18.3312142 31.6914062,17.352829 31.6914062,16.3744437 C31.6914062,16.2415766 31.6796875,16.1087095 31.65625,16 C30.7304687,16.0362365 29.6171875,16.640178 28.9492187,17.4494596 C28.421875,18.06548 27.9414062,19.0317864 27.9414062,20.0222505 C27.9414062,20.1671964 27.9648438,20.3121424 27.9765625,20.3604577 C28.0351562,20.3725366 28.1289062,20.3846154 28.2226562,20.3846154 Z M25.2929688,35 C26.4296875,35 26.9335938,34.214876 28.3515625,34.214876 C29.7929688,34.214876 30.109375,34.9758423 31.375,34.9758423 C32.6171875,34.9758423 33.4492188,33.792117 34.234375,32.6325493 C35.1132812,31.3038779 35.4765625,29.9993643 35.5,29.9389701 C35.4179688,29.9148125 33.0390625,28.9122695 33.0390625,26.0979021 C33.0390625,23.6579784 34.9140625,22.5588048 35.0195312,22.474253 C33.7773438,20.6382708 31.890625,20.5899555 31.375,20.5899555 C29.9804688,20.5899555 28.84375,21.4596313 28.1289062,21.4596313 C27.3554688,21.4596313 26.3359375,20.6382708 25.1289062,20.6382708 C22.8320312,20.6382708 20.5,22.5950413 20.5,26.2911634 C20.5,28.5861411 21.3671875,31.013986 22.4335938,32.5842339 C23.3476562,33.9129053 24.1445312,35 25.2929688,35 Z"
+        fill={colors.login.appleLogoInk}
+      />
+    </Svg>
+  );
+}
+
+/** 第三方圆钮图标分发(figma §4.5 icon 48;providers.social 驱动显隐,无返回不渲染)。
+ *  Apple 走 AppleLogoGlyph(圆钮行第一颗,LoginSocialButton variant='apple'),
+ *  此处只列 Google/微信/SSO。 */
 export function LoginSocialGlyph({
   provider,
 }: {
-  provider: 'apple' | 'google' | 'wechat' | 'sso';
+  provider: 'google' | 'wechat' | 'sso';
 }) {
-  if (provider === 'apple') return <AppleIcon />;
   if (provider === 'google') return <GoogleIcon />;
   if (provider === 'wechat') return <WeChatIcon />;
   return <SsoIcon />;
@@ -1060,16 +1080,22 @@ const makeStyles = (colors: ThemeColors) =>
     width: LOGIN_BACK.size,
     zIndex: 2,
   },
+  // 错误提示定位:主按钮底(380)与面板底(440)之间的整段区间,文案垂直居中
+  // (用户拍板 2026-07-24;旧实现 top 380 顶对齐视觉上紧贴按钮)。
   errorText: {
+    alignItems: 'center',
+    height: LOGIN_ERROR_TEXT.height,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    top: LOGIN_ERROR_TEXT.y,
+    width: LOGIN_ERROR_TEXT.width,
+  },
+  errorTextLabel: {
     color: colors.login.loginError,
     fontSize: LOGIN_ERROR_TEXT.font,
     fontWeight: fontWeight.regular,
-    left: 0,
-    position: 'absolute',
     textAlign: 'center',
-    textAlignVertical: 'center',
-    top: LOGIN_ERROR_TEXT.y,
-    width: LOGIN_ERROR_TEXT.width,
   },
   methodRow: {
     backgroundColor: colors.login.actionControlBg,

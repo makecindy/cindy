@@ -28,7 +28,12 @@ import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { TabBar, TabStrip } from './TabBar';
 import { EmptyState } from './EmptyState';
-import { getTabKind, hydrateTabState } from './registry';
+import {
+  getTabKind,
+  hydrateTabState,
+  listGhostTabMenuMetas,
+  useTabKindRegistryVersion,
+} from './registry';
 import {
   addOrFocusSingletonTab,
   addTab,
@@ -166,6 +171,12 @@ export function RightSidebarShell({
 
   const tabs = bucket.tabs;
   const activeTabId = bucket.activeTabId;
+
+  // 插件页签(panel.position:'tab')随装/卸/停用动态注册,版本号驱动重渲——
+  // EmptyState 的插件行与「+」菜单动态分组都吃这份数据。
+  const tabRegistryVersion = useTabKindRegistryVersion();
+  // 注册表是模块级 Map,不在 React 数据流里 —— 版本号是唯一变化信号,拿它当 dep。
+  const ghostTabMetas = useMemo(() => listGhostTabMenuMetas(), [tabRegistryVersion]);
 
   // 关掉最后一个 tab → 通知 host 自动收起侧栏。只在 tab 数「从 >0 变 0」的转变时
   // 触发,不是"等于 0"就触发:
@@ -431,6 +442,8 @@ export function RightSidebarShell({
             onAddReviewTab={() => handleAdd('review')}
             onAddBrowserTab={() => handleAdd('web-browser')}
             onAddTerminalTab={() => handleAdd('terminal')}
+            ghostTabMetas={ghostTabMetas}
+            onAddGhostTab={handleAdd}
           />
         ) : (
           // 所有 tab 都挂载,只切换可见性(规则 7:杜绝切顶层 tab 时 plugin 内部 state /

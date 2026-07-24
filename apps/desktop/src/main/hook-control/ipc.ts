@@ -53,6 +53,7 @@ import {
 } from './store.js';
 import {
   createHookControlManager,
+  hookNotConnectedIpcMessage,
   HookNotConnectedError,
   HookPrefsTimeoutError,
   type HookControlManager,
@@ -62,7 +63,6 @@ import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolB
 import { createHookBindingStore } from './bindings.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
-import { cancelReleasedOutput } from '../content-moderation/outputHub.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
@@ -200,10 +200,11 @@ function currentAccountFingerprint(): string | null {
   return createHash('sha256').update(fingerprintSource).digest('base64url').slice(0, 22);
 }
 
-/** prefs 往返错误 -> IPC 错误码(规则 13)。 */
+/** prefs 往返错误 -> IPC 错误码(规则 13)。not-connected 文案随 provider 区分,
+ *  Telegram 偏好查询失败不再误报 Slack Hook 断线(issue #279)。 */
 function throwHookPrefsError(err: unknown): never {
   if (err instanceof HookNotConnectedError) {
-    throwIpcError('HOOK_NOT_CONNECTED', 'slack hook is not connected');
+    throwIpcError('HOOK_NOT_CONNECTED', hookNotConnectedIpcMessage(err.provider));
   }
   if (err instanceof HookPrefsTimeoutError) {
     throwIpcError(
@@ -295,7 +296,6 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       // task.cancel 的中断出口: 与用户手动 Stop 同一条 session.abort() 路径
       abortSession: async (sessionId) => {
-        cancelReleasedOutput(sessionId);
         await getMaker().getSession(sessionId)?.abort();
       },
       // session.archive 的归档出口: 与 device-link 远程归档同一条
@@ -681,8 +681,9 @@ export function registerHookControlIpc(): void {
   });
 
   // Account teardown is orchestrated before its DB closes. This listener is a
-  // fail-closed backstop for signed-out/local sessions; activation still waits
-  // for app:ready-for-bot after the next owner DB is ready.
+  // fail-closed backstop for signed-out/local sessions; activation waits for
+  // the next owner DB readiness callback (with app:ready-for-bot as a
+  // compatibility retry).
   disposeAuthListener = authManager.onAuthStateChange(() => {
     if (!hookControlAvailable()) {
       void stopHookControlAccount().catch((err: unknown) => {
@@ -696,7 +697,7 @@ export function registerHookControlIpc(): void {
   log.info('hook-control ipc registered');
 }
 
-/** Called by app:ready-for-bot after the current account DB is ready. */
+/** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
   ensureInstances().manager.activateAccount();

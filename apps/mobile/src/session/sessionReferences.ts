@@ -157,7 +157,11 @@ export function extractMobileSessionReferences(
     const key = mobileSessionReferenceMetadataKey(target.sessionId, target.messageClientId);
     if (seen.has(key)) continue;
     seen.add(key);
-    const deviceId = deviceIdForSession(target.sessionId)
+    // 深链里冻结的 `?device=`(生成时刻的会话归属)优先——与桌面端
+    // reconcileSessionRefsForText 同口径;会话归属不会迁移,冻结值不受
+    // 发送时刻 store 状态(设备离线 / 列表未同步)影响。
+    const deviceId = target.deviceId
+      ?? deviceIdForSession(target.sessionId)
       ?? previousDeviceIds.get(key)
       ?? previousDeviceIdsBySession.get(target.sessionId);
     refs.push({

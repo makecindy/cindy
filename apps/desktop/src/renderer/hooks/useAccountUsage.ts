@@ -264,8 +264,10 @@ export function useAccountUsage(
   vendorKey: 'cc' | 'codex' | undefined,
   quotaSource: CodexQuotaSource = 'app-server',
 ): RateLimitSnapshot | null {
-  // 幂等; 首个实例装上 module 常驻订阅, 保证卸载窗口内的广播(尤其换号清空)不丢。
-  ensureModuleSubscription();
+  // 幂等; 首个 codex 实例装上 module 常驻订阅, 保证之后卸载窗口内的广播(尤其
+  // 换号清空)不丢。非 codex 会话不装 —— 从没有 codex chip 消费过就没有可残留
+  // 的缓存, 常驻监听纯属白耗(review 反馈)。
+  if (vendorKey === 'codex') ensureModuleSubscription();
   const [snapshot, setSnapshot] = useState<RateLimitSnapshot | null>(() =>
     vendorKey === 'codex' ? selectCodexSlot(quotaSource) : null,
   );

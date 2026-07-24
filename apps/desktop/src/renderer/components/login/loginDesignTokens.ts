@@ -69,7 +69,8 @@ export const CONTROL = {
 export const SPINNER = { size: 24, x: 487, y: 27 } as const; // 247:1546 @load
 export const SOCIAL = { y: 480, size: 80, gap: 70, radius: 50, iconSize: 48 } as const; // §4.5
 export const BACK = { x: 20, y: 20, size: 60, radius: 40 } as const; // §4.6
-export const ERROR_TEXT = { y: 380, width: 680, height: 50, fontSize: 20 } as const; // §4.8 误差文本 (0,380)
+// 错误提示:占满主按钮底(380)→面板底(440)整段,文案垂直居中(2026-07-24 拍板;原 h50 偏上)
+export const ERROR_TEXT = { y: 380, width: 680, height: 60, fontSize: 20 } as const;
 export const METHOD_ROW = {
   x: 70,
   width: 540,
@@ -149,4 +150,9 @@ export const LOGIN_COLORS = {
   splashProgressTrack: 'var(--login-splash-progress-track)',
   splashProgressFill: 'var(--login-splash-progress-fill)',
   linkHover: 'var(--login-link-hover)',
+  /**
+   * Apple 登录圆钮底(App Store Guideline 4:亮 = ADR Black button 黑圆白标 /
+   * 暗 = ADR White button 白圆黑标,无描边;用户标准图 2026-07-24)
+   */
+  appleCircleBg: 'var(--login-apple-circle-bg)',
 } as const;

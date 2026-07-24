@@ -204,6 +204,10 @@ export interface LoginSkinColors {
   invertedButtonBorder: string;
   /** 大 loading 环轨(亮 rgba(42,40,40,.18) / 暗 rgba(212,212,212,.18) 推导,待 Figma) */
   loadingRingTrack: string;
+  /** Apple 圆钮底色(亮 #000000 / 暗 #FFFFFF;ADR Black/White 官方按钮配色,Guideline 4,用户标准图 2026-07-24) */
+  appleCircleBg: string;
+  /** Apple logo 标色(亮 #FFFFFF / 暗 #000000;与圆钮底反相,ADR 官方 Logo-only) */
+  appleLogoInk: string;
 }
 
 /** 登录皮肤双态色板(与桌面 --login-* dark 值同源,DESIGN.md §16.1) */
@@ -239,6 +243,8 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
     overlayControlPressed: 'rgba(0, 0, 0, 0.08)',
     invertedButtonBorder: '#FFFFFF',
     loadingRingTrack: 'rgba(42, 40, 40, 0.18)',
+    appleCircleBg: '#000000',
+    appleLogoInk: '#FFFFFF',
   },
   dark: {
     bgBase: '#1F1F1E',
@@ -271,6 +277,8 @@ export const loginPalettes: Record<ThemeMode, LoginSkinColors> = {
     overlayControlPressed: 'rgba(0, 0, 0, 0.08)',
     invertedButtonBorder: '#FFFFFF',
     loadingRingTrack: 'rgba(212, 212, 212, 0.18)',
+    appleCircleBg: '#FFFFFF',
+    appleLogoInk: '#000000',
   },
 };
 

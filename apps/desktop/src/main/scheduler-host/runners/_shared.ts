@@ -13,10 +13,6 @@ import type { Logger } from '@cindy/maker-scheduler';
 
 import { sessions as sessionsTable } from '../../localDb/schema';
 import type { SchedulerDrizzleDb } from '../storage';
-import {
-  cancelReleasedOutput,
-  onReleasedAgentEvent,
-} from '../../content-moderation/outputHub.js';
 
 /**
  * 修正 runner 新建 sessions 行的 metadata 列。
@@ -118,7 +114,6 @@ export async function runOneTurn(
         off();
         // 超时强制 abort，agent 子进程会停止运行（不再烧 token）
         try {
-          cancelReleasedOutput(session.id);
           void session.abort();
         } catch (err) {
           logger.warn?.('[runner] session.abort() on timeout failed', err);
@@ -126,7 +121,7 @@ export async function runOneTurn(
         reject(new Error(`timeout after ${timeoutMs}ms`));
       }, timeoutMs);
 
-      const off = onReleasedAgentEvent(session, (ev: AgentEvent) => {
+      const off = session.onEvent((ev: AgentEvent) => {
         if (ev.type === 'text') {
           const data = ev.data as { text?: string; isFinal?: boolean } | null;
           if (data && typeof data.text === 'string') {

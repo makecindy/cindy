@@ -238,15 +238,23 @@ describe('native e2e environment', () => {
     expect(authContext).toContain('clearAllMobileVoiceCredentials().catch(() => undefined),');
   });
 
-  it('keeps Android voice input as an explicit unsupported native boundary for now', () => {
+  it('backs Android realtime voice with the Expo AudioStream already shipped in the app', () => {
     const expoModuleConfig = readFileSync(
       resolve(process.cwd(), 'modules/xdt-mobile-realtime-audio/expo-module.config.json'),
       'utf8',
     );
     const realtimeAudio = readFileSync(resolve(process.cwd(), 'src/session/mobileRealtimeAudio.ts'), 'utf8');
+    const appJson = readFileSync(resolve(process.cwd(), 'app.json'), 'utf8');
 
+    // The latency-tuned custom recorder stays Apple-only. Android reuses the
+    // PCM SharedObject from expo-audio, which is already a native dependency.
     expect(expoModuleConfig).toContain('"platforms": ["apple"]');
     expect(expoModuleConfig).not.toContain('"android"');
+    expect(appJson).toContain('"recordAudioAndroid": true');
+    expect(realtimeAudio).toContain("requireNativeModule<ExpoAudioNativeModule>('ExpoAudio')");
+    expect(realtimeAudio).toContain('new module.AudioStream({');
+    expect(realtimeAudio).toContain("encoding: 'int16'");
+    expect(realtimeAudio).toContain('convertExpoAudioPcm16(');
     expect(realtimeAudio).toContain("throw new UnavailabilityError('Cindy mobile voice input', 'realtime microphone PCM capture')");
     expect(realtimeAudio).toContain('EXPO_PUBLIC_XDT_MOBILE_E2E_MOCK_AUDIO');
   });

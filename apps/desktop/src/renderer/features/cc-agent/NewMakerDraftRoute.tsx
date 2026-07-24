@@ -1754,17 +1754,51 @@ export function NewMakerDraftRoute() {
         setPendingGoal(remoteSessionId, { objective, limits });
         // 自动起名:goal 首轮走 GoalController 的 session.send、不经 maker:input:enqueue,
         // 被控端 deviceLinkAutoTitle 不会触发(Codex review #548)—— 与本地分支的
-        // autoNameSession 对位,经隧道生成标题并窄口径写回。fire-and-forget;
-        // 写回前 re-read,仅在会话仍无标题时落盘(用户手动改名 wins)。
+        // autoNameSession 对位:先立即用目标文案截断占位(Codex 式,侧边栏不停留在
+        // 'New Maker'),再经隧道生成智能标题窄口径覆盖。fire-and-forget;
+        // 覆盖前 re-read,仅在标题仍是占位/默认时落盘(用户手动改名 wins)。
         const titleAgentKind = persistedAgentKind === 'codex' ? 'codex' : 'claude-code';
+        // 先折叠空白并 trim 再截断,避免前导空白吃满 40 字符得到空占位(PR #296 review)。
+        const placeholderTitle = objective.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
         void (async () => {
           try {
+            // 无文本目标(理论不可达,goal 对话框必填)不起名:被控端旧版本的
+            // maker:generate-title 没有空消息防线,LLM 会把"请提供内容"当标题。
+            if (!placeholderTitle) return;
+            // 覆写守卫:仅当远端标题仍是默认占位时才自动起名(user rename wins,
+            // PR #296 review)。刚 create-session 建出的会话标题必为 'New Maker',
+            // 此检查防御极端 race;读取失败时按默认占位继续,不中断起名。
+            try {
+              const preCheck = (await window.electronAPI.deviceLink.invoke(
+                deviceId,
+                'local-db:sessions:get',
+                [remoteSessionId],
+              )) as { title?: string | null } | null;
+              const preTitle = preCheck?.title?.trim();
+              if (preTitle && preTitle !== 'New Maker') return;
+            } catch {
+              // 读不到当前标题时按"仍是默认占位"继续。
+            }
+            // 占位写入失败(旧被控端无此窄口径 / 瞬时通道错误)单独吞掉,不中断
+            // 后续智能起名——生成与写回不依赖占位成功(PR #296 review P1)。
+            try {
+              await window.electronAPI.deviceLink.invoke(
+                deviceId,
+                'local-db:sessions:patch-meta',
+                [remoteSessionId, { title: placeholderTitle }],
+              );
+            } catch {
+              // 占位失败仅暂留默认名,智能标题仍会尝试生成并写回。
+            }
             const gen = (await window.electronAPI.deviceLink.invoke(
               deviceId,
               'maker:generate-title',
               [{ message: objective, agentKind: titleAgentKind, sessionId: remoteSessionId }],
             )) as { title: string | null } | null;
-            const title = gen?.title?.trim() || objective.replace(/\n/g, ' ').slice(0, 40).trim();
+            const title = gen?.title?.trim();
+            // 智能标题与占位相同也照走写回:占位写入允许失败(上方 catch),
+            // 此时远端仍是 'New Maker',跳过会让标题永久停在默认名(PR #296
+            // review P1);占位已成功时重写同值幂等无害。
             if (!title) return;
             const current = (await window.electronAPI.deviceLink.invoke(
               deviceId,
@@ -1772,15 +1806,21 @@ export function NewMakerDraftRoute() {
               [remoteSessionId],
             )) as { title?: string | null } | null;
             const existingTitle = current?.title?.trim();
-            // 'New Maker' 是 maker:create-session 的默认占位符标题,允许覆写;
+            // 占位标题与 'New Maker'(maker:create-session 的默认占位符)都允许覆写;
             // 用户已手动改过的真实标题则保留(user rename wins)。
-            if (existingTitle && existingTitle !== 'New Maker') return;
+            if (
+              existingTitle &&
+              existingTitle !== 'New Maker' &&
+              existingTitle !== placeholderTitle
+            ) {
+              return;
+            }
             await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:patch-meta', [
               remoteSessionId,
               { title },
             ]);
           } catch {
-            // 起名失败不影响目标流程,侧边栏保留默认名。
+            // 起名失败不影响目标流程,侧边栏保留占位/默认名。
           }
         })();
         clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
@@ -1831,7 +1871,7 @@ export function NewMakerDraftRoute() {
       // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。
       await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
       // 自动起名:/goal 新建的会话不经普通发送路径,scheduleAutoName 漏触发 → 标题会停在默认。
-      // 这里用目标文案补一次,与普通会话同款(宽限期 + 占位 + 不覆盖手动改名)。
+      // 这里用目标文案补一次,与普通会话同款(立即占位 + 智能标题后台覆盖 + 不覆盖手动改名)。
       makerChatStore.autoNameSession(newSession.id, objective, capabilityAgentKind);
       clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
       resetDraftWorkspaceAfterSend();
@@ -2089,26 +2129,6 @@ export function NewMakerDraftRoute() {
               />
 
               <div className={cn('flex w-full flex-col items-start gap-0', isDraftNarrow && 'order-3')}>
-                {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
-                    被控设备上、属于那台机器的项目,而不是本机。 */}
-                {isDeviceLinkDraft && (
-                  <div className="mb-3 flex max-w-full items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
-                    <MonitorSmartphone
-                      size={14}
-                      strokeWidth={2}
-                      className="shrink-0 text-[var(--folder-item-icon)]"
-                    />
-                    <span className="min-w-0 truncate">
-                      {t('ccAgent.draft.remoteProjectBanner', {
-                        device: effectiveDeviceLinkDeviceName ?? effectiveDeviceLinkDeviceId ?? '',
-                        project:
-                          effectiveWorkingDir?.split(/[\\/]/).filter(Boolean).pop() ??
-                          effectiveWorkingDir ??
-                          '',
-                      })}
-                    </span>
-                  </div>
-                )}
                 <div className="w-full">
                   <ChatInput
                     onSend={handleSend}
@@ -2204,6 +2224,27 @@ export function NewMakerDraftRoute() {
                     }
                   />
                 </div>
+                {/* device-link:为远程设备项目新建对话时的明显标识。让用户清楚这条对话会建在
+                    被控设备上、属于那台机器的项目,而不是本机。放输入框正下方并与其水平居中
+                    (父列 items-start,靠 self-center 相对 w-full 的输入框居中)。 */}
+                {isDeviceLinkDraft && (
+                  <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-[12px] text-[var(--text-secondary)]">
+                    <MonitorSmartphone
+                      size={14}
+                      strokeWidth={2}
+                      className="shrink-0 text-[var(--folder-item-icon)]"
+                    />
+                    <span className="min-w-0 truncate">
+                      {t('ccAgent.draft.remoteProjectBanner', {
+                        device: effectiveDeviceLinkDeviceName ?? effectiveDeviceLinkDeviceId ?? '',
+                        project:
+                          effectiveWorkingDir?.split(/[\\/]/).filter(Boolean).pop() ??
+                          effectiveWorkingDir ??
+                          '',
+                      })}
+                    </span>
+                  </div>
+                )}
                 {/* 输入框跟随 inputWidth 变宽后,快捷入口只有 4 项,若也铺满全宽
                     会被撑成又宽又空的短卡。这里把卡片区封顶在 800px、左对齐(与输入框
                     左缘齐),保持每张卡当前的紧凑比例;输入框仍独立用满可用宽度。 */}

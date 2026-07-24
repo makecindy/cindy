@@ -10,8 +10,6 @@
   "websiteUrl": "https://cindy.com.cn",
   "modelAccessApiBaseUrl": "https://model-access.cindy.com.cn",
   "voiceApiBaseUrl": "https://voice.cindy.com.cn",
-  "moderationSignApiBaseUrl": "",
-  "moderationSignTestApiBaseUrl": "",
   "githubApiBaseUrl": "https://github.cindy.com.cn",
   "skillhubApiBaseUrl": "https://xd-skillhub.cindy.com.cn",
   "cdnBaseUrl": "https://hotfix.cindy.com.cn/cindy",

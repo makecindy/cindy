@@ -38,6 +38,7 @@ import {
 
 import {
   createHookControlManager,
+  hookNotConnectedIpcMessage,
   HookNotConnectedError,
   HookPrefsTimeoutError,
   providerForExternalKey,
@@ -155,6 +156,112 @@ describe('hook-control runtime capability gate', () => {
     manager.sync();
 
     expect(createTransport).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it('cold-start activation connects an enabled Hook after the owner DB becomes ready', () => {
+    const dispose = vi.fn();
+    const createTransport = vi.fn((_opts: HookTransportOpts) => ({
+      send: () => true,
+      dispose,
+    }));
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://hook.example',
+        enabled: true,
+      }),
+      {
+        accountInitiallyActive: false,
+        isAvailable: () => true,
+        createTransport,
+      },
+    );
+
+    manager.sync();
+    expect(createTransport).not.toHaveBeenCalled();
+
+    manager.activateAccount();
+    expect(createTransport).toHaveBeenCalledOnce();
+    expect(manager.snapshot().status).toBe('connecting');
+
+    manager.dispose();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('leaving local mode reconnects only after a cloud account lifecycle activates', async () => {
+    let available = false;
+    const createTransport = vi.fn((_opts: HookTransportOpts) => ({
+      send: () => true,
+      dispose: () => {},
+    }));
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://hook.example',
+        enabled: true,
+      }),
+      {
+        accountInitiallyActive: false,
+        isAvailable: () => available,
+        createTransport,
+      },
+    );
+
+    manager.activateAccount();
+    expect(createTransport).not.toHaveBeenCalled();
+
+    await manager.deactivateAccount();
+    available = true;
+    manager.activateAccount();
+    expect(createTransport).toHaveBeenCalledOnce();
+
+    manager.dispose();
+  });
+
+  it('late dispatch during owner shutdown receives a structured disabled ack', async () => {
+    const transportOpts: HookTransportOpts[] = [];
+    const createTransport = vi.fn((opts: HookTransportOpts) => {
+      transportOpts.push(opts);
+      return {
+        send: () => true,
+        dispose: () => {},
+      };
+    });
+    const manager = makeManager(
+      memoryStore({
+        url: 'wss://hook.example',
+        enabled: true,
+      }),
+      { createTransport },
+    );
+    manager.sync();
+    await manager.deactivateAccount();
+
+    const staleOnMessage = transportOpts[0]?.onMessage;
+    if (!staleOnMessage) throw new Error('transport callback was not captured');
+    const sent: HookMessage[] = [];
+    staleOnMessage(
+      makeTaskDispatch({
+        requestId: 'late-owner-dispatch',
+        externalKey: 'slack:C1:1.1',
+        workspace: 'chat',
+        prompt: 'must not cross the owner boundary',
+      }),
+      (message) => {
+        sent.push(message);
+        return true;
+      },
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: 'task.ack',
+      payload: {
+        requestId: 'late-owner-dispatch',
+        result: 'rejected',
+        reason: 'disabled',
+      },
+    });
+
     manager.dispose();
   });
 });
@@ -2495,11 +2602,14 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     await expect(manager.getWorkspacePrefs()).rejects.toBeInstanceOf(HookPrefsTimeoutError);
   });
 
-  it('未连接: 立即拒绝 HookNotConnectedError', async () => {
+  it('未连接: 立即拒绝 HookNotConnectedError(provider=slack)', async () => {
     const store = memoryStore({ url: 'ws://127.0.0.1:1', enabled: false });
     const manager = makeManager(store);
     cleanups.push(() => manager.dispose());
-    await expect(manager.getWorkspacePrefs()).rejects.toBeInstanceOf(HookNotConnectedError);
+    const rejection = await manager.getWorkspacePrefs().catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(HookNotConnectedError);
+    // Slack prefs 失败必须携带 slack provider —— IPC 层据此映射 Slack 文案。
+    expect((rejection as HookNotConnectedError).provider).toBe('slack');
   });
 
   it('主动推送(replyTo null): 只广播, 不惊动在途请求', async () => {
@@ -2532,6 +2642,40 @@ describe('目录偏好远程读写(prefs.get / prefs.set / prefs.state 往返)',
     await server.waitFor('prefs.get');
     sock.close(); // server 掉线
     await expect(promise).rejects.toBeInstanceOf(HookNotConnectedError);
+  });
+});
+
+describe('provider-specific not-connected 映射(issue #279)', () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups.splice(0)) c();
+  });
+
+  it('IPC 文案随 provider 区分: Telegram 不再复用 Slack 文案', () => {
+    expect(hookNotConnectedIpcMessage('telegram')).toBe('Telegram provider is not connected');
+    expect(hookNotConnectedIpcMessage('slack')).toBe('slack hook is not connected');
+    // 未指定 provider(null = 通用 Hook 失败)返回中性文案, 不把非 Slack 失败
+    // 误报成 Slack —— 与 HookNotConnectedError 的 null 语义一致(issue #279 review)。
+    expect(hookNotConnectedIpcMessage(null)).toBe('hook is not connected');
+  });
+
+  it('Telegram 未启用: getProviderWorkspacePrefs 拒绝 HookNotConnectedError(provider=telegram)', async () => {
+    const store = memoryStore({
+      url: 'ws://127.0.0.1:1',
+      enabled: true,
+      telegramEnabled: false,
+    });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+    const rejection = await manager
+      .getProviderWorkspacePrefs('telegram')
+      .catch((err: unknown) => err);
+    expect(rejection).toBeInstanceOf(HookNotConnectedError);
+    // Telegram 偏好失败必须指向 Telegram provider —— 否则 Slack 在线时会被误诊断线。
+    expect((rejection as HookNotConnectedError).provider).toBe('telegram');
+    expect(hookNotConnectedIpcMessage((rejection as HookNotConnectedError).provider)).toBe(
+      'Telegram provider is not connected',
+    );
   });
 });
 
