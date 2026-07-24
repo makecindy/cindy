@@ -108,6 +108,7 @@ export function GhostPluginPage() {
   const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
+  const marketDetailRequestRef = useRef(0);
   const refreshMarket = useCallback(async () => {
     try {
       setMarketSnapshot(await window.electronAPI.pluginMarket.snapshot());
@@ -486,13 +487,17 @@ export function GhostPluginPage() {
 
   const handleSelectMarket = useCallback(
     async (pluginId: string) => {
+      const requestId = ++marketDetailRequestRef.current;
       setMarketBusyId(pluginId);
       try {
-        setMarketDetail(await window.electronAPI.pluginMarket.detail(pluginId));
+        const detail = await window.electronAPI.pluginMarket.detail(pluginId);
+        if (requestId === marketDetailRequestRef.current) setMarketDetail(detail);
       } catch (error) {
-        toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
+        if (requestId === marketDetailRequestRef.current) {
+          toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
+        }
       } finally {
-        setMarketBusyId(null);
+        if (requestId === marketDetailRequestRef.current) setMarketBusyId(null);
       }
     },
     [t],
@@ -533,7 +538,10 @@ export function GhostPluginPage() {
       <MarketPluginDetailView
         detail={marketDetail}
         busy={marketBusyId === marketDetail.pluginId}
-        onBack={() => setMarketDetail(null)}
+        onBack={() => {
+          marketDetailRequestRef.current += 1;
+          setMarketDetail(null);
+        }}
         onInstall={() => void handleInstallFromMarket()}
       />
     );
