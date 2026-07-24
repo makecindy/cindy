@@ -282,9 +282,28 @@ function scheduleObserverTrailingPermissionProbe(generation: number): void {
 
 function broadcastPermissionGuideStatus(status: ComputerStatus): void {
   guideStatus = status;
+  sendPermissionGuideStatus(status);
+}
+
+function sendPermissionGuideStatus(
+  status: ComputerStatus,
+  guideOverride?: ComputerStatus | null,
+): void {
+  const guideWebContentsId = guideWindow && !guideWindow.isDestroyed()
+    ? guideWindow.webContents.id
+    : null;
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send(MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED, status);
+      const outboundStatus = (
+        guideOverride
+        && guideWebContentsId === win.webContents.id
+      )
+        ? guideOverride
+        : status;
+      win.webContents.send(
+        MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED,
+        outboundStatus,
+      );
     }
   }
 }
@@ -393,6 +412,17 @@ function missingPermission(status: ComputerStatus | null): PermissionKind | null
     return 'screenRecording';
   }
   return null;
+}
+
+function isPausedPermissionProbePlaceholder(status: ComputerStatus): boolean {
+  const permissionState = status.permissionState;
+  return (
+    isComputerDriverPermissionProbePaused()
+    && permissionState?.platform === 'macos'
+    && permissionState.accessibility === 'missing'
+    && permissionState.screenRecording === 'unknown'
+    && permissionState.screenRecordingCapturable === 'unknown'
+  );
 }
 
 function observationKey(location: ComputerUseSwitchLocationResult): string {
@@ -628,7 +658,17 @@ export function refreshComputerPermissionGuideWindow(status?: ComputerStatus): v
       broadcastPermissionGuideStatus(status);
       return;
     }
-    void serializePermissionGuideUpdate('explicit permission guide status refresh', () => {
+    const preserveGuideSnapshot = isPausedPermissionProbePlaceholder(status);
+    void serializePermissionGuideUpdate('explicit permission guide status refresh', async (generation) => {
+      if (preserveGuideSnapshot) {
+        // A status read while the probe is paused contains a synthetic
+        // Accessibility-missing placeholder. Other Settings windows still
+        // need that runtime status, but the coach must keep its authoritative
+        // preflight snapshot and pass through the existing drag ownership gate.
+        sendPermissionGuideStatus(status, guideStatus);
+        await refreshElectronPermissionGuideStateSerialized({}, generation);
+        return;
+      }
       nativeHost?.update(nativeStateFrom(status, readPermissionDragState(), lastSwitchLocation));
       broadcastPermissionGuideStatus(status);
     });

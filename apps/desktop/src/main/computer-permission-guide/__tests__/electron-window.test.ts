@@ -18,10 +18,10 @@ const harness = vi.hoisted(() => {
   const closeComputerUseSwitchLocator = vi.fn(async () => undefined);
   let nextGuideLoadError: Error | null = null;
   const computerStatus = (permissionState: Partial<{
-    status: 'missing' | 'granted';
-    accessibility: 'missing' | 'granted';
-    screenRecording: 'missing' | 'granted';
-    screenRecordingCapturable: 'missing' | 'granted';
+    status: 'missing' | 'granted' | 'unknown';
+    accessibility: 'missing' | 'granted' | 'unknown';
+    screenRecording: 'missing' | 'granted' | 'unknown';
+    screenRecordingCapturable: 'missing' | 'granted' | 'unknown';
   }> = {}) => ({
     installed: true,
     executablePath: '/tmp/cua-driver',
@@ -1121,6 +1121,50 @@ describe('Electron Computer Use permission guide window', () => {
       }));
     });
     expect(harness.locateComputerUseSwitchTarget).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the preflight guide step when a paused status refresh is synthetic', async () => {
+    const nativeStarted = createDeferred<boolean>();
+    harness.nativeShow.mockReturnValueOnce(nativeStarted.promise);
+    harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
+    const guide = await import('../window');
+    const preflightStatus = harness.computerStatus({ accessibility: 'granted' });
+    const show = guide.showComputerPermissionGuideWindow(null, preflightStatus);
+    await vi.waitFor(() => {
+      expect(harness.nativeShow).toHaveBeenCalledOnce();
+    });
+    harness.nativeUpdate.mockClear();
+    harness.broadcastSend.mockClear();
+    harness.windows[1].webContents.send.mockClear();
+
+    const pausedStatus = harness.computerStatus({
+      screenRecording: 'unknown',
+      screenRecordingCapturable: 'unknown',
+    });
+    guide.refreshComputerPermissionGuideWindow(pausedStatus);
+
+    await vi.waitFor(() => {
+      expect(harness.nativeUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        accessibilityGranted: true,
+        screenRecordingGranted: false,
+        draggedScreenRecording: false,
+      }));
+    });
+    expect(harness.broadcastSend).toHaveBeenCalledWith(
+      'maker:computer:permission-guide-status-changed',
+      pausedStatus,
+    );
+    expect(harness.windows[1].webContents.send).toHaveBeenCalledWith(
+      'maker:computer:permission-guide-status-changed',
+      preflightStatus,
+    );
+    expect(guide.getComputerPermissionGuideStatus(
+      harness.windows[1].webContents as unknown as WebContents,
+    )).toBe(preflightStatus);
+    expect(harness.locateComputerUseSwitchTarget).not.toHaveBeenCalled();
+
+    nativeStarted.resolve(true);
+    await show;
   });
 
   it('clears a historical drag hint when the live System Settings row is absent', async () => {
