@@ -14,9 +14,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { triggerLogin, cancelLogin } = vi.hoisted(() => ({
+const { triggerLogin, cancelLogin, codexAuthMock } = vi.hoisted(() => ({
   triggerLogin: vi.fn(),
   cancelLogin: vi.fn(),
+  // 可变快照:各用例自行设定初始态;登录成功用例只有 triggerLogin 翻转
+  // 到 authenticated 后才算连接,防止「既有快照」冒充「本次登录成功」。
+  codexAuthMock: {
+    state: { kind: 'authenticated', authSource: 'oauth' } as {
+      kind: string;
+      authSource?: string;
+    },
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -29,7 +37,7 @@ vi.mock('@/hooks/useCodexAuth', () => ({
   isChatGptConnectionConnected: (state: { kind: string; authSource?: string }) =>
     state.kind === 'authenticated' && state.authSource === 'oauth',
   useCodexAuth: () => ({
-    state: { kind: 'authenticated', authSource: 'oauth' },
+    state: codexAuthMock.state,
     triggerLogin,
     cancelLogin,
     logout: vi.fn(),
@@ -65,7 +73,12 @@ const OPENAI_PROVIDER = {
 beforeEach(() => {
   triggerLogin.mockReset();
   cancelLogin.mockReset();
-  triggerLogin.mockResolvedValue('authenticated');
+  codexAuthMock.state = { kind: 'authenticated', authSource: 'oauth' };
+  // 登录成功 = 快照翻转到 authenticated;完成边界必须由这次翻转驱动。
+  triggerLogin.mockImplementation(async () => {
+    codexAuthMock.state = { kind: 'authenticated', authSource: 'oauth' };
+    return 'authenticated';
+  });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       listProviderPresets: vi.fn(async () => ({ presets: [] })),
@@ -96,6 +109,9 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
   });
 
   it('仅在用户点击授权且本次登录成功后完成绑定流程', async () => {
+    // 从未认证起步:完成只能由本次 triggerLogin 成功后的状态翻转驱动,
+    // 既有 authenticated 快照(上一用例的场景)不能冒充登录成功。
+    codexAuthMock.state = { kind: 'unauthenticated' };
     const onDone = vi.fn();
     render(
       <AddProviderWizard
