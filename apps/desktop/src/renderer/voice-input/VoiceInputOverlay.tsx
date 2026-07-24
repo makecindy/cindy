@@ -19,6 +19,7 @@ import type {
 
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -151,6 +152,7 @@ function getPasteErrorHintKey(errorCode: PasteErrorCode | null): string {
 
 export function VoiceInputOverlay() {
   const { t, i18n } = useTranslation();
+  const { confirm: confirmDialog } = useConfirmDialog();
   const codexSessionPromptActiveRef = useRef(false);
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
     onPromptClosed: () => {
@@ -680,10 +682,10 @@ export function VoiceInputOverlay() {
     }
     if (!readVoicePrivacyConsent()) {
       const confirmed = await confirmDialog({
-        title: '语音输入隐私说明',
-        description: '语音输入会使用麦克风，并将音频发送到配置的语音识别服务进行转写。你可以取消，取消不会影响文字输入。',
-        confirmText: '同意并继续',
-        cancelText: '取消',
+        title: t('voicePrivacyConsent.title'),
+        description: t('voicePrivacyConsent.description'),
+        confirmText: t('voicePrivacyConsent.confirm'),
+        cancelText: t('voicePrivacyConsent.cancel'),
         autoFocusConfirm: true,
       });
       if (!confirmed || !saveVoicePrivacyConsent()) return;

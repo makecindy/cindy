@@ -2,7 +2,7 @@ import {
   createVoicePrivacyConsent,
   isCurrentVoicePrivacyConsent,
   type VoicePrivacyConsent,
-} from '@lizi/maker-shared/voice-privacy-consent';
+} from '@cindy/maker-shared/voice-privacy-consent';
 
 const STORAGE_KEY = 'cindy.voiceInput.privacyConsent.v1';
 
@@ -20,7 +20,7 @@ export function readVoicePrivacyConsent(): VoicePrivacyConsent | null {
 export function saveVoicePrivacyConsent(): boolean {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(createVoicePrivacyConsent()));
-    return isCurrentVoicePrivacyConsent(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null'));
+    return true;
   } catch {
     return false;
   }

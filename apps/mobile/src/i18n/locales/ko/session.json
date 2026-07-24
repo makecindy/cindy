@@ -22,7 +22,13 @@
     "openMicPermission": "마이크 권한 설정 열기",
     "maxAttachments": "첨부는 최대 {{max}}개까지 가능합니다.",
     "voiceStopRecording": "녹음 중지",
-    "capabilitiesUnsupported": "지원되지 않는 원격 기능 형식입니다"
+    "capabilitiesUnsupported": "지원되지 않는 원격 기능 형식입니다",
+    "voicePrivacyConsent": {
+      "title": "음성 입력 개인정보 안내",
+      "description": "음성 입력은 마이크를 사용하며, 텍스트 변환을 위해 설정된 음성 인식 서비스로 오디오를 전송합니다. 취소해도 텍스트 입력에는 영향을 주지 않습니다.",
+      "confirm": "동의하고 계속",
+      "cancel": "취소"
+    }
   },
   "screen": {
     "composerSyncing": "세션 데이터를 동기화 중입니다. 완료되면 보낼 수 있습니다.",

@@ -1565,8 +1565,8 @@ export default function NewRemoteSessionScreen() {
     if (voiceRecordingActiveRef.current || voiceState === 'listening') return;
     if (!selectedDeviceId || !isMobileRealtimeAudioAvailable()) return;
     if (!await ensureMobileVoicePrivacyConsent()) return;
-    // Keep the native audio-session warmup on the synchronous press-down path
-    // (prewarmMobileVoiceStart re-runs it idempotently below).
+    // After consent is confirmed, warm the native audio session before starting
+    // the speculative ASR connection (the full prewarm repeats this idempotently).
     prewarmMobileRealtimeAudio();
     // 托管预热:凭登录态提前拿 voice-server 票据并开 ASR WebSocket。
     prewarmMobileVoiceStart(selectedDeviceId, {

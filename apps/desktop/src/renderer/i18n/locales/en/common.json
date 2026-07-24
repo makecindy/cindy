@@ -3890,6 +3890,12 @@
       "saveEdit": "Save Text"
     }
   },
+  "voicePrivacyConsent": {
+    "title": "Voice input privacy notice",
+    "description": "Voice input uses your microphone and sends audio to your configured speech recognition service for transcription. You can cancel without affecting text input.",
+    "confirm": "Agree and continue",
+    "cancel": "Cancel"
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "Voice input",

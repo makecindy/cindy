@@ -9,14 +9,18 @@ export type VoicePrivacyConsent = {
   acceptedAt: number;
 };
 
-export function isCurrentVoicePrivacyConsent(value: unknown): value is VoicePrivacyConsent {
+export function isCurrentVoicePrivacyConsent(
+  value: unknown,
+  now = Date.now(),
+): value is VoicePrivacyConsent {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<VoicePrivacyConsent>;
   return candidate.policyId === VOICE_PRIVACY_POLICY_ID
     && candidate.policyVersion === CURRENT_VOICE_PRIVACY_POLICY_VERSION
     && typeof candidate.acceptedAt === 'number'
     && Number.isFinite(candidate.acceptedAt)
-    && candidate.acceptedAt > 0;
+    && candidate.acceptedAt > 0
+    && candidate.acceptedAt <= now;
 }
 
 export function createVoicePrivacyConsent(now = Date.now()): VoicePrivacyConsent {

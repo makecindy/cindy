@@ -3889,6 +3889,12 @@
       "saveEdit": "テキストを保存"
     }
   },
+  "voicePrivacyConsent": {
+    "title": "音声入力のプライバシーについて",
+    "description": "音声入力ではマイクを使用し、文字起こしのために設定済みの音声認識サービスへ音声を送信します。キャンセルしてもテキスト入力には影響しません。",
+    "confirm": "同意して続ける",
+    "cancel": "キャンセル"
+  },
   "voiceInputOverlay": {
     "status": {
       "listening": "音声入力中",

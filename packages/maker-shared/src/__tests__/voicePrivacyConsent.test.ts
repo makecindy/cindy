@@ -18,6 +18,7 @@ describe('voice privacy consent', () => {
     expect(isCurrentVoicePrivacyConsent(null)).toBe(false);
     expect(isCurrentVoicePrivacyConsent({ policyId: 'voice-input', policyVersion: 'old', acceptedAt: 123 })).toBe(false);
     expect(isCurrentVoicePrivacyConsent({ policyId: 'voice-input', policyVersion: CURRENT_VOICE_PRIVACY_POLICY_VERSION, acceptedAt: 0 })).toBe(false);
-    expect(isCurrentVoicePrivacyConsent(createVoicePrivacyConsent(123))).toBe(true);
+    expect(isCurrentVoicePrivacyConsent(createVoicePrivacyConsent(124), 123)).toBe(false);
+    expect(isCurrentVoicePrivacyConsent(createVoicePrivacyConsent(123), 123)).toBe(true);
   });
 });

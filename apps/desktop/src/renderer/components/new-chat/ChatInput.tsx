@@ -2231,17 +2231,17 @@ export function ChatInput({
       onBeforeVoiceInputStart: async () => {
         if (readVoicePrivacyConsent()) return true;
         const confirmed = await confirmDialog({
-          title: '语音输入隐私说明',
-          description: '语音输入会使用麦克风，并将音频发送到配置的语音识别服务进行转写。你可以取消，取消不会影响文字输入。',
-          confirmText: '同意并继续',
-          cancelText: '取消',
+          title: t('voicePrivacyConsent.title'),
+          description: t('voicePrivacyConsent.description'),
+          confirmText: t('voicePrivacyConsent.confirm'),
+          cancelText: t('voicePrivacyConsent.cancel'),
           autoFocusConfirm: true,
         });
         return confirmed && saveVoicePrivacyConsent();
       },
       onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
     }),
-    [confirmDialog, handleVoiceInputPermissionRequired],
+    [confirmDialog, handleVoiceInputPermissionRequired, t],
   );
 
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
