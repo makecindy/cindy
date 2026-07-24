@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG, parseCatalog, sanitizePresets, sortPresetsForLocale } from '../catalog.js';
+import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from '../catalog.js';
 import { mergeWithBundled } from '../source.js';
 import type { Catalog } from '../types.js';
 
@@ -113,6 +113,19 @@ describe('mergeWithBundled presets 兜底', () => {
     const merged = mergeWithBundled(minimalCatalog());
     expect(merged.presets).toEqual(BUNDLED_CATALOG.presets);
     expect(merged.presets?.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe('presetDisplayName', () => {
+  it('中文 locale 用 name;其它 locale 优先 nameEn,缺省回落 name', () => {
+    const p = { name: '智谱 GLM(中国大陆)', nameEn: 'Zhipu GLM (China)' };
+    expect(presetDisplayName(p, 'zh-CN')).toBe('智谱 GLM(中国大陆)');
+    expect(presetDisplayName(p, 'zh')).toBe('智谱 GLM(中国大陆)');
+    expect(presetDisplayName(p, 'en')).toBe('Zhipu GLM (China)');
+    expect(presetDisplayName(p, 'ja')).toBe('Zhipu GLM (China)');
+    // 无 nameEn(全球厂商预设本就是英文名)→ 一律回落 name。
+    expect(presetDisplayName({ name: 'DeepSeek' }, 'en')).toBe('DeepSeek');
+    expect(presetDisplayName({ name: 'DeepSeek' }, 'zh-CN')).toBe('DeepSeek');
   });
 });
 
