@@ -43,6 +43,7 @@ export interface MacComputerPermissionGuideNativeHostOptions {
   onCompleted: () => void;
   onAttached?: () => void;
   onExited?: () => void;
+  onAuthSheetDismissed?: () => void;
   onDragBegan: (permission: 'accessibility' | 'screenRecording') => void;
   onDragEnded: (
     permission: 'accessibility' | 'screenRecording',
@@ -214,6 +215,11 @@ export class MacComputerPermissionGuideNativeHost {
       return;
     }
 
+    if (payload.type === 'auth-sheet-dismissed' && this.child === child) {
+      log.info('System Settings auth sheet dismissed; triggering permission recheck');
+      this.options.onAuthSheetDismissed?.();
+      return;
+    }
     if (payload.type === 'ready' && this.child === child) {
       this.ready = true;
       settle(true);

@@ -284,7 +284,6 @@ private final class PermissionCardController: NSViewController {
     private let titleLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let appNameLabel = NSTextField(labelWithString: "CuaDriver")
-    private let closeButton = NonactivatingCloseButton()
     private let dragCoach = NSView()
     private let dragCoachIcon = NSImageView()
     private let dragCoachPill = NSVisualEffectView()
@@ -294,7 +293,6 @@ private final class PermissionCardController: NSViewController {
     private var permission: Permission = .accessibility
     private var hasBeenDragged = false
     private var closeTimer: Timer?
-    var onClose: (() -> Void)?
     var onComplete: (() -> Void)?
     var onDragBegan: ((Permission) -> Void)?
     var onDragEnded: ((Permission, NSDragOperation) -> Void)?
@@ -329,19 +327,6 @@ private final class PermissionCardController: NSViewController {
         materialView.layer?.borderWidth = 0.5
         materialView.layer?.borderColor = NSColor.white.withAlphaComponent(0.13).cgColor
         root.addSubview(materialView)
-
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
-        closeButton.image = NSImage(
-            systemSymbolName: "xmark",
-            accessibilityDescription: usesChineseCopy ? "关闭" : "Close"
-        )
-        closeButton.imageScaling = .scaleProportionallyDown
-        closeButton.isBordered = false
-        closeButton.bezelStyle = .circular
-        closeButton.contentTintColor = .secondaryLabelColor
-        closeButton.target = self
-        closeButton.action = #selector(closeRequested)
-        materialView.addSubview(closeButton)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
@@ -383,18 +368,13 @@ private final class PermissionCardController: NSViewController {
             materialView.topAnchor.constraint(equalTo: root.topAnchor),
             materialView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
 
-            closeButton.trailingAnchor.constraint(equalTo: materialView.trailingAnchor, constant: -12),
-            closeButton.topAnchor.constraint(equalTo: materialView.topAnchor, constant: 10),
-            closeButton.widthAnchor.constraint(equalToConstant: 28),
-            closeButton.heightAnchor.constraint(equalToConstant: 28),
-
             titleLabel.leadingAnchor.constraint(equalTo: materialView.leadingAnchor, constant: 16),
-            titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
+            titleLabel.trailingAnchor.constraint(equalTo: materialView.trailingAnchor, constant: -16),
             titleLabel.topAnchor.constraint(equalTo: eyebrowLabel.bottomAnchor, constant: 3),
             titleLabel.heightAnchor.constraint(equalToConstant: 28),
 
             eyebrowLabel.leadingAnchor.constraint(equalTo: materialView.leadingAnchor, constant: 16),
-            eyebrowLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
+            eyebrowLabel.trailingAnchor.constraint(equalTo: materialView.trailingAnchor, constant: -16),
             eyebrowLabel.topAnchor.constraint(equalTo: materialView.topAnchor, constant: 12),
             eyebrowLabel.heightAnchor.constraint(equalToConstant: 15),
 
@@ -604,9 +584,6 @@ private final class PermissionCardController: NSViewController {
         dragCoach.layer?.opacity = 1
     }
 
-    @objc private func closeRequested() {
-        onClose?()
-    }
 }
 
 /** Tracks the real System Settings window and attaches a non-activating panel. */
@@ -631,6 +608,7 @@ private final class PermissionGuideCoordinator {
     private var presentation: Presentation = .hidden
     private var switchTarget: NSPoint?
     private var switchWindowSize: NSSize?
+    private var authSheetVisible = false
 
     init(appURL: URL) {
         panel = PermissionAccessoryPanel(
@@ -652,8 +630,8 @@ private final class PermissionGuideCoordinator {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.level = .floating
-        panel.isFloatingPanel = true
+        panel.level = .normal
+        panel.isFloatingPanel = false
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.worksWhenModal = true
@@ -668,8 +646,8 @@ private final class PermissionGuideCoordinator {
         switchPanel.isOpaque = false
         switchPanel.backgroundColor = .clear
         switchPanel.hasShadow = false
-        switchPanel.level = .floating
-        switchPanel.isFloatingPanel = true
+        switchPanel.level = .normal
+        switchPanel.isFloatingPanel = false
         switchPanel.hidesOnDeactivate = false
         switchPanel.becomesKeyOnlyIfNeeded = true
         switchPanel.worksWhenModal = true
@@ -687,10 +665,6 @@ private final class PermissionGuideCoordinator {
         hostView.addSubview(card)
         hostView.interactiveView = card
 
-        cardController.onClose = { [weak self] in
-            self?.dismiss(reason: "close-requested")
-            emit(["type": "close-requested"])
-        }
         switchGuideController.onClose = { [weak self] in
             self?.dismiss(reason: "close-requested")
             emit(["type": "close-requested"])
@@ -776,7 +750,7 @@ private final class PermissionGuideCoordinator {
         guard let settingsApp = NSRunningApplication
             .runningApplications(withBundleIdentifier: systemSettingsBundleIdentifier)
             .first,
-              let settingsFrame = systemSettingsWindowFrame(pid: settingsApp.processIdentifier)
+              let settingsInfo = systemSettingsWindowInfo(pid: settingsApp.processIdentifier)
         else {
             if !isDragging {
                 if settingsMissingSince == nil {
@@ -799,6 +773,7 @@ private final class PermissionGuideCoordinator {
             }
             return
         }
+        let settingsFrame = settingsInfo.frame
         settingsMissingSince = nil
         didNotifySettingsClosed = false
 
@@ -809,6 +784,24 @@ private final class PermissionGuideCoordinator {
 
         let frontmostBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         guard isDragging || frontmostBundle == systemSettingsBundleIdentifier else {
+            panel.orderOut(nil)
+            switchGuideController.prepareForDismissal()
+            switchPanel.orderOut(nil)
+            return
+        }
+
+        // When the auth sheet dismisses (fingerprint/password completed),
+        // tell Electron so it can re-probe the permission state immediately.
+        if authSheetVisible && !settingsInfo.hasModalSheet {
+            authSheetVisible = false
+            emit(["type": "auth-sheet-dismissed"])
+        } else if !authSheetVisible && settingsInfo.hasModalSheet {
+            authSheetVisible = true
+        }
+
+        // Hide while System Settings shows a modal sheet (auth dialog).
+        // The panel reappears automatically on the next tick after dismissal.
+        if settingsInfo.hasModalSheet && !isDragging {
             panel.orderOut(nil)
             switchGuideController.prepareForDismissal()
             switchPanel.orderOut(nil)
@@ -833,7 +826,7 @@ private final class PermissionGuideCoordinator {
             }
             if !switchPanel.isVisible {
                 switchGuideController.prepareForDisplay()
-                switchPanel.orderFrontRegardless()
+                switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
                 emit([
                     "type": "attached",
                     "systemX": settingsFrame.origin.x,
@@ -855,7 +848,7 @@ private final class PermissionGuideCoordinator {
             panel.setFrame(desiredFrame, display: panel.isVisible, animate: false)
         }
         if !panel.isVisible && !isDragging {
-            panel.orderFrontRegardless()
+            panel.order(.above, relativeTo: settingsInfo.windowNumber)
             emit([
                 "type": "attached",
                 "systemX": settingsFrame.origin.x,
@@ -922,26 +915,44 @@ private final class PermissionGuideCoordinator {
     }
 }
 
+private struct SystemSettingsWindowInfo {
+    let frame: NSRect
+    let windowNumber: Int
+    let hasModalSheet: Bool
+}
+
 /** Finds the largest visible layer-zero window owned by System Settings. */
-private func systemSettingsWindowFrame(pid: pid_t) -> NSRect? {
+private func systemSettingsWindowInfo(pid: pid_t) -> SystemSettingsWindowInfo? {
     guard let rawList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
         as? [[String: Any]] else { return nil }
-    var candidates: [CGRect] = []
+    var bestArea: CGFloat = 0
+    var bestRect: CGRect?
+    var bestWindowID: CGWindowID = 0
+    var layerZeroCount = 0
     for info in rawList {
         guard let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber,
               ownerPID.int32Value == pid,
               let layer = info[kCGWindowLayer as String] as? NSNumber,
               layer.intValue == 0,
               let bounds = info[kCGWindowBounds as String] as? [String: Any],
-              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-              rect.width > 360,
-              rect.height > 260 else { continue }
-        candidates.append(rect)
+              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+        if rect.width > 100 && rect.height > 80 {
+            layerZeroCount += 1
+        }
+        guard rect.width > 360, rect.height > 260 else { continue }
+        let area = rect.width * rect.height
+        guard let windowID = info[kCGWindowNumber as String] as? NSNumber,
+              area > bestArea else { continue }
+        bestArea = area
+        bestRect = rect
+        bestWindowID = CGWindowID(windowID.intValue)
     }
-    guard let cgFrame = candidates.max(by: { $0.width * $0.height < $1.width * $1.height }) else {
-        return nil
-    }
-    return appKitRect(fromQuartz: cgFrame)
+    guard let cgFrame = bestRect else { return nil }
+    return SystemSettingsWindowInfo(
+        frame: appKitRect(fromQuartz: cgFrame),
+        windowNumber: Int(bestWindowID),
+        hasModalSheet: layerZeroCount >= 2
+    )
 }
 
 /** Converts Quartz top-left coordinates through the matching physical display. */

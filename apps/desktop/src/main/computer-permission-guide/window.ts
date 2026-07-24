@@ -932,6 +932,23 @@ export async function showComputerPermissionGuideWindow(
         closeComputerPermissionGuideWindow();
         broadcastPermissionGuideCancelled();
       },
+      onAuthSheetDismissed: () => {
+        if (!ownsNativeHost()) return;
+        log.info('auth sheet dismissed; rechecking permissions');
+        cancelPendingObserverTrailingProbe();
+        void serializePermissionGuideUpdate(
+          'auth sheet dismissed permission recheck',
+          async (gen) => {
+            cancelPendingObserverTrailingProbe();
+            await refreshElectronPermissionGuideStateSerialized({
+              freshPermissionProbe: true,
+              bypassPermissionProbeCache: true,
+              forceBroadcast: true,
+            }, gen);
+          },
+          generation,
+        );
+      },
       onDragBegan: (permission) => {
         if (!ownsNativeHost()) return;
         log.debug('native Computer Use permission drag began', { permission });
