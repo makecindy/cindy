@@ -95,9 +95,7 @@ export function LoginStage({
             // footer 与登录面板共享 handoff 入场态，避免品牌 splash 期间先露出
             // “跳过登录”而面板仍不可点击。
             opacity: groupStyle?.opacity,
-            transform: groupStyle?.transform
-              ? `translateX(-50%) ${groupStyle.transform}`
-              : 'translateX(-50%)',
+            transform: 'translateX(-50%)',
             pointerEvents: groupStyle?.pointerEvents,
             transition: groupStyle?.transition,
           }}
