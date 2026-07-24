@@ -1,26 +1,30 @@
-# Design System Inspired by Ollama
+# Cindy Design System
+
+> Heritage note: this visual language was originally derived from an external
+> minimalist reference (2025). It has since evolved into Cindy's own system —
+> no external site or product is a reference for new design decisions.
 
 ## 1. Visual Theme & Atmosphere
 
-Ollama's interface is radical minimalism taken to its logical conclusion — a pure-white void where content floats without decoration, shadow, or color. The design philosophy mirrors the product itself: strip away everything unnecessary until only the essential tool remains. This is the digital equivalent of a Dieter Rams object — every pixel earns its place, and the absence of design IS the design.
+Cindy's interface is radical minimalism applied to an AI-agent workbench — a quiet, near-monochrome canvas where the user's content and the agent's output are the only things that demand attention. The design philosophy mirrors the product: strip away everything unnecessary until only the essential tool remains. This is the digital equivalent of a Dieter Rams object — every pixel earns its place, and the absence of decoration IS the design.
 
-The entire page exists in pure grayscale. There is zero chromatic color in the interface — no brand blue, no accent green, no semantic red. The only colors that exist are shades between pure black (`#000000`) and pure white (`#ffffff`), creating a monochrome environment that lets the user's mental model of "open models" remain uncolored by brand opinion. The Ollama llama mascot, rendered in simple black line art, is the only illustration — and even it's monochrome.
+The default theme lives almost entirely in grayscale. Chromatic color is reserved for a small, explicitly sanctioned set of semantic signals (status, diff, focus — see §2); everything else is shades between near-black and near-white. Long working sessions stay calm, and color means something whenever it does appear.
 
-What makes this system distinctive is the combination of a single geometric sans-serif (Inter) with an exclusively pill-shaped geometry (9999px radius on everything interactive). The clean letterforms + rounded buttons + rounded containers create a cohesive "softness language" that makes a developer-oriented tool feel approachable and friendly rather than intimidating. This is minimalism with warmth — not cold Swiss-style grid minimalism, but the kind where the edges are literally softened.
+What makes this system distinctive is the combination of a single geometric sans-serif (Inter) with a pill-first geometry (9999px radius on interactive elements). The clean letterforms + rounded buttons + rounded containers create a cohesive "softness language" that makes a developer-oriented tool feel approachable and friendly rather than intimidating. This is minimalism with warmth — not cold Swiss-style grid minimalism, but the kind where the edges are literally softened.
 
 **Key Characteristics:**
 
-- Pure white canvas with zero chromatic color — completely grayscale
+- Near-monochrome default theme; chromatic color only via the sanctioned semantic set (§2), always consumed through tokens (§10)
 - Inter as the single sans family, carrying both display headlines and body text
 - Tight border-radius system: 8px (inner controls) / 12px (containers) / 9999px (pill) — three values, nothing else
-- Zero shadows — depth comes exclusively from background color shifts and borders
+- Zero shadows in the base language — depth comes from background color shifts and 1px borders (narrow token-gated exceptions live in §10)
 - Pill-shaped geometry on all interactive elements (buttons, tabs, inputs, tags)
-- The Ollama llama as the sole illustration — black line art, no color
-- Extreme content restraint — the homepage is short, focused, and uncluttered
+- No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
+- Extreme content restraint — each surface presents one clear idea
 
 ## 2. Color Palette & Roles
 
-> **多主题架构注意**:本节列出的色值是 **Default Light / Default Dark**(默认主题,设计灵感来自 Ollama 官网)的具体值,作为视觉规范的参考样本。运行时**每个色值都通过 token 引用**(见第 10 节 Theme System & Token Reference),所以同一组件在其它主题(如 Eclipse / One Dark Pro / Monokai Pro)下会自动呈现该主题的对应色。**实现组件时永远写 token 不写 hex**——具体规则见第 10 节。
+> **多主题架构注意**:本节列出的色值是 **Default Light / Default Dark**(默认主题)的具体值,作为视觉规范的参考样本。运行时**每个色值都通过 token 引用**(见第 10 节 Theme System & Token Reference),所以同一组件在其它主题(如 Eclipse / One Dark Pro / Monokai Pro)下会自动呈现该主题的对应色。**实现组件时永远写 token 不写 hex**——具体规则见第 10 节。
 
 ### Primary Text
 
@@ -81,7 +85,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 ### Gradient System
 
-- **None.** Ollama uses absolutely no gradients. Visual separation comes from flat color blocks and single-pixel borders. This is a deliberate, almost philosophical design choice.
+- **None in the core UI.** Cindy uses no gradients; visual separation comes from flat color blocks and single-pixel borders. This is a deliberate, almost philosophical design choice. (The login canvas is also flat by ruling — see §16.5.)
 
 ## 3. Typography Rules
 
@@ -90,7 +94,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - **Display / Body / UI**: `Inter`, with fallbacks: `system-ui, -apple-system, "Segoe UI", sans-serif`
 - **Monospace**: `JetBrains Mono`, with fallbacks: `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`
 
-*Note: The entire interface uses a single sans font — Inter — for both display headlines and body text. Inter is chosen for (a) its neutral, geometric character that stays out of the way, (b) its excellent legibility at small sizes, and (c) its wide availability in both web and design tooling (including the Pencil .pen editor). A single font keeps the hierarchy clean — separation comes from size and weight, not typeface contrast.*
+*Note: The entire interface uses a single sans font — Inter — for both display headlines and body text. Inter is chosen for (a) its neutral, geometric character that stays out of the way, (b) its excellent legibility at small sizes, and (c) its wide availability in both web and design tooling. A single font keeps the hierarchy clean — separation comes from size and weight, not typeface contrast.*
 
 ### Hierarchy
 
@@ -110,6 +114,8 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 | Code Caption    | JetBrains Mono | 14px (0.88rem) | 400     | 1.43         | normal                                 | Code snippets, secondary                                                                                                                                                                                                                                     |
 | Code Small      | JetBrains Mono | 11–12px        | 400–500 | 1.40–1.63    | normal                                 | Tags, labels, in-tree paths                                                                                                                                                                                                                                  |
 
+
+*Positioning note: the Display / Section Heading / Sub-heading rows are for brand-scale surfaces (login, splash, empty states); everyday app chrome lives in the Body / Caption / Small / Micro rows.*
 
 ### Principles
 
@@ -145,7 +151,6 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - Background: Pure Black (`#000000`)
 - Text: Pure White (`#ffffff`)
 - Radius: pill-shaped (9999px)
-- Inferred from "Create account" and "Explore" buttons
 - Maximum emphasis — black on white
 
 ### Cards & Containers
@@ -182,71 +187,34 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - **按钮**: pill(9999px);主按钮 = 实心 CTA(`--confirm-btn-primary-*`),次按钮 / 取消 = 描边(`--confirm-btn-secondary-*`,透明底 + Board 边框);底部 `justify-end`。
 - **打开时焦点**: 落在该弹窗的**主输入或主按钮**,不要默认停在取消键(见 §14.2 + ConfirmDialog 的 `autoFocusConfirm` / `onOpenAutoFocus`)。
 
-### Navigation
-
-- Clean horizontal nav with minimal elements
-- Logo: Ollama llama icon + wordmark in black
-- Links: "Models", "Docs", "Pricing" in black at 16px, weight 400
-- Search bar: pill-shaped with placeholder text
-- Right side: "Sign in" link + "Download" black pill CTA
-- No borders, no background — transparent nav on white page
-
-### Image Treatment
-
-- The Ollama llama mascot is the only illustration — black line art on white
-- Code screenshots/terminal outputs shown in bordered containers (12px radius)
-- Integration logos displayed as simple icons in a grid
-- No photographs, no gradients, no decorative imagery
-
-### Distinctive Components
+### Tabs
 
 **Tab Pills**
 
-- Pill-shaped tab selectors (e.g., "Coding" | "OpenClaw")
-- Active: Light Gray bg; Inactive: transparent
+- Pill-shaped tab selectors (e.g. the Claude | Codex agent switch on the new-session screen)
+- Active: Light Gray bg (`--surface-chip`); Inactive: transparent
 - All pill-shaped (9999px)
-
-**Model Tags**
-
-- Small pill-shaped tags (e.g., "ollama", "launch", "claude")
-- Light Gray background, dark text
-- The primary way to browse models
-
-**Terminal Command Block**
-
-- Monospace code showing `ollama run` commands
-- Minimal styling — just a bordered 12px-radius container
-- Copy button integrated
-
-**Integration Grid**
-
-- Grid of integration logos (Codex, Claude Code, OpenCode, LangChain, etc.)
-- Each in a bordered pill or card with icon + name
-- Tabbed by category (Coding, Documents & RAG, Automation, Chat)
 
 ## 5. Layout Principles
 
 ### Spacing System
 
 - Base unit: 8px
-- Scale: 4px, 6px, 8px, 9px, 10px, 12px, 14px, 16px, 20px, 24px, 32px, 40px, 48px, 88px, 112px
+- Scale: 4px, 6px, 8px, 10px, 12px, 14px, 16px, 20px, 24px, 32px, 40px, 48px
 - Button padding: 10px 24px (consistent across all buttons)
-- Card internal padding: approximately 24–32px
-- Section vertical spacing: very generous (88px–112px)
+- Container padding: dialogs 16px (`p-4`, see §4 Dialog & Modal); dropdown panels 6–8px (see §4 Select & Dropdown)
 
-### Grid & Container
+### Layout Structure (App)
 
-- Max container width: approximately 1024–1280px, centered
-- Hero: centered single-column with llama illustration
-- Feature sections: 2-column layout (text left, code right)
-- Integration grid: responsive multi-column
-- Footer: clean single-row
+- Full-window three-region structure: sidebar + content area (+ optional right panel), separated by 1px Board dividers on a single flat Surface — never by background shifts (see §2 layer rule).
+- Centered-card layouts (login, empty states) follow the Surface + Card two-layer rule in §2.
+- Reading-width content (settings forms, document previews) is centered with a comfortable max width; full-bleed content (chat stream, file tree) fills its region.
 
 ### Whitespace Philosophy
 
-- **Emptiness as luxury**: The page is remarkably short and sparse — no feature section overstays its welcome. Each concept gets minimal but sufficient space.
-- **Content density is low by design**: Where other AI companies pack feature after feature, Ollama presents three ideas (run models, use with apps, integrations) and stops.
-- **The white space IS the brand**: Pure white space with zero decoration communicates "this tool gets out of your way."
+- **Emptiness as luxury**: no surface overstays its welcome — each concept gets minimal but sufficient space.
+- **Content density is low by design**: one clear idea per surface. When a screen needs more, split it into progressive disclosure (§14) instead of packing it tighter.
+- **The white space IS the brand**: calm, undecorated space communicates "this tool gets out of your way."
 
 ### Border Radius Scale
 
@@ -268,7 +236,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 | Lifted (Card)      | Card fill (`#ffffff` Light / `#2c2c2a` Dark) + optional 1px Board outline | Login cards, modals, raised panels             |
 
 
-**Shadow Philosophy**: Ollama uses **zero shadows**. This is not an oversight — it's a deliberate design decision. Every other major AI product site uses at least subtle shadows. Ollama's flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering.
+**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the token-gated floating-layer exceptions registered in §10 — `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow`; never add ad-hoc shadows to in-page elements.)
 
 ## 7. Do's and Don'ts
 
@@ -278,7 +246,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - Use pill-shaped (9999px) radius on all interactive elements — buttons, tabs, inputs, tags
 - Use 12px radius on all non-interactive containers — code blocks, cards, panels
 - Use 8px radius only for inner controls that can't be a pill — multi-line inputs, dropdown/menu rows (see §5)
-- Keep the palette strictly grayscale — no chromatic colors except the blue focus ring
+- Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
 - Use Inter at weight 500 for display headings — hierarchy comes from size + weight, not typeface switching
 - Maintain zero shadows — depth comes from borders and background shifts only
 - Keep content density low — each section should present one clear idea
@@ -291,46 +259,26 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 - Don't invent arbitrary radii — only three values exist: 8px (inner controls), 12px (containers), 9999px (pill). Nothing in between, nothing else.
 - Don't add shadows to any element — the flat aesthetic is intentional
 - Don't use font weights above 500 — no bold, no black weight
-- Don't add decorative illustrations beyond the llama mascot
+- Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on sanctioned brand surfaces (login, splash, new-session brand block — see §15.7 / §16)
 - Don't use gradients anywhere — flat blocks and borders only
-- Don't overcomplicate the layout — two columns maximum, no complex grids
+- Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids
 - Don't use borders heavier than 1px — containment is always the lightest possible touch
 - Don't add decorative or large-motion animation — no bounce, parallax, looping, or gratuitous movement. Short **functional** state transitions (color / background / opacity, ≤150ms) are fine and expected — see §14.4.
 
-## 8. Responsive Behavior
+## 8. Window & Adaptive Behavior
 
-### Breakpoints
+Cindy Desktop is an Electron app: layout responds to window resizing, not page breakpoints.
 
+### Desktop Window
 
-| Name          | Width       | Key Changes                                      |
-| ------------- | ----------- | ------------------------------------------------ |
-| Mobile        | <640px      | Single column, stacked everything, hamburger nav |
-| Small Tablet  | 640–768px   | Minor adjustments to spacing                     |
-| Tablet        | 768–850px   | 2-column layouts begin                           |
-| Desktop       | 850–1024px  | Standard layout, expanded features               |
-| Large Desktop | 1024–1280px | Maximum content width                            |
+- Minimum window size: **800 × 600** (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts`; secondary windows share the same floor)
+- The sidebar is collapsible; region dividers and paddings hold as the window narrows, and content reflows fluidly
+- Chat stream and composer reflow with the window; code blocks keep horizontal scroll instead of wrapping
+- Control sizes and paddings follow §4 at every window size — targets never shrink below their specified geometry
 
+### Mobile
 
-### Touch Targets
-
-- All buttons are pill-shaped with generous padding (10px 24px)
-- Navigation links at comfortable 16px size
-- Minimum touch area easily exceeds 44x44px
-
-### Collapsing Strategy
-
-- **Navigation**: Collapses to hamburger menu on mobile
-- **Feature sections**: 2-column → stacked single column
-- **Hero text**: 48px → 36px → 30px progressive scaling
-- **Integration grid**: Multi-column → 2-column → single column
-- **Code blocks**: Horizontal scroll maintained
-
-### Image Behavior
-
-- Llama mascot scales proportionally
-- Code blocks maintain monospace formatting
-- Integration icons reflow to fewer columns
-- No art direction changes
+Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). The surfaces specified so far are documented in §15.13 (cross-platform skin rules) and §16 (login); mobile layout beyond those surfaces follows `apps/mobile` as implemented.
 
 ## 9. Agent Prompt Guide
 
@@ -347,11 +295,12 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 
 ### Example Component Prompts
 
-- "Create a hero section on Surface (#f8f8f6) with an illustration centered above a headline at 48px Inter weight 500, line-height 1.0. Use Pure Black (#000000) text. Below, add a black pill-shaped CTA button (9999px radius, 10px 24px padding) and a gray pill button."
-- "Design a code block with a 12px border-radius, 1px solid Board (#d7d7d4 Light / #3c3c3a Dark) border on Card background. Use JetBrains Mono at 16px for the terminal command. No shadow."
+- "Create a settings section: an ivory Card (--surface-card-ivory, 12px radius, 1px --border-default outline) on the Surface page background; section title 14px Inter 500, body rows 14px 400."
+- "Design a code block with a 12px border-radius, 1px solid Board (#d7d7d4 Light / #3c3c3a Dark) border on Card background. Use JetBrains Mono for the code. No shadow."
 - "Build a tab bar with pill-shaped tabs (9999px radius). Active tab: Light Gray (#e5e5e5) background, Near Black (#262626) text. Inactive: transparent background, Stone (#737373) text."
-- "Create an integration card grid. Each card is a bordered pill (9999px radius) or a 12px-radius card with 1px solid Board (#d7d7d4) border. Icon + name inside. Grid of 4 columns on desktop."
-- "Design a navigation bar: transparent background, no border. Ollama logo on the left, 3 text links (Pure Black, 16px, weight 400), pill search input in the center, 'Sign in' text link and black pill 'Download' button on the right."
+- "Build a chat composer: a Card-colored (--surface-elevated) 12px-radius container; inside, pill control chips (9999px) that are borderless at rest and gain a --border-default outline on hover."
+- "Design a confirm dialog: 12px-radius container, max-width 400px, pill buttons — solid CTA on the right, outlined secondary beside it; focus lands on the primary button."
+- "Create a dropdown: pill trigger; panel width bound to the trigger; 12px-radius Card panel with 1px Board border; option rows highlighted with 8px inner radius via --model-item-hover."
 
 ### Iteration Guide
 
@@ -360,7 +309,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 3. Always specify radius from the three tiers — pill (9999px) / container (12px) / inner control (8px, only for textareas & dropdown rows). Nothing else.
 4. Shadows are always zero — never add them
 5. Weight is always 400 or 500 — never bold
-6. If something feels too decorated, remove it — less is always more for Ollama
+6. If something feels too decorated, remove it — less is always more
 
 ## 10. Theme System & Token Reference
 
@@ -394,7 +343,7 @@ Cindy 桌面端用 **VSCode 风格的 ColorRegistry + Theme override** 模型管
 
 **Tier 1 — Semantic slot (39 个)**:跨语境复用的核心语义槽,加新主题时这一层是 override 的主战场。
 
-| 类目 | Slot | Ollama Light | Ollama Dark | 主要用途 |
+| 类目 | Slot | Default Light | Default Dark | 主要用途 |
 |---|---|---|---|---|
 | **Surface (12)** | `--surface` | `#f8f8f6` | `#1f1f1e` | 页面 Surface(hex 形式) |
 | | `--surface-hsl` | `60 12.5% 97%` | `60 2% 12%` | 同上 HSL 形式,`hsl(var(--xxx))` 消费 |
