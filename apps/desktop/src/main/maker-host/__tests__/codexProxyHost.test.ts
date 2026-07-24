@@ -452,8 +452,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -660,6 +660,198 @@ describe('codex proxy host', () => {
       input: originalInput,
     });
     clearSessionProvider('session-openai-custom-tool');
+  });
+
+  it('normalizes the Codex tool set to ByteDance Seed Responses capabilities', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-seed', 'thread-seed', 'PRODUCT_PROMPT');
+    setSessionProvider('session-seed', 'xd');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'function', name: 'write_stdin' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [{ type: 'function', name: 'close_agent' }] },
+        { type: 'web_search', external_web_access: true },
+        { type: 'image_generation' },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier answer' }] },
+        { type: 'reasoning', summary: [], content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      ],
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-seed' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'function', name: 'write_stdin' },
+        { type: 'web_search' },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: [
+        {
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'earlier answer' }],
+        },
+        { type: 'reasoning', summary: [], content: null },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      ],
+    });
+    clearSessionProvider('session-seed');
+  });
+
+  it('removes Seed tool controls when every declared tool is unsupported', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'namespace', name: 'multi_agent_v1', tools: [] }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      input: 'hello',
+    });
+  });
+
+  it('drops Seed web search when Codex explicitly disables live web access', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'web_search', external_web_access: false },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    });
+  });
+
+  it('resets a Seed tool choice that references a filtered tool', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'image_generation' },
+      ],
+      tool_choice: { type: 'image_generation' },
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+      input: 'hello',
+    });
+  });
+
+  it('keeps a Seed tool choice that references a retained function', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+      ],
+      tool_choice: { type: 'function', name: 'exec_command' },
+      parallel_tool_calls: false,
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'bytedance-seed/seed-2.1-pro',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      tool_choice: { type: 'function', name: 'exec_command' },
+      parallel_tool_calls: false,
+      input: 'hello',
+    });
   });
 
   it('keeps Codex namespace tools for non-xAI requests', async () => {
@@ -1008,7 +1200,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(9); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(10); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
