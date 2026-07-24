@@ -1331,6 +1331,18 @@
       "toggleAria": "切换实验功能：{{title}}",
       "features": {}
     },
+    "lspMode": {
+      "cell": {
+        "title": "代码智能 (LSP) · Beta",
+        "description": "通过 typescript-language-server 给 agent 提供精确的符号引用、跳转、call hierarchy。仅在 TypeScript 项目里生效 (自动检测 tsconfig.json / package.json 依赖)。非 TS 项目里此开关无效果,agent 工具列表不会出现 lsp_*。"
+      },
+      "toggleAria": "LSP 代码智能开关",
+      "toast": {
+        "enabled": "LSP 已开启,新建 session 后生效",
+        "disabled": "LSP 已关闭,新建 session 后生效",
+        "toggleFailed": "切换 LSP 开关失败"
+      }
+    },
     "gitSafety": {
       "title": "Git 安全",
       "autoSnapshotTitle": "Git 安全保存点",

@@ -1332,6 +1332,18 @@
       "toggleAria": "Toggle experimental feature: {{title}}",
       "features": {}
     },
+    "lspMode": {
+      "cell": {
+        "title": "Code Intelligence (LSP) · Beta",
+        "description": "Gives the agent precise symbol references, go-to-definition, and call hierarchy via typescript-language-server. Only takes effect in TypeScript projects (auto-detected from tsconfig.json / package.json dependencies). In non-TS projects this switch does nothing and lsp_* tools won't appear in the agent's tool list."
+      },
+      "toggleAria": "Toggle LSP code intelligence",
+      "toast": {
+        "enabled": "LSP enabled — takes effect in new sessions",
+        "disabled": "LSP disabled — takes effect in new sessions",
+        "toggleFailed": "Failed to toggle LSP"
+      }
+    },
     "gitSafety": {
       "title": "Git Safety",
       "autoSnapshotTitle": "Git safety snapshots",

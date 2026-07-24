@@ -1331,6 +1331,18 @@
       "toggleAria": "実験的機能を切り替え: {{title}}",
       "features": {}
     },
+    "lspMode": {
+      "cell": {
+        "title": "コードインテリジェンス (LSP) · Beta",
+        "description": "typescript-language-server を通じて、エージェントに正確なシンボル参照・定義ジャンプ・コールヒエラルキーを提供します。TypeScript プロジェクトでのみ有効です (tsconfig.json / package.json の依存関係を自動検出)。TS 以外のプロジェクトではこのスイッチは効果がなく、エージェントのツール一覧に lsp_* は表示されません。"
+      },
+      "toggleAria": "LSP コードインテリジェンスを切り替え",
+      "toast": {
+        "enabled": "LSP を有効にしました。新しいセッションから反映されます",
+        "disabled": "LSP を無効にしました。新しいセッションから反映されます",
+        "toggleFailed": "LSP の切り替えに失敗しました"
+      }
+    },
     "gitSafety": {
       "title": "Git セーフティ",
       "autoSnapshotTitle": "Git セーフティ保存点",

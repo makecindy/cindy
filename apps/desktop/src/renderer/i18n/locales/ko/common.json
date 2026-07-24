@@ -1331,6 +1331,18 @@
       "toggleAria": "실험적 기능 전환: {{title}}",
       "features": {}
     },
+    "lspMode": {
+      "cell": {
+        "title": "코드 인텔리전스 (LSP) · Beta",
+        "description": "typescript-language-server를 통해 에이전트에 정확한 심볼 참조, 정의 이동, 호출 계층(call hierarchy)을 제공합니다. TypeScript 프로젝트에서만 동작합니다(tsconfig.json / package.json 의존성 자동 감지). TS 프로젝트가 아니면 이 스위치는 효과가 없으며 에이전트 도구 목록에 lsp_*가 표시되지 않습니다."
+      },
+      "toggleAria": "LSP 코드 인텔리전스 전환",
+      "toast": {
+        "enabled": "LSP가 활성화되었습니다. 새 세션부터 적용됩니다",
+        "disabled": "LSP가 비활성화되었습니다. 새 세션부터 적용됩니다",
+        "toggleFailed": "LSP 전환에 실패했습니다"
+      }
+    },
     "gitSafety": {
       "title": "Git 안전",
       "autoSnapshotTitle": "Git 안전 저장점",
