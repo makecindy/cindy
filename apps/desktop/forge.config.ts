@@ -95,11 +95,6 @@ const NATIVE_RUNTIME_DEPS = [
   'picomatch',
   'is-glob',
   'is-extglob', // is-glob 的运行时依赖
-  // Windows 启动期 Claude orphan 扫描:直接走 Win32 Tool Help snapshot,
-  // 不再 spawn PowerShell(360 等安全软件会把启动期脚本子进程判成攻击)。
-  // N-API 二进制不需要 Electron rebuild；下面 bundleNativeDeps 只拷运行时
-  // JS + .node，避免把 npm 包里的 PDB / obj / 工程文件带进正式包。
-  '@vscode/windows-process-tree',
   // sharp (maker-core image-resizer 用): 主包 + libvips wrapper + 当前平台
   // 子包(在 bundleNativeDeps 里动态拼)。sharp 走 prebuilt 二进制路线,
   // 不需要 electron-rebuild — 它通过 N-API 兼容多 ABI, 直接 require 就能用。
@@ -158,6 +153,12 @@ const NATIVE_RUNTIME_DEPS = [
   // (另一个是 playwright-core),已全覆盖。
   'undici',
 ];
+
+// Windows 启动期 Claude orphan 扫描:直接走 Win32 Tool Help snapshot,
+// 不再 spawn PowerShell(360 等安全软件会把启动期脚本子进程判成攻击)。
+// N-API 二进制不需要 Electron rebuild；bundleNativeDeps 仅在 win32 目标
+// 拷贝运行时 JS + .node，避免非 Windows 包加载或携带 Win32 binary。
+const WINDOWS_PROCESS_TREE_RUNTIME_DEP = '@vscode/windows-process-tree';
 
 /**
  * @parcel/watcher 的 prebuilt 二进制按 platform-arch (在 linux 上还分 glibc/musl)
@@ -344,6 +345,7 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     ...NATIVE_RUNTIME_DEPS,
     parcelWatcherPlatformPkg(targetPlatform, targetArch),
     ...sharpPlatformPkgs(targetPlatform, targetArch),
+    ...(targetPlatform === 'win32' ? [WINDOWS_PROCESS_TREE_RUNTIME_DEP] : []),
     // loudness 只在 Windows 用 (录音时静音)。它的 Win 后端是个捆绑的 .exe,
     // 必须运行时按 __dirname 找 — 所以走 NATIVE_RUNTIME_DEPS 这条路, 不让 vite
     // bundle。Mac/Linux 完全不带, 避免拖入 execa 这条无用依赖链。
@@ -361,7 +363,7 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     // dir created before cpSync — cpSync only mkdir's the leaf.
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.rmSync(dst, { recursive: true, force: true });
-    if (dep === '@vscode/windows-process-tree') {
+    if (dep === WINDOWS_PROCESS_TREE_RUNTIME_DEP) {
       copyWindowsProcessTreeRuntime(src, dst);
     } else {
       fs.cpSync(src, dst, { recursive: true, dereference: true });

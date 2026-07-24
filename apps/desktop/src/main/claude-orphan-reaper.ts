@@ -30,7 +30,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { getAllProcesses, ProcessDataFlag, type IProcessInfo } from '@vscode/windows-process-tree';
+import type { IProcessInfo } from '@vscode/windows-process-tree';
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
@@ -92,7 +92,12 @@ interface ProcessRow {
 
 const WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS = 1000;
 
-function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
+async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
+  // This file is imported on every desktop platform. Keep the native Win32
+  // binding behind the platform-specific scan so macOS/Linux never resolve or
+  // load windows_process_tree.node during startup.
+  const { getAllProcesses, ProcessDataFlag } = await import('@vscode/windows-process-tree');
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const finish = (processes: IProcessInfo[]): void => {

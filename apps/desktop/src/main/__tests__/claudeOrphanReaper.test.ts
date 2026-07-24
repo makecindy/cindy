@@ -47,6 +47,7 @@ async function importReaper(options: {
   platform: NodeJS.Platform;
   windowsProcesses?: WindowsProcessRow[];
   getAllProcesses?: GetAllProcessesMock;
+  windowsProcessTreeFactory?: () => Record<string, unknown>;
   execFileSync?: ExecFileSyncMock;
   spawnSync?: SpawnSyncMock;
 }) {
@@ -55,14 +56,18 @@ async function importReaper(options: {
   vi.doMock('../logger', () => ({
     createLogger: () => logger,
   }));
-  vi.doMock('@vscode/windows-process-tree', () => ({
-    ProcessDataFlag: { None: 0, Memory: 1, CommandLine: 2 },
-    getAllProcesses:
-      options.getAllProcesses ??
-      vi.fn((callback: (processes: WindowsProcessRow[]) => void) => {
-        callback(options.windowsProcesses ?? []);
-      }),
-  }));
+  vi.doMock(
+    '@vscode/windows-process-tree',
+    options.windowsProcessTreeFactory ??
+      (() => ({
+        ProcessDataFlag: { None: 0, Memory: 1, CommandLine: 2 },
+        getAllProcesses:
+          options.getAllProcesses ??
+          vi.fn((callback: (processes: WindowsProcessRow[]) => void) => {
+            callback(options.windowsProcesses ?? []);
+          }),
+      })),
+  );
   vi.doMock('node:child_process', () => ({
     execFileSync: options.execFileSync ?? vi.fn(),
     spawnSync: options.spawnSync ?? vi.fn(),
@@ -249,11 +254,38 @@ describe('reapClaudeOrphans', () => {
     expect(logger.debug).toHaveBeenCalled();
   });
 
+  it('does not load the native Windows module on POSIX', async () => {
+    const windowsProcessTreeFactory = vi.fn(() => {
+      throw new Error('Windows native module must not load on POSIX');
+    });
+    const spawnSync = vi.fn(() => ({ stdout: '', status: 0 }));
+    const { reapClaudeOrphans } = await importReaper({
+      platform: 'linux',
+      windowsProcessTreeFactory,
+      spawnSync,
+    });
+
+    await expect(reapClaudeOrphans()).resolves.toEqual(
+      expect.objectContaining({ scannedTotal: 0 }),
+    );
+    expect(windowsProcessTreeFactory).not.toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalledWith(
+      'ps',
+      ['-A', '-o', 'pid=,ppid=,command='],
+      expect.anything(),
+    );
+  });
+
   it('bounds a native Windows scan that never invokes its callback', async () => {
     vi.useFakeTimers();
     let nativeCallback: ((processes: WindowsProcessRow[]) => void) | undefined;
+    let markNativeScanStarted!: () => void;
+    const nativeScanStarted = new Promise<void>((resolve) => {
+      markNativeScanStarted = resolve;
+    });
     const getAllProcesses = vi.fn((callback: (processes: WindowsProcessRow[]) => void) => {
       nativeCallback = callback;
+      markNativeScanStarted();
     });
     const execFileSync = vi.fn();
     const { reapClaudeOrphans } = await importReaper({
@@ -263,6 +295,7 @@ describe('reapClaudeOrphans', () => {
     });
 
     const resultPromise = reapClaudeOrphans();
+    await nativeScanStarted;
     await vi.advanceTimersByTimeAsync(1000);
 
     await expect(resultPromise).resolves.toEqual(expect.objectContaining({ scannedTotal: 0 }));

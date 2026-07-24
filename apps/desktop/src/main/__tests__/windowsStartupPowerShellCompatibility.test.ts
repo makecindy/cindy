@@ -40,7 +40,9 @@ describe('Windows startup PowerShell compatibility', () => {
     const forgeConfig = read('forge.config.ts');
 
     expect(viteConfig).toContain("'@vscode/windows-process-tree'");
-    expect(forgeConfig).toContain("'@vscode/windows-process-tree'");
+    expect(forgeConfig).toContain(
+      "targetPlatform === 'win32' ? [WINDOWS_PROCESS_TREE_RUNTIME_DEP] : []",
+    );
     expect(forgeConfig).toContain('copyWindowsProcessTreeRuntime(src, dst)');
     expect(forgeConfig).toContain("'windows_process_tree.node'");
   });
