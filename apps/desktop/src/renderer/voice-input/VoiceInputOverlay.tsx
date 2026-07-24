@@ -57,6 +57,7 @@ import {
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { prewarmVoiceInputAudio } from './audioContextPool';
+import { readVoicePrivacyConsent, saveVoicePrivacyConsent } from './voicePrivacyConsent';
 import { createVoiceInputAudioProfile } from './audioProfile';
 import { startVoiceInputCaptureSession } from './captureSession';
 import {
@@ -677,6 +678,16 @@ export function VoiceInputOverlay() {
     if (stateRef.current === 'listening' || stateRef.current === 'submitting' || stateRef.current === 'refining') {
       return;
     }
+    if (!readVoicePrivacyConsent()) {
+      const confirmed = await confirmDialog({
+        title: '语音输入隐私说明',
+        description: '语音输入会使用麦克风，并将音频发送到配置的语音识别服务进行转写。你可以取消，取消不会影响文字输入。',
+        confirmText: '同意并继续',
+        cancelText: '取消',
+        autoFocusConfirm: true,
+      });
+      if (!confirmed || !saveVoicePrivacyConsent()) return;
+    }
     clearErrorCloseTimer();
     resetOverlayInteraction();
     const attemptId = startAttemptIdRef.current + 1;
@@ -863,6 +874,7 @@ export function VoiceInputOverlay() {
     cancelStartedRun,
     clearErrorCloseTimer,
     closeOverlay,
+    confirmDialog,
     createStartReadyState,
     failRecording,
     formatMicrophoneFallbackMessage,
@@ -1301,6 +1313,7 @@ export function VoiceInputOverlay() {
   // effect runs well before the user's first shortcut press, populating the
   // shared AudioContext + worklet module and warming provider auth.
   useEffect(() => {
+    if (!readVoicePrivacyConsent()) return;
     void window.electronAPI.voiceInput.prewarm({
       sourceLanguage: settingsRef.current.language,
       refinementEnabled: settingsRef.current.refinementEnabled,

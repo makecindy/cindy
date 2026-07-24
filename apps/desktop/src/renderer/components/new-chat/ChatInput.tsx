@@ -193,6 +193,7 @@ import {
 } from '@/voice-input/shortcut';
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { readVoicePrivacyConsent, saveVoicePrivacyConsent } from '@/voice-input/voicePrivacyConsent';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
@@ -2226,8 +2227,21 @@ export function ChatInput({
   }, [confirmDialog, t]);
 
   const voiceInputOptions = useMemo(
-    () => ({ onMicrophonePermissionRequired: handleVoiceInputPermissionRequired }),
-    [handleVoiceInputPermissionRequired],
+    () => ({
+      onBeforeVoiceInputStart: async () => {
+        if (readVoicePrivacyConsent()) return true;
+        const confirmed = await confirmDialog({
+          title: '语音输入隐私说明',
+          description: '语音输入会使用麦克风，并将音频发送到配置的语音识别服务进行转写。你可以取消，取消不会影响文字输入。',
+          confirmText: '同意并继续',
+          cancelText: '取消',
+          autoFocusConfirm: true,
+        });
+        return confirmed && saveVoicePrivacyConsent();
+      },
+      onMicrophonePermissionRequired: handleVoiceInputPermissionRequired,
+    }),
+    [confirmDialog, handleVoiceInputPermissionRequired],
   );
 
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
