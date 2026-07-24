@@ -912,7 +912,7 @@ export function GhostToolCard({
           参数(审计透明层,与旧 bar 同一承诺)。chip 以下整块交给意识画布。 */}
       <button
         type="button"
-        className="mb-2 flex cursor-pointer items-center gap-1.5 self-start rounded-full border px-2 py-0.5 text-left"
+        className="mb-2 flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-full border px-2 py-0.5 text-left"
         style={{ backgroundColor: 'var(--surface-chip)', borderColor: 'var(--border-default)' }}
         onClick={(e) => {
           // 展开是"就地看详情":先通知消息流跳过本次高度变化的贴底跟随

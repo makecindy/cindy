@@ -402,19 +402,21 @@ function ScopePicker({
               <DropdownMenuItem
                 key={dir}
                 onClick={() => onPick(dir)}
-                className="grid w-full grid-cols-[14px_max-content] items-center gap-x-2.5 pr-4 cursor-pointer"
+                // minmax(0,max-content):菜单仍按内容自适应宽,但路径超过菜单
+                // max-w 上限时列可收缩、由 truncate 出省略号,不再水平溢出。
+                className="grid w-full grid-cols-[14px_minmax(0,max-content)] items-center gap-x-2.5 pr-4 cursor-pointer"
               >
                 <Check
                   size={14}
                   className={cn('shrink-0', isCurrent ? 'opacity-100' : 'opacity-0')}
                 />
-                <div className="flex flex-col gap-0.5">
+                <div className="flex min-w-0 flex-col gap-0.5">
                   <div className="flex items-center gap-1.5">
-                    <span className="whitespace-nowrap text-13 font-medium">
+                    <span className="truncate text-13 font-medium">
                       {basename(dir)}
                     </span>
                   </div>
-                  <span className="whitespace-nowrap text-11 text-[var(--settings-section-desc)]">
+                  <span title={dir} className="truncate text-11 text-[var(--settings-section-desc)]">
                     {dir}
                   </span>
                 </div>
