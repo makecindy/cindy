@@ -4485,6 +4485,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:grant-permissions', options),
       driverIcon: (): Promise<{ iconDataUrl: string | null }> =>
         ipcRenderer.invoke('maker:computer:driver-icon'),
+      permissionGuideStatus: (): Promise<ComputerDriverStatus> =>
+        ipcRenderer.invoke('maker:computer:permission-guide-status'),
       startPermissionAppDrag: (iconDataUrl: string): void =>
         ipcRenderer.send('maker:computer:permission-app-drag-start', { iconDataUrl }),
       finishPermissionAppDrag: (): void =>

@@ -128,12 +128,10 @@ export function ComputerPermissionGuideWindow() {
         log.debug('permission guide driver icon lookup failed', error);
       });
     }
-    void window.electronAPI.maker.computer.status({
-      forcePermissionProbe: true,
-    }).then((status) => {
+    void window.electronAPI.maker.computer.permissionGuideStatus().then((status) => {
       if (!cancelled) setPermissionState(status.permissionState ?? null);
     }).catch((error) => {
-      log.debug('permission guide initial status check failed', error);
+      log.debug('permission guide initial status snapshot failed', error);
     });
     const onStatusChanged = window.electronAPI.maker.computer.onPermissionGuideStatusChanged;
     const dispose = typeof onStatusChanged === 'function'

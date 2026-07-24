@@ -497,6 +497,8 @@ export const MAKER_INVOKE = {
   COMPUTER_GRANT_PERMISSIONS: 'maker:computer:grant-permissions',
   // macOS: CuaDriver.app 的真实安装图标(授权引导弹窗里给用户当识别参照)。
   COMPUTER_DRIVER_ICON: 'maker:computer:driver-icon',
+  // macOS: 当前授权引导生命周期持有的预检快照（不触发新的权限探测）。
+  COMPUTER_PERMISSION_GUIDE_STATUS: 'maker:computer:permission-guide-status',
   // macOS: 取消在途的 CuaDriver 授权流程(引导弹窗「取消」时收割 grant 子进程)。
   COMPUTER_CANCEL_PERMISSION_GRANT: 'maker:computer:cancel-permission-grant',
   /**

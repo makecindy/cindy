@@ -64,6 +64,43 @@ describe('resolveComputerPermissionGuideInitialAwaitingUser', () => {
 });
 
 describe('ComputerPermissionGuideWindow native drag fallback', () => {
+  it('initializes from the guide preflight snapshot without probing permissions again', async () => {
+    const status = vi.fn();
+    const permissionGuideStatus = vi.fn().mockResolvedValue({
+      permissionState: {
+        platform: 'macos',
+        required: true,
+        status: 'missing',
+        accessibility: 'granted',
+        screenRecording: 'missing',
+        screenRecordingCapturable: 'missing',
+        canGrant: true,
+      },
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          computer: {
+            status,
+            permissionGuideStatus,
+            driverIcon: vi.fn().mockResolvedValue({ iconDataUrl: null }),
+            startPermissionAppDrag: vi.fn(),
+            finishPermissionAppDrag: vi.fn(),
+            cancelPermissionGrant: vi.fn().mockResolvedValue({ cancelled: true }),
+            onPermissionGuideStatusChanged: vi.fn(() => () => undefined),
+          },
+        },
+      },
+    });
+
+    render(createElement(ComputerPermissionGuideWindow));
+
+    expect(await screen.findByText('Drag Computer Use into Screen Recording')).toBeTruthy();
+    expect(permissionGuideStatus).toHaveBeenCalledOnce();
+    expect(status).not.toHaveBeenCalled();
+  });
+
   it('leaves the hidden drag state when Chromium omits dragend', () => {
     vi.useFakeTimers();
     const startPermissionAppDrag = vi.fn();
@@ -73,7 +110,7 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
       value: {
         maker: {
           computer: {
-            status: vi.fn(() => new Promise(() => undefined)),
+            permissionGuideStatus: vi.fn(() => new Promise(() => undefined)),
             startPermissionAppDrag,
             finishPermissionAppDrag,
             cancelPermissionGrant: vi.fn().mockResolvedValue({ cancelled: true }),

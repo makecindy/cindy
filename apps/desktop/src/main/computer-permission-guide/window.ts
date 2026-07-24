@@ -684,6 +684,14 @@ export function isComputerPermissionGuideWebContents(sender: WebContents): boole
   );
 }
 
+/** Return the preflight snapshot only to the renderer owned by this guide. */
+export function getComputerPermissionGuideStatus(
+  sender: WebContents,
+): ComputerStatus | null {
+  if (!isComputerPermissionGuideWebContents(sender)) return null;
+  return guideStatus;
+}
+
 function isValidComputerPermissionDragIconDataUrl(value: unknown): value is string {
   if (typeof value !== 'string' || !value.startsWith(DRAG_ICON_DATA_URL_PREFIX)) {
     return false;

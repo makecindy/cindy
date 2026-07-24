@@ -71,6 +71,7 @@ import {
 import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
+  getComputerPermissionGuideStatus,
   openComputerPermissionPaneForStatus,
   isComputerPermissionGuideWebContents,
   refreshComputerPermissionGuideWindow,
@@ -7008,6 +7009,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   // 查询型:授权引导弹窗的 CuaDriver 图标。取不到时 renderer 降级用通用图标。
   ipcMain.handle(MAKER_INVOKE.COMPUTER_DRIVER_ICON, async () => {
     return { iconDataUrl: await getComputerDriverAppIcon() };
+  });
+
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_PERMISSION_GUIDE_STATUS, async (_event) => {
+    const status = getComputerPermissionGuideStatus(_event.sender);
+    if (!status) {
+      throwIpcError('PRECONDITION_FAILED', 'Computer Use permission guide is not active');
+    }
+    return status;
   });
 
   ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_START, (_event, payload?: {

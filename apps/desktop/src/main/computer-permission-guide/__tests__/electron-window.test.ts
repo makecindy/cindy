@@ -392,6 +392,12 @@ describe('Electron Computer Use permission guide window', () => {
     expect(guide.isComputerPermissionGuideWebContents(
       harness.windows[0].webContents as unknown as WebContents,
     )).toBe(false);
+    expect(guide.getComputerPermissionGuideStatus(
+      harness.windows[1].webContents as unknown as WebContents,
+    )).toEqual(harness.computerStatus());
+    expect(guide.getComputerPermissionGuideStatus(
+      harness.windows[0].webContents as unknown as WebContents,
+    )).toBeNull();
   });
 
   it('closes the persistent switch locator when the whole guide closes', async () => {
