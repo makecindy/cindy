@@ -58,7 +58,17 @@ import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { bindNativeProviderAuth, isNativeProviderAuthBound, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
+import {
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  type ActiveAppSession,
+} from '../appSessionState.js';
+import {
+  bindNativeProviderAuth,
+  claimDetectedNativeProviderAuth,
+  isNativeProviderAuthBound,
+  unbindNativeProviderAuth,
+} from './nativeProviderAuthBinding.js';
 
 const execFileP = promisify(execFile);
 const log = createLogger('auth-adapters');
@@ -625,11 +635,58 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private reconcileWithSystemCodex(): Promise<void> {
     if (this.pendingReconcile) return this.pendingReconcile;
-    const run = this.runReconcileWithSystemCodex().finally(() => {
-      if (this.pendingReconcile === run) this.pendingReconcile = null;
-    });
+    // 发起时刻固定会话快照:reconcile 是异步的,期间可能发生账号切换;绑定自愈
+    // 只允许写给「发起时与完成时都是同一个已提交会话」的 owner(见 claim 内校验)。
+    const sessionAtStart = getActiveAppSession();
+    const run = this.runReconcileWithSystemCodex()
+      .then(() => this.claimDetectedCodexOAuthBinding(sessionAtStart))
+      .finally(() => {
+        if (this.pendingReconcile === run) this.pendingReconcile = null;
+      });
     this.pendingReconcile = run;
     return run;
+  }
+
+  /**
+   * reconcile 收口后的绑定自愈:codex-home 里存在可用 OAuth token(硬链自本机 CLI 或
+   * 早年隔离登录)、而 openai 尚无任何 owner 绑定时,把它绑给当前 owner。
+   *
+   * 修复的时序竞态:一次性 legacy 迁移(migrateLegacyNativeProviderAuthBindings)在
+   * 首次登录时快照 hasCodexOAuthLoginUnbound(),但 reconcile 硬链往往还没建立 ——
+   * 名额被以 openai:false 永久消费,首个 owner 从此拿不到设计内的自动继承;local 模式
+   * owner 更是从不跑该迁移。结果是 getState 报 authenticated(读 auth.json)而
+   * provider connected=false(查绑定),设置页「已连接」与聊天门禁「无来源」自相矛盾。
+   *
+   * 安全边界不变:已有归属(含别的账号)/ legacyClaimOwner 是别的账号 / durable
+   * disconnect 抑制中,一律不写(见 claimDetectedNativeProviderAuth),换账号继续
+   * fail-closed。写失败只记日志,不让 reconcile 链路抛穿。
+   *
+   * 会话边界防护(review P1):claim 在异步 reconcile 完成后执行,期间可能发生账号
+   * 切换。只在「发起时与完成时是同一个已提交会话(owner + generation 均未变)、且
+   * 没有会话边界切换在途」时才允许写入;否则放弃本轮 —— 新会话自己的下一次
+   * reconcile 会带着自己的快照重试,自愈不丢,只是绝不把 A 时代发起的认领写到 B 名下。
+   */
+  private claimDetectedCodexOAuthBinding(sessionAtStart: ActiveAppSession): void {
+    const session = getActiveAppSession();
+    if (isAppSessionBoundaryPending()) return;
+    if (
+      session.generation !== sessionAtStart.generation ||
+      session.dataOwnerId !== sessionAtStart.dataOwnerId
+    ) {
+      return;
+    }
+    if (this.oauthInvalidatedReason) return;
+    const authPath = path.join(this.codexHome, 'auth.json');
+    if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return;
+    try {
+      if (claimDetectedNativeProviderAuth('openai', () => this.hasCodexOAuthLoginUnbound())) {
+        log.info('codex OAuth credential auto-bound to current owner after reconcile');
+      }
+    } catch (err) {
+      log.warn('codex OAuth binding claim failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -822,6 +879,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return { authenticated: false, errorReason: localState.errorReason ?? 'no_oauth' };
     }
     const localState = await this.readLocalCodexAuthState();
+    // 绑定 gate(与 provider 目录 connected / getAccessToken 同口径,对齐 Anthropic 侧
+    // readClaudeAiOAuth 的读取层校验):auth.json 是与系统 CLI 共享的存储,凭证在、但
+    // openai 未绑定到当前 owner 时,不得以 OAuth 已连接示人 —— 否则设置页显示「已连接」
+    // 而聊天门禁按无来源拦截,状态自相矛盾。上方 reconcile 收口已把「首个 owner 检测到
+    // 本机 CLI 凭证」的合法自动继承补好绑定(claimDetectedCodexOAuthBinding);走到这里
+    // 仍未绑定的只剩换账号等 fail-closed 场景,按无 OAuth 处理,可退网关 key。
+    if (
+      localState.authenticated &&
+      localState.authSource === 'oauth' &&
+      !isNativeProviderAuthBound('openai')
+    ) {
+      if (readClaudeApiKey()) {
+        return { authenticated: true, identity: 'API Key · Cindy AI', authSource: 'api-key' };
+      }
+      return { authenticated: false, errorReason: 'oauth_not_bound' };
+    }
     if (localState.authenticated) {
       // api-key 型 auth.json(可解析但无 access_token)且配了网关 key:fallback spawn
       // 实际会走 gateway key(hasCodexOAuthLogin=false),authSource 补成 'api-key'
@@ -1178,13 +1251,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * are covered by the active Codex login.
    */
   async getAccessToken(): Promise<string | null> {
-    if (!isNativeProviderAuthBound('openai')) return null;
     this.ensureInvalidationMarkerLoaded();
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
     }
     if (this.oauthInvalidatedReason) return null;
+    // 绑定校验放在 reconcile 之后:reconcile 收口会为首个 owner 补绑定
+    // (claimDetectedCodexOAuthBinding),同一次调用内即可生效;校验仍在 token
+    // 读取之前,未绑定(换账号等)保持 fail-closed 返回 null。
     await this.reconcileWithSystemCodex();
+    if (!isNativeProviderAuthBound('openai')) return null;
     const authPath = path.join(this.codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return null;
     try {
@@ -1209,13 +1285,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * user id, not a workspace id, and must not bind reset-credit operations.
    */
   async getAccountId(): Promise<string | null> {
-    if (!isNativeProviderAuthBound('openai')) return null;
     this.ensureInvalidationMarkerLoaded();
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
     }
     if (this.oauthInvalidatedReason) return null;
+    // 同 getAccessToken:绑定校验在 reconcile(含首个 owner 补绑定)之后、读取之前。
     await this.reconcileWithSystemCodex();
+    if (!isNativeProviderAuthBound('openai')) return null;
     const authPath = path.join(this.codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return null;
     return readCodexAccountId(authPath);

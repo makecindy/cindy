@@ -159,6 +159,14 @@ export function ModelPickerSheet({
   const secondaryTranslate = useRef(new Animated.Value(windowHeight)).current;
   const secondaryAnimatingRef = useRef(false);
 
+  // Android adjustResize 会在键盘开合时改变 windowHeight。重置 effect 只应由一次新的
+  // visible 周期触发；否则浮窗打开期间的缩窗会把二级视图、snap 和搜索状态全部重置，
+  // 并与 SheetSurface 对新高度的正常吸附动画叠加。最新高度只供下次打开时初始化位移。
+  const windowHeightRef = useRef(windowHeight);
+  useEffect(() => {
+    windowHeightRef.current = windowHeight;
+  }, [windowHeight]);
+
   // 每次重新打开重置(view 回一级、snap 回 half、清搜索、允许再次自动滚到选中行)。
   useEffect(() => {
     if (!visible) return;
@@ -167,9 +175,9 @@ export function ModelPickerSheet({
     setSecondarySnap('half');
     setQuery('');
     didAutoScrollRef.current = false;
-    secondaryTranslate.setValue(windowHeight);
+    secondaryTranslate.setValue(windowHeightRef.current);
     secondaryAnimatingRef.current = false;
-  }, [visible, secondaryTranslate, windowHeight]);
+  }, [visible, secondaryTranslate]);
 
   const heights = useMemo(
     () => computeContextSheetSnapHeights({ safeAreaTopInset: insets.top, screenHeight: windowHeight }),

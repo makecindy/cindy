@@ -55,6 +55,8 @@ const mocks = vi.hoisted(() => ({
   readLayoutPreferences: vi.fn<() => Map<number, AgentIslandLayoutPreference>>(() => new Map()),
   writeLayoutPreference: vi.fn(),
   tapWindowBroadcast: vi.fn(),
+  showMessageBox: vi.fn(),
+  openExternal: vi.fn(),
 }));
 
 vi.mock('electron', () => {
@@ -67,7 +69,9 @@ vi.mock('electron', () => {
       fromWebContents: mocks.browserWindowFromWebContents,
       getAllWindows: mocks.browserWindowGetAllWindows,
     },
+    dialog: { showMessageBox: mocks.showMessageBox },
     ipcMain: { handle: mocks.ipcHandle },
+    shell: { openExternal: mocks.openExternal },
     screen: {
       getPrimaryDisplay: mocks.getPrimaryDisplay,
       getDisplayMatching: mocks.getDisplayMatching,
@@ -88,6 +92,8 @@ vi.mock('../layoutPreferenceStore.js', () => ({
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
+
+import { resetEpermGuidanceForTest } from '../../file-access/permissions.js';
 
 beforeEach(() => {
   mocks.getSessionRowSnapshot.mockReset();
@@ -117,6 +123,11 @@ beforeEach(() => {
   mocks.readLayoutPreferences.mockReturnValue(new Map());
   mocks.writeLayoutPreference.mockReset();
   mocks.tapWindowBroadcast.mockReset();
+  mocks.showMessageBox.mockReset();
+  mocks.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
+  mocks.openExternal.mockReset();
+  mocks.openExternal.mockResolvedValue(undefined);
+  resetEpermGuidanceForTest();
 });
 
 type NativePublishCall = [
@@ -1431,6 +1442,138 @@ describe('AgentIslandService native publishing', () => {
       deferredReveal: false,
       deferredRevealReason: null,
     });
+  });
+
+  it('shows localized macOS protected-folder guidance once per folder kind', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn(() => true);
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish },
+      });
+      const event: AgentEvent = {
+        type: 'tool_result_full',
+        source: 'claude-code',
+        data: {
+          toolUseId: 'tool-1',
+          fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Desktop/blocked.txt'`,
+        },
+      };
+
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'claude-code' }, event);
+      await vi.waitFor(() => expect(mocks.showMessageBox).toHaveBeenCalledTimes(1));
+      service.handleAgentEvent({ sessionId: 's2', agentKind: 'claude-code' }, event);
+      await Promise.resolve();
+
+      expect(mocks.showMessageBox).toHaveBeenCalledTimes(1);
+      expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'warning',
+        title: 'macOS folder access denied',
+        message: 'Cindy cannot access your Desktop folder',
+        buttons: ['Open System Settings', 'Cancel'],
+      }));
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('opens macOS folder settings from a guidance dialog attached to the main window', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const mainWindow = { isDestroyed: () => false } as unknown as BrowserWindow;
+      mocks.showMessageBox.mockResolvedValue({ response: 0, checkboxChecked: false });
+      const service = new AgentIslandService({
+        getMainWindow: () => mainWindow,
+        nativeHost: { failed: false, publish: vi.fn(() => true) },
+      });
+
+      service.handleAgentEvent(
+        { sessionId: 's1', agentKind: 'claude-code' },
+        {
+          type: 'tool_result_full',
+          source: 'claude-code',
+          data: {
+            toolUseId: 'tool-1',
+            fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Documents/blocked.txt'`,
+            isError: true,
+          },
+        },
+      );
+
+      await vi.waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_DocumentsFolder',
+      ));
+      expect(mocks.showMessageBox).toHaveBeenCalledWith(
+        mainWindow,
+        expect.objectContaining({ message: 'Cindy cannot access your Documents folder' }),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('does not show protected-folder guidance for an explicitly successful tool result', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish: vi.fn(() => true) },
+      });
+
+      service.handleAgentEvent(
+        { sessionId: 's1', agentKind: 'codex' },
+        {
+          type: 'tool_result_full',
+          source: 'codex',
+          data: {
+            toolUseId: 'tool-1',
+            fullText: `Log excerpt: EPERM under '${process.env.HOME}/Desktop/blocked.txt'`,
+            isError: false,
+          },
+        },
+      );
+      await Promise.resolve();
+
+      expect(mocks.showMessageBox).not.toHaveBeenCalled();
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('does not show macOS protected-folder guidance on other platforms', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: { failed: false, publish: vi.fn(() => true) },
+      });
+
+      service.handleAgentEvent(
+        { sessionId: 's1', agentKind: 'claude-code' },
+        {
+          type: 'tool_result_full',
+          source: 'claude-code',
+          data: {
+            toolUseId: 'tool-1',
+            fullText: `EPERM: operation not permitted, open '${process.env.HOME}/Desktop/blocked.txt'`,
+            isError: true,
+          },
+        },
+      );
+      await Promise.resolve();
+
+      expect(mocks.showMessageBox).not.toHaveBeenCalled();
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it('clears unread completion attention when focused windows report visible sessions', async () => {

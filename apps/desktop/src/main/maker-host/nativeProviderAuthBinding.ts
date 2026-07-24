@@ -73,3 +73,32 @@ export function migrateLegacyNativeProviderAuthBindings(
   }
   writeBindings(next);
 }
+
+/**
+ * Claim an auto-detected local CLI credential for the current owner.
+ *
+ * The Codex import channel materializes its credential lazily (the ~/.codex
+ * reconcile hardlink is created after startup), so the one-shot legacy
+ * migration above can consume `legacyClaimOwner` while the credential is not
+ * visible yet — stranding the intended first-owner auto-connect forever, and
+ * local-mode owners never run that migration at all. This repairs exactly
+ * that: only when the slot has no owner, the credential exists, and no OTHER
+ * account won the legacy claim. An existing binding is never overwritten, so
+ * account switches stay fail-closed like migrateLegacyNativeProviderAuthBindings.
+ */
+export function claimDetectedNativeProviderAuth(
+  provider: NativeProviderId,
+  hasCredential: () => boolean,
+): boolean {
+  const owner = getActiveAppSession().dataOwnerId;
+  if (!owner) return false;
+  const bindings = readBindings();
+  // Key-presence, not truthiness: a corrupted/empty-string slot must count as
+  // "claimed by unknown" and fail closed, never as re-claimable (matches
+  // unbindNativeProviderAuth's `in` pattern).
+  if (provider in bindings) return false;
+  if ('legacyClaimOwner' in bindings && bindings.legacyClaimOwner !== owner) return false;
+  if (!hasCredential()) return false;
+  writeBindings({ ...bindings, [provider]: owner });
+  return true;
+}

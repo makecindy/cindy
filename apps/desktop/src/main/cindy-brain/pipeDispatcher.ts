@@ -9,6 +9,8 @@
  *   - 资格审(装没装 / 醒没醒 / 有没有这个工具 / 熔断没)→ 结构化错误码;
  *   - 按需拉起沙箱(spawn 幂等);
  *   - callId 配对 + 超时掐断(过期卷子作废丢弃);
+ *   - 长任务续命:主机代办在途 hold(cindySlot 接线)与插件 tool-progress
+ *     心跳都能把超时窗口续到 GHOST_PIPE_CALL_MAX_TOTAL_MS 天花板内;
  *   - 交卷验身:pending 记录派给了谁,别的意识交不了这份卷(不信自报之外
  *     的第二道:连"替别人交卷"的通道都没有);
  *   - 崩溃/熄灯时把在途调用全部按 GHOST_CRASHED/GHOST_ASLEEP 收掉。
@@ -23,7 +25,7 @@ import type {
   GhostToolCallResult,
   InstalledGhost,
 } from '../../shared/ghost.js';
-import { isGhostPluginErrorCode } from '../../shared/ghost.js';
+import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
 import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 
 export interface PipeDispatcherDeps {
@@ -47,8 +49,15 @@ export interface PipeDispatcherDeps {
 
 interface PendingCall {
   ghostId: string;
+  tool: string;
   resolve: (result: GhostToolCallResult) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  /** 派发时刻(续命天花板从这里起算)。 */
+  startedAt: number;
+  /** 当前生效的超时时刻(hold / 心跳只延不缩,release 才收)。 */
+  deadlineAt: number;
+  /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
+  holds: number;
 }
 
 /**
@@ -57,8 +66,13 @@ interface PendingCall {
  * + 余量——否则意识合法地等一单大上传时,管子先到点向 agent 报 TIMEOUT,
  * 而上传仍在后台继续并可能成功,用户被误导重试造成二次全量上传
  * (2026-07-13 xd-pages 部署迁移时定为 330s;原 180s)。
+ * 分钟级以上的长任务不再靠调大本值硬扛:主机代办在途自动续命、插件可发
+ * tool-progress 心跳续命,天花板见 GHOST_PIPE_CALL_MAX_TOTAL_MS。
  */
 const DEFAULT_TIMEOUT_MS = 330_000;
+
+/** 代办收工(release)后留给意识做后处理与交卷的余量窗口。 */
+const HOLD_SETTLE_GRACE_MS = 60_000;
 
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
@@ -115,20 +129,122 @@ export class GhostPipeDispatcher {
     const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args };
 
     return new Promise<GhostToolCallResult>((resolve) => {
-      const setT = this.deps.setTimeoutFn ?? setTimeout;
-      const timer = setT(() => {
-        if (this.pending.delete(callId)) {
-          this.deps.log?.warn('ghost tool call timed out', { ghostId, tool, callId });
-          resolve({ ok: false, errorCode: 'TIMEOUT', message: `工具 ${tool} 执行超时` });
-        }
-      }, this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      this.pending.set(callId, { ghostId, resolve, timer });
+      const startedAt = Date.now();
+      const entry: PendingCall = {
+        ghostId,
+        tool,
+        resolve,
+        timer: undefined,
+        startedAt,
+        deadlineAt: startedAt + this.baseTimeoutMs(),
+        holds: 0,
+      };
+      this.pending.set(callId, entry);
+      this.armTimer(callId, entry);
 
       if (!this.deps.sendToGhost(ghostId, payload)) {
         // 逻辑页不在线(拉起后瞬时死亡等):立即收卷。
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
       }
     });
+  }
+
+  /** 基础超时档(注入值钳到天花板内,保证初始 deadline 不越过绝对上限)。 */
+  private baseTimeoutMs(): number {
+    return Math.min(this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS, GHOST_PIPE_CALL_MAX_TOTAL_MS);
+  }
+
+  /** 按 entry.deadlineAt 重挂超时闹钟(旧闹钟一并清掉)。 */
+  private armTimer(callId: string, entry: PendingCall): void {
+    (this.deps.clearTimeoutFn ?? clearTimeout)(entry.timer);
+    const setT = this.deps.setTimeoutFn ?? setTimeout;
+    entry.timer = setT(() => {
+      if (this.pending.delete(callId)) {
+        this.deps.log?.warn('ghost tool call timed out', {
+          ghostId: entry.ghostId,
+          tool: entry.tool,
+          callId,
+          totalMs: Date.now() - entry.startedAt,
+        });
+        entry.resolve({
+          ok: false,
+          errorCode: 'TIMEOUT',
+          message: `工具 ${entry.tool} 执行超时(任务可能仍在后台继续,稍后重试或许能直接取回已完成的结果)`,
+        });
+      }
+    }, Math.max(0, entry.deadlineAt - Date.now()));
+  }
+
+  /**
+   * 把在途卷的超时时刻至少延到 targetAt:只延不缩,且不超过派发起算的
+   * GHOST_PIPE_CALL_MAX_TOTAL_MS 天花板(到顶后不再续,卷到点照常作废)。
+   */
+  private extendDeadline(callId: string, entry: PendingCall, targetAt: number): void {
+    const cap = entry.startedAt + GHOST_PIPE_CALL_MAX_TOTAL_MS;
+    const next = Math.min(Math.max(targetAt, entry.deadlineAt), cap);
+    // <=:双保险守住"只延不缩"——即使 deadline 因注入值异常已在 cap 之上,
+    // 也绝不反向收短(baseTimeoutMs 的钳制让这理论上不会发生)。
+    if (next <= entry.deadlineAt) return;
+    entry.deadlineAt = next;
+    this.armTimer(callId, entry);
+  }
+
+  /**
+   * 代办 hold:主机自己正为该卷干活(cindy 槽署名代办)时替它续命。
+   * ghostId = 主机反查的代办发起方身份——与交卷/心跳同纪律配对校验,
+   * 沙箱填错/冒用别人在途的 callId 不能续命他人的卷、也不污染其计数。
+   * budgetMs = 这单代办自身的预算(如视频 expected×3);窗口延到
+   * now + budget + 交卷余量。查无此卷/不是它的卷,静默忽略。
+   *
+   * 已知边界:callId 归因是插件自报的(记账同契约),同一意识自己的两个
+   * 并发调用互填 callId 主机无从分辨(沙箱内部并发,主机没有"正在处理哪
+   * 份卷"的会话状态)。错配只伤它自己:错署名的调用不获续命照常超时,
+   * 被错挂的调用最多被延长;release 收窗下限是基础窗口(见 releaseCall),
+   * 不会把任何卷收到无续命机制时的行为之下。
+   */
+  holdCall(ghostId: string, callId: string, budgetMs: number): void {
+    const entry = this.pending.get(callId);
+    if (!entry || entry.ghostId !== ghostId) return;
+    entry.holds += 1;
+    this.extendDeadline(callId, entry, Date.now() + budgetMs + HOLD_SETTLE_GRACE_MS);
+  }
+
+  /**
+   * 代办收工:hold 计数归零时把窗口收回(不短于插件本来的基础窗口,并留
+   * 交卷余量)——不让 16 分钟的 hold 在任务 3 分钟完成后继续吊着失败面。
+   * 验身同 holdCall(冒名 release 不能提前收短别人的窗口)。
+   */
+  releaseCall(ghostId: string, callId: string): void {
+    const entry = this.pending.get(callId);
+    if (!entry || entry.ghostId !== ghostId) return;
+    entry.holds = Math.max(0, entry.holds - 1);
+    if (entry.holds > 0) return;
+    const target = Math.max(entry.startedAt + this.baseTimeoutMs(), Date.now() + HOLD_SETTLE_GRACE_MS);
+    if (target < entry.deadlineAt) {
+      entry.deadlineAt = target;
+      this.armTimer(callId, entry);
+    }
+  }
+
+  /**
+   * 心跳续命(ghost-pipe:send 的 tool-progress 分支)。验身同交卷:callId
+   * 不是派给你的即拒(拒因只进日志,不给沙箱探测面)。每次心跳把窗口
+   * 重新续满一个基础档;天花板由 extendDeadline 统一钳制。
+   */
+  handleToolProgress(senderGhostId: string, payload: unknown): { accepted: boolean; reason?: string } {
+    const p = payload as { callId?: unknown };
+    if (typeof p?.callId !== 'string') {
+      return { accepted: false, reason: 'tool-progress 载荷形状不合法' };
+    }
+    const entry = this.pending.get(p.callId);
+    if (!entry) {
+      return { accepted: false, reason: '卷子不存在或已过期' };
+    }
+    if (entry.ghostId !== senderGhostId) {
+      return { accepted: false, reason: '不是你的卷子' };
+    }
+    this.extendDeadline(p.callId, entry, Date.now() + this.baseTimeoutMs());
+    return { accepted: true };
   }
 
   /**

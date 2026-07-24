@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
+import { ERROR_REASON_I18N_KEYS } from '@/components/chat/ErrorMessageCard';
 
 const SESSION_ID = 's-err';
 
@@ -29,6 +30,12 @@ function errorRow(clientId: string, content: unknown): Message {
 }
 
 describe('mapServerMessages — persisted terminal error rows', () => {
+  it('maps Codex Auto reviewer failures to the stable localized reason key', () => {
+    expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
+      'logic.errors.codexAutoReviewUnavailable',
+    );
+  });
+
   it('restores message text and errorReason from structured content', () => {
     const mapped = makerChatStore.__mapServerMessagesForTest([
       errorRow('e1', {

@@ -47,7 +47,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { AddTabDropdown } from './AddTabDropdown';
 import { getTabKind, hydrateTabState } from './registry';
-import type { TabKindId, TabState } from './types';
+import type { BuiltinTabKindId, TabKindId, TabState } from './types';
 
 interface TabBarProps {
   tabs: TabState[];
@@ -114,7 +114,7 @@ interface TabStripProps {
   addButtonClassName?: string;
 }
 
-const KIND_ICON: Record<TabKindId, LucideIcon> = {
+const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'file-browser': FolderTree,
   'web-browser': Globe,
   terminal: Terminal,
@@ -122,7 +122,7 @@ const KIND_ICON: Record<TabKindId, LucideIcon> = {
   'orca-workers': UsersRound,
 };
 
-const KIND_LABEL_KEY: Record<TabKindId, string> = {
+const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'file-browser': 'rightSidebar.tabs.kinds.fileBrowser',
   'web-browser': 'rightSidebar.tabs.kinds.browser',
   terminal: 'rightSidebar.tabs.kinds.terminal',
@@ -143,6 +143,9 @@ function iconForTabKind(kind: TabKindId): LucideIcon {
 }
 
 function labelKeyForTabKind(kind: TabKindId): string {
+  // 插件页签的意识被停用/卸下(plugin 已注销)时,pill 兜底显示「插件面板」
+  // 而非「未知标签页」——kind 前缀本身就能识别它是谁的地盘。
+  if (kind.startsWith('ghost:')) return 'rightSidebar.tabs.kinds.ghostPanel';
   return (
     (KIND_LABEL_KEY as Partial<Record<string, string>>)[kind] ??
     'rightSidebar.tabs.kinds.unknown'

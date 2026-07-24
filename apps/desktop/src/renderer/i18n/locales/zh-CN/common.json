@@ -1,7 +1,4 @@
 {
-  "contentModeration": {
-    "blocked": "抱歉，当前问题暂时无法为您解答，请调整提问表述。"
-  },
   "ipcError": {
     "SESSION_RUNNING": "当前会话正在执行任务，请稍后再试。",
     "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（会话仍使用原来源）。等其他任务结束后再试。"
@@ -1566,8 +1563,7 @@
       "save": "保存",
       "overLimit": " — 已超出长度限制",
       "toast": {
-        "saved": "自定义指令已保存",
-        "saveFailed": "自定义指令保存失败"
+        "saved": "自定义指令已保存"
       }
     },
     "chipMetrics": {
@@ -2307,6 +2303,7 @@
         "command": "聊天指令 ${{command}}",
         "panelRight": "面板「{{title}}」· 停靠主聊天区右侧",
         "panelLeft": "面板「{{title}}」· 停靠主聊天区左侧",
+        "panelTab": "面板「{{title}}」· 右侧栏页签",
         "code": "可执行代码",
         "codeDetail": "在独立沙箱中运行,无法访问你的文件与网络。",
         "resident": "常驻运行(生效后即启动,不调用也保持后台进程)",
@@ -3034,7 +3031,8 @@
       "menu": {
         "addLabel": "添加标签",
         "comingSoon": "即将支持",
-        "alreadyOpen": "已打开"
+        "alreadyOpen": "已打开",
+        "pluginGroup": "插件"
       },
       "kinds": {
         "fileBrowser": "文件浏览器",
@@ -3042,7 +3040,8 @@
         "terminal": "终端",
         "review": "审查",
         "collaboration": "协同",
-        "unknown": "未知标签页"
+        "unknown": "未知标签页",
+        "ghostPanel": "插件面板"
       },
       "controls": {
         "maximizeAria": "最大化侧栏",
@@ -3067,6 +3066,9 @@
         "browserSub": "Browser",
         "openTerminal": "打开终端",
         "terminalSub": "Terminal",
+        "pluginSub": "Plugin",
+        "pluginGroup": "插件面板",
+        "pluginGroupSub": "{{count}} 个插件",
         "addMoreHint": "可通过顶部 + 按钮选择更多面板类型"
       },
       "placeholderHint": "{{kind}} — 内容将在后续阶段加入"
@@ -6521,7 +6523,8 @@
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
-      "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。"
+      "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
+      "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID 和 App Secret 都需要填写",
@@ -6843,6 +6846,20 @@
     "note": {
       "codexStateSkipped": "本机尚未初始化 Codex 环境，会话状态未完全恢复；先运行一次 Codex 会话后即可正常续聊。",
       "workdirKeyInexact": "所选目录路径过长，无法放置历史转录，已降级为仅聊天记录。"
+    }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS 文件夹访问被拒绝",
+      "message": "Cindy 无法访问你的“{{folder}}”文件夹",
+      "detail": "macOS 拒绝了访问。请打开“系统设置”授予权限，然后重新运行 Agent 命令。",
+      "openSystemSettings": "打开系统设置",
+      "cancel": "取消",
+      "folderNames": {
+        "desktop": "桌面",
+        "documents": "文稿",
+        "downloads": "下载"
+      }
     }
   }
 }

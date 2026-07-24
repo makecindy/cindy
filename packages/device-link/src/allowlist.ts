@@ -388,8 +388,6 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:input:projection',
   'maker:interaction-request',
   'maker:interaction-dismissed',
-  'content-moderation:input-blocked',
-  'content-moderation:output-blocked',
   // Claude Auto classifier 故障后降级到 ask;payload 带 sessionId,控制端显示同款提示。
   'maker:auto-permission:fallback',
   // 被控端 active-catalog revision 变化：控制端按 deviceId 驱逐并重拉 provider 目录。

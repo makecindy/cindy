@@ -150,12 +150,6 @@ import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
-import { moderateProfileUpdate } from './content-moderation/profile.js';
-import {
-  moderateUserPrompt,
-  validateUserPromptReviewValue,
-} from './content-moderation/userPrompt.js';
-import { cancelAllReleasedOutputs } from './content-moderation/outputHub.js';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import { installWebviewHardener } from './webview-security';
@@ -2298,7 +2292,6 @@ const createWindow = () => {
 
 let disposeSkillhubAutoSyncAuthListener: (() => void) | null = null;
 let disposeProviderAccessAuthListener: (() => void) | null = null;
-let disposeContentModerationAuthListener: (() => void) | null = null;
 
 const registerIpcHandlers = () => {
   // Find the primary app window, skipping transient utility BrowserWindows like
@@ -3348,12 +3341,6 @@ const registerIpcHandlers = () => {
     accountDeletionHandlers.consumeRestoredNotice(),
   );
 
-  ipcMain.handle('content-moderation:review-user-prompt', async (event, value: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    validateUserPromptReviewValue(value);
-    return moderateUserPrompt(value);
-  });
-
   // ── Profile 编辑 IPC(设置 → 用户卡片编辑;业务体在 profileEdit.ts,
   //    资料直写 auth-server,头像经 oss-server 预签名直传) ──
 
@@ -3383,7 +3370,6 @@ const registerIpcHandlers = () => {
       }
       return result;
     },
-    moderateProfile: (input) => moderateProfileUpdate(input),
     patchProfile: (patch) => authManager.updateServerProfile(patch),
     logWarn: (message, err) => profileEditLog.warn(message, err),
   };
@@ -4047,13 +4033,6 @@ const registerIpcHandlers = () => {
   });
   disposeProviderAccessAuthListener = authManager.onAuthStateChange(() => {
     refreshProviderAccessAfterAuthChange();
-  });
-  let moderationAuthEpoch = authManager.getAuthIdentityEpoch();
-  disposeContentModerationAuthListener = authManager.onAuthStateChange(() => {
-    const nextEpoch = authManager.getAuthIdentityEpoch();
-    if (nextEpoch === moderationAuthEpoch) return;
-    moderationAuthEpoch = nextEpoch;
-    cancelAllReleasedOutputs();
   });
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
@@ -5296,6 +5275,22 @@ app.on('ready', async () => {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      // Hook ingress has the same hard dependency on the current owner's DB as
+      // the personal IM channel. Activate it from this authoritative Main-side
+      // readiness point instead of relying only on the renderer's later
+      // fire-and-forget app:ready-for-bot signal. That signal can be lost during
+      // cold-start auto-login or an owner remount, leaving an enabled Hook
+      // permanently disconnected until the user toggles it.
+      try {
+        startHookControlAccount();
+      } catch (err) {
+        // Hook is an optional account integration. A damaged config or endpoint
+        // must not roll back an otherwise healthy owner DB; the renderer's
+        // compatibility signal below provides a later retry.
+        dbClientLog.warn('hook-control activation after owner DB ready failed (non-fatal)', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       attemptStartScheduler();
       attemptStartEmbeddingHost();
       // 旧「资料本地覆写」方案退役(2026-07)的一次性清理:清当前账号名下的
@@ -5435,14 +5430,12 @@ app.on('ready', async () => {
   im.registerIpc();
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
-  // handler。bot 的 WS 长连接此处不启动 —— 由 renderer 在用户登录 + localDb 就绪
-  // 后通过 'app:ready-for-bot' IPC 触发(见下方 handler)。
+  // handler。FeishuBot 的 WS 长连接此处不启动 —— 由 renderer 在用户登录 +
+  // localDb 就绪后通过 'app:ready-for-bot' IPC 触发(见下方 handler)。
   startImOrchestrators();
-  // Renderer → main 的 "应用真正就绪" 信号。LocalDbGate 在 localDb.ensureReady
-  // 成功之后调一次。在此之前 bot 不上线 —— 否则会出现"bot 已上线但 localDb 未
-  // ready, 用户回消息直接 500"的 race(2026-05-07 王韬反馈)。
-  // 多次调用是幂等的(startImConnection 内部 connectionStarted 守卫),
-  // renderer remount / 切账号都不会重复连。
+  // Renderer → main 的 "应用真正就绪" 兼容信号。LocalDbGate 在
+  // localDb.ensureReady 成功之后调一次。Hook 已在 localDb onReady 的 Main
+  // 权威时点激活，这里保留幂等兜底；FeishuBot 仍由本信号启动。
   ipcMain.handle('app:ready-for-bot', (event) => {
     assertTrustedAppRendererEvent(event);
     startHookControlAccount();
@@ -5543,8 +5536,6 @@ onQuit(
   () => {
     disposeProviderAccessAuthListener?.();
     disposeProviderAccessAuthListener = null;
-    disposeContentModerationAuthListener?.();
-    disposeContentModerationAuthListener = null;
   },
   'sync',
 );

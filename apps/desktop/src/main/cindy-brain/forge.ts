@@ -677,7 +677,10 @@ my-ghost/
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
   "panel": { "title": "面板标题", "html": "panel.html", "position": "right",
              "minWidth": 240, "defaultFraction": 0.24 },
-  // panel.position:相对主聊天窗的停靠位,right(缺省)/ left;top/bottom 暂未支持(排期中)
+  // panel.position:面板显示形态。right(缺省)/ left = 停靠主聊天窗两侧;
+  // "tab" = 右侧栏页签(与文件/审查/终端同一容器,每会话至多一个,用户从
+  // 空态列表或「+」菜单打开;此形态没有拖缝宽度,声明 minWidth /
+  // defaultFraction 会被拒装,请移除)。top/bottom 暂未支持(排期中)
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时必填——凭证收单界面,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
@@ -888,7 +891,8 @@ cindy.onHostMessage(function (msg) {
   // 可经 cindy-ghost://<id>/media/<指纹> 上墙)。工具要吃用户图就读它。
 });
 
-// 交卷(330 秒内必须,超时作废;够覆盖一单大文件上传/取件):
+// 交卷(默认 330 秒内,超时作废;够覆盖一单大文件上传/取件。长任务可续命,
+// 见下方"长任务续命"):
 cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
   xdt_image_urls: ["cindy-media://…"],  // 顶层带这个字段 → 聊天气泡直接渲染图卡
   // xdt_video_urls 同理渲染视频卡。音频用 xdt_audio_tracks(对象数组,逐轨):
@@ -931,6 +935,15 @@ cindy.send({
   message: '删除需要确认，请传 confirm:true 后重试',
 });
 
+// 长任务续命(超时窗口默认 330s,从派发起算绝对上限 30 分钟):
+// - 经 cindy-request 请主机代办且带 callId 的署名单(出图/视频)在途时,
+//   主机**自动**替这份卷续命,你不用做任何事;
+// - 自己经 network 槽轮询外部长任务时,期间定期(建议 ≤60s 一次)发心跳:
+//   cindy.send({ type: 'tool-progress', callId: msg.callId });
+//   每次心跳把窗口重新续满一个 330s 档;callId 不是派给你的会被静默丢弃。
+// - 预计超过 30 分钟天花板的超长任务,不要吊着一次 tool-call 等:视频代办用
+//   mode:'submit' 异步提交(见下),自己的外部任务拆成"提交 + 查询"两个工具。
+
 // Cindy 代办(需声明 cindy 槽 + 能力详单;主机出图、落仓、记账,你只拿到指纹字符串):
 // 由 tool-call 触发的代办**务必带上收到的 callId**(归因号:让用户在日志/账单里
 // 对上"哪次调用花的钱");面板交互等自发代办可不带。
@@ -944,9 +957,20 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 // 改图(需详单含 "edit";源图必须是本意识名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
-// 视频(需详单 video 类目;分钟级长任务,返回形态同上,url 是 .mp4):
+// 视频(需详单 video 类目;分钟级长任务,返回形态同上,url 是 .mp4。同步等待
+// 期间主机自动替你的 tool-call 续命,分钟级任务放心 await):
 //   { kind: 'gen_video', prompt }                       // 文生视频
 //   { kind: 'edit_video', prompt, hashes: ['<指纹>'] }  // 参考图生视频(1–2 张)
+// 视频异步模式(可能超过 30 分钟续命天花板,或不想吊着 tool-call 等时):
+//   加 mode:'submit' → 受理后立即返回 { ok:true, jobId, status:'running',
+//   expectedSeconds }(资格审/源图归属仍同步校验,拒绝立即可见),生成在
+//   后台继续;用 { kind:'query_job', jobId } 轮询:进行中 { ok:true,
+//   status:'running', elapsedSeconds },完成 { ok:true, status:'done', url,
+//   hash, ext, model, modelLabel }(取件字段与同步返回同形),失败
+//   { ok:false, message }。完成结果保留 30 分钟(每意识最多缓存 16 单完成
+//   记录,超出淘汰最旧),过期或应用重启后查无此单(按可重新提交处理);
+//   后台在途上限 2 单。建议把插件工具拆成"提交生成 + 查询结果"两个,
+//   让 AI 自己掌握轮询节奏。
 // 选型两个可选参数,规则:
 //   tier:'draft'(快省草稿)| 'standard'(默认)| 'best'(最好)——只表达档位
 //     意图,具体用哪个模型由主机决定。这是你唯一该主动用的选型参数。
@@ -1560,7 +1584,8 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 
 其它硬边界:每意识同时在途 4 个请求;媒体取件/上传共用全局串行闸,同时只
 处理一单(忙时返回结构化"正忙",稍后重试即可);重定向最多 3 跳且逐跳重验
-白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做。
+白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
+tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
 
 ## 4.8 设置自绘(settingsHtml)+ 自定义参数存取(/kv)
 
@@ -2034,6 +2059,12 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
 
 ## 5. 面板(panel.html/css/js)
 
+- 显示形态由 \`panel.position\` 决定:\`right\`(缺省)/ \`left\` = 停靠主聊天窗两侧
+  的常驻面板;\`"tab"\` = 右侧栏页签——与文件/审查/终端同一容器,每会话至多
+  一个页签,由用户从右侧栏空态列表或「+」菜单打开(不随装入自动弹出)。页签
+  形态没有拖缝宽度语义,声明 \`minWidth\` / \`defaultFraction\` 会被拒装。两种形态
+  的面板代码完全一样(同一 panel.html,供片/主题/媒体规则不变),只是宿主容器
+  不同;页签形态请把界面做成自适应宽度;
 - 与电子脑同源,用 \`BroadcastChannel('<自定名>')\` 通信(电子脑发,面板收);
 - 取自己的媒体:\`cindy-ghost://<id>/media/<指纹><后缀>\`(主机查账验归属,别人的图 404);
 - 重启回放:\`fetch('cindy-ghost://<id>/gallery')\` 返回本意识作品清单 \`[{src, caption}]\`;

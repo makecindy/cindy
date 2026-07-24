@@ -109,8 +109,6 @@ export type IpcErrorCode =
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
-  | 'CONTENT_MODERATION_REJECTED' // 内容审核明确拒绝
-  | 'CONTENT_MODERATION_CANCELLED' // 审核期间登录身份切换,结果作废
   // 会话分享(.cshare 导出/导入)
   | 'SHARE_FILE_INVALID' // 不是 .cshare / 头或 manifest 损坏 / payload 不是 zip
   | 'SHARE_PASSWORD_REQUIRED' // 文件已加密但未提供密码
@@ -209,8 +207,6 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'MODEL_ACCESS_UNSUPPORTED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
-  'CONTENT_MODERATION_REJECTED',
-  'CONTENT_MODERATION_CANCELLED',
   'SHARE_FILE_INVALID',
   'SHARE_PASSWORD_REQUIRED',
   'SHARE_PASSWORD_WRONG',

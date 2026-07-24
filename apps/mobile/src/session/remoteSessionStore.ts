@@ -19,20 +19,9 @@ import {
   createSessionWriteQueue,
 } from '@/session/swipeRowRegistry';
 import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobileSessionMessageCache';
-import {
-  readComposerDraftSync,
-  saveComposerDraft,
-} from '@/session/composerDraftStore';
-import { queueComposerAttachment } from '@/session/composerAttachmentInbox';
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
-import type {
-  InputProjection,
-  PendingInteraction,
-  RemoteMessage,
-  RemoteSerializedAttachment,
-  RemoteSession,
-} from '@/session/types';
+import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 interface DeviceShard {
   deviceId: string;
@@ -73,22 +62,6 @@ interface LivePlanSnapshot {
   persistId?: string;
   toolUseId: string;
 }
-
-export type ContentModerationNotice =
-  | {
-      kind: 'output';
-      sessionId: string;
-      turnId: string;
-      i18nKey: 'contentModeration.blocked';
-      revision: number;
-    }
-  | {
-      kind: 'input';
-      sessionId: string;
-      clientId: string;
-      reason: 'rejected' | 'cancelled';
-      revision: number;
-    };
 
 const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
   isRunning: false,
@@ -177,9 +150,6 @@ const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
 let mergedSessions: RemoteSession[] = [];
 let messageVersion = 0;
 let storeVersion = 0;
-let viewedSessionId: string | null = null;
-let contentModerationNotice: ContentModerationNotice | null = null;
-let contentModerationNoticeRevision = 0;
 // 当前权威设备列表(由首页从设备列表 API reconcile 后注入)。每次重算会话时基于它 + 当前 shards(stale 侧)
 // 重建身份索引,用于给会话算展示用 canonicalDeviceId(把 re-link 后残留 stale shard 认领回当前设备);
 // 为 null 时不归一,安全退化。
@@ -855,24 +825,6 @@ function recallParkedTaskUpdates(
 }
 
 export const remoteSessionStore = {
-  setViewedSessionId(sessionId: string | null): void {
-    viewedSessionId = sessionId;
-    if (contentModerationNotice && contentModerationNotice.sessionId !== sessionId) {
-      contentModerationNotice = null;
-      emit();
-    }
-  },
-
-  getContentModerationNotice(sessionId: string): ContentModerationNotice | null {
-    return contentModerationNotice?.sessionId === sessionId ? contentModerationNotice : null;
-  },
-
-  consumeContentModerationNotice(revision: number): void {
-    if (contentModerationNotice?.revision !== revision) return;
-    contentModerationNotice = null;
-    emit();
-  },
-
   // 注入当前权威设备列表(首页从 /api/device-link/devices reconcile 后调用),用于设备身份归一化。
   // 仅在身份索引实际变化时重算,避免每次设备列表引用变动都刷新全部会话。
   setDeviceIdentity(devices: readonly { deviceId: string; name: string }[]): void {
@@ -1475,60 +1427,6 @@ export const remoteSessionStore = {
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
-    if (channel === 'content-moderation:input-blocked') {
-      if (!isRecord(payload)) return;
-      const sessionId = readString(payload, 'sessionId');
-      const clientId = readString(payload, 'clientId');
-      const text = typeof payload.text === 'string' ? payload.text : null;
-      const reason = payload.reason === 'rejected' || payload.reason === 'cancelled'
-        ? payload.reason
-        : null;
-      if (!sessionId || !clientId || text === null || !reason) return;
-
-      this.removeMessages(sessionId, [clientId], deviceId);
-      const existingDraft = readComposerDraftSync(sessionId);
-      const restoredDraft = existingDraft
-        ? [text, existingDraft].filter((part) => part.length > 0).join('\n\n')
-        : text;
-      if (restoredDraft.length > 0) saveComposerDraft(sessionId, restoredDraft);
-      for (const file of normalizeModerationInputFiles(payload.files)) {
-        queueComposerAttachment(sessionId, file);
-      }
-
-      if (sessionId === viewedSessionId) {
-        contentModerationNotice = {
-          kind: 'input',
-          sessionId,
-          clientId,
-          reason,
-          revision: ++contentModerationNoticeRevision,
-        };
-        emit();
-      }
-      return;
-    }
-    if (channel === 'content-moderation:output-blocked') {
-      if (!isRecord(payload)) return;
-      const sessionId = readString(payload, 'sessionId');
-      const turnId = readString(payload, 'turnId');
-      if (
-        sessionId
-        && turnId
-        && sessionId === viewedSessionId
-        && payload.kind === 'blocked'
-        && payload.i18nKey === 'contentModeration.blocked'
-      ) {
-        contentModerationNotice = {
-          kind: 'output',
-          sessionId,
-          turnId,
-          i18nKey: 'contentModeration.blocked',
-          revision: ++contentModerationNoticeRevision,
-        };
-        emit();
-      }
-      return;
-    }
     if (channel === SESSION_ACTIVITY_CHANNEL) {
       this.applySessionActivity(deviceId, payload);
       return;
@@ -1999,8 +1897,6 @@ export const remoteSessionStore = {
     reseedHandlers.clear();
     mergedSessions = [];
     deviceList = null;
-    viewedSessionId = null;
-    contentModerationNotice = null;
     bumpMessageVersion();
     emit();
   },
@@ -2284,53 +2180,8 @@ function readNumber(value: unknown, key: string): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }
 
-function normalizeModerationInputFiles(value: unknown): RemoteSerializedAttachment[] {
-  if (!Array.isArray(value)) return [];
-  const categories = new Set(['image', 'pdf', 'text', 'office', 'file']);
-  const normalized: RemoteSerializedAttachment[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const id = readString(item, 'id');
-    const name = readString(item, 'name');
-    const path = readString(item, 'path');
-    const ext = typeof item.ext === 'string' ? item.ext : null;
-    const mimeType = typeof item.mimeType === 'string' ? item.mimeType : null;
-    const size = readNumber(item, 'size');
-    const category = typeof item.category === 'string' && categories.has(item.category)
-      ? item.category as RemoteSerializedAttachment['category']
-      : null;
-    if (!id || !name || !path || ext === null || mimeType === null || size === null || !category) {
-      continue;
-    }
-    if (path.startsWith('clipboard://')) continue;
-    normalized.push({
-      id,
-      name,
-      path,
-      ext,
-      size,
-      category,
-      mimeType,
-      ...(typeof item.url === 'string' ? { url: item.url } : {}),
-      ...(typeof item.originalName === 'string' ? { originalName: item.originalName } : {}),
-      ...(typeof item.base64 === 'string' ? { base64: item.base64 } : {}),
-      ...(typeof item.textContent === 'string' ? { textContent: item.textContent } : {}),
-      ...(typeof item.truncated === 'boolean' ? { truncated: item.truncated } : {}),
-      ...(typeof item.annotated === 'boolean' ? { annotated: item.annotated } : {}),
-    });
-  }
-  return normalized;
-}
-
 export function useRemoteSessions(): RemoteSession[] {
   return useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getSessions);
-}
-
-export function useContentModerationNotice(sessionId: string): ContentModerationNotice | null {
-  return useSyncExternalStore(
-    remoteSessionStore.subscribe,
-    () => remoteSessionStore.getContentModerationNotice(sessionId),
-  );
 }
 
 /** Subscribe to one session's message mirror without triggering cache hydration side effects. */

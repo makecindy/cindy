@@ -121,7 +121,6 @@ const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:input:projection',
   'maker:interaction-request',
   'maker:interaction-dismissed',
-  'content-moderation:output-blocked',
   'local-db:messages:created',
   'usage:message-turn-cost',
   'maker:session-model-pref:changed',
@@ -168,11 +167,7 @@ import {
   parseUserContent,
   stringifyUserContent,
 } from '@/lib/imageRef';
-import {
-  getDraft as getComposerDraft,
-  saveDraft as saveComposerDraft,
-  plainTextToTiptapDoc,
-} from '@/lib/composerDraftStore';
+import { saveDraft as saveComposerDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
 import {
   canStartComposerSteer,
   canStartQueuedSteer,
@@ -2327,7 +2322,9 @@ export function handleStreamEvent(
             ? i18n.t('logic.errors.turnFailed')
             : reason === 'silent-stop-exhausted'
               ? i18n.t('logic.errors.silentStopExhausted')
-              : decodeRemoteErrorMessage(safeErrMsg);
+              : reason === 'codex-auto-review-unavailable'
+                ? i18n.t('logic.errors.codexAutoReviewUnavailable')
+                : decodeRemoteErrorMessage(safeErrMsg);
       const isTerminalError = isTerminalErrorData(event.data);
       if (!isTerminalError) {
         return {
@@ -3623,9 +3620,6 @@ function initGlobalListeners(): void {
         case 'maker:interaction-dismissed':
           handleInteractionDismissedRaw(push.payload);
           break;
-        case 'content-moderation:output-blocked':
-          handleContentModerationOutputBlocked(push.payload);
-          break;
         case 'local-db:messages:created':
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload);
@@ -3870,78 +3864,6 @@ function initGlobalListeners(): void {
       });
     },
     'ghosts-user-message-blocked',
-  );
-
-  bindIpc(
-    (cb) => window.electronAPI.contentModeration?.onInputBlocked?.(cb),
-    (raw: unknown) => {
-      const payload = raw as {
-        sessionId?: string;
-        clientId?: string;
-        text?: string;
-        files?: SerializedAttachedFile[];
-        reason?: 'rejected' | 'cancelled';
-      } | null;
-      if (!payload?.sessionId || !payload.clientId || typeof payload.text !== 'string') return;
-
-      setState(payload.sessionId, (state) => ({
-        ...state,
-        messages: state.messages.filter(
-          (message) => !(message.clientId === payload.clientId && message.isPendingPersist),
-        ),
-      }));
-
-      const existing = getComposerDraft(payload.sessionId);
-      const restoredText = plainTextToTiptapDoc(payload.text);
-      const text = existing?.text?.content?.length
-        ? {
-            type: 'doc',
-            content: [
-              ...(restoredText.content ?? []),
-              { type: 'paragraph' },
-              ...existing.text.content,
-            ],
-          }
-        : restoredText;
-
-      const restoredFiles = (payload.files ?? []) as AttachedFile[];
-      const seen = new Set<string>();
-      const attachments = [...restoredFiles, ...(existing?.attachments ?? [])].filter((file) => {
-        const key = file.id || file.url || file.path;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      saveComposerDraft(payload.sessionId, { text, attachments });
-      if (payload.reason === 'rejected') {
-        toast.error(i18n.t('contentModeration.blocked'));
-      }
-    },
-    'content-moderation-input-blocked',
-  );
-
-  const handleContentModerationOutputBlocked = (raw: unknown): void => {
-    const payload = raw as {
-      sessionId?: string;
-      kind?: string;
-      i18nKey?: string;
-    } | null;
-    if (
-      !payload?.sessionId
-      || payload.kind !== 'blocked'
-      || payload.i18nKey !== 'contentModeration.blocked'
-      || !_activeViewSessions.has(payload.sessionId)
-    ) {
-      return;
-    }
-    toast.error(i18n.t('contentModeration.blocked'));
-  };
-
-  bindIpc(
-    (cb) => window.electronAPI.contentModeration?.onOutputBlocked?.(cb),
-    handleContentModerationOutputBlocked,
-    'content-moderation-output-blocked',
   );
 
   // ── 意识改写(订阅槽①):用户消息正文被钩子优化 ──
@@ -5450,13 +5372,6 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
     .catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
-// 自动起名的"无中间态宽限期":LLM 在此窗口内出结果就直接用智能标题、不闪原话
-// (Claude haiku 实测常 2-3s 命中);超过则先用原话前 40 字占位,再后台等 oneShot
-// 真正出结果(靠其自身 30s 超时)异步覆盖成智能标题。这样 Claude 快路径无跳变,
-// Codex 慢路径(临时 thread 冷启动 + 可能重连,常 >3s)也能最终拿到智能标题,而
-// 不是像旧的"等够 N 秒否则 fallback"那样永远停在原话。
-const TITLE_AUTONAME_GRACE_MS = 3000;
-
 const forkAutoNameChecked = new Set<string>();
 
 /** 落库 + patch sidebar 标题 — 自动起名链路的统一出口。 */
@@ -5467,9 +5382,11 @@ async function applyAutoNameTitle(sessionId: string, title: string): Promise<voi
 }
 
 /**
- * 宽限期 + 后台覆盖式自动起名:
- *   - 宽限期(TITLE_AUTONAME_GRACE_MS)内 LLM 出非空标题 → 直接用,无原话中间态。
- *   - 超宽限期 → 先用原话前 40 字占位改名,后台继续等 oneShot 出结果再覆盖。
+ * 立即占位 + 后台覆盖式自动起名(Codex 式):
+ *   - 发送瞬间就用原话前 40 字占位改名,侧边栏不停留在 "New Maker" 默认标题。
+ *   - 后台等 oneShot 出非空智能标题(靠其自身 30s 超时)再覆盖占位;占位→智能
+ *     标题的一次跳变是有意为之——立即反映"这个会话是关于什么的"优于先看数秒
+ *     默认名。
  * 整条链路 fire-and-forget,失败只打日志,不阻塞发送主流程。
  */
 function scheduleAutoName(
@@ -5480,26 +5397,27 @@ function scheduleAutoName(
   // device-link 远程会话由被控端 main 负责基于本机 DB 自动起名，控制端 renderer
   // 不再额外生成标题，避免两端并发覆盖同一 session title。
   if (isRemoteSession(sessionId)) return;
-  const fallbackTitle = text.replace(/\n/g, ' ').slice(0, 40);
-  const titlePromise = window.electronAPI.maker
-    .generateTitle(text, agentKind, sessionId)
-    .then((result) => result.title)
-    .catch(() => null);
+  // 先折叠空白并 trim,再截断——先截断会让"前 40 字符全是空白"的消息(如粘贴
+  // 大段缩进/多行文本)得到空占位,误跳过起名(PR #296 review)。
+  const fallbackTitle = text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+  // 纯附件等无文本首条消息起不出有意义的标题,保留默认标题。
+  if (!fallbackTitle) return;
   void (async () => {
     try {
-      const graceP = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), TITLE_AUTONAME_GRACE_MS),
-      );
-      const within = await Promise.race([titlePromise, graceP]);
-      if (within && within.trim()) {
-        // 宽限期内命中 → 直接智能标题,无中间态。
-        await applyAutoNameTitle(sessionId, within);
+      // 覆写守卫:仅当标题仍是系统占位(默认 'New Maker' / fork 占位)时才自动
+      // 起名。用户可以在发首条消息前就手动改名(空会话也能重命名),此时整条
+      // 链路放弃——占位与智能标题都不写(user rename wins,PR #296 review)。
+      const before = await sessionService.get(sessionId);
+      if (before.title && before.title !== 'New Maker' && !before.title.startsWith('[Fork')) {
         return;
       }
-      // 宽限期超时 → 先用原话占位,后台等智能标题再覆盖。
+      const titlePromise = window.electronAPI.maker
+        .generateTitle(text, agentKind, sessionId)
+        .then((result) => result.title)
+        .catch(() => null);
       await applyAutoNameTitle(sessionId, fallbackTitle);
-      const smart = await titlePromise;
-      if (smart && smart.trim() && smart !== fallbackTitle) {
+      const smart = (await titlePromise)?.trim();
+      if (smart && smart !== fallbackTitle) {
         // 覆盖前 re-read 确认标题仍是我们写的占位 —— 等待窗口(Codex oneShot 最长
         // ~30s)内用户若从 header/sidebar 手动改名,标题已不等于 fallbackTitle,
         // 此时不覆盖,让用户的手动改名 wins(避免后台智能标题静默冲掉用户改名)。

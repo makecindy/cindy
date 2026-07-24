@@ -312,7 +312,11 @@ export function getDesktopProviderService(): ProviderService {
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       anthropic: () => isNativeProviderAuthBound('anthropic') && hasClaudeAiOAuth(),
-      openai: () => isNativeProviderAuthBound('openai') && desktopCodexAuthAdapter.hasCodexOAuthLogin(),
+      // openai 不再前置 isNativeProviderAuthBound 短路:hasCodexOAuthLogin →
+      // getAccessToken 内部已是「reconcile(含首个 owner 绑定自愈)→ 绑定校验 → 读
+      // token」的完整口径,未绑定仍 fail-closed 返回 null;前置短路反而会拦掉
+      // listProviders 路径触发绑定自愈的机会(claimDetectedCodexOAuthBinding)。
+      openai: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
       xai: () => isNativeProviderAuthBound('xai') && hasGrokOAuthLogin(),
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。

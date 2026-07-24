@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { FileDiff, FolderTree, Globe, Terminal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { listGhostTabMenuMetas, useTabKindRegistryVersion } from './registry';
 import type { TabKindId, TabKindMenuMeta } from './types';
 
 const DROPDOWN_WIDTH = 220;
@@ -108,6 +109,9 @@ export function AddTabDropdown({ onClose, onSelect, existingKinds }: AddTabDropd
 
   const enabled = MENU_ITEMS.filter((m) => m.enabled).sort((a, b) => a.order - b.order);
   const coming = MENU_ITEMS.filter((m) => !m.enabled).sort((a, b) => a.order - b.order);
+  // 插件页签(panel.position:'tab')动态分组:随装/卸/停用增减,版本号驱动重渲。
+  useTabKindRegistryVersion();
+  const ghostItems = listGhostTabMenuMetas();
 
   return (
     <div
@@ -138,6 +142,31 @@ export function AddTabDropdown({ onClose, onSelect, existingKinds }: AddTabDropd
           />
         );
       })}
+      {ghostItems.length > 0 && (
+        <>
+          <div className="mx-1 my-1 h-px bg-[var(--border-default)]" />
+          <GroupHeader label={t('rightSidebar.tabs.menu.pluginGroup')} />
+          {ghostItems.map((m) => {
+            const alreadyOpen = m.singleton && existingKinds?.has(m.kind);
+            return (
+              <DropdownItem
+                key={m.kind}
+                icon={m.icon}
+                // 插件名是用户内容原文(labelText),labelKey 只作兜底。
+                label={m.labelText ?? t(m.labelKey)}
+                trailing={
+                  alreadyOpen ? (
+                    <span className="text-[10px] text-[var(--text-tertiary)]">
+                      {t('rightSidebar.tabs.menu.alreadyOpen')}
+                    </span>
+                  ) : undefined
+                }
+                onClick={() => onSelect(m.kind)}
+              />
+            );
+          })}
+        </>
+      )}
       {coming.length > 0 && (
         <>
           <div className="mx-1 my-1 h-px bg-[var(--border-default)]" />

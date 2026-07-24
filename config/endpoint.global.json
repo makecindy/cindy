@@ -10,8 +10,6 @@
   "websiteUrl": "https://cindy.app",
   "modelAccessApiBaseUrl": "https://model-access.cindy.app",
   "voiceApiBaseUrl": "https://voice.cindy.app",
-  "moderationSignApiBaseUrl": "",
-  "moderationSignTestApiBaseUrl": "",
   "githubApiBaseUrl": "https://github.cindy.app",
   "skillhubApiBaseUrl": "https://xd-skillhub.cindy.app",
   "cdnBaseUrl": "https://hotfix.cindy.app/cindy",
