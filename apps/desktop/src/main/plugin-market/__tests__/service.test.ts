@@ -13,6 +13,7 @@ const runtime = vi.hoisted(() => ({
   install: vi.fn(),
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
+  accountGhostAvailable: true,
   session: {
     mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
     dataOwnerId: 'user-1' as string | null,
@@ -43,6 +44,7 @@ vi.mock('../../logger.js', () => ({
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: () => runtime.ghosts }),
+  isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: runtime.install,
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
   uninstallGhostAndCleanup: runtime.uninstall,
@@ -65,6 +67,7 @@ afterEach(() => {
   runtime.install.mockReset();
   runtime.uninstall.mockReset();
   runtime.builtinRemoved.clear();
+  runtime.accountGhostAvailable = true;
   runtime.session = {
     mode: 'cloud',
     dataOwnerId: 'user-1',
@@ -235,12 +238,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const snapshot = await h.service.snapshot();
 
     expect(snapshot.items[0]).toMatchObject({
-      installState: 'installed',
+      installState: 'update-available',
       enabled: true,
     });
     expect(h.ledger.installationForGhost('cindy-test')).toMatchObject({
       source: 'legacy-adopted',
       pluginId: PLUGIN_ID,
+      releaseId: 'legacy-unresolved:1.0.0',
+      sha256: 'legacy-unverified',
     });
     expect(runtime.install).not.toHaveBeenCalled();
   });
@@ -404,6 +409,23 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('hides account-managed public plugins from account-free local mode', async () => {
+    runtime.session = {
+      mode: 'local',
+      dataOwnerId: 'local-v1',
+      generation: 2,
+    };
+    const item = summary({ ghostId: 'cindy-github' });
+    runtime.accountGhostAvailable = false;
+    const h = harness([item]);
+
+    await expect(h.service.snapshot()).resolves.toEqual({
+      items: [],
+      unavailableReason: null,
+    });
+    expect(h.api.listAll).toHaveBeenCalledOnce();
+  });
+
   it('does not re-enable an installed defaultInstall package disabled by the user', async () => {
     const item = summary({ defaultInstall: true });
     runtime.ghosts = [
@@ -539,6 +561,25 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(snapshot.items[0]?.installState).toBe('conflict');
     expect(runtime.install).not.toHaveBeenCalled();
     expect(h.ledger.installationForGhost('third-party')).toBeNull();
+  });
+
+  it('treats a removed market record plus an existing directory as an id conflict', async () => {
+    const item = summary();
+    runtime.ghosts = [
+      {
+        manifest: manifest(),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: true,
+      },
+    ];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      installed: false,
+    });
+
+    await expect(h.service.install(item.id)).rejects.toThrow('本地已存在同 id Plugin');
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 
   it('requires an explicit reviewed flag before an update can add permissions', async () => {

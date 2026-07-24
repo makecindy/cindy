@@ -108,18 +108,27 @@ export function GhostPluginPage() {
   const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
+  const marketRefreshRequestRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
   const refreshMarket = useCallback(async () => {
+    const requestId = ++marketRefreshRequestRef.current;
     try {
-      setMarketSnapshot(await window.electronAPI.pluginMarket.snapshot());
+      const snapshot = await window.electronAPI.pluginMarket.snapshot();
+      if (requestId === marketRefreshRequestRef.current) setMarketSnapshot(snapshot);
     } catch (error) {
-      setMarketSnapshot({
-        items: [],
-        unavailableReason: error instanceof Error ? error.message : String(error),
-      });
+      if (requestId === marketRefreshRequestRef.current) {
+        setMarketSnapshot({
+          items: [],
+          unavailableReason: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }, []);
   useEffect(() => {
+    setMarketSnapshot(null);
+    setMarketDetail(null);
+    setMarketBusyId(null);
+    marketDetailRequestRef.current += 1;
     void refreshMarket();
   }, [refreshMarket, mode, dataOwnerId]);
   const activeSessionWorkingDir = useSyncExternalStore(

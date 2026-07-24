@@ -944,6 +944,8 @@ function clearAuth(
      * removeSafe 会把别人的新 token 删掉,把对方也踢成半死。
      */
     preservePersistedRefreshToken?: boolean;
+    /** Defer changing the active owner until the enclosing teardown completes. */
+    deferSessionCommit?: boolean;
   } = {},
 ): void {
   const notify = opts.notify ?? true;
@@ -973,7 +975,9 @@ function clearAuth(
   // 串号边界改由 login / 冷启动时 providerSecretStore.reconcileOwner 处理:owner 变了才清。
   // clearAuth 必须保持同步(大量调用方依赖立即 notify),但 promise rejection 仍要吞掉并记日志。
   clearPerAccountIntegrationsInBackground();
-  commitActiveAppSession(opts.nextMode ?? 'signed-out');
+  if (!opts.deferSessionCommit) {
+    commitActiveAppSession(opts.nextMode ?? 'signed-out');
+  }
   if (notify) {
     notifyRenderer();
     notifyAuthListeners();
@@ -994,7 +998,11 @@ async function expireRuntimeAuth(
 ): Promise<void> {
   const releaseBoundary = beginAppSessionBoundary();
   notifyRendererAuthBoundaryPending();
-  clearAuth({ notify: false, preservePersistedRefreshToken: opts.preservePersistedRefreshToken });
+  clearAuth({
+    notify: false,
+    preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
+    deferSessionCommit: true,
+  });
   try {
     if (accountSwitchTeardown) {
       await accountSwitchTeardown({ previousUserId, nextUserId: 'signed-out' });
@@ -1012,6 +1020,7 @@ async function expireRuntimeAuth(
   } catch (err) {
     log.error('closeLocalDb on runtime auth expiry failed', err);
   } finally {
+    commitActiveAppSession('signed-out');
     releaseBoundary();
     notifyRenderer();
     notifyAuthListeners();
@@ -1032,6 +1041,7 @@ export function invalidateSession(reason: string): Promise<void> {
   // published and credentials can be cleared synchronously first. API calls
   // that detect the rejection may themselves run inside a scheduler/service
   // being torn down; they must be able to unwind without a stop-await cycle.
+  const releaseBoundary = beginAppSessionBoundary();
   const run = Promise.resolve().then(async () => {
     try {
       if (authSessionTeardown) {
@@ -1048,13 +1058,16 @@ export function invalidateSession(reason: string): Promise<void> {
       closeLocalDb();
     } catch (error) {
       log.error(`closeLocalDb on ${reason} failed (non-fatal)`, error);
+    } finally {
+      commitActiveAppSession('signed-out');
+      releaseBoundary();
     }
   });
   sessionInvalidationPromise = run;
   // Keep the current renderer surface in place until its session-expired
   // dialog is acknowledged. Main-process consumers still need the immediate
   // logged-out transition so no account-scoped work can restart meanwhile.
-  clearAuth({ notify: false });
+  clearAuth({ notify: false, deferSessionCommit: true });
   notifyAuthListeners();
   // invalidateSession 的 reason 是调用方语境串而非服务端失效码,这里只把
   // 「账号不可用」显式归类,其余统一走通用过期文案。

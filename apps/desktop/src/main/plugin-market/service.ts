@@ -24,6 +24,7 @@ import { getCurrentUserId } from '../authManager.js';
 import {
   getGhostManager,
   installOrUpdateMarketGhostPackage,
+  isGhostAvailableForActiveSession,
   isBuiltinGhostRemovedByUser,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
@@ -74,7 +75,10 @@ function visiblePluginsForOwner(
   plugins: readonly VisiblePluginSummary[],
 ): VisiblePluginSummary[] {
   return owner.mode === 'local'
-    ? plugins.filter((plugin) => plugin.scope === 'public')
+    ? plugins.filter(
+        (plugin) =>
+          plugin.scope === 'public' && isGhostAvailableForActiveSession(plugin.ghostId),
+      )
     : [...plugins];
 }
 
@@ -82,16 +86,6 @@ function defaultInstallSubject(owner: ActiveAppSession): string {
   const subject = getCurrentUserId() ?? owner.dataOwnerId;
   if (!subject) throw new Error('Plugin 市场缺少本地数据身份');
   return subject;
-}
-
-function sameLegacyFacts(plugin: VisiblePluginSummary, ghost: InstalledGhost): boolean {
-  return (
-    plugin.ghostId === ghost.manifest.id &&
-    plugin.currentRelease.version === ghost.manifest.version &&
-    plugin.name === ghost.manifest.name &&
-    plugin.description === (ghost.manifest.description ?? null) &&
-    plugin.author === (ghost.manifest.author ?? null)
-  );
 }
 
 function recordFrom(
@@ -122,9 +116,6 @@ function legacyRecordFrom(
   plugin: VisiblePluginSummary,
   ghost: InstalledGhost,
 ): PluginMarketInstallationRecord {
-  if (sameLegacyFacts(plugin, ghost)) {
-    return recordFrom(plugin, 'legacy-adopted');
-  }
   return {
     pluginId: plugin.id,
     ghostId: plugin.ghostId,
@@ -333,10 +324,7 @@ export class PluginMarketService {
       .list()
       .find((ghost) => ghost.manifest.id === plugin.ghostId);
     const currentRecord = ledger.installationForGhost(plugin.ghostId);
-    if (
-      existing &&
-      (!currentRecord || currentRecord.pluginId !== plugin.id)
-    ) {
+    if (existing && (!currentRecord?.installed || currentRecord.pluginId !== plugin.id)) {
       throw new Error(`本地已存在同 id Plugin: ${plugin.ghostId}`);
     }
 
@@ -420,7 +408,7 @@ export class PluginMarketService {
     );
     const conflict = Boolean(
       duplicateGhostIds.has(plugin.ghostId) ||
-        (ghost && (!record || record.pluginId !== plugin.id)),
+        (ghost && (!record?.installed || record.pluginId !== plugin.id)),
     );
     const installState: PluginMarketItem['installState'] = conflict
       ? 'conflict'
