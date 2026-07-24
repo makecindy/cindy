@@ -7,16 +7,17 @@
  *   3. dismiss 与卡片共享同一 key:banner 上点 X,key 写入(两处一起消失)。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { providersState, authState } = vi.hoisted(() => ({
+const { providersState, authState, exitLocalModeMock } = vi.hoisted(() => ({
   providersState: { providers: [] as unknown[], loading: false },
   authState: { mode: 'cloud' as string },
+  exitLocalModeMock: vi.fn(async () => undefined),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -28,7 +29,7 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => authState,
+  useAuth: () => ({ ...authState, exitLocalMode: exitLocalModeMock }),
 }));
 
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
@@ -89,12 +90,13 @@ describe('ConnectProviderBanner', () => {
     expect(screen.getByTestId('location').textContent).toBe('/settings?tab=providers');
   });
 
-  it('local 模式 CTA 变登录,落 /login', () => {
+  it('local 模式 CTA 变登录,落 /login', async () => {
     authState.mode = 'local';
     renderBanner();
 
     fireEvent.click(screen.getByText('onboarding.connectProvider.banner.loginCta'));
-    expect(screen.getByTestId('location').textContent).toBe('/login');
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/login'));
+    expect(exitLocalModeMock).toHaveBeenCalledTimes(1);
   });
 
   it('有已连接来源 → 渲染 null', () => {

@@ -17,12 +17,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { providersState, authState, regionState, detectState } = vi.hoisted(() => ({
-  providersState: { providers: [] as unknown[], loading: false },
-  authState: { mode: 'cloud' as string },
-  regionState: { value: 'global' as string },
-  detectState: { detections: [] as unknown[] },
-}));
+const { providersState, authState, regionState, detectState, exitLocalModeMock } = vi.hoisted(
+  () => ({
+    providersState: { providers: [] as unknown[], loading: false },
+    authState: { mode: 'cloud' as string },
+    regionState: { value: 'global' as string },
+    detectState: { detections: [] as unknown[] },
+    exitLocalModeMock: vi.fn(async () => undefined),
+  }),
+);
 
 // 与 hook 内 `../../shared/brandRegion` 解析到同一模块(都落 src/shared/)。
 vi.mock('../../shared/brandRegion', () => ({
@@ -40,7 +43,7 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => authState,
+  useAuth: () => ({ ...authState, exitLocalMode: exitLocalModeMock }),
 }));
 
 vi.mock('@/lib/providerModels', () => ({
@@ -240,7 +243,9 @@ describe('ConnectProviderCard', () => {
 
     const loginRow = screen.getByText('onboarding.connectProvider.cindy.loginTitle');
     fireEvent.click(loginRow.closest('button')!);
-    expect(screen.getByTestId('location').textContent).toBe('/login');
+    // local 模式登录必须先 exitLocalMode(GuestRoute 对 local 一律弹回首页)再进 /login。
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/login'));
+    expect(exitLocalModeMock).toHaveBeenCalledTimes(1);
   });
 
   it('「其他供应商」懒加载预设,展开后点预设行落 connect=<presetId>', async () => {

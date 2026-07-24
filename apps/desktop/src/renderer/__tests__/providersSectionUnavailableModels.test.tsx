@@ -59,6 +59,10 @@ vi.mock('@/hooks/useProviders', () => ({
   }),
 }));
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: 'cloud', exitLocalMode: vi.fn(async () => undefined) }),
+}));
+
 vi.mock('@/hooks/useCodexAuth', () => ({
   isChatGptConnectionConnected: () => false,
   useCodexAuth: () => ({
@@ -143,7 +147,9 @@ describe('ProvidersSection — 双栏管理', () => {
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
 
     // 详情头 + 左栏行都显示 xd 标题(默认选中第一行 = xd)。
-    expect((await screen.findAllByText('settings.providers.xd.title')).length).toBeGreaterThanOrEqual(2);
+    expect(
+      (await screen.findAllByText('settings.providers.xd.title')).length,
+    ).toBeGreaterThanOrEqual(2);
     // 未连接的 Anthropic 不出现在左栏(无检测建议时整页不出现)。
     expect(screen.queryByText('Anthropic')).toBeNull();
     // xd 实时模型为空 → 详情空态提示(不渲染模型开关面板)。

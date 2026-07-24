@@ -13,6 +13,7 @@ import type { CSSProperties } from 'react';
 
 import { cn } from '@/lib/utils';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 
 export function ConnectProviderBanner({
   className,
@@ -23,6 +24,7 @@ export function ConnectProviderBanner({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const signInToCindy = useSignInToCindy();
   const onboarding = useProviderOnboarding();
 
   if (!onboarding.visible) return null;
@@ -45,7 +47,7 @@ export function ConnectProviderBanner({
       </span>
       <button
         type="button"
-        onClick={() => navigate(cloudMode ? '/settings?tab=providers' : '/login')}
+        onClick={() => (cloudMode ? navigate('/settings?tab=providers') : void signInToCindy())}
         className="shrink-0 text-xs font-medium text-[var(--text-primary)] transition-opacity hover:opacity-70"
       >
         {cloudMode

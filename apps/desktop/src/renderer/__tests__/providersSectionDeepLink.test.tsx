@@ -28,6 +28,10 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: providersState.providers, loading: false, refetch: vi.fn() }),
 }));
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: 'local', exitLocalMode: vi.fn(async () => undefined) }),
+}));
+
 vi.mock('@/hooks/useCodexAuth', () => ({
   isChatGptConnectionConnected: () => false,
   useCodexAuth: () => ({
@@ -204,7 +208,8 @@ describe('ProvidersSection — 深链定位', () => {
     expect(screen.queryByTestId('wizard-stub')).toBeNull();
 
     fireEvent.click(screen.getByText('settings.providers.xdSignin.cta'));
-    expect(screen.getByTestId('login-page')).not.toBeNull();
+    // local 模式:先 exitLocalMode 再进 /login(直跳会被 GuestRoute 弹回)。
+    await waitFor(() => expect(screen.getByTestId('login-page')).not.toBeNull());
   });
 
   it('wizard=1 → 向导目录第一步(无 entry);参数清除', async () => {

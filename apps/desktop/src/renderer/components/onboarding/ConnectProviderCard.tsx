@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { providerMonogram } from '@/lib/providerModels';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import type { ProviderOnboardingRow } from '@/hooks/useProviderOnboarding';
 import type { ProviderLogoRouting } from '@/components/icons/ProviderLogoMark';
 
@@ -37,6 +38,7 @@ function rowIcon(id: string, name: string, routing?: ProviderLogoRouting): React
 export function ConnectProviderCard({ className }: { className?: string }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const signInToCindy = useSignInToCindy();
   const onboarding = useProviderOnboarding({ loadPresets: true });
   const [othersOpen, setOthersOpen] = useState(false);
 
@@ -115,7 +117,7 @@ export function ConnectProviderCard({ className }: { className?: string }) {
               : t('onboarding.connectProvider.cindy.loginDesc')
           }
           badge={t('onboarding.connectProvider.recommendedLabel')}
-          onClick={() => (cloudMode ? goConnect('xd') : navigate('/login'))}
+          onClick={() => (cloudMode ? goConnect('xd') : void signInToCindy())}
         />
         {primaryRows.map(renderRow)}
 

@@ -28,6 +28,7 @@ import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth
 import { useApiKey } from '@/hooks/useApiKey';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { toast } from '@/lib/toast';
 import {
   appendDiscoveredCustomProviderModels,
@@ -1097,6 +1098,7 @@ function SuggestionRow({
 export function ProvidersSection() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const signInToCindy = useSignInToCindy();
   const { confirm } = useConfirmDialog();
   const { providers, loading, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
@@ -1420,7 +1422,7 @@ export function ProvidersSection() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => navigate('/login')}
+                  onClick={() => void signInToCindy()}
                   className="mt-1 flex h-9 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity hover:opacity-90"
                   style={{
                     backgroundColor: 'var(--accent-cta-bg)',
