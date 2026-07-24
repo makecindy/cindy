@@ -133,7 +133,21 @@ export class PluginMarketLedger {
         mode: 0o600,
         flag: 'wx',
       });
-      fs.renameSync(tempPath, filePath);
+      try {
+        fs.renameSync(tempPath, filePath);
+      } catch (error) {
+        // Windows refuses to replace an existing file with renameSync. The
+        // destination is only the previous ledger snapshot, so remove it and
+        // retry while retaining the freshly flushed temp file.
+        const code = error && typeof error === 'object' && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
+          throw error;
+        }
+        fs.rmSync(filePath, { force: true });
+        fs.renameSync(tempPath, filePath);
+      }
     } finally {
       fs.rmSync(tempPath, { force: true });
     }

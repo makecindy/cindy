@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
 
 interface MarketPluginDetailViewProps {
   detail: PluginMarketDetail;
@@ -22,6 +23,7 @@ export function MarketPluginDetailView({
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const permissions = ghostPermissionItems(detail.manifest);
+  const presentationOrigin = pluginPresentationOrigin(detail);
   const actionKey =
     detail.installState === 'update-available'
       ? 'settings.ghosts.market.update'
@@ -54,7 +56,7 @@ export function MarketPluginDetailView({
                 {detail.name}
               </h1>
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
-                <span>{t(`settings.ghosts.market.scope.${detail.scope}`)}</span>
+                <span>{t(`settings.ghosts.market.scope.${presentationOrigin}`)}</span>
                 <span aria-hidden="true">·</span>
                 <span>v{detail.version}</span>
                 {detail.author ? (
