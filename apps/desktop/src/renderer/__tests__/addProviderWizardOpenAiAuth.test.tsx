@@ -24,6 +24,10 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
+  // 与真实实现同判定:仅 authenticated + oauth 视为 ChatGPT 已连接
+  // (#268 起向导直接消费此 helper,mock 必须同步导出)。
+  isChatGptConnectionConnected: (state: { kind: string; authSource?: string }) =>
+    state.kind === 'authenticated' && state.authSource === 'oauth',
   useCodexAuth: () => ({
     state: { kind: 'authenticated', authSource: 'oauth' },
     triggerLogin,
