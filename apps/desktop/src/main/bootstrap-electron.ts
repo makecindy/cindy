@@ -550,6 +550,7 @@ import { registerLayoutIpc } from './layout/index.js';
 import {
   getGhostManager,
   isGhostAvailableForActiveSession,
+  refreshGhostLocalization,
   registerGhostIpc,
   setGhostsChangedObserver,
   suspendAllGhosts,
@@ -1498,6 +1499,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshGhostLocalization();
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);

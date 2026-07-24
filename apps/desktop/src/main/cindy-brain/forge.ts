@@ -19,8 +19,10 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import {
+  GHOST_LOCALE_MAX_BYTES,
   GHOST_MANIFEST_FILE,
   validateGhostManifest,
+  validateGhostManifestLocaleResource,
   type GhostManifest,
 } from '../../shared/ghost.js';
 
@@ -553,7 +555,38 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     }
     const manifest = v.manifest;
 
-    // 2) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
+    // 2) locale 资源必须真实、可解析且完整覆盖已声明字段。与装入侧使用
+    // 同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
+    if (manifest.locales) {
+      for (const [locale, rel] of Object.entries(manifest.locales)) {
+        if (!rel) continue;
+        let raw: unknown;
+        try {
+          const abs = path.join(dir, ...rel.split('/'));
+          const stat = await fs.promises.stat(abs);
+          if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
+            throw new Error(`文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
+          }
+          raw = JSON.parse(await fs.promises.readFile(abs, 'utf8'));
+        } catch (err) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `locales.${locale} 不可用(${rel}):${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+        const localized = validateGhostManifestLocaleResource(raw, manifest);
+        if (!localized.ok) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `locales.${locale} 不合格(${rel}):${localized.reason}`,
+          };
+        }
+      }
+    }
+
+    // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
     const mustExist: string[] = [];
     if (manifest.entry) mustExist.push(manifest.entry);
     if (manifest.node?.entry) mustExist.push(manifest.node.entry);
@@ -568,7 +601,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       }
     }
 
-    // 3) 收集文件(递归,跳过开发残留),数量/体积设限。
+    // 4) 收集文件(递归,跳过开发残留),数量/体积设限。
     const files: Array<{ rel: string; abs: string }> = [];
     let totalBytes = 0;
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
@@ -602,7 +635,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
 
-    // 4) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
+    // 5) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
     // 文件收集在写盘之前完成 + shouldSkip 跳过 *.cindy,自身产物不会进包;
     // 同名覆盖:同 id 同版本重打包语义上就是同一个包。
     const zip = new JSZip();
@@ -651,6 +684,11 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 my-ghost/
 ├── ghost.json    ← 身份卡(必须,zip 根部)
 ├── main.js       ← 电子脑:后台逻辑入口(声明了 tools/cindy 时必须)
+├── locales/      ← 可选:宿主驱动的清单文案翻译(声明 locales 时英文必须存在)
+│   ├── en.json
+│   ├── zh-CN.json
+│   ├── ja.json
+│   └── ko.json
 ├── node/
 │   └── worker.cjs ← 可选:随包 Node/stdio MCP 入口(声明 node 槽时必须,见 §4.12)
 ├── panel.html    ← 面板界面(声明了 panel.html 时必须)
@@ -668,6 +706,12 @@ my-ghost/
   "name": "我的意识",           // 展示名
   "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
+    "en": "locales/en.json",
+    "zh-CN": "locales/zh-CN.json",
+    "ja": "locales/ja.json",
+    "ko": "locales/ko.json"
+  },
   "version": "1.0.0",
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(确认框会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
@@ -692,6 +736,34 @@ my-ghost/
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 \`\`\`
+
+### 2.1 本地化资源(locales)
+
+插件语言**只跟随 Cindy 宿主当前语言**。不要读取 \`navigator.language\`、操作系统语言或
+浏览器偏好，也不要在插件内保存另一份语言选择。宿主当前支持
+\`zh-CN / en / ja / ko\`；插件没提供宿主当前语言时固定使用英文，因此只要声明
+\`locales\` 就必须提供 \`en\`。
+
+每个 locale JSON 完整覆盖清单中已有的可本地化字段；工具按稳定的 tool name 对齐，
+协议键、工具名和参数名不翻译：
+
+\`\`\`json
+{
+  "name": "My Plugin",
+  "description": "What this plugin does.",
+  "whenToUse": "Use it when ...",
+  "tools": {
+    "do_thing": {
+      "description": "Do the task and return the result."
+    }
+  }
+}
+\`\`\`
+
+若原清单声明了 \`description\`、\`whenToUse\` 或 \`tools\`，每个 locale 文件都必须
+完整提供对应字段/全部工具说明；缺译、未知工具、多余字段、文件缺失、无效 JSON 或单文件
+超过 64KB 都会在 Forge 打包期与安装期拒绝。清单列表、详情页、Agent 工具目录都消费
+同一份本地化结果。
 
 十三个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
@@ -997,12 +1069,13 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
-电子脑需要按宿主构建身份选择公开配置时,走只读 request。当前只暴露
-\`region: 'cn' | 'global'\`,不含登录态、路径、设备信息或凭证:
+电子脑需要按宿主构建身份或当前语言选择公开配置/界面文案时,走只读 request。当前只暴露
+\`region: 'cn' | 'global'\` 与 \`locale: 'zh-CN' | 'en' | 'ja' | 'ko'\`,
+不含登录态、路径、设备信息或凭证:
 
 \`\`\`js
 const r = await cindy.request({ kind: 'app-context' });
-// → { ok:true, context:{ region:'cn'|'global' } }
+// → { ok:true, context:{ region:'cn'|'global', locale:'zh-CN'|'en'|'ja'|'ko' } }
 \`\`\`
 
 \`settingsHtml\` / panel 没有 preload 桥,读取同一份上下文走同源只读端点:
@@ -1010,12 +1083,20 @@ const r = await cindy.request({ kind: 'app-context' });
 \`\`\`js
 const r = await (await fetch('/app-context')).json();
 const region = r.context.region;
+const locale = r.context.locale;
 \`\`\`
 
 region 只适合选择**已在 manifest 声明过**的公开配置。例如 broker OAuth
 可在 \`clientIdAlternatives\` 列出备用 ID,再由 settingsHtml 把选中的
 \`clientId\` 放进 \`/oauth/<key>/connect\` body;主机会做清单白名单复验。
 不要用 region 推断用户位置、语言或数据归属。
+
+\`locale\` 是插件语言的唯一事实来源。设置页、panel 和电子脑都只使用它；
+不要读取 \`navigator.language\`。宿主切换语言时，运行中的电子脑会收到
+\`{ type:'host-context-changed', ok:true, context:{ region, locale } }\`，可用
+\`BroadcastChannel\` 通知同插件的设置页/panel 重新读取 \`/app-context\` 并换文案。
+未运行的插件会在下次启动或页面重新装载时直接读到新语言。插件自身不支持该 locale 时
+必须选英文资源。
 
 ## 4.5 聊天卡片(card 槽,海报模式)
 

@@ -6,6 +6,7 @@ import {
   diffGhostPermissionItems,
   ghostContentKeys,
   ghostExternalLinkUrls,
+  ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
   ghostPreviewUrlAllowed,
@@ -19,7 +20,10 @@ import {
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
   parseGhostPartition,
+  resolveGhostManifestLocale,
   validateGhostManifest,
+  validateGhostManifestLocaleResource,
+  withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
 import { createDefaultLayout, type SplitNode } from '../layoutTree';
@@ -237,6 +241,96 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: '  ' }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), author: 'x'.repeat(65) }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
+  });
+
+  it('locales 只接受宿主四种语言、安全 JSON 路径且必须提供英文', () => {
+    const valid = validateGhostManifest({
+      ...goodManifest(),
+      locales: {
+        en: 'locales/en.json',
+        'zh-CN': 'locales/zh-CN.json',
+        ja: 'locales/ja.json',
+        ko: 'locales/ko.json',
+      },
+    });
+    expect(valid.ok).toBe(true);
+    expect(valid.ok && valid.manifest.locales?.en).toBe('locales/en.json');
+
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { 'zh-CN': 'locales/zh-CN.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: '../en.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', fr: 'locales/fr.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'locales/en.json' },
+    }).ok).toBe(false);
+  });
+
+  it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
+    const parsed = validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'locales/ja.json' },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
+    expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
+    expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  it('locale 资源完整覆盖清单文案和全部工具，并按稳定 tool name 合并', () => {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'localized',
+      name: 'Base',
+      description: 'Base description',
+      whenToUse: 'Base routing',
+      version: '1.0.0',
+      entry: 'main.js',
+      slots: ['tool'],
+      tools: [
+        { name: 'alpha', description: 'Base alpha' },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const resource = validateGhostManifestLocaleResource({
+      name: 'Localized',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: {
+        beta: { description: 'Localized beta' },
+        alpha: { description: 'Localized alpha' },
+      },
+    }, parsed.manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
+      name: 'Localized',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: [
+        { name: 'alpha', description: 'Localized alpha' },
+        { name: 'beta', description: 'Localized beta' },
+      ],
+    });
+    expect(validateGhostManifestLocaleResource({
+      name: 'Incomplete',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: { alpha: { description: 'Only one' } },
+    }, parsed.manifest).ok).toBe(false);
   });
 
   it('icon:可选包内相对路径,扩展名白名单;非法路径/扩展名 → 拒', () => {

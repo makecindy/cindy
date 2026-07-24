@@ -70,7 +70,7 @@ import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoin
 import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccounts.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
-import { t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
   FILO_GOOGLE_GHOST_ID,
@@ -189,14 +189,17 @@ import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 const log = createLogger('brain');
 
 /**
- * 电子脑管子与 settingsHtml `/app-context` 共用,避免两条 region 口径漂移。
+ * 电子脑管子与 settingsHtml `/app-context` 共用,避免 region / locale 两条口径漂移。
  * dev 区域(第三系统身份,2026-07-20)对意识映射为 'cn':意识契约
  * GhostAppRegion 维持 cn|global 两值(FORGE_GUIDE §4.1 不变),dev 的行为
  * 语义本就归 cn 系,意识按区域选公开配置时应与 cn 同待遇。
  */
 function currentGhostAppContext() {
   const region: GhostAppRegion = CURRENT_CINDY_REGION === 'global' ? 'global' : 'cn';
-  return { ok: true as const, context: { region } };
+  return {
+    ok: true as const,
+    context: { region, locale: getResolvedMainLocale() },
+  };
 }
 
 let managerSingleton: GhostManager | null = null;
@@ -507,6 +510,7 @@ export function getGhostManager(): GhostManager {
     managerSingleton = new GhostManager({
       getRootDir: brainRootDir,
       onChanged: broadcastGhostsChanged,
+      getLocale: getResolvedMainLocale,
       trustRegistry: loadGhostTrustRegistry(),
       log,
     });
@@ -3139,6 +3143,24 @@ export function setGhostsChangedObserver(
   observer: ((ghosts: InstalledGhost[]) => void) | null,
 ): void {
   ghostsChangedObserver = observer;
+}
+
+/**
+ * 宿主语言切换后的插件刷新入口：重新按当前语言解析 manifest 并广播；
+ * 已运行的逻辑页收到同一份 app-context 变化，可经自身 BroadcastChannel
+ * 通知设置页/面板。未运行插件下次启动时直接读取最新语言。
+ */
+export function refreshGhostLocalization(): void {
+  if (!managerSingleton) return;
+  const ghosts = managerSingleton.list();
+  broadcastGhostsChanged(ghosts);
+  const context = currentGhostAppContext();
+  for (const ghost of ghosts) {
+    sendToGhostLogic(ghost.manifest.id, {
+      type: 'host-context-changed',
+      ...context,
+    });
+  }
 }
 
 /** Plugin 顶部快捷行的 host-owned MRU 快照，多窗口同步。 */

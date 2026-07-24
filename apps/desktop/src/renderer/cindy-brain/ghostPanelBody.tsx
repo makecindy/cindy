@@ -247,7 +247,14 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
     };
     // version 入依赖:原位更新换版后 webview 重挂载,面板立刻跑新代码
     // (供片协议直读安装目录,不重挂会一直渲染旧版缓存的页面)。
-  }, [crashed, generation, manifest.id, manifest.version, panelHtml]);
+  }, [
+    crashed,
+    generation,
+    manifest.id,
+    manifest.version,
+    manifest.resolvedLocale,
+    panelHtml,
+  ]);
 
   if (crashed) {
     return (

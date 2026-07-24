@@ -386,7 +386,15 @@ function SettingsWebviewBody({
       webview.remove();
     };
     // version 入依赖:原位更新换版后 webview 重挂载,设置区立刻跑新代码。
-  }, [crashed, generation, manifest.id, manifest.version, settingsHtml, fixedHeight]);
+  }, [
+    crashed,
+    generation,
+    manifest.id,
+    manifest.version,
+    manifest.resolvedLocale,
+    settingsHtml,
+    fixedHeight,
+  ]);
 
   if (crashed) {
     return (

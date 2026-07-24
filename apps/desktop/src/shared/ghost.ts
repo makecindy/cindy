@@ -1,4 +1,5 @@
 import { findSplitChildByPanelKind, insertRootSplitPane, type Layout } from './layoutTree';
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './locale';
 
 /**
  * 意识(Ghost,.cindy 文件)的清单数据模型与校验 —— main / renderer 共用。
@@ -880,6 +881,16 @@ export interface GhostManifest {
   /** 作者展示名(仅展示用)。 */
   author?: string;
   /**
+   * 本地化资源路径。声明后必须至少提供英文；宿主按当前应用语言读取，
+   * 当前语言未提供时固定回退英文。路径均位于插件安装目录内。
+   */
+  locales?: Partial<Record<SupportedLocale, string>> & { en: string };
+  /**
+   * 宿主解析清单后附加的当前语言，只用于运行时视图与 webview 刷新。
+   * 不属于 ghost.json 作者字段；validateGhostManifest 会忽略包内同名输入。
+   */
+  resolvedLocale?: SupportedLocale;
+  /**
    * 意识自我介绍(1–300 字,仅展示用):这段意识是干嘛
    * 的、给谁用。装入确认框与详情页展示;与 tools[].description(给 AI 看的
    * 工具说明)职责不同,后者不因本字段缺省而顶上。
@@ -976,6 +987,20 @@ export interface GhostManifest {
   /** 面板声明;没有面板的意识(如纯工具意识)可省略。 */
   panel?: GhostPanelDecl;
 }
+
+/**
+ * 单个插件 locale 文件的 manifest 文案。协议键、工具名和参数名不翻译；
+ * tools 以稳定 tool name 对齐，避免数组顺序变化导致翻译错位。
+ */
+export interface GhostManifestLocaleResource {
+  name: string;
+  description?: string;
+  whenToUse?: string;
+  tools?: Record<string, { description: string }>;
+}
+
+/** 单个插件 locale JSON 的字节上限。Forge 与装入侧共用，避免两端契约漂移。 */
+export const GHOST_LOCALE_MAX_BYTES = 64 * 1024;
 
 /** 已装入主机的意识(清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
@@ -1493,6 +1518,128 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** 当前宿主语言在插件未提供时固定回退英文。 */
+export function ghostLocalePathFor(
+  manifest: GhostManifest,
+  locale: string | undefined | null,
+): string | null {
+  if (!manifest.locales) return null;
+  const supported = (SUPPORTED_LOCALES as readonly string[]).includes(locale ?? '')
+    ? locale as SupportedLocale
+    : DEFAULT_LOCALE;
+  return manifest.locales[supported] ?? manifest.locales[DEFAULT_LOCALE] ?? null;
+}
+
+/** 把当前宿主语言附到运行时清单视图；不支持的输入固定归一到英文。 */
+export function withGhostResolvedLocale(
+  manifest: GhostManifest,
+  locale: string | undefined | null,
+): GhostManifest {
+  const resolvedLocale = (SUPPORTED_LOCALES as readonly string[]).includes(locale ?? '')
+    ? locale as SupportedLocale
+    : DEFAULT_LOCALE;
+  return { ...manifest, resolvedLocale };
+}
+
+/**
+ * 校验 locale 文件，并要求它完整覆盖原 manifest 已声明的可本地化字段。
+ * 缺译拒装，避免支持语言中静默混入另一种语言。
+ */
+export function validateGhostManifestLocaleResource(
+  raw: unknown,
+  manifest: GhostManifest,
+): { ok: true; resource: GhostManifestLocaleResource } | { ok: false; reason: string } {
+  if (!isPlainObject(raw)) return { ok: false, reason: 'locale 文件必须是对象' };
+  if (typeof raw.name !== 'string' || raw.name.trim().length === 0 || raw.name.length > 64) {
+    return { ok: false, reason: 'locale.name 必须是 1–64 字符的非空字符串' };
+  }
+  const optionalText = (
+    field: 'description' | 'whenToUse',
+    max: number,
+  ): string | undefined | { error: string } => {
+    const expected = manifest[field] !== undefined;
+    const value = raw[field];
+    if (!expected) {
+      if (value !== undefined) return { error: `locale.${field} 不应存在：原 manifest 未声明该字段` };
+      return undefined;
+    }
+    if (typeof value !== 'string' || value.trim().length === 0 || value.length > max) {
+      return { error: `locale.${field} 必须是 1–${max} 字符的非空字符串` };
+    }
+    return value;
+  };
+  const description = optionalText('description', 300);
+  if (isPlainObject(description) && typeof description.error === 'string') {
+    return { ok: false, reason: description.error };
+  }
+  const whenToUse = optionalText('whenToUse', 300);
+  if (isPlainObject(whenToUse) && typeof whenToUse.error === 'string') {
+    return { ok: false, reason: whenToUse.error };
+  }
+
+  let tools: Record<string, { description: string }> | undefined;
+  if (manifest.tools !== undefined) {
+    if (!isPlainObject(raw.tools)) {
+      return { ok: false, reason: 'locale.tools 必须按 tool name 提供完整对象' };
+    }
+    const expectedNames = new Set(manifest.tools.map((tool) => tool.name));
+    const actualNames = Object.keys(raw.tools);
+    const unknown = actualNames.find((name) => !expectedNames.has(name));
+    if (unknown) return { ok: false, reason: `locale.tools 含未知工具 ${JSON.stringify(unknown)}` };
+    tools = {};
+    for (const tool of manifest.tools) {
+      const localized = raw.tools[tool.name];
+      if (!isPlainObject(localized)) {
+        return { ok: false, reason: `locale.tools 缺少 ${JSON.stringify(tool.name)}` };
+      }
+      if (
+        typeof localized.description !== 'string' ||
+        localized.description.trim().length === 0 ||
+        localized.description.length > 1024
+      ) {
+        return {
+          ok: false,
+          reason: `locale.tools[${JSON.stringify(tool.name)}].description 必须是 1–1024 字符的非空字符串`,
+        };
+      }
+      tools[tool.name] = { description: localized.description };
+    }
+  } else if (raw.tools !== undefined) {
+    return { ok: false, reason: 'locale.tools 不应存在：原 manifest 未声明工具' };
+  }
+
+  return {
+    ok: true,
+    resource: {
+      name: raw.name,
+      ...(typeof description === 'string' ? { description } : {}),
+      ...(typeof whenToUse === 'string' ? { whenToUse } : {}),
+      ...(tools !== undefined ? { tools } : {}),
+    },
+  };
+}
+
+/** 用已校验的 locale 资源生成宿主与 Agent 消费的本地化 manifest 视图。 */
+export function resolveGhostManifestLocale(
+  manifest: GhostManifest,
+  resource: GhostManifestLocaleResource,
+): GhostManifest {
+  return {
+    ...manifest,
+    name: resource.name,
+    ...(resource.description !== undefined ? { description: resource.description } : {}),
+    ...(resource.whenToUse !== undefined ? { whenToUse: resource.whenToUse } : {}),
+    ...(manifest.tools !== undefined && resource.tools !== undefined
+      ? {
+          tools: manifest.tools.map((tool) => ({
+            ...tool,
+            description: resource.tools![tool.name].description,
+          })),
+        }
+      : {}),
+  };
+}
+
 /**
  * 校验一份解析后的 ghost.json。宽进严出:忽略未知字段(向前兼容),
  * 已知字段全部严格检查;任何不合格都给出人类可读 reason。
@@ -1522,6 +1669,43 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     (typeof raw.author !== 'string' || raw.author.trim().length === 0 || raw.author.length > 64)
   ) {
     return { ok: false, reason: 'author 必须是 1–64 字符的非空字符串' };
+  }
+  let locales: GhostManifest['locales'];
+  if (raw.locales !== undefined) {
+    if (!isPlainObject(raw.locales)) {
+      return { ok: false, reason: 'locales 必须是语言到 locale JSON 路径的对象' };
+    }
+    const unknownLocale = Object.keys(raw.locales).find(
+      (locale) => !(SUPPORTED_LOCALES as readonly string[]).includes(locale),
+    );
+    if (unknownLocale) {
+      return {
+        ok: false,
+        reason: `locales 含宿主不支持的语言 ${JSON.stringify(unknownLocale)}(可用:${SUPPORTED_LOCALES.join(' / ')})`,
+      };
+    }
+    if (raw.locales.en === undefined) {
+      return { ok: false, reason: 'locales 必须提供 en，作为所有不支持语言的固定回退' };
+    }
+    const normalized: Partial<Record<SupportedLocale, string>> = {};
+    const seenPaths = new Set<string>();
+    for (const locale of SUPPORTED_LOCALES) {
+      const localePath = raw.locales[locale];
+      if (localePath === undefined) continue;
+      if (
+        typeof localePath !== 'string' ||
+        !isSafeGhostRelativePath(localePath) ||
+        !localePath.toLowerCase().endsWith('.json')
+      ) {
+        return { ok: false, reason: `locales.${locale} 必须是安装目录内以 .json 结尾的安全相对路径` };
+      }
+      if (seenPaths.has(localePath)) {
+        return { ok: false, reason: `locales 含重复路径 ${JSON.stringify(localePath)}` };
+      }
+      seenPaths.add(localePath);
+      normalized[locale] = localePath;
+    }
+    locales = normalized as GhostManifest['locales'];
   }
   if (
     raw.description !== undefined &&
@@ -2984,6 +3168,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       version: raw.version,
       kind: 'chip',
       ...(raw.author !== undefined ? { author: raw.author as string } : {}),
+      ...(locales !== undefined ? { locales } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
       ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
@@ -3017,7 +3202,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
  *
  * 上行(电子脑 → 主机,cindy.send(payload) = ipcRenderer.invoke):
  *   - tool-result:交卷。
- *   - host-request:读取宿主公开上下文。目前只支持 app-context(region),
+ *   - host-request:读取宿主公开上下文。目前只支持 app-context(region + locale),
  *     无需声明卡槽、无用户数据与凭证内容。
  *   - cindy-request(旧名 model-request 兼容):cindy 槽代办(意识请 Cindy 本体干活;invoke 的返回值即结果,
  *     无需另配对)。gen_image / edit_image;须声明 'cindy' 卡槽与能力详单。
@@ -3306,6 +3491,8 @@ export interface GhostAppContextResult {
   ok: true;
   context: {
     region: GhostAppRegion;
+    /** 当前宿主应用语言；插件只使用本值，不读取 navigator.language。 */
+    locale: SupportedLocale;
   };
 }
 
