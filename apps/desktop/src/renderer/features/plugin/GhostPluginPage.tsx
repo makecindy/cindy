@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronDown, Download, Plus, Sparkles, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Sparkles, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -853,11 +853,11 @@ function MarketPluginCard({
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
         )}
       >
-        <Download size={13} aria-hidden="true" />
+        <ChevronRight size={13} aria-hidden="true" />
         {t(
           item.installState === 'conflict'
             ? 'settings.ghosts.market.conflict'
-            : 'settings.ghosts.market.install',
+            : 'settings.ghosts.market.details',
         )}
       </button>
     </article>

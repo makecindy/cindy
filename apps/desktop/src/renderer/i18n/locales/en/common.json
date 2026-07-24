@@ -2223,6 +2223,7 @@
           "local": "Local"
         },
         "install": "Install",
+        "details": "Details",
         "update": "Update from market",
         "installed": "Installed",
         "conflict": "Plugin ID conflict",

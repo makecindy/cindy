@@ -2222,6 +2222,7 @@
           "local": "ローカル"
         },
         "install": "インストール",
+        "details": "詳細",
         "update": "マーケットから更新",
         "installed": "インストール済み",
         "conflict": "プラグイン ID の競合",

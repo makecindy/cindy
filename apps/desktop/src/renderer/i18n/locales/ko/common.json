@@ -2222,6 +2222,7 @@
           "local": "로컬"
         },
         "install": "설치",
+        "details": "상세",
         "update": "마켓에서 업데이트",
         "installed": "설치됨",
         "conflict": "플러그인 ID 충돌",

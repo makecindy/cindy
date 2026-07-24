@@ -1894,7 +1894,16 @@ export async function uninstallGhostAndCleanup(
   }
   broadcastGhostsChanged(manager.list());
   if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
-  await completeLedger?.();
+  try {
+    await completeLedger?.();
+  } catch (error) {
+    // The package is already gone; a session switch must not report uninstall
+    // as failed. The next market snapshot reconciles the ledger conservatively.
+    log.warn('market ledger uninstall reconciliation deferred', {
+      id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /** 市场默认安装必须尊重用户对内置插件的显式卸载选择。 */
