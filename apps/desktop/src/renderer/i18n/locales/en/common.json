@@ -5670,11 +5670,6 @@
           "description": "Pre-review new changes on open PRs each weekday and report risks by severity",
           "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits since the last run, citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
         },
-        "repo-weekly-report": {
-          "name": "Repository weekly report",
-          "description": "Summarize weekly progress and risks, with priority suggestions for next week",
-          "prompt": "Summarize this week's development progress in the repository as a report the team can use directly.\nConstraints:\n- Use commits, PRs, issues, and CI status as evidence; organize by theme instead of listing every commit\n- Clearly list completed, in-progress, and blocked items as well as high-risk changes\n- Suggest priorities for next week and explain the reasoning\n- Where evidence is insufficient, state the gap honestly instead of inventing progress"
-        },
         "domain-radar": {
           "name": "Domain radar",
           "description": "Periodically collect the latest updates in a topic you follow and deliver an opinionated digest",

@@ -2,7 +2,6 @@ import type { ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   BookOpenCheck,
-  CalendarDays,
   FileText,
   FlaskConical,
   GitBranch,
@@ -111,8 +110,6 @@ function iconForTemplate(id: string): ComponentType<LucideProps> {
       return FlaskConical;
     case 'pr-gatekeeper':
       return GitPullRequest;
-    case 'repo-weekly-report':
-      return CalendarDays;
     case 'domain-radar':
       return Radar;
     case 'competitor-watch':

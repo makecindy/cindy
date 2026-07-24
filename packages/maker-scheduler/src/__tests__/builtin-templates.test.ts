@@ -21,16 +21,17 @@ describe('BUILTIN_TEMPLATES', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('every template belongs to a declared category, and no category is empty', () => {
+  it('every template belongs to a declared category, with exactly 2 per category', () => {
     const categoryIds = new Set(TEMPLATE_CATEGORIES.map((c) => c.id));
     for (const template of BUILTIN_TEMPLATES) {
       expect(categoryIds.has(template.category), `${template.id} category`).toBe(true);
     }
+    // desktop 模板网格是两列，每类超过 2 条会折行（2026-07-24 产品确认每类固定 2 条）。
     for (const category of TEMPLATE_CATEGORIES) {
       expect(
-        BUILTIN_TEMPLATES.some((t) => t.category === category.id),
-        `category ${category.id} has templates`,
-      ).toBe(true);
+        BUILTIN_TEMPLATES.filter((t) => t.category === category.id).length,
+        `category ${category.id} template count`,
+      ).toBe(2);
     }
   });
 

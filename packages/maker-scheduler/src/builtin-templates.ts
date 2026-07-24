@@ -14,7 +14,8 @@ import type { ScheduleTemplate, TemplateCategory } from './types.js';
  *   绝不周期性读取用户私人账号数据（邮箱、IM、日程）——那类任务每次运行
  *   都消耗用户 token 并把隐私数据喂进定时任务，不作为官方推荐。
  * - 产出必须是可交付物（报告 / 草稿 / PR），不是提醒。
- * - 开发与非开发办公场景各占一半。
+ * - 兼顾开发与非开发办公场景。
+ * - 每个分类固定 2 条：desktop 模板网格是两列，超过 2 条会折行（2026-07-24）。
  */
 
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
@@ -67,25 +68,6 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
     useWorktree: false,
     notify: DEFAULT_NOTIFY,
     capabilities: ['pr'],
-  },
-  {
-    id: 'repo-weekly-report',
-    name: '仓库周报',
-    description: '每周总结仓库进展与风险，给出下周优先级建议',
-    category: 'dev-automation',
-    source: 'builtin',
-    prompt: `总结本周仓库的开发进展，生成一份团队可直接使用的周报。
-约束：
-- 以 commit、PR、issue 和 CI 状态为证据，按主题归纳，不做流水账
-- 明确列出已完成、进行中、被阻塞的事项和高风险改动
-- 给出下周优先级建议，并说明判断依据
-- 证据不足的地方如实说明缺口，不要补编进展`,
-    cronExpr: '0 17 * * 5',
-    timezone: DEFAULT_TIMEZONE,
-    recurring: true,
-    agentKind: 'claude-code',
-    useWorktree: false,
-    notify: DEFAULT_NOTIFY,
   },
   {
     id: 'domain-radar',
