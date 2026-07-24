@@ -111,16 +111,18 @@ export function GhostPluginPage() {
       const snapshot = await window.electronAPI.pluginMarket.snapshot();
       if (requestId === marketRefreshRequestRef.current) setMarketSnapshot(snapshot);
     } catch (error) {
-      if (requestId === marketRefreshRequestRef.current) {
-        setMarketSnapshot((current) =>
-          preserveOnError && current
-            ? current
-            : {
-                items: [],
-                unavailableReason: error instanceof Error ? error.message : String(error),
-              },
-        );
-      }
+      if (requestId !== marketRefreshRequestRef.current) return;
+      setMarketSnapshot((current) =>
+        preserveOnError && current
+          ? current
+          : {
+              items: [],
+              unavailableReason: error instanceof Error ? error.message : String(error),
+            },
+      );
+      // Background icon renewal keeps the current snapshot visible, but must still report
+      // failure to the renewal hook so it can schedule a bounded retry.
+      if (preserveOnError) throw error;
     }
   }, []);
   useEffect(() => {
@@ -516,13 +518,16 @@ export function GhostPluginPage() {
   );
 
   const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
-    const requestId = ++marketDetailRequestRef.current;
+    // A background icon renewal may observe navigation, but must never invalidate a
+    // user-initiated detail request by advancing its request generation.
+    const requestId = marketDetailRequestRef.current;
     try {
       const detail = await window.electronAPI.pluginMarket.detail(pluginId);
       if (requestId !== marketDetailRequestRef.current) return;
       setMarketDetail((current) => (current?.pluginId === pluginId ? detail : current));
-    } catch {
+    } catch (error) {
       // A background URL renewal must not close an otherwise usable detail page.
+      if (requestId === marketDetailRequestRef.current) throw error;
     }
   }, []);
   const visibleMarketIcons = useMemo(

@@ -1,9 +1,10 @@
 import type { PluginIconMetadata } from '@cindy/plugin-protocol';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const ICON_REFRESH_LEAD_MS = 30_000;
 const ICON_REFRESH_MIN_DELAY_MS = 1_000;
 const ICON_ERROR_RECOVERY_COOLDOWN_MS = 30_000;
+const ICON_REFRESH_RETRY_DELAY_MS = 30_000;
 
 type ExpiringPluginIcon = Pick<PluginIconMetadata, 'expiresAt'> | null | undefined;
 
@@ -35,6 +36,7 @@ export function usePluginIconRefresh(
   refreshRef.current = refresh;
   const inFlightRef = useRef<Promise<void> | null>(null);
   const lastErrorRecoveryAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const [retryAtMs, setRetryAtMs] = useState<number | null>(null);
   const refreshAtMs = useMemo(() => earliestPluginIconRefreshAtMs(icons), [icons]);
 
   const requestRefresh = useCallback(() => {
@@ -42,7 +44,10 @@ export function usePluginIconRefresh(
     const request = Promise.resolve().then(() => refreshRef.current());
     inFlightRef.current = request;
     void request
-      .catch(() => undefined)
+      .then(
+        () => setRetryAtMs(null),
+        () => setRetryAtMs(Date.now() + ICON_REFRESH_RETRY_DELAY_MS),
+      )
       .finally(() => {
         if (inFlightRef.current === request) inFlightRef.current = null;
       });
@@ -50,10 +55,11 @@ export function usePluginIconRefresh(
 
   useEffect(() => {
     if (refreshAtMs === null) return;
-    const delayMs = Math.max(ICON_REFRESH_MIN_DELAY_MS, refreshAtMs - Date.now());
+    const scheduledAtMs = retryAtMs ?? refreshAtMs;
+    const delayMs = Math.max(ICON_REFRESH_MIN_DELAY_MS, scheduledAtMs - Date.now());
     const timer = window.setTimeout(requestRefresh, delayMs);
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && refreshAtMs <= Date.now()) {
+      if (document.visibilityState === 'visible' && scheduledAtMs <= Date.now()) {
         requestRefresh();
       }
     };
@@ -62,7 +68,7 @@ export function usePluginIconRefresh(
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshAtMs, requestRefresh]);
+  }, [refreshAtMs, requestRefresh, retryAtMs]);
 
   return useCallback(() => {
     const now = Date.now();

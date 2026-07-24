@@ -73,6 +73,32 @@ describe('usePluginIconRefresh', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it('retries a failed scheduled renewal after a bounded delay', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(START_MS);
+    const refresh = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValue(undefined);
+
+    renderHook(() => usePluginIconRefresh([icon(START_MS + 60_000)], refresh));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_999);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it('deduplicates concurrent image failures and cools down retries', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(START_MS);
