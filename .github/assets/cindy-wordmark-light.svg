@@ -1,8 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6828 2332" role="img" aria-label="CINDY">
-  <!-- CINDY wordmark - source-of-truth vector.
-       Rebuilt 2026-07-12 from the design-final PNG export (6828x2332) via
-       potrace, per-color layers. Letters inherit currentColor so one file
-       serves black/white/mono uses; brand marks are logo-red #F70121
+  <!-- CINDY wordmark - light-background variant, derived from the internal
+       source-of-truth vector (whose letters inherit currentColor). This copy
+       hard-codes the letter fill to #040303 because <img> embeds cannot set
+       currentColor from the host page; the dark-background sibling hard-codes
+       #FFFFFF instead. Brand marks are logo-red #F70121
        (NOTE: logo red differs from brand UI red #F43D3F - intentional, measured).
        The trailing underscore carries id="cursor" for host blink animation. -->
   <g transform="translate(0.000000,2332.000000) scale(0.100000,-0.100000)">
