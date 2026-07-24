@@ -3669,6 +3669,8 @@
       "edit": "Edit",
       "options": "Options",
       "priceTip": "Input {{input}} · Output {{output}} per 1M tokens",
+      "cacheReadPriceTip": "Cache read {{price}} per 1M tokens",
+      "cacheWritePriceTip": "Cache write {{price}} per 1M tokens",
       "trigger": {
         "placeholder": "Select model",
         "aria": "Select model. Current: {{model}}",

@@ -3668,6 +3668,8 @@
       "edit": "编辑",
       "options": "选项",
       "priceTip": "输入 {{input}} · 输出 {{output}} / 百万 token",
+      "cacheReadPriceTip": "缓存读取 {{price}} / 百万 token",
+      "cacheWritePriceTip": "缓存写入 {{price}} / 百万 token",
       "trigger": {
         "placeholder": "选择模型",
         "aria": "选择模型。当前：{{model}}",

@@ -23,8 +23,16 @@
  * createDesktopProviderService.ts,这样依赖本 holder 的纯逻辑模块(及其单测)不被 electron 污染。
  */
 
-import { BUNDLED_CATALOG, type AgentKind, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  type AgentKind,
+  type Catalog,
+  type CatalogModel,
+  type ModelCost,
+  type Provider,
+} from '@cindy/model-providers';
 
+import type { ModelGroupPricing } from '../../shared/modelAccess.js';
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
@@ -53,7 +61,7 @@ export interface XdGatewayAgentOverride {
 }
 
 /** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 同形)。 */
-export interface XdGatewayModelInfo {
+export interface XdGatewayModelInfo extends ModelGroupPricing {
   id: string;
   /** 进哪些 runtime tab;缺省 = 仅 claude-code 兜底。 */
   agents?: AgentKind[];
@@ -87,6 +95,31 @@ export interface XdGatewayModelInfo {
  *  - 目录里有、网关没有 → 不展示。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
+
+function gatewayModelCost(model: XdGatewayModelInfo): ModelCost | undefined {
+  const perMillion = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value * 1_000_000
+      : undefined;
+  const input = perMillion(model.inputCostPerToken);
+  const output = perMillion(model.outputCostPerToken);
+  const cacheRead = perMillion(model.cacheReadInputTokenCost);
+  const cacheWrite = perMillion(model.cacheCreationInputTokenCost);
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(input !== undefined ? { input } : {}),
+    ...(output !== undefined ? { output } : {}),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+  };
+}
 
 /**
  * Anthropic(Claude.ai 订阅)的**权威模型清单**(2026-07-19 统一重构):由 host 的
@@ -416,6 +449,7 @@ function computeMerged(): Catalog {
                 ? efforts[efforts.length - 1]
                 : null;
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
+        const cost = gatewayModelCost(gm);
         const merged: CatalogModel = {
           id: gm.id,
           name: gm.name ?? gm.id,
@@ -428,6 +462,7 @@ function computeMerged(): Catalog {
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
+          ...(cost ? { cost } : {}),
         };
         models[agent]!.push(merged);
       }

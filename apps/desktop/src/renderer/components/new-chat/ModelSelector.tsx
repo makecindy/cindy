@@ -26,6 +26,12 @@ import { useModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
+  formatModelPriceAmount,
+  formatModelPricePair,
+  resolveModelDisplayPrice,
+  type ModelDisplayPrice,
+} from '@/lib/modelPriceDisplay';
+import {
   filterChatBridgedCodexProviders,
   providerMonogram,
   resolveVisibleModelAgentKind,
@@ -44,8 +50,10 @@ import {
   resolveModelIconKind,
   sourcesForModel,
   visibleModelUnion,
+  type ModelCost,
   type ProviderView,
 } from '@cindy/model-providers';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { buildProviderSections } from './sourceSwitch';
 
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
@@ -622,13 +630,45 @@ export function ModelSelectorContent({
   };
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
-  const priceTipOf = (id: string): string | null => {
-    const p = pricing?.[id];
-    if (!p) return null;
-    const fmt = (v: number) => `$${Number(v.toFixed(2))}`;
-    return t('newChat.modelSelector.priceTip', {
-      input: fmt(p.inputUsdPerMtok),
-      output: fmt(p.outputUsdPerMtok),
+  const modelPriceOf = (
+    providerId: string | null,
+    id: string,
+  ): ModelDisplayPrice | null => {
+    if (!currentAgentKind) return null;
+    const effectiveProviderId =
+      providerId ??
+      effectiveSourceIdForModel(
+        providers,
+        currentProviderId,
+        id,
+        currentAgentKind,
+      );
+    const provider = effectiveProviderId
+      ? providers.find((candidate) => candidate.id === effectiveProviderId)
+      : undefined;
+    const catalogCost = provider
+      ? getModel(provider, id, currentAgentKind)?.cost
+      : undefined;
+    const fallback = pricing?.[id];
+    const referenceUsdCost: ModelCost | undefined =
+      catalogCost ??
+      (fallback
+        ? {
+            input: fallback.inputUsdPerMtok,
+            output: fallback.outputUsdPerMtok,
+            ...(fallback.cacheReadUsdPerMtok !== undefined
+              ? { cacheRead: fallback.cacheReadUsdPerMtok }
+              : {}),
+            ...(fallback.cacheCreateUsdPerMtok !== undefined
+              ? { cacheWrite: fallback.cacheCreateUsdPerMtok }
+              : {}),
+          }
+        : undefined);
+    return resolveModelDisplayPrice({
+      providerId: effectiveProviderId,
+      gatewayCost: catalogCost,
+      referenceUsdCost,
+      region: CURRENT_CINDY_REGION,
     });
   };
   const modelDisabledOf = (id: string): boolean => {
@@ -870,7 +910,9 @@ export function ModelSelectorContent({
       effectiveSourceIdForModel(providers, currentProviderId, editingModel.id, currentAgentKind);
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
   }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId]);
-  const editingPrice = editingModel ? priceTipOf(editingModel.id) : null;
+  const editingPrice = editingModel
+    ? modelPriceOf(editingProvider?.id ?? editingProviderId, editingModel.id)
+    : null;
 
   // 每个模型行的信息 / 配置内容由一个独立的 portaled Popover 承载,而不是拼进主菜单宽度。
   // 这样浮层会像 Hermes 的 Radix submenu 一样贴着当前行移动,切行不触发主菜单重排。
@@ -972,7 +1014,40 @@ export function ModelSelectorContent({
           {editingModel.supportsFastMode && (
             <span>{t('newChat.modelSelector.meta.fastBadge')}</span>
           )}
-          {editingPrice && <span>{editingPrice}</span>}
+          {editingPrice && (
+            <span>
+              {t('newChat.modelSelector.priceTip', {
+                input: formatModelPriceAmount(
+                  editingPrice.input,
+                  editingPrice.currency,
+                ),
+                output: formatModelPriceAmount(
+                  editingPrice.output,
+                  editingPrice.currency,
+                ),
+              })}
+            </span>
+          )}
+          {editingPrice?.cacheRead !== undefined && (
+            <span>
+              {t('newChat.modelSelector.cacheReadPriceTip', {
+                price: formatModelPriceAmount(
+                  editingPrice.cacheRead,
+                  editingPrice.currency,
+                ),
+              })}
+            </span>
+          )}
+          {editingPrice?.cacheWrite !== undefined && (
+            <span>
+              {t('newChat.modelSelector.cacheWritePriceTip', {
+                price: formatModelPriceAmount(
+                  editingPrice.cacheWrite,
+                  editingPrice.currency,
+                ),
+              })}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -988,6 +1063,7 @@ export function ModelSelectorContent({
     const disabled = modelDisabledOf(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
+    const rowPrice = modelPriceOf(providerId, model.id);
     // 信息面板对所有可用模型开放;能否编辑 effort / Fast 在面板内部另行判定。
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态
@@ -1109,8 +1185,17 @@ export function ModelSelectorContent({
                 )}
               </span>
             </span>
-            {isSelected && (
-              <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
+            {(rowPrice || isSelected) && (
+              <span className="ml-2 flex shrink-0 items-center gap-1.5">
+                {rowPrice && (
+                  <span className="tabular-nums text-11 font-normal text-[var(--text-tertiary)]">
+                    {formatModelPricePair(rowPrice)}
+                  </span>
+                )}
+                {isSelected && (
+                  <Check size={15} className="shrink-0 text-[var(--model-item-check)]" />
+                )}
+              </span>
             )}
           </div>
         </PopoverAnchor>

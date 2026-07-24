@@ -61,6 +61,45 @@ describe('overlayCindyModelMeta', () => {
     expect(m.contextWindow).toBe(999_000);
   });
 
+  it('本地元数据覆盖和撤销都保留 Gateway 价格字段', () => {
+    const priced: ModelAccessGatewayModel = {
+      ...SERVER_MODEL,
+      costDiscount: 0.2,
+      inputCostPerToken: 0.000003,
+      outputCostPerToken: 0.000015,
+      tieredPricing: [
+        {
+          range: [0, 200_000],
+          inputCostPerToken: 0.000003,
+          outputCostPerToken: 0.000015,
+        },
+      ],
+    };
+    const [overridden] = overlayCindyModelMeta(
+      [priced],
+      envelope({ 'gpt-5.5': LOCAL_ENTRY }),
+    );
+    const [revoked] = overlayCindyModelMeta(
+      [priced],
+      envelope({ 'gpt-5.5': null }),
+    );
+
+    for (const model of [overridden, revoked]) {
+      expect(model).toMatchObject({
+        costDiscount: 0.2,
+        inputCostPerToken: 0.000003,
+        outputCostPerToken: 0.000015,
+        tieredPricing: [
+          {
+            range: [0, 200_000],
+            inputCostPerToken: 0.000003,
+            outputCostPerToken: 0.000015,
+          },
+        ],
+      });
+    }
+  });
+
   it('icon(展示图标)可经本地条目覆盖 / 撤销:字符串透传,非字符串条目整条拒绝', () => {
     const [withIcon] = overlayCindyModelMeta(
       [SERVER_MODEL],

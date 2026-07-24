@@ -3668,6 +3668,8 @@
       "edit": "編集",
       "options": "オプション",
       "priceTip": "入力 {{input}} · 出力 {{output}} / 100万トークン",
+      "cacheReadPriceTip": "キャッシュ読み取り {{price}} / 100万トークン",
+      "cacheWritePriceTip": "キャッシュ書き込み {{price}} / 100万トークン",
       "trigger": {
         "placeholder": "モデルを選択",
         "aria": "モデルを選択。現在：{{model}}",

@@ -17,6 +17,8 @@ import { useEffect, useState } from 'react';
 export interface ModelPrice {
   inputUsdPerMtok: number;
   outputUsdPerMtok: number;
+  cacheReadUsdPerMtok?: number;
+  cacheCreateUsdPerMtok?: number;
 }
 
 export type ModelPricingMap = Record<string, ModelPrice>;
@@ -27,11 +29,26 @@ let inflight: Promise<ModelPricingMap | null> | null = null;
 function isValidMap(v: unknown): v is ModelPricingMap {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   return Object.values(v as Record<string, unknown>).every(
-    (p) =>
-      !!p &&
-      typeof p === 'object' &&
-      typeof (p as ModelPrice).inputUsdPerMtok === 'number' &&
-      typeof (p as ModelPrice).outputUsdPerMtok === 'number',
+    (p) => {
+      if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
+      const price = p as ModelPrice;
+      return (
+        typeof price.inputUsdPerMtok === 'number' &&
+        Number.isFinite(price.inputUsdPerMtok) &&
+        price.inputUsdPerMtok >= 0 &&
+        typeof price.outputUsdPerMtok === 'number' &&
+        Number.isFinite(price.outputUsdPerMtok) &&
+        price.outputUsdPerMtok >= 0 &&
+        (price.cacheReadUsdPerMtok === undefined ||
+          (typeof price.cacheReadUsdPerMtok === 'number' &&
+            Number.isFinite(price.cacheReadUsdPerMtok) &&
+            price.cacheReadUsdPerMtok >= 0)) &&
+        (price.cacheCreateUsdPerMtok === undefined ||
+          (typeof price.cacheCreateUsdPerMtok === 'number' &&
+            Number.isFinite(price.cacheCreateUsdPerMtok) &&
+            price.cacheCreateUsdPerMtok >= 0))
+      );
+    },
   );
 }
 

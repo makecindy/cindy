@@ -3668,6 +3668,8 @@
       "edit": "편집",
       "options": "옵션",
       "priceTip": "입력 {{input}} · 출력 {{output}} / 100만 토큰",
+      "cacheReadPriceTip": "캐시 읽기 {{price}} / 100만 토큰",
+      "cacheWritePriceTip": "캐시 쓰기 {{price}} / 100만 토큰",
       "trigger": {
         "placeholder": "모델 선택",
         "aria": "모델 선택. 현재: {{model}}",

@@ -19,6 +19,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         value?: string;
         model?: string;
         effort?: string;
+        price?: string;
       },
     ) => {
       const translations: Record<string, string> = {
@@ -552,7 +553,10 @@ describe('ModelSelector trigger variants', () => {
     expect(within(options).getByText('Most capable for ambitious work')).toBeTruthy();
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
-    const price = within(options).getByText('Input $3 · Output $15 per 1M tokens');
+    const price = within(options).getByText(
+      'Input ¥20.1 · Output ¥100.5 per 1M tokens',
+    );
+    expect(within(row).getByText('¥20.1 / ¥100.5')).toBeTruthy();
     const firstChoice = within(options).getByRole('option', { name: 'low' });
     const description = within(options).getByText('Most capable for ambitious work');
     expect(
