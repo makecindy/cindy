@@ -72,16 +72,24 @@ describe('useFeishuBot', () => {
 
   it('updates the live owner and module cache when main claims the first sender', async () => {
     const { api, statusListeners } = installFeishuApi();
+    api.getState.mockResolvedValueOnce({
+      status: 'connected',
+      appId: 'cli_hydrated_owner_test',
+      appSecret: null,
+      hasSecret: true,
+      ownerOpenId: null,
+      lifecycleAnnouncement: true,
+    });
     const first = renderHook(() => useFeishuBot());
 
-    await waitFor(() => expect(first.result.current.status).toBe('connected'));
+    await waitFor(() => expect(first.result.current.appId).toBe('cli_hydrated_owner_test'));
     expect(first.result.current.ownerOpenId).toBeNull();
 
     act(() => {
       for (const listener of statusListeners) {
         listener({
           status: 'connected',
-          botAppId: 'cli_test',
+          botAppId: 'cli_hydrated_owner_test',
           ownerOpenId: 'ou_new_owner',
         });
       }
