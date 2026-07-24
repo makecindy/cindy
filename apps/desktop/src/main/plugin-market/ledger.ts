@@ -59,6 +59,16 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
 export class PluginMarketLedger {
   constructor(private readonly filePathSource: string | (() => string)) {}
 
+  /**
+   * Binds a dynamic owner-scoped ledger to the path captured at operation start.
+   * Static test/isolated ledgers keep their instance so callers can inspect them.
+   */
+  bind(filePath: string): PluginMarketLedger {
+    return typeof this.filePathSource === 'function'
+      ? new PluginMarketLedger(filePath)
+      : this;
+  }
+
   private filePath(): string {
     return typeof this.filePathSource === 'function'
       ? this.filePathSource()

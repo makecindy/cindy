@@ -97,4 +97,20 @@ describe('PluginMarketLedger', () => {
     expect(fs.existsSync(path.join(root, 'owner-a', 'ledger.v1.json'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'owner-b', 'ledger.v1.json'))).toBe(false);
   });
+
+  it('keeps a bound owner path stable after the active owner changes', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-plugin-ledger-bound-'));
+    roots.push(root);
+    let owner = 'owner-a';
+    const ledger = new PluginMarketLedger(() =>
+      path.join(root, owner, 'ledger.v1.json'),
+    );
+    const bound = ledger.bind(path.join(root, owner, 'ledger.v1.json'));
+
+    owner = 'owner-b';
+    bound.upsertInstallation(record());
+
+    expect(fs.existsSync(path.join(root, 'owner-a', 'ledger.v1.json'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'owner-b', 'ledger.v1.json'))).toBe(false);
+  });
 });

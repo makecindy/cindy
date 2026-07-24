@@ -148,6 +148,7 @@ interface LocalInstallSnapshot {
  */
 export class PluginMarketService {
   private readonly mutations = new Map<string, Promise<unknown>>();
+  private ledgerMutation: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly api = new PluginMarketApi(),
@@ -180,11 +181,12 @@ export class PluginMarketService {
     }
 
     requireSameCloudOwner(owner);
-    this.adoptLegacyInstallations(plugins);
-    this.reconcileRemovedInstallations();
-    await this.applyDefaultInstalls(plugins, owner);
+    const ledger = this.ledgerForOwner(owner);
+    await this.adoptLegacyInstallations(plugins, ledger, owner);
+    await this.reconcileRemovedInstallations(ledger, owner);
+    await this.applyDefaultInstalls(plugins, owner, ledger);
     requireSameCloudOwner(owner);
-    return { items: this.toItems(plugins), unavailableReason: null };
+    return { items: this.toItems(plugins, ledger), unavailableReason: null };
   }
 
   async detail(pluginId: string): Promise<PluginMarketDetail> {
@@ -198,7 +200,11 @@ export class PluginMarketService {
       throw new Error(`当前 Cindy 不支持此 Plugin 清单: ${compatible.reason}`);
     }
     return {
-      ...this.toItem(plugin),
+      ...this.toItem(
+        plugin,
+        NO_DUPLICATE_GHOST_IDS,
+        this.localInstallSnapshot(this.ledgerForOwner(owner)),
+      ),
       manifest: compatible.manifest,
     };
   }
@@ -210,6 +216,7 @@ export class PluginMarketService {
     if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
     this.requireConfigured();
     const owner = captureCloudOwner();
+    const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameCloudOwner(owner);
       const catalog = await this.api.listAll();
@@ -227,6 +234,7 @@ export class PluginMarketService {
           plugin,
           options?.allowPermissionExpansion === true,
           owner,
+          ledger,
         ),
       };
     });
@@ -235,9 +243,10 @@ export class PluginMarketService {
   async uninstall(pluginId: string): Promise<{ ok: true }> {
     if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
     const owner = captureCloudOwner();
+    const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameCloudOwner(owner);
-      const data = this.ledger.read();
+      const data = ledger.read();
       const record = Object.values(data.installations).find(
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
       );
@@ -245,7 +254,9 @@ export class PluginMarketService {
       requireSameCloudOwner(owner);
       await uninstallGhostAndCleanup(record.ghostId);
       requireSameCloudOwner(owner);
-      this.ledger.markRemoved(record.ghostId, getCurrentUserId());
+      await this.withLedgerMutation(owner, () => {
+        ledger.markRemoved(record.ghostId, getCurrentUserId());
+      });
       return { ok: true };
     });
   }
@@ -254,12 +265,13 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     allowPermissionExpansion = false,
     owner = captureCloudOwner(),
+    ledger = this.ledgerForOwner(owner),
   ): Promise<InstalledGhost> {
     requireSameCloudOwner(owner);
     const existing = getGhostManager()
       .list()
       .find((ghost) => ghost.manifest.id === plugin.ghostId);
-    const currentRecord = this.ledger.installationForGhost(plugin.ghostId);
+    const currentRecord = ledger.installationForGhost(plugin.ghostId);
     if (
       existing &&
       (!currentRecord || currentRecord.pluginId !== plugin.id)
@@ -303,7 +315,9 @@ export class PluginMarketService {
         version: plugin.currentRelease.version,
       });
       requireSameCloudOwner(owner);
-      this.ledger.upsertInstallation(recordFrom(plugin, 'market'));
+      await this.withLedgerMutation(owner, () => {
+        ledger.upsertInstallation(recordFrom(plugin, 'market'));
+      });
       return ghost;
     } finally {
       await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
@@ -316,14 +330,17 @@ export class PluginMarketService {
     }
   }
 
-  private toItems(plugins: readonly VisiblePluginSummary[]): PluginMarketItem[] {
+  private toItems(
+    plugins: readonly VisiblePluginSummary[],
+    ledger = this.ledger,
+  ): PluginMarketItem[] {
     const counts = ghostIdCounts(plugins);
     const duplicateGhostIds = new Set(
       plugins
         .filter((plugin) => (counts.get(plugin.ghostId) ?? 0) > 1)
         .map((plugin) => plugin.ghostId),
     );
-    const local = this.localInstallSnapshot();
+    const local = this.localInstallSnapshot(ledger);
     return plugins.map((plugin) => this.toItem(plugin, duplicateGhostIds, local));
   }
 
@@ -366,9 +383,13 @@ export class PluginMarketService {
     };
   }
 
-  private adoptLegacyInstallations(plugins: readonly VisiblePluginSummary[]): void {
+  private async adoptLegacyInstallations(
+    plugins: readonly VisiblePluginSummary[],
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
     const counts = ghostIdCounts(plugins);
-    const installations = this.ledger.read().installations;
+    const installations = ledger.read().installations;
     for (const ghost of getGhostManager().list()) {
       if (installations[ghost.manifest.id]) continue;
       if (!isOfficialGhostId(ghost.manifest.id)) continue;
@@ -380,7 +401,9 @@ export class PluginMarketService {
       );
       if (matches.length !== 1) continue;
       const record = legacyRecordFrom(matches[0], ghost);
-      this.ledger.upsertInstallation(record);
+      await this.withLedgerMutation(owner, () => {
+        ledger.upsertInstallation(record);
+      });
       installations[record.ghostId] = record;
       log.info('legacy plugin adopted into market ledger', {
         ghostId: ghost.manifest.id,
@@ -390,14 +413,19 @@ export class PluginMarketService {
     }
   }
 
-  private reconcileRemovedInstallations(): void {
+  private async reconcileRemovedInstallations(
+    ledger: PluginMarketLedger,
+    owner: ActiveAppSession,
+  ): Promise<void> {
     const installedIds = new Set(
       getGhostManager().list().map((ghost) => ghost.manifest.id),
     );
     const userId = getCurrentUserId();
-    for (const record of Object.values(this.ledger.read().installations)) {
+    for (const record of Object.values(ledger.read().installations)) {
       if (record.installed && !installedIds.has(record.ghostId)) {
-        this.ledger.markRemoved(record.ghostId, userId);
+        await this.withLedgerMutation(owner, () => {
+          ledger.markRemoved(record.ghostId, userId);
+        });
       }
     }
   }
@@ -405,6 +433,7 @@ export class PluginMarketService {
   private async applyDefaultInstalls(
     plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
+    ledger: PluginMarketLedger,
   ): Promise<void> {
     const user = getAuthState().user;
     if (!user) return;
@@ -414,11 +443,11 @@ export class PluginMarketService {
         .filter((plugin) => counts.get(plugin.ghostId) === 1)
         .map((plugin) => plugin.ghostId),
     );
-    const ledger = this.ledger.read();
-    const local = this.localInstallSnapshot(ledger.installations);
+    const ledgerData = ledger.read();
+    const local = this.localInstallSnapshot(ledger, ledgerData.installations);
     for (const summary of plugins) {
       if (!summary.defaultInstall || !uniqueGhostIds.has(summary.ghostId)) continue;
-      if (ledger.defaultInstallOptOuts[user.id]?.includes(summary.id)) continue;
+      if (ledgerData.defaultInstallOptOuts[user.id]?.includes(summary.id)) continue;
       if (isBuiltinGhostRemovedByUser(summary.ghostId)) continue;
       const state = this.toItem(summary, NO_DUPLICATE_GHOST_IDS, local).installState;
       if (state !== 'not-installed') continue;
@@ -426,7 +455,7 @@ export class PluginMarketService {
         await this.withMutation(summary.id, async () => {
           requireSameCloudOwner(owner);
           const detail = await this.api.detail(summary.id);
-          await this.installDetail(detail, false, owner);
+          await this.installDetail(detail, false, owner, ledger);
         });
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。
@@ -439,7 +468,8 @@ export class PluginMarketService {
   }
 
   private localInstallSnapshot(
-    installations = this.ledger.read().installations,
+    ledger = this.ledger,
+    installations = ledger.read().installations,
   ): LocalInstallSnapshot {
     return {
       ghostsById: new Map(
@@ -447,6 +477,28 @@ export class PluginMarketService {
       ),
       installations,
     };
+  }
+
+  private ledgerForOwner(owner: ActiveAppSession): PluginMarketLedger {
+    requireSameCloudOwner(owner);
+    return this.ledger.bind(
+      ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
+    );
+  }
+
+  private withLedgerMutation<T>(
+    owner: ActiveAppSession,
+    operation: () => T | Promise<T>,
+  ): Promise<T> {
+    const current = this.ledgerMutation.then(() => {
+      requireSameCloudOwner(owner);
+      return operation();
+    });
+    this.ledgerMutation = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
   }
 
   private withMutation<T>(pluginId: string, operation: () => Promise<T>): Promise<T> {
