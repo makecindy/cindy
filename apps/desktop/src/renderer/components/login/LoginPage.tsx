@@ -116,8 +116,10 @@ export function LoginPage() {
   const { reportPanelBottomReserve } = handoff;
   useLayoutEffect(() => {
     reportPanelBottomReserve(panelBottomReserve);
-    return () => reportPanelBottomReserve(null);
   }, [panelBottomReserve, reportPanelBottomReserve]);
+  useLayoutEffect(() => {
+    return () => reportPanelBottomReserve(null);
+  }, [reportPanelBottomReserve]);
   const isGlobalBuild = import.meta.env.VITE_CINDY_AUTH_REGION === 'global';
   // identifier 形态 = 构建区域确定性推导(用户拍板 2026-07-21:手机/邮箱分区互斥,
   // 双 tab 切换移除);providers 仅兜底区域首选方式未下发的场景。
