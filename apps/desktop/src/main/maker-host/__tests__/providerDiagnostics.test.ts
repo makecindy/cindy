@@ -136,6 +136,25 @@ describe('buildProbeRequest', () => {
     });
   });
 
+  it('codex Chat bridge wire：/chat/completions 基础流式探测,不强制 tool_choice', () => {
+    const { url, init } = buildProbeRequest({
+      agent: 'codex',
+      baseUrl: 'https://api.deepseek.com/v1',
+      modelId: 'deepseek-chat',
+      wireProtocol: 'openai-chat',
+      apiKey: 'sk-ds',
+    });
+    expect(url).toBe('https://api.deepseek.com/v1/chat/completions');
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(body.messages).toEqual([{ role: 'user', content: 'ping' }]);
+    // 不带 tools / 强制 tool_choice —— 思考模型(DeepSeek deepseek-v4-pro)会拒强制工具,
+    // 导致可达端点被误报失败;工具能力交给真实会话验证。
+    expect(body.tools).toBeUndefined();
+    expect(body.tool_choice).toBeUndefined();
+  });
+
   it('无 key 时不注入鉴权头（端点可能靠自定义 headers 鉴权）', () => {
     const { init } = buildProbeRequest({
       agent: 'claude-code',
@@ -181,6 +200,49 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     );
     expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE' });
   });
+
+  it('openai-chat 探测:200 text/event-stream → ok', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
+      async () => new Response('data: {}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('openai-chat 探测:200 SSE 顶层 error 帧 → 分类失败', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
+      async () => new Response(
+        'data: {"error":{"type":"server_error","message":"model overloaded"}}\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_ERROR', status: 200 });
+  });
+
+  it('openai-chat 探测:200 SSE 无 data 帧 → WIRE_INCOMPATIBLE', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
+      async () => new Response(': keepalive\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 200 });
+  });
+
+  it('openai-chat 探测:200 但非 SSE(application/json)→ WIRE_INCOMPATIBLE(与真实桥同口径)', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
+      async () => new Response('{"choices":[]}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 200 });
+  });
+
+  it('原生 Responses(codex 无 openai-chat)不做 SSE 校验:200 JSON 仍 ok', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    expect(r.ok).toBe(true);
+  });
 });
 
 describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
@@ -206,6 +268,33 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       apiKey: 'sk-saved',
       headers: { 'x-tenant': 't1' },
     });
+  });
+
+  it('api-key-header + openai-chat 供应商:saved 探测带上 wireProtocol → 打 /chat/completions', async () => {
+    const chatConfig = {
+      id: 'ds-chat',
+      name: 'DeepSeek Chat',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.deepseek.com',
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' }],
+        },
+      },
+    };
+    setCustomProviders([buildUserProvider(chatConfig)]);
+    setDiagnosticsKeyReader(() => 'sk-ds');
+    // resolveSavedProbeSpec 必须回带 wireProtocol，否则 buildProbeRequest 回落原生 /responses。
+    expect(resolveSavedProbeSpec('ds-chat', 'codex').wireProtocol).toBe('openai-chat');
+    let seenUrl = '';
+    await testProviderConnection(
+      { kind: 'saved', providerId: 'ds-chat', agent: 'codex' },
+      async (url) => {
+        seenUrl = String(url);
+        return fakeResponse(200, 'data: [DONE]\n\n');
+      },
+    );
+    expect(seenUrl).toBe('https://api.deepseek.com/chat/completions');
   });
 
   it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', () => {

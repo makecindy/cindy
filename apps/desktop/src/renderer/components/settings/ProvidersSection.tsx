@@ -760,6 +760,7 @@ function providerViewToConfig(p: ProviderView): CustomProviderConfig {
     const models = p.models[agent] ?? [];
     runtimes[agent] = {
       baseUrl: routing?.upstream ?? '',
+      ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
       models: models.map(customProviderModelConfigFromCatalogModel),
       ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
         ? { headers: { ...routing.headerOverride } }

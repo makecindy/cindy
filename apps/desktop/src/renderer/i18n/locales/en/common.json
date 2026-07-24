@@ -1139,6 +1139,7 @@
           "name": "Display name",
           "namePlaceholder": "My AI provider",
           "protocols": "Runtime",
+          "wireProtocol": "Upstream protocol",
           "baseUrl": "Base URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API key",
@@ -1156,11 +1157,17 @@
           "addHeader": "Add header",
           "removeRow": "Remove row"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses (native)",
+          "chat": "Chat Completions (Cindy bridge)",
+          "responsesHelp": "The provider supports the Responses API natively, so Cindy forwards its event stream unchanged.",
+          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable."
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
           "codex": "Codex",
-          "codexDesc": "Codex follows the OpenAI protocol (auth via Bearer). Requires models that support the Responses API. Enter this source's baseURL, key, and models for Codex; leave blank to skip Codex for this source."
+          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose a native Responses upstream or let Cindy bridge a provider that only supports Chat Completions. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
         },
         "errors": {
           "nameRequired": "Display name is required",
@@ -1291,6 +1298,7 @@
         "authorizeFailed": "Failed to authorize {{name}}. Please try again",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
+        "bridgedNote": "Cindy bridge (Chat Completions)",
         "docsLink": "View setup docs",
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",

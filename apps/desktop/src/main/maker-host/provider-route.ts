@@ -253,6 +253,81 @@ export function providerRoutingServesWireModel(
  *                   auto 模式的安全分类器等)不属于订阅直连供应商的服务范围,必须回落默认路由,
  *                   否则被误送到无法服务它的上游 → 分类器必挂、工具全被拦(issue #886)。
  */
+export function getSessionRoutingDescriptor(
+  sessionId: string,
+  agent: AgentKind,
+  wireModel?: string,
+): RoutingDescriptor | null {
+  const providerId = getSessionProvider(sessionId);
+  if (!providerId) return null;
+  const routing = getActiveCatalog().providers.find((provider) => provider.id === providerId)?.routing[agent];
+  if (!routing || !routingServesWireModel(routing, wireModel)) return null;
+  return routing;
+}
+
+export interface ResolvedSessionRoute {
+  providerId: string;
+  providerSource: 'builtin' | 'user';
+  routing: RoutingDescriptor;
+  apiKey: string | null;
+  oauthToken: string | null;
+}
+
+/**
+ * 解析会话选定来源的完整运行时素材，供需要本地协议 handler 的路径使用。
+ * 普通透明转发仍走 resolveSessionRouteDecision，避免改变历史返回形态。
+ */
+export async function resolveSessionRoute(
+  sessionId: string,
+  agent: AgentKind,
+  wireModel?: string,
+): Promise<ResolvedSessionRoute | null> {
+  const providerId = getSessionProvider(sessionId);
+  if (!providerId) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const routing = provider?.routing[agent];
+  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
+  const apiKey = provider.source === 'user' ? customProviderKeyReader(providerId, agent) : null;
+  let oauthToken: string | null = null;
+  if (routing.authStrategy === 'oauth-token') oauthToken = oauthTokenReader(providerId);
+  else if (routing.authStrategy === 'provider-oauth-header') {
+    try {
+      oauthToken = await providerOAuthTokenReader(providerId, agent);
+    } catch {
+      oauthToken = null;
+    }
+  }
+  return {
+    providerId,
+    providerSource: provider.source,
+    routing,
+    apiKey,
+    oauthToken,
+  };
+}
+
+/** Build outbound headers for an already resolved local protocol handler. */
+export function buildLocalHandlerHeaders(route: ResolvedSessionRoute, agent: AgentKind): {
+  headers: Record<string, string>;
+  headerDelete: string[];
+} {
+  const headers: Record<string, string> = { ...(route.routing.headerOverride ?? {}) };
+  const headerDelete = new Set(route.routing.headerDelete ?? []);
+  switch (route.routing.authStrategy) {
+    case 'api-key-header':
+      if (route.apiKey) headers.authorization = `Bearer ${route.apiKey}`;
+      break;
+    case 'oauth-token':
+    case 'provider-oauth-header':
+      headers.authorization = `Bearer ${route.oauthToken || MISSING_PROVIDER_OAUTH_TOKEN}`;
+      break;
+    case 'gateway-key':
+    case 'oauth-passthrough':
+      break;
+  }
+  if (agent === 'codex') for (const name of CODEX_ACCOUNT_HEADERS) headerDelete.add(name);
+  return { headers, headerDelete: [...headerDelete] };
+}
 export function resolveSessionRouteDecision(
   sessionId: string,
   agent: AgentKind,

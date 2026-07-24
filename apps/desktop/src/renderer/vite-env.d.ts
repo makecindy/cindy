@@ -3375,6 +3375,7 @@ interface ElectronAPI {
               agent: 'claude-code' | 'codex';
               baseUrl: string;
               modelId: string;
+              wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
               apiKey?: string | null;
               headers?: Record<string, string>;
             };

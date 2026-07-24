@@ -238,6 +238,22 @@ describe('routing modelPrefixes 服务范围契约 (issue #886)', () => {
   });
 });
 
+describe('routing wireProtocol per-agent 契约', () => {
+  it('parseCatalog 拒绝 claude-code 使用 openai-chat', () => {
+    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const anthropic = bad.providers.find((p) => p.id === 'anthropic')!;
+    anthropic.routing['claude-code'] = { ...anthropic.routing['claude-code']!, wireProtocol: 'openai-chat' };
+    expect(() => parseCatalog(bad)).toThrow(/openai-chat/);
+  });
+
+  it('parseCatalog 拒绝 codex 使用 anthropic-messages(codex host 只实现 Responses 与本地 Chat 桥)', () => {
+    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = bad.providers.find((p) => p.id === 'xai')!;
+    xai.routing.codex = { ...xai.routing.codex!, wireProtocol: 'anthropic-messages' };
+    expect(() => parseCatalog(bad)).toThrow(/anthropic-messages/);
+  });
+});
+
 describe('runtime-injected registry semantics(生产形态:动态清单注入后)', () => {
   const views = buildRegistry(runtimeCatalog(), { anthropic: true, openai: true, xai: true, xd: true });
 

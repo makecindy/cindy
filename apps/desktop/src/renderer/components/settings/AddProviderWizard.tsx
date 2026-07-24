@@ -440,6 +440,7 @@ export function AddProviderWizard({
         if (agentModels.length === 0) continue;
         runtimes[agent] = {
           baseUrl: rt.baseUrl,
+          ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
           models: agentModels,
           ...(rt.headers ? { headers: rt.headers } : {}),
           ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
@@ -717,13 +718,19 @@ export function AddProviderWizard({
                   }}
                 />
               </div>
-              {/* baseUrl 由预设携带,只读展示(要改走保存后的编辑表单)。 */}
+              {/* baseUrl 由预设携带,只读展示(要改走保存后的编辑表单)。
+                  codex + openai-chat 上游标注「Cindy 桥接」,让用户明确该通道是协议转换而非原生。 */}
               <div className="flex flex-col gap-1">
-                {presetAgents.map((agent) => (
-                  <span key={agent} className="truncate text-12" style={{ color: 'var(--text-tertiary)' }}>
-                    {AGENT_LABEL[agent]} · {sel.preset.runtimes[agent]?.baseUrl}
-                  </span>
-                ))}
+                {presetAgents.map((agent) => {
+                  const rt = sel.preset.runtimes[agent];
+                  const bridged = agent === 'codex' && rt?.wireProtocol === 'openai-chat';
+                  return (
+                    <span key={agent} className="truncate text-12" style={{ color: 'var(--text-tertiary)' }}>
+                      {AGENT_LABEL[agent]} · {rt?.baseUrl}
+                      {bridged ? ` · ${t('settings.providers.wizard.bridgedNote')}` : ''}
+                    </span>
+                  );
+                })}
               </div>
               {presetSingleAgentNote && <InfoLine text={presetSingleAgentNote} />}
               {sel.preset.docsUrl && (

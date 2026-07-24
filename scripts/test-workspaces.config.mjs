@@ -103,6 +103,7 @@ export default {
     requiredUnitWorkspace('mobile', 'apps/mobile'),
     requiredUnitWorkspace('@cindy/anthropic-compat-proxy', 'packages/anthropic-compat-proxy'),
     requiredUnitWorkspace('@cindy/anthropic-responses-bridge', 'packages/anthropic-responses-bridge'),
+    requiredUnitWorkspace('@cindy/responses-chat-bridge', 'packages/responses-chat-bridge'),
     requiredUnitWorkspace('@cindy/auth-client', 'packages/auth-client'),
     requiredUnitWorkspace('@cindy/browser-control-runtime', 'packages/browser-control-runtime'),
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),

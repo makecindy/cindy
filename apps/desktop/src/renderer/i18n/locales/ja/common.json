@@ -1139,6 +1139,7 @@
           "name": "表示名",
           "namePlaceholder": "マイ AI プロバイダー",
           "protocols": "Runtime",
+          "wireProtocol": "上流プロトコル",
           "baseUrl": "ベース URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API キー",
@@ -1156,11 +1157,17 @@
           "addHeader": "ヘッダーを追加",
           "removeRow": "この行を削除"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses（ネイティブ）",
+          "chat": "Chat Completions（Cindy ブリッジ）",
+          "responsesHelp": "プロバイダーが Responses API をネイティブ対応しているため、Cindy はイベントストリームをそのまま転送します。",
+          "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
           "codex": "Codex",
-          "codexDesc": "Codex は OpenAI プロトコルに従います（Bearer で認証）、Responses API に対応するモデルが必要です。この提供元の Codex 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Codex を提供しません。"
+          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブの上流、または Chat Completions のみを提供するプロバイダーを Cindy でブリッジする方式を選べます。この提供元の Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",
@@ -1290,6 +1297,7 @@
         "authorizeFailed": "「{{name}}」の認証に失敗しました。もう一度お試しください",
         "nameLabel": "表示名",
         "onlyAgentNote": "このプロバイダーは {{agent}} のみ対応です",
+        "bridgedNote": "Cindy ブリッジ（Chat Completions）",
         "docsLink": "接続ドキュメントを見る",
         "fetching": "接続を確認してモデル一覧を取得しています…",
         "fetchFailed": "モデル一覧を取得できませんでした。プリセットの推奨モデルで追加を完了し、あとで詳細から更新できます",

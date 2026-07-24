@@ -1139,6 +1139,7 @@
           "name": "显示名称",
           "namePlaceholder": "我的 AI 提供商",
           "protocols": "Runtime",
+          "wireProtocol": "上游协议",
           "baseUrl": "基础 URL",
           "baseUrlPlaceholder": "https://api.myprovider.com/v1",
           "apiKey": "API 密钥",
@@ -1156,11 +1157,17 @@
           "addHeader": "添加请求头",
           "removeRow": "删除该行"
         },
+        "wireProtocol": {
+          "responses": "OpenAI Responses（原生）",
+          "chat": "Chat Completions（Cindy 桥接）",
+          "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
+          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型,留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 遵循 OpenAI 协议(用 Bearer 鉴权),需要提供支持 Responses API 的模型。填该来源用于 Codex 的 baseURL、密钥与模型,留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接仅支持 Chat Completions 的供应商。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1290,6 +1297,7 @@
         "authorizeFailed": "「{{name}}」授权失败,请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
+        "bridgedNote": "Cindy 桥接（Chat Completions）",
         "docsLink": "查看接入文档",
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加,稍后在详情里刷新",
