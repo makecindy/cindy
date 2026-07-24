@@ -285,6 +285,23 @@ describe('BillingPage remote catalog rendering', () => {
     ).toBeTruthy();
   });
 
+  it('refreshes the balance once when a checkout becomes completed', async () => {
+    const getBalance = window.electronAPI.billing.getBalance;
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(getBalance).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, { phase: 'AWAITING_PAYMENT' });
+    view.rerender(<BillingPage />);
+    expect(getBalance).toHaveBeenCalledTimes(1);
+
+    Object.assign(checkout.state, { phase: 'COMPLETED' });
+    view.rerender(<BillingPage />);
+    await waitFor(() => expect(getBalance).toHaveBeenCalledTimes(2));
+
+    view.rerender(<BillingPage />);
+    expect(getBalance).toHaveBeenCalledTimes(2);
+  });
+
   it('does not show zero or block purchases when balance is not provisioned', async () => {
     window.electronAPI.billing.getBalance = vi.fn(async () => {
       throw Object.assign(new Error('[NOT_FOUND] balance account is not provisioned'), {

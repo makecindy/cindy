@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowRight,
@@ -162,6 +162,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [selectedPurchaseOptionId, setSelectedPurchaseOptionId] = useState<string | null>(null);
   const [customAmount, setCustomAmount] = useState('');
   const checkout = useBillingCheckout(accountId);
+  const previousCheckoutPhaseRef = useRef(checkout.state.phase);
 
   const resetSelection = useCallback(() => {
     setSelectedOfferCode(null);
@@ -169,13 +170,24 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setCustomAmount('');
   }, []);
 
+  const loadBalance = useCallback(async () => {
+    setLoadingBalance(true);
+    setBalanceError(null);
+    try {
+      setBalance(await billingApi.getBalance());
+    } catch (error) {
+      setBalance(null);
+      setBalanceError(balanceIssue(error));
+    } finally {
+      setLoadingBalance(false);
+    }
+  }, []);
+
   const loadBillingState = useCallback(async () => {
     setLoadingCatalog(true);
     setLoadingSubscription(true);
-    setLoadingBalance(true);
     setCatalogError(false);
     setSubscriptionError(false);
-    setBalanceError(null);
     await Promise.allSettled([
       billingApi
         .getCatalog()
@@ -194,15 +206,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
           },
         )
         .finally(() => setLoadingSubscription(false)),
-      billingApi
-        .getBalance()
-        .then(setBalance, (error) => {
-          setBalance(null);
-          setBalanceError(balanceIssue(error));
-        })
-        .finally(() => setLoadingBalance(false)),
+      loadBalance(),
     ]);
-  }, []);
+  }, [loadBalance]);
 
   useEffect(() => {
     void loadBillingState();
@@ -214,6 +220,14 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setSubscriptionError(false);
     }
   }, [checkout.state.subscription]);
+
+  useEffect(() => {
+    const previousPhase = previousCheckoutPhaseRef.current;
+    previousCheckoutPhaseRef.current = checkout.state.phase;
+    if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
+      void loadBalance();
+    }
+  }, [checkout.state.phase, loadBalance]);
 
   const offers = useMemo<PurchasableOffer[]>(() => {
     if (!catalog) return [];
