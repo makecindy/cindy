@@ -24,7 +24,12 @@ describe('Windows startup PowerShell compatibility', () => {
     expect(reaper).not.toContain("await import('@vscode/windows-process-tree')");
     expect(shortcuts.toLowerCase()).not.toContain('powershell.exe');
     expect(shortcuts).not.toContain('node:child_process');
-    expect(shortcuts).toContain('shell.readShortcutLink');
+    // Resolution must not use the synchronous Electron main-thread API: a single
+    // slow/redirected shell.readShortcutLink call cannot be interrupted by the
+    // cleanup deadline and would freeze startup. Parse the raw bytes with async fs.
+    expect(shortcuts).not.toContain('shell.readShortcutLink');
+    expect(shortcuts).toContain("import fs from 'node:fs/promises'");
+    expect(shortcuts).toContain('await fs.readFile');
   });
 
   it('awaits orphan ownership scanning before any concurrent teardown', () => {

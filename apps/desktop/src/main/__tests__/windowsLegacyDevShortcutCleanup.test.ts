@@ -7,11 +7,6 @@ vi.mock('electron', () => ({
       throw new Error('not used in tests');
     },
   },
-  shell: {
-    readShortcutLink: () => {
-      throw new Error('not used in tests');
-    },
-  },
 }));
 vi.mock('../logger', () => ({
   createLogger: () => ({
@@ -24,7 +19,9 @@ vi.mock('../logger', () => ({
 
 import {
   cleanupLegacyDevShortcuts,
+  parseWindowsShortcut,
   type LegacyDevShortcutCleanupDeps,
+  type LegacyShortcutDetails,
 } from '../windowsLegacyDevShortcutCleanup';
 
 const APP_DATA = 'C:\\Users\\u\\AppData\\Roaming';
@@ -39,10 +36,12 @@ function dirEntry(name: string, kind: 'directory' | 'file') {
 }
 
 function makeHarness(options?: {
-  files?: Record<string, Electron.ShortcutDetails>;
+  files?: Record<string, { target: string; args?: string }>;
   dirs?: Record<string, Array<ReturnType<typeof dirEntry>>>;
 }) {
-  const files = new Map<string, Electron.ShortcutDetails>(Object.entries(options?.files ?? {}));
+  const files = new Map<string, { target: string; args?: string }>(
+    Object.entries(options?.files ?? {}),
+  );
   const dirs = new Map(Object.entries(options?.dirs ?? {}));
   const removed: string[] = [];
   const logger = { info: vi.fn(), warn: vi.fn() };
@@ -55,10 +54,10 @@ function makeHarness(options?: {
       if (!files.delete(filePath)) throw new Error(`ENOENT ${filePath}`);
       removed.push(filePath);
     },
-    readShortcut: (filePath) => {
+    readShortcut: async (filePath) => {
       const details = files.get(filePath);
       if (!details) throw new Error(`ENOENT ${filePath}`);
-      return details;
+      return { target: details.target, args: details.args ?? '' };
     },
     logger,
   };
@@ -159,7 +158,7 @@ describe('cleanupLegacyDevShortcuts', () => {
     deps.unlink = async () => {
       throw new Error('access denied');
     };
-    deps.readShortcut = () => {
+    deps.readShortcut = async () => {
       throw new Error('corrupt link');
     };
     const originalReaddir = deps.readdir;
@@ -180,8 +179,9 @@ describe('cleanupLegacyDevShortcuts', () => {
       new Promise((resolve) => {
         finishReaddir = resolve;
       });
-    const readShortcut = vi.fn(() => ({
+    const readShortcut = vi.fn(async (): Promise<LegacyShortcutDetails> => ({
       target: 'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
+      args: '',
     }));
     deps.readShortcut = readShortcut;
 
@@ -200,5 +200,86 @@ describe('cleanupLegacyDevShortcuts', () => {
 
     expect(readShortcut).not.toHaveBeenCalled();
     expect(removed).toEqual([]);
+  });
+
+  it('lets the deadline win when a single shortcut resolution never completes', async () => {
+    // Resolution is now async, so one hanging read cannot hold the main thread
+    // past the deadline the way a synchronous shell.readShortcutLink call could.
+    vi.useFakeTimers();
+    const shortcut = path.join(START_MENU, 'Electron.lnk');
+    const { deps, logger, removed } = makeHarness({
+      dirs: { [START_MENU]: [dirEntry('Electron.lnk', 'file')] },
+    });
+    deps.readShortcut = () => new Promise<LegacyShortcutDetails>(() => {});
+
+    const cleanup = cleanupLegacyDevShortcuts(deps);
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'legacy dev shortcut cleanup timed out; continuing startup',
+      { timeoutMs: 8_000 },
+    );
+    expect(removed).toEqual([]);
+    expect(shortcut).toContain('Electron.lnk');
+  });
+});
+
+describe('parseWindowsShortcut', () => {
+  const SHELL_LINK_CLSID = Buffer.from([
+    0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+  ]);
+
+  function buildLnk(opts: { target: string; args?: string }): Buffer {
+    const header = Buffer.alloc(0x4c);
+    header.writeUInt32LE(0x4c, 0);
+    SHELL_LINK_CLSID.copy(header, 4);
+    let flags = 0x0000_0002; // HasLinkInfo
+    const hasArgs = opts.args !== undefined;
+    if (hasArgs) flags |= 0x0000_0020; // HasArguments
+    header.writeUInt32LE(flags, 20);
+
+    const linkInfoHeaderSize = 0x1c;
+    const baseBytes = Buffer.from(opts.target, 'latin1');
+    const localBasePathOffset = linkInfoHeaderSize;
+    const suffixOffset = localBasePathOffset + baseBytes.length + 1;
+    const linkInfoSize = suffixOffset + 1;
+    const linkInfo = Buffer.alloc(linkInfoSize);
+    linkInfo.writeUInt32LE(linkInfoSize, 0);
+    linkInfo.writeUInt32LE(linkInfoHeaderSize, 4);
+    linkInfo.writeUInt32LE(0x1, 8); // VolumeIDAndLocalBasePath
+    linkInfo.writeUInt32LE(linkInfoHeaderSize, 12); // VolumeIDOffset (unused here)
+    linkInfo.writeUInt32LE(localBasePathOffset, 16);
+    linkInfo.writeUInt32LE(0, 20); // CommonNetworkRelativeLinkOffset
+    linkInfo.writeUInt32LE(suffixOffset, 24);
+    baseBytes.copy(linkInfo, localBasePathOffset);
+
+    const parts = [header, linkInfo];
+    if (hasArgs) {
+      const argBytes = Buffer.from(opts.args!, 'latin1');
+      const stringData = Buffer.alloc(2 + argBytes.length);
+      stringData.writeUInt16LE(argBytes.length, 0);
+      argBytes.copy(stringData, 2);
+      parts.push(stringData);
+    }
+    return Buffer.concat(parts);
+  }
+
+  it('decodes an argumentless dev Electron target from raw .lnk bytes', () => {
+    const target = 'C:\\repo\\node_modules\\electron\\dist\\electron.exe';
+    expect(parseWindowsShortcut(buildLnk({ target }))).toEqual({ target, args: '' });
+  });
+
+  it('decodes command-line arguments when present', () => {
+    const target = 'C:\\repo\\node_modules\\electron\\dist\\electron.exe';
+    expect(parseWindowsShortcut(buildLnk({ target, args: 'C:\\repo' }))).toEqual({
+      target,
+      args: 'C:\\repo',
+    });
+  });
+
+  it('returns null for buffers that are not shell links', () => {
+    expect(parseWindowsShortcut(Buffer.from('not a shortcut'))).toBeNull();
+    expect(parseWindowsShortcut(Buffer.alloc(0x4c))).toBeNull();
   });
 });

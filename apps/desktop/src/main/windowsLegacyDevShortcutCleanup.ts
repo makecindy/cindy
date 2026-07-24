@@ -3,12 +3,19 @@
  *
  * This runs during Windows startup before notifications are initialized. Keep
  * it free of script hosts: spawning PowerShell here is both unnecessary
- * (Electron can read `.lnk` files itself) and prone to security-product alerts.
+ * (a `.lnk` is a documented binary format) and prone to security-product alerts.
+ *
+ * Shortcut resolution also stays off Electron's synchronous shell shortcut
+ * reader: that API resolves links synchronously on the main thread and may touch
+ * the (possibly redirected or high-latency) target volume, so a single slow call
+ * cannot be interrupted by the cleanup deadline and would freeze startup. Instead
+ * we read the raw bytes with async fs and decode only the stored target/arguments,
+ * so the main thread performs at most a microsecond-scale in-memory parse.
  */
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { app, shell } from 'electron';
+import { app } from 'electron';
 import { createLogger } from './logger';
 
 const log = createLogger('legacyDevShortcutCleanup');
@@ -20,14 +27,144 @@ interface ShortcutDirEntry {
   isFile(): boolean;
 }
 
+export interface LegacyShortcutDetails {
+  target: string;
+  args: string;
+}
+
 export interface LegacyDevShortcutCleanupDeps {
   platform: NodeJS.Platform;
   appDataDir: () => string | null;
   exists: (filePath: string) => Promise<boolean>;
   readdir: (dirPath: string) => Promise<ShortcutDirEntry[]>;
   unlink: (filePath: string) => Promise<void>;
-  readShortcut: (filePath: string) => Electron.ShortcutDetails;
+  readShortcut: (filePath: string) => Promise<LegacyShortcutDetails | null>;
   logger?: Pick<ReturnType<typeof createLogger>, 'info' | 'warn'>;
+}
+
+// [MS-SHLLINK] ShellLinkHeader is a fixed 0x4C-byte prefix whose LinkCLSID is the
+// packed GUID {00021401-0000-0000-C000-000000000046}.
+const SHELL_LINK_HEADER_SIZE = 0x4c;
+const SHELL_LINK_CLSID = Buffer.from([
+  0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+]);
+
+// [MS-SHLLINK] LinkFlags bits used here.
+const FLAG_HAS_LINK_TARGET_ID_LIST = 0x0000_0001;
+const FLAG_HAS_LINK_INFO = 0x0000_0002;
+const FLAG_HAS_NAME = 0x0000_0004;
+const FLAG_HAS_RELATIVE_PATH = 0x0000_0008;
+const FLAG_HAS_WORKING_DIR = 0x0000_0010;
+const FLAG_HAS_ARGUMENTS = 0x0000_0020;
+const FLAG_IS_UNICODE = 0x0000_0080;
+
+function decodeNullTerminated(buffer: Buffer, start: number, unicode: boolean): string {
+  if (start < 0 || start >= buffer.length) return '';
+  if (unicode) {
+    let end = start;
+    while (end + 1 < buffer.length && !(buffer[end] === 0 && buffer[end + 1] === 0)) end += 2;
+    return buffer.toString('utf16le', start, end);
+  }
+  let end = start;
+  while (end < buffer.length && buffer[end] !== 0) end += 1;
+  return buffer.toString('latin1', start, end);
+}
+
+/**
+ * Decodes the stored target path and command-line arguments from raw `.lnk`
+ * bytes. Best-effort and defensive: any structural anomaly yields `null` (or an
+ * empty field) rather than throwing, so a malformed shortcut is simply skipped.
+ * We only need enough of [MS-SHLLINK] to recognize an argumentless dev Electron
+ * link, not a faithful round-trip of every field.
+ */
+export function parseWindowsShortcut(buffer: Buffer): LegacyShortcutDetails | null {
+  if (buffer.length < SHELL_LINK_HEADER_SIZE) return null;
+  if (buffer.readUInt32LE(0) !== SHELL_LINK_HEADER_SIZE) return null;
+  if (!buffer.subarray(4, 20).equals(SHELL_LINK_CLSID)) return null;
+
+  const flags = buffer.readUInt32LE(20);
+  const unicode = (flags & FLAG_IS_UNICODE) !== 0;
+  let offset = SHELL_LINK_HEADER_SIZE;
+
+  // LinkTargetIDList: a 2-byte size prefix + IDList. We only need to skip it.
+  if (flags & FLAG_HAS_LINK_TARGET_ID_LIST) {
+    if (offset + 2 > buffer.length) return null;
+    const idListSize = buffer.readUInt16LE(offset);
+    offset += 2 + idListSize;
+    if (offset > buffer.length) return null;
+  }
+
+  let target = '';
+
+  // LinkInfo: LocalBasePath (+ CommonPathSuffix) is the resolved target for a
+  // local file, without touching the target volume the way shell resolution does.
+  if (flags & FLAG_HAS_LINK_INFO) {
+    const linkInfoStart = offset;
+    if (linkInfoStart + 4 > buffer.length) return null;
+    const linkInfoSize = buffer.readUInt32LE(linkInfoStart);
+    if (linkInfoSize < 0x1c || linkInfoStart + linkInfoSize > buffer.length) return null;
+    const headerSize = buffer.readUInt32LE(linkInfoStart + 4);
+    const linkInfoFlags = buffer.readUInt32LE(linkInfoStart + 8);
+    if (linkInfoFlags & 0x1) {
+      // VolumeIDAndLocalBasePath present.
+      const basePathOffset = buffer.readUInt32LE(linkInfoStart + 16);
+      const suffixOffset = buffer.readUInt32LE(linkInfoStart + 24);
+      let base = '';
+      let suffix = '';
+      if (headerSize >= 0x24 && linkInfoStart + 36 <= buffer.length) {
+        const basePathOffsetUnicode = buffer.readUInt32LE(linkInfoStart + 28);
+        const suffixOffsetUnicode = buffer.readUInt32LE(linkInfoStart + 32);
+        if (basePathOffsetUnicode) {
+          base = decodeNullTerminated(buffer, linkInfoStart + basePathOffsetUnicode, true);
+        }
+        if (suffixOffsetUnicode) {
+          suffix = decodeNullTerminated(buffer, linkInfoStart + suffixOffsetUnicode, true);
+        }
+      }
+      if (!base && basePathOffset) {
+        base = decodeNullTerminated(buffer, linkInfoStart + basePathOffset, false);
+      }
+      if (!suffix && suffixOffset) {
+        suffix = decodeNullTerminated(buffer, linkInfoStart + suffixOffset, false);
+      }
+      target = base + suffix;
+    }
+    offset = linkInfoStart + linkInfoSize;
+  }
+
+  // StringData: NAME, RELATIVE_PATH, WORKING_DIR, COMMAND_LINE_ARGUMENTS,
+  // ICON_LOCATION — each a 2-byte character count followed by the string.
+  const readStringData = (): string | null => {
+    if (offset + 2 > buffer.length) return null;
+    const count = buffer.readUInt16LE(offset);
+    offset += 2;
+    const byteLength = unicode ? count * 2 : count;
+    if (offset + byteLength > buffer.length) return null;
+    const value = buffer.toString(unicode ? 'utf16le' : 'latin1', offset, offset + byteLength);
+    offset += byteLength;
+    return value;
+  };
+
+  let relativePath = '';
+  let args = '';
+  if (flags & FLAG_HAS_NAME && readStringData() === null) return null;
+  if (flags & FLAG_HAS_RELATIVE_PATH) {
+    const value = readStringData();
+    if (value === null) return null;
+    relativePath = value;
+  }
+  if (flags & FLAG_HAS_WORKING_DIR && readStringData() === null) return null;
+  if (flags & FLAG_HAS_ARGUMENTS) {
+    const value = readStringData();
+    if (value === null) return null;
+    args = value;
+  }
+
+  // A relative path preserves the trailing "...\electron.exe" segment, which is
+  // all the classifier needs, so it is an adequate fallback when LinkInfo is absent.
+  if (!target && relativePath) target = relativePath;
+  if (!target) return null;
+  return { target, args };
 }
 
 function defaultDeps(): LegacyDevShortcutCleanupDeps {
@@ -50,7 +187,7 @@ function defaultDeps(): LegacyDevShortcutCleanupDeps {
     },
     readdir: (dirPath) => fs.readdir(dirPath, { withFileTypes: true }),
     unlink: (filePath) => fs.unlink(filePath),
-    readShortcut: (filePath) => shell.readShortcutLink(filePath),
+    readShortcut: async (filePath) => parseWindowsShortcut(await fs.readFile(filePath)),
     logger: log,
   };
 }
@@ -87,7 +224,7 @@ async function collectShortcutFiles(
   return shortcuts;
 }
 
-function isArgumentlessDevElectronShortcut(details: Electron.ShortcutDetails): boolean {
+function isArgumentlessDevElectronShortcut(details: LegacyShortcutDetails): boolean {
   if (typeof details.target !== 'string' || details.target.length === 0) return false;
   const target = details.target.replace(/\//g, '\\').toLowerCase();
   return target.endsWith('\\node_modules\\electron\\dist\\electron.exe') && !details.args;
@@ -122,16 +259,16 @@ async function runCleanup(
   if (shouldStop()) return;
   for (const shortcutPath of shortcutFiles) {
     if (shouldStop()) return;
-    let details: Electron.ShortcutDetails;
+    let details: LegacyShortcutDetails | null;
     try {
-      details = deps.readShortcut(shortcutPath);
+      // Async byte read + in-memory parse; unlike the synchronous shell reader
+      // this yields to the deadline instead of blocking the main thread.
+      details = await deps.readShortcut(shortcutPath);
     } catch {
       continue;
     }
-    // readShortcutLink is synchronous, so also compare the wall-clock deadline
-    // after each call; a busy main thread cannot rely on the timer firing first.
     if (shouldStop()) return;
-    if (!isArgumentlessDevElectronShortcut(details)) continue;
+    if (!details || !isArgumentlessDevElectronShortcut(details)) continue;
     try {
       await deps.unlink(shortcutPath);
       if (shouldStop()) return;
