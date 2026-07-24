@@ -38,6 +38,7 @@
  */
 
 import path from 'node:path';
+import { constants as fsConstants } from 'node:fs';
 import fsp from 'node:fs/promises';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import Database from 'better-sqlite3';
@@ -212,10 +213,16 @@ async function writeAdoptionMarker(
 ): Promise<void> {
   // tmp + 原子改名入位:直接截断重写在中途崩溃时会留下半份 JSON,读取端把
   // 损坏 marker 当缺失,pending 凭据一丢,占位库让位路径就被永久关闭。
-  const tmpPath = `${markerPath}.tmp`;
+  // tmp 名带 pid + 进程内序号:共享 userData 的两个实例同时写 marker 时,
+  // 固定 tmp 名会互相截断出撕裂 JSON;唯一化后每次 replace 都是完整文件,
+  // 竞态只剩字段级 last-writer-wins(丢一条记录,由前置检查兜底,方向安全)。
+  const tmpPath = `${markerPath}.${process.pid}.${markerTmpSeq++}.tmp`;
   await deps.fs.writeFile(tmpPath, JSON.stringify(marker, null, 2));
   await deps.fs.replaceFile(tmpPath, markerPath);
 }
+
+/** marker tmp 文件的进程内单调序号(同进程并发写也不撞名)。 */
+let markerTmpSeq = 0;
 
 /**
  * 推迟/失败退出前登记 pending(best-effort,失败只 warn):没有它,本次退出后
@@ -602,22 +609,25 @@ const realFsDeps: LocalAdoptionFsDeps = {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EEXIST') throw err;
-      // 文件系统不支持硬链接(FAT/exFAT 等):退化为「检查 + rename」,窗口
-      // 收窄到毫秒级(上层还有并发实例 gate 兜底)。fail-closed:只有确认
-      // 目标不存在(ENOENT)才 rename;EACCES 等「存在与否不可知」一律拒绝,
-      // 绝不冒覆盖风险。
+      // 文件系统不支持硬链接(FAT/exFAT 等):退化为 copyFile(COPYFILE_EXCL)
+      // ——目标名的创建同样是原子独占(存在即 EEXIST),没有「检查与改名之间」
+      // 的覆盖窗口。中途崩溃最坏留下半份目标文件:下次登录按不可读跳过认领,
+      // local 数据完好(fail-safe),绝不会覆盖真实账号库。
+      await fsp.copyFile(source, target, fsConstants.COPYFILE_EXCL);
       try {
-        await fsp.access(target);
-      } catch (accessErr) {
-        if ((accessErr as NodeJS.ErrnoException).code === 'ENOENT') {
-          await fsp.rename(source, target);
-          return;
+        await fsp.unlink(source);
+      } catch (copyCleanupErr) {
+        try {
+          await fsp.unlink(target);
+        } catch (rollbackErr) {
+          log.warn(
+            'local owner adoption: rollback of copied target failed: %s',
+            rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+          );
         }
-        throw accessErr;
+        throw copyCleanupErr;
       }
-      const eexist = new Error(`EEXIST: file already exists, rename '${source}' -> '${target}'`);
-      (eexist as NodeJS.ErrnoException).code = 'EEXIST';
-      throw eexist;
+      return;
     }
     try {
       await fsp.unlink(source);
