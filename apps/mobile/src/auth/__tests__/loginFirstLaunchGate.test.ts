@@ -80,7 +80,9 @@ describe('MobileLoginHandoffStage 消费 pending(源码结构断言,仓内无 re
       resolve(process.cwd(), 'src/components/MobileLoginHandoffStage.tsx'),
       'utf8',
     );
-    const pendingReturn = source.indexOf("=== 'pending') return null");
+    const pendingReturn = source.indexOf(
+      "firstLaunchGate === 'pending' && props.themeOverride == null",
+    );
     const overrideProvider = source.indexOf('<ThemeOverrideProvider');
     expect(pendingReturn, 'pending 早退存在').toBeGreaterThan(-1);
     expect(overrideProvider, 'ThemeOverrideProvider 渲染存在').toBeGreaterThan(-1);

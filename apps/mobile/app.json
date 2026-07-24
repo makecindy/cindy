@@ -71,7 +71,7 @@
             "image": "./assets/login/login-hero@2x.png",
             "imageWidth": 128,
             "dark": {
-              "backgroundColor": "#1F1F1E",
+              "backgroundColor": "#EDEDED",
               "image": "./assets/login/login-hero@2x.png"
             }
           }
