@@ -148,6 +148,17 @@ describe('persistent switch locator connection', () => {
     expect(new Set(sessions)).toEqual(new Set([sessions[0]]));
   });
 
+  it('filters the AX snapshot by the stable CuaDriver row label', async () => {
+    await expect(locateComputerUseSwitchTarget()).resolves.toMatchObject({ status: 'found' });
+
+    const stateRequest = callToolMock.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.name === 'get_window_state');
+    expect(stateRequest?.arguments).toMatchObject({
+      query: 'CuaDriver',
+    });
+  });
+
   it('serializes overlapping locate operations', async () => {
     const {
       promise: firstState,

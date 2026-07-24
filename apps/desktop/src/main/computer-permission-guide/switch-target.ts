@@ -328,11 +328,11 @@ async function locateComputerUseSwitchTargetSerialized(): Promise<ComputerUseSwi
           pid,
           window_id: windowId,
           include_screenshot: false,
-          // Accessibility rows are alphabetically ordered, so Computer Use is
-          // near the beginning. Avoid walking the full 400-500 element tree.
+          // Match the stable app row instead of the localized permission-pane
+          // title, while avoiding a walk of the full 400-500 element tree.
           max_elements: 180,
           max_depth: 6,
-          query: 'Computer Use',
+          query: 'CuaDriver',
           session: connection.session,
         },
       }),
