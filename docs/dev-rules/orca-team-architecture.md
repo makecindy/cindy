@@ -163,9 +163,9 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 
 1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
    用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
-   内按多个角色并行派单时，Lead 必须先读 workspace，再通过
-   `send_to_worker`／`create_workers` 进入 Orca 状态机；Codex
-   `spawn_agent`／`followup_task` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
+   内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
+   `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。Codex
+   `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
    Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
    Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
 
