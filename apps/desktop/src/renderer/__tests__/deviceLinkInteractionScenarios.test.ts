@@ -1044,6 +1044,13 @@ describe('远程交互接线不变式', () => {
     }
   });
 
+  it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
+    const runnerSrc = mainSrc('scheduler-host/runner.ts');
+    const hostSrc = mainSrc('scheduler-host/index.ts');
+    expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
+    expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
+  });
+
   it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {
     const src = read('features/cc-agent/CCAgentSessionView.tsx');
     const start = src.indexOf('handleExtraDirsChange');

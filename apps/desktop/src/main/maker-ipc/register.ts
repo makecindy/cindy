@@ -629,7 +629,7 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
 // 跨 module 提取一个 sessions-broadcast helper 不在本次范围内。所有 caller
 // 都广播 `local-db:sessions:created`, renderer sessionsStore.onCreated 收到后
 // forceRefreshAll 重拉所有桶。
-function broadcastSessionCreated(sessionId: string): void {
+export function broadcastSessionCreated(sessionId: string): void {
   tapWindowBroadcast('local-db:sessions:created', { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;

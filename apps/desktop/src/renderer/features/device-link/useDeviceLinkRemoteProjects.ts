@@ -15,7 +15,8 @@
  *    全量(reconcile 规则:先 subscribe 再 snapshot,中间窗口的增量由 push 兜)。
  *  - 之后被控端的 `sessions:patched`(改名/置顶/删/归档/设置)经 push → makerChatStore 路由到
  *    remoteProjectsStore.applyPatch;`sessions:created`(无 row 数据)→ 防抖重拉该设备。
- *    **不再 10s 轮询**(去掉轮询补偿;稳态全靠 push)。
+ *  - push 是低延迟主路径；另以低频全量 snapshot 做 anti-entropy，补偿 push 丢失或一次性
+ *    refresh 重试耗尽，确保镜像无需等待无关事件或手动切换控制权也能最终收敛。
  *  - 设备瞬时不可达(下线 / relay connecting)→ 保留最近一次快照并标记 disconnected;
  *    明确不合格(关被控 / 被撤销 / 本机禁用控制)→ `unsubscribe` + removeDevice。
  *  - WS 重连 → 对每个合格设备重新 subscribe + 重新 bootstrap(被控端可能重启过、订阅 registry 清空)。
@@ -46,6 +47,30 @@ const log = createLogger('device-link-remote-projects');
 /** sessions:created reseed 防抖(被控端短时间多次创建会话 / orca 起多 worker 时合并重拉)。 */
 const RESEED_DEBOUNCE_MS = 300;
 
+/** best-effort push 的 anti-entropy 上限：丢事件时最多约 10s 自动拉回权威快照。 */
+const RECONCILE_INTERVAL_MS = 10_000;
+
+type RemoteSessionsRefresh = (deviceId: string, name?: string) => Promise<unknown>;
+
+/**
+ * 启动 listing tier 的低频全量对账。setInterval 只负责触发；每设备的并发合并与乱序保护
+ * 继续由 refreshRemoteDeviceSessions 负责。返回清理函数，避免窗口卸载后残留 timer。
+ */
+export function startRemoteSessionsReconciler(
+  getEligibleDevices: () => Iterable<readonly [string, string]>,
+  refresh: RemoteSessionsRefresh = refreshRemoteDeviceSessions,
+  intervalMs = RECONCILE_INTERVAL_MS,
+): () => void {
+  const timer = setInterval(() => {
+    for (const [deviceId, name] of getEligibleDevices()) {
+      void refresh(deviceId, name).catch((err) => {
+        log.debug(`periodic sessions reconcile failed for ${deviceId.slice(0, 8)}`, err);
+      });
+    }
+  }, intervalMs);
+  return () => clearInterval(timer);
+}
+
 type IneligibleRemoteProjectAction = 'disconnect' | 'remove' | 'ignore';
 
 export function resolveIneligibleRemoteProjectAction(input: {
@@ -75,6 +100,8 @@ export function useDeviceLinkRemoteProjects(): void {
     }
 
     let disposed = false;
+    /** relay 在线时才跑 anti-entropy；connecting 期间保留 shard 但不制造失败重试。 */
+    let linkOnline = true;
     /** 当前合格设备:deviceId → 友好名 */
     const eligible = new Map<string, string>();
     /** 本机主动关闭控制的目标设备(控制端本地偏好)。 */
@@ -238,6 +265,13 @@ export function useDeviceLinkRemoteProjects(): void {
         }, RESEED_DEBOUNCE_MS),
       );
     });
+    const stopPeriodicReconcile = startRemoteSessionsReconciler(
+      () => (linkOnline ? eligible : []),
+      async (deviceId, name) => {
+        const result = await refreshRemoteDeviceSessions(deviceId, name);
+        if (result === 'revoked' && !disposed) handleRevoked(deviceId);
+      },
+    );
 
     void window.electronAPI.deviceLink
       .getState()
@@ -274,6 +308,7 @@ export function useDeviceLinkRemoteProjects(): void {
     // WS 重连后:presence 重新对齐 + 对每个已合格设备重新 subscribe + 重新 bootstrap
     // (被控端可能重启过、订阅 registry 清空,这步重建订阅;reseed 补新设备)。
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      linkOnline = p.status === 'online';
       if (p.status !== 'online') {
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
@@ -327,6 +362,7 @@ export function useDeviceLinkRemoteProjects(): void {
     return () => {
       disposed = true;
       setRemoteReseedImpl(null);
+      stopPeriodicReconcile();
       for (const t of reseedTimers.values()) clearTimeout(t);
       reseedTimers.clear();
       bootstrapTasks.clear();

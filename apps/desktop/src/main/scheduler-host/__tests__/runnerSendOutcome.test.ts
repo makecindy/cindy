@@ -492,4 +492,29 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(run.resultText).toBe('done text');
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
+
+  it('broadcasts a newly accepted schedule session after its user row is durable', async () => {
+    const order: string[] = [];
+    mocks.createMessage.mockImplementation(async () => {
+      order.push('persist');
+    });
+    const onSessionCreated = vi.fn(() => {
+      order.push('broadcast');
+    });
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner } = createRunnerHarness(h.session, { onSessionCreated });
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(onSessionCreated).toHaveBeenCalledWith('scheduler-session'));
+    expect(order).toEqual(['persist', 'broadcast']);
+
+    h.emit({ type: 'done', data: {} });
+    await expect(firePromise).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: undefined,
+    });
+  });
 });
