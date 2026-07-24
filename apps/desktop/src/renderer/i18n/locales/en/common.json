@@ -2763,8 +2763,8 @@
     "consentDialog": {
       "title": "Terms of Service & Privacy Policy",
       "body": "Read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy> to continue.",
-      "agree": "Agree and Continue",
-      "disagree": "Don't Agree"
+      "agree": "Agree",
+      "disagree": "Not Now"
     },
     "ssoOrgTitle": "Enterprise SSO",
     "ssoOrgSubtitle": "Enter a company ID, organization slug, or verified domain to continue with single sign-on",

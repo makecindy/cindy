@@ -2762,7 +2762,7 @@
     "consentDialog": {
       "title": "服务条款和隐私协议",
       "body": "请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>",
-      "agree": "同意并继续",
+      "agree": "同意",
       "disagree": "暂不同意"
     },
     "ssoOrgTitle": "企业 SSO 登录",

@@ -2762,7 +2762,7 @@
     "consentDialog": {
       "title": "利用規約とプライバシーポリシー",
       "body": "続行するには、Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を確認し、同意してください。",
-      "agree": "同意して続行",
+      "agree": "同意する",
       "disagree": "同意しない"
     },
     "ssoOrgTitle": "企業 SSO サインイン",
