@@ -37,8 +37,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function session(id: string): Session {
-  return { id } as Session;
+function session(id: string, partial: Partial<Session> = {}): Session {
+  return { id, ...partial } as Session;
 }
 
 function deferred<T>() {
@@ -88,7 +88,9 @@ describe('refreshRemoteDeviceSessions retry', () => {
   it('永久错误(REMOTE_DISABLED)→ 不重试,立即放弃(返回 gave-up)', async () => {
     const d = did();
     invoke.mockRejectedValue(new Error('[REMOTE_DISABLED] remote control disabled'));
-    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe('gave-up');
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
   });
@@ -96,7 +98,9 @@ describe('refreshRemoteDeviceSessions retry', () => {
   it('访问被撤销(DEVICE_LINK_ACCESS_REVOKED)→ 不重试,返回 revoked(调用方据此 handleRevoked)', async () => {
     const d = did();
     invoke.mockRejectedValue(new Error('[DEVICE_LINK_ACCESS_REVOKED] revoked'));
-    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe('revoked');
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'revoked',
+    );
     expect(invoke).toHaveBeenCalledTimes(1); // 终态,不重试
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
   });
@@ -143,6 +147,24 @@ describe('refreshRemoteDeviceSessions retry', () => {
     ]);
   });
 
+  it('周期有界快照更新命中行但保留 200 条窗口外的有效会话', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [
+      session('recent', { title: 'old' }),
+      session('outside-window'),
+    ]);
+    invoke.mockResolvedValueOnce([session('recent', { title: 'new' })]);
+
+    await refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    const merged = remoteProjectsStore.getMergedRemoteSessions();
+    expect(merged.map((s) => s.id)).toEqual(['recent', 'outside-window']);
+    expect(merged[0].title).toBe('new');
+  });
+
   it('同设备并发重拉合并为单飞执行,期间新触发只补跑一次', async () => {
     const d = did();
     invoke.mockResolvedValueOnce([session('old')]).mockResolvedValueOnce([session('fresh')]);
@@ -160,12 +182,10 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const firstSnapshot = deferred<Session[]>();
     const secondSnapshot = deferred<Session[]>();
     const secondStarted = deferred<void>();
-    invoke
-      .mockReturnValueOnce(firstSnapshot.promise)
-      .mockImplementationOnce(() => {
-        secondStarted.resolve();
-        return secondSnapshot.promise;
-      });
+    invoke.mockReturnValueOnce(firstSnapshot.promise).mockImplementationOnce(() => {
+      secondStarted.resolve();
+      return secondSnapshot.promise;
+    });
 
     const first = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
     const second = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
@@ -176,6 +196,56 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
     secondSnapshot.resolve([session('fresh')]);
     await expect(Promise.all([first, second])).resolves.toEqual(['ok', 'ok']);
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
+  });
+
+  it('正常 refresh 排在周期 merge 后时恢复 replace 语义', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
+    const periodicSnapshot = deferred<Session[]>();
+    const replacementSnapshot = deferred<Session[]>();
+    const replacementStarted = deferred<void>();
+    invoke.mockReturnValueOnce(periodicSnapshot.promise).mockImplementationOnce(() => {
+      replacementStarted.resolve();
+      return replacementSnapshot.promise;
+    });
+
+    const periodic = refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+    const bootstrap = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
+
+    periodicSnapshot.resolve([session('stale')]);
+    await replacementStarted.promise;
+    replacementSnapshot.resolve([session('fresh')]);
+
+    await expect(Promise.all([periodic, bootstrap])).resolves.toEqual(['ok', 'ok']);
+    expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
+  });
+
+  it('周期 merge 排在正常 refresh 后时不能降级 replace 语义', async () => {
+    const d = did();
+    remoteProjectsStore.setDeviceSessions(d, 'Mac B', [session('outside-window')]);
+    const bootstrapSnapshot = deferred<Session[]>();
+    const periodicSnapshot = deferred<Session[]>();
+    const periodicStarted = deferred<void>();
+    invoke.mockReturnValueOnce(bootstrapSnapshot.promise).mockImplementationOnce(() => {
+      periodicStarted.resolve();
+      return periodicSnapshot.promise;
+    });
+
+    const bootstrap = refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
+    const periodic = refreshRemoteDeviceSessions(d, 'Mac B', {
+      sleep: noSleep,
+      snapshotMode: 'merge',
+    });
+
+    bootstrapSnapshot.resolve([session('stale')]);
+    await periodicStarted.promise;
+    periodicSnapshot.resolve([session('fresh')]);
+
+    await expect(Promise.all([bootstrap, periodic])).resolves.toEqual(['ok', 'ok']);
     expect(remoteProjectsStore.getMergedRemoteSessions().map((s) => s.id)).toEqual(['fresh']);
   });
 });

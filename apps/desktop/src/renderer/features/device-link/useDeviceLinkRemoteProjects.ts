@@ -15,8 +15,8 @@
  *    全量(reconcile 规则:先 subscribe 再 snapshot,中间窗口的增量由 push 兜)。
  *  - 之后被控端的 `sessions:patched`(改名/置顶/删/归档/设置)经 push → makerChatStore 路由到
  *    remoteProjectsStore.applyPatch;`sessions:created`(无 row 数据)→ 防抖重拉该设备。
- *  - push 是低延迟主路径；另以低频全量 snapshot 做 anti-entropy，补偿 push 丢失或一次性
- *    refresh 重试耗尽，确保镜像无需等待无关事件或手动切换控制权也能最终收敛。
+ *  - push 是低延迟主路径；另以低频有界 snapshot 做 anti-entropy，更新窗口内权威状态，
+ *    补偿 push 丢失或一次性 refresh 重试耗尽；窗口外会话保留，避免把响应缺席误判为删除。
  *  - 设备瞬时不可达(下线 / relay connecting)→ 保留最近一次快照并标记 disconnected;
  *    明确不合格(关被控 / 被撤销 / 本机禁用控制)→ `unsubscribe` + removeDevice。
  *  - WS 重连 → 对每个合格设备重新 subscribe + 重新 bootstrap(被控端可能重启过、订阅 registry 清空)。
@@ -100,8 +100,10 @@ export function useDeviceLinkRemoteProjects(): void {
     }
 
     let disposed = false;
-    /** relay 在线时才跑 anti-entropy；connecting 期间保留 shard 但不制造失败重试。 */
-    let linkOnline = true;
+    /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
+    let linkOnline = false;
+    /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
+    let linkStatusPushSeen = false;
     /** 当前合格设备:deviceId → 友好名 */
     const eligible = new Map<string, string>();
     /** 本机主动关闭控制的目标设备(控制端本地偏好)。 */
@@ -268,7 +270,9 @@ export function useDeviceLinkRemoteProjects(): void {
     const stopPeriodicReconcile = startRemoteSessionsReconciler(
       () => (linkOnline ? eligible : []),
       async (deviceId, name) => {
-        const result = await refreshRemoteDeviceSessions(deviceId, name);
+        // sessions:list 是 200 条有界窗口；周期对账只能合并命中行，不能把窗口外缺席
+        // 解释成删除。显式删除/归档仍由 sessions:patched push 收口。
+        const result = await refreshRemoteDeviceSessions(deviceId, name, { snapshotMode: 'merge' });
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
       },
     );
@@ -277,6 +281,7 @@ export function useDeviceLinkRemoteProjects(): void {
       .getState()
       .then((state) => {
         if (disposed) return;
+        if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
         disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
         reseed();
       })
@@ -298,7 +303,8 @@ export function useDeviceLinkRemoteProjects(): void {
     // 被控端 active-catalog 变化：供应商目录与 capabilities.availableModels 必须同代刷新。
     // 两套缓存订阅会把完整结果原子推给已挂载选择器，刷新期间保留旧列表避免空白跳变。
     const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push) => {
-      if (disposed || push.channel !== 'maker:provider:changed' || !eligible.has(push.deviceId)) return;
+      if (disposed || push.channel !== 'maker:provider:changed' || !eligible.has(push.deviceId))
+        return;
       evictDeviceProviders(push.deviceId);
       evictDeviceCapabilities(push.deviceId);
       void prefetchDeviceProviders(push.deviceId);
@@ -308,6 +314,7 @@ export function useDeviceLinkRemoteProjects(): void {
     // WS 重连后:presence 重新对齐 + 对每个已合格设备重新 subscribe + 重新 bootstrap
     // (被控端可能重启过、订阅 registry 清空,这步重建订阅;reseed 补新设备)。
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((p) => {
+      linkStatusPushSeen = true;
       linkOnline = p.status === 'online';
       if (p.status !== 'online') {
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions

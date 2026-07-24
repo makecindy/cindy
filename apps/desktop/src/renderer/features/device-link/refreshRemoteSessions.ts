@@ -1,10 +1,9 @@
 /**
  * refreshRemoteDeviceSessions —— 立即(可 await)重拉某被控设备的会话列表(bootstrap / reconcile)。
  *
- * 这是「读被控端真相」的一次性按需拉取,**不是**轮询补偿(控制端纯镜像下,稳态增量靠
- * 被控端 sessions:patched/created push 驱动;本函数只用于「刚在被控端创建了一个会话、要马上
- * navigate 过去」这类需要先把新 sessionId 注册进 store 才能避免 404 的 bootstrap-before-navigate
- * 场景:listing tier 首拉、reconnect 重拉、fork / orca worker / 远程新建会话)。
+ * 这是「读被控端真相」的一次性按需拉取。默认用于 listing tier 首拉、reconnect、
+ * sessions:created reseed、fork / orca worker / 远程新建会话；周期 anti-entropy 也复用本函数，
+ * 但使用 merge 模式，避免有界列表删除窗口外会话。
  *
  * 用 per-device epoch 防乱序:两次重拉乱序 resolve 时,旧的那次结果被丢弃(只接受最新一次),
  * 避免旧 snapshot 覆盖新 snapshot(reconcile 规则)。
@@ -43,7 +42,12 @@ const ACCESS_REVOKED_MARKER = 'DEVICE_LINK_ACCESS_REVOKED';
  * ⚠️ 超时码用 DEVICE_LINK_TIMEOUT:invoke 超时的原始 DeviceLinkError('INVOKE_TIMEOUT') 在 main IPC
  * 层被映射成 `[DEVICE_LINK_TIMEOUT]` 才到 renderer,这里匹配的是 renderer 实际看到的已映射码。
  */
-const TRANSIENT_MARKERS = ['DbClient not ready', 'NOT_CONNECTED', 'DEVICE_OFFLINE', 'DEVICE_LINK_TIMEOUT'] as const;
+const TRANSIENT_MARKERS = [
+  'DbClient not ready',
+  'NOT_CONNECTED',
+  'DEVICE_OFFLINE',
+  'DEVICE_LINK_TIMEOUT',
+] as const;
 
 /**
  * 该远程错误是否「瞬态、值得重试」。永久错误优先(命中即不重试);否则仅当命中已知瞬态标记
@@ -66,6 +70,8 @@ export interface RefreshOptions {
   sleep?: (ms: number) => Promise<void>;
   /** 最大尝试次数(含首次),默认 DEFAULT_MAX_ATTEMPTS。 */
   maxAttempts?: number;
+  /** replace 用于 bootstrap/reseed；merge 用于周期有界快照，保留响应窗口外会话。 */
+  snapshotMode?: 'replace' | 'merge';
 }
 
 /**
@@ -94,7 +100,18 @@ export async function refreshRemoteDeviceSessions(
   if (existing) {
     existing.rerun = true;
     existing.name = name ?? existing.name;
-    existing.opts = { ...existing.opts, ...opts };
+    const requestedSnapshotMode = opts.snapshotMode ?? 'replace';
+    existing.opts = {
+      ...existing.opts,
+      ...opts,
+      // 同一 single-flight 批次里 replace 是更强语义：bootstrap/reseed 不能被期间到达的
+      // periodic merge 降级；反向排队时，普通 refresh 也必须从 merge 恢复 replace。
+      snapshotMode:
+        (existing.opts.snapshotMode ?? 'replace') === 'replace' ||
+        requestedSnapshotMode === 'replace'
+          ? 'replace'
+          : 'merge',
+    };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
     remoteProjectsStore.nextSnapshotEpoch(deviceId);
     return existing.promise;
@@ -146,7 +163,11 @@ async function runRefreshRemoteDeviceSessions(
       // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
       if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'gave-up';
       if (Array.isArray(list)) {
-        remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
+        if (opts.snapshotMode === 'merge') {
+          remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, list as Session[]);
+        } else {
+          remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
+        }
       }
       return 'ok'; // 成功
     } catch (err) {
