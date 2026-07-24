@@ -102,6 +102,13 @@ import {
 } from './layoutPreferenceStore.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import {
+  detectProtectedFolderEperm,
+  openFolderPrivacySettings,
+  releaseEpermGuidance,
+  shouldShowEpermGuidance,
+  type ProtectedFolderKind,
+} from '../file-access/permissions.js';
 import { SessionActivityRelay } from './sessionActivityRelay.js';
 
 const log = createLogger('agent-island');
@@ -608,6 +615,20 @@ export class AgentIslandService {
       this.clearCompletedSilencedRunForNewActivity(hydrated.sessionId);
       this.deferredCompletions.delete(hydrated.sessionId);
     }
+    if (process.platform === 'darwin' && event.type === 'tool_result_full') {
+      const data = event.data as { fullText?: string; isError?: boolean } | undefined;
+      // Codex marks successful results explicitly; Claude Code currently omits isError.
+      // Skip only a known success so Claude Code EPERM output still receives guidance.
+      const folderKind = data?.isError !== false && data?.fullText
+        ? detectProtectedFolderEperm(data.fullText)
+        : null;
+      if (folderKind && shouldShowEpermGuidance(folderKind)) {
+        void this.showFolderEpermGuidance(folderKind).catch((error: unknown) => {
+          releaseEpermGuidance(folderKind);
+          log.warn('failed to show folder access guidance', { kind: folderKind, error });
+        });
+      }
+    }
     const suppressCompletionAttention = this.isCompletionEventSilenced(hydrated.sessionId, event);
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
@@ -881,6 +902,29 @@ export class AgentIslandService {
       workingDir: cached?.workingDir ?? meta.workingDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
     };
+  }
+
+  private async showFolderEpermGuidance(kind: ProtectedFolderKind): Promise<void> {
+    const folderName = t(`fileAccess.epermGuidance.folderNames.${kind.toLowerCase()}`);
+    const options = {
+      type: 'warning' as const,
+      title: t('fileAccess.epermGuidance.title'),
+      message: t('fileAccess.epermGuidance.message').replace('{{folder}}', folderName),
+      detail: t('fileAccess.epermGuidance.detail'),
+      buttons: [
+        t('fileAccess.epermGuidance.openSystemSettings'),
+        t('fileAccess.epermGuidance.cancel'),
+      ],
+      defaultId: 0,
+      cancelId: 1,
+    };
+    const mainWindow = this.deps.getMainWindow();
+    const result = mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showMessageBox(mainWindow, options)
+      : await dialog.showMessageBox(options);
+    if (result.response === 0) {
+      await openFolderPrivacySettings(kind);
+    }
   }
 
   private ensureMetadata(sessionId: string): void {

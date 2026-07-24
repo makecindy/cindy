@@ -1,7 +1,4 @@
 {
-  "contentModeration": {
-    "blocked": "Sorry, we can't answer this question right now. Please rephrase your question."
-  },
   "ipcError": {
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish."
@@ -1537,8 +1534,7 @@
       "save": "Save",
       "overLimit": " — over limit",
       "toast": {
-        "saved": "Custom instructions saved",
-        "saveFailed": "Failed to save custom instructions"
+        "saved": "Custom instructions saved"
       }
     },
     "chipMetrics": {
@@ -2303,6 +2299,7 @@
         "command": "Chat command ${{command}}",
         "panelRight": "Panel \"{{title}}\" · docked right of the chat",
         "panelLeft": "Panel \"{{title}}\" · docked left of the chat",
+        "panelTab": "Panel \"{{title}}\" · tab in the right sidebar",
         "code": "Executable code",
         "codeDetail": "Runs in an isolated sandbox with no access to your files or network.",
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
@@ -3030,7 +3027,8 @@
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",
-        "alreadyOpen": "Open"
+        "alreadyOpen": "Open",
+        "pluginGroup": "Plugins"
       },
       "kinds": {
         "fileBrowser": "File browser",
@@ -3038,7 +3036,8 @@
         "terminal": "Terminal",
         "review": "Review",
         "collaboration": "Team",
-        "unknown": "Unknown tab"
+        "unknown": "Unknown tab",
+        "ghostPanel": "Plugin panel"
       },
       "controls": {
         "maximizeAria": "Maximize sidebar",
@@ -3063,6 +3062,9 @@
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
         "terminalSub": "Terminal",
+        "pluginSub": "Plugin",
+        "pluginGroup": "Plugin panels",
+        "pluginGroupSub": "{{count}} plugins",
         "addMoreHint": "Use the + button at the top to choose more panel types"
       },
       "placeholderHint": "{{kind}} — content coming in a later phase"
@@ -3681,7 +3683,7 @@
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Runs trusted commands automatically. Untrusted commands, escalation requests, and high-risk built-in actions still ask. Unlike Full access."
+            "description": "Runs commands automatically inside the protected workspace sandbox. Actions that cross the sandbox boundary go to an automatic reviewer; high-risk actions may still be denied or require confirmation."
           },
           "bypassPermissions": {
             "label": "Full access",
@@ -6501,7 +6503,8 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
-      "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed."
+      "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
+      "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
@@ -7043,6 +7046,20 @@
       "pendingQuote": "A plan change to {{name}} is in progress.",
       "resume": "Continue",
       "undo": "Undo downgrade"
+    }
+  },
+  "fileAccess": {
+    "epermGuidance": {
+      "title": "macOS folder access denied",
+      "message": "Cindy cannot access your {{folder}} folder",
+      "detail": "macOS denied access. Open System Settings to grant permission, then run your agent command again.",
+      "openSystemSettings": "Open System Settings",
+      "cancel": "Cancel",
+      "folderNames": {
+        "desktop": "Desktop",
+        "documents": "Documents",
+        "downloads": "Downloads"
+      }
     }
   }
 }

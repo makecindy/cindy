@@ -300,7 +300,11 @@ import {
   resolveComposerVoiceHoldActive,
   shouldArmComposerVoiceHold,
 } from '@/session/composerVoiceHold';
-import { isMobileRealtimeAudioAvailable, prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import {
+  isMobileRealtimeAudioAvailable,
+  prewarmMobileRealtimeAudio,
+  shouldShowMobileVoiceUi,
+} from '@/session/mobileRealtimeAudio';
 import {
   discardPendingPrewarm,
   prewarmMobileVoiceStart,
@@ -374,7 +378,6 @@ import {
   sessionMetaWriteGuard,
   sessionMetaWriteQueue,
   sessionPendingWrites,
-  useContentModerationNotice,
   useRemoteSessions,
   useSessionGoalStatus,
   useSessionInputProjection,
@@ -644,11 +647,6 @@ export default function SessionScreen() {
   const revokedDevices = useRevokedDevices();
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
-  const contentModerationNotice = useContentModerationNotice(sessionId);
-  useEffect(() => {
-    remoteSessionStore.setViewedSessionId(sessionId);
-    return () => remoteSessionStore.setViewedSessionId(null);
-  }, [sessionId]);
   const messages = useSessionMessages(sessionId, deviceId);
   const pending = useSessionPendingInteractions(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
@@ -694,32 +692,6 @@ export default function SessionScreen() {
   const [pendingMediaAssets, setPendingMediaAssets] = useState<ContextSheetMediaAsset[]>([]);
   // 本机图片附件的本地预览 uri(attachmentId → file://),composer 托盘缩略图 / 全图查看用。
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!contentModerationNotice) return;
-    if (contentModerationNotice.kind === 'input') {
-      const restoredDraft = readComposerDraftSync(sessionId);
-      if (restoredDraft !== null) setDraft(restoredDraft);
-      const restoredAttachments = drainComposerAttachments(sessionId);
-      if (restoredAttachments.length > 0) {
-        setAttachments((current) => {
-          const merged = [...restoredAttachments];
-          for (const attachment of current) {
-            if (merged.length >= MOBILE_MAX_ATTACHMENTS) break;
-            if (merged.some((item) => item.id === attachment.id)) continue;
-            merged.push(attachment);
-          }
-          return merged.slice(0, MOBILE_MAX_ATTACHMENTS);
-        });
-      }
-    }
-    if (
-      contentModerationNotice.kind === 'output'
-      || contentModerationNotice.reason === 'rejected'
-    ) {
-      Alert.alert('提示', '抱歉，当前问题暂时无法为您解答，请调整提问表述。');
-    }
-    remoteSessionStore.consumeContentModerationNotice(contentModerationNotice.revision);
-  }, [contentModerationNotice, sessionId]);
   // composer 托盘里正被全屏查看的图片附件 id(null = 关闭)。
   const [composerPreviewAttachmentId, setComposerPreviewAttachmentId] = useState<string | null>(null);
   const [goalBusy, setGoalBusy] = useState(false);
@@ -1375,6 +1347,7 @@ export default function SessionScreen() {
       : [],
     [atResources, canUseComposer, composerTrigger],
   );
+  const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
   const voiceIsProcessing = voiceState === 'submitting' || voiceState === 'refining';
   const voiceIsBusy = voiceIsListening || voiceIsProcessing;
@@ -1605,15 +1578,17 @@ export default function SessionScreen() {
   const composerFloatingVoiceButtonStyle = composerShowInlineStop && composerShowSendButton
     ? styles.composerFloatingVoiceButtonWithInlineStop
     : undefined;
-  const composerVoicePlacement = resolveMobileComposerVoiceButtonPlacement({
-    // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
-    hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
-  });
+  const composerVoicePlacement = voiceUiAvailable
+    ? resolveMobileComposerVoiceButtonPlacement({
+      // 行尾有发送或占发送位的停止按钮时让位;附件-only(无文字)同样命中。
+      hasTrailingAction: composerSendSlotIsStop || composerShowSendButton,
+    })
+    : undefined;
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / Square / spinner)表达。
-  const voiceStatusVisible = Boolean(voiceError);
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
   const nativeShellLayout = useMemo(() => buildSessionNativeShellLayout({
     attachmentPickerOpen: false,
     keyboardHeight: keyboardState.height,
@@ -1809,7 +1784,7 @@ export default function SessionScreen() {
         />
       ) : null}
       <ComposerToolbarSpacer />
-      {composerVoicePlacement.inline || composerVoicePlacement.floating
+      {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot />
         : null}
       {renderComposerTrailingActions()}
@@ -7000,7 +6975,7 @@ export default function SessionScreen() {
                     caretHidden={voiceIsListening}
                     compact={compactComposer && !composerCardActive}
                     editable={!composerLayout.input.disabled}
-                    floatingVoiceButton={renderComposerVoiceButton}
+                    floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
                     floatingVoiceButtonStyle={composerFloatingVoiceButtonStyle}
                     cursorColor={colors.inputCaret}
                     inputFrameHeight={composerResize.frameHeight}

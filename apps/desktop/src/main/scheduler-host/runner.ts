@@ -73,10 +73,6 @@ import type { SchedulerDrizzleDb } from './storage';
 import { backfillSessionMeta } from './runners/_shared';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
 import { defaultModelFor } from './model-defaults';
-import {
-  cancelReleasedOutput,
-  onReleasedAgentEvent,
-} from '../content-moderation/outputHub.js';
 
 const ALLOWED_EFFORT = new Set<string>([
   'minimal',
@@ -761,7 +757,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
       this.deps.logger.info?.(
         `[runner] ctx.signal aborted, calling session.abort() for ${session.id}`,
       );
-      cancelReleasedOutput(session.id);
       void session.abort().catch((err) => {
         this.deps.logger.warn?.('[runner] session.abort failed', err);
       });
@@ -1145,7 +1140,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 不让已暂停/删除的任务在会话里继续执行(PR #972 review P2)。
         if (ctx.signal.aborted) {
           if (live) {
-            cancelReleasedOutput(sessionId);
             void live.abort().catch((err) => {
               this.deps.logger.warn?.('[runner] late-dispatch abort failed', err);
             });
@@ -1222,7 +1216,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (dispatched) {
         const live = this.deps.maker.getSession(sessionId);
         if (live) {
-          cancelReleasedOutput(sessionId);
           void live.abort().catch((err) => {
             this.deps.logger.warn?.('[runner] session.abort failed', err);
           });
@@ -1444,7 +1437,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 一个 turn 的 canonical 文本)。异常保护见 BG_TASK_IDLE_FALLBACK_MS。
    */
   private createTurnCompletionWaiter(
-    session: Pick<Awaited<ReturnType<Maker['createSession']>>, 'id' | 'onEvent' | 'abort'>,
+    session: Pick<Awaited<ReturnType<Maker['createSession']>>, 'id' | 'onEvent'>,
   ): TurnCompletionWaiter {
     let assistantText = '';
     let stopped = false;
@@ -1481,7 +1474,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }, BG_TASK_IDLE_FALLBACK_MS);
         bgFallbackTimer.unref?.();
       };
-      const off = onReleasedAgentEvent(session, (ev: AgentEvent) => {
+      const off = session.onEvent((ev: AgentEvent) => {
         // 等待后台任务期间,任何事件都说明会话还活着 → 刷新兜底计时
         if (waitingForBgTasks) armBgFallbackTimer();
         if (ev.type === 'agent_task_update') {

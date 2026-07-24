@@ -320,6 +320,56 @@ describe('agentInputQueue', () => {
     ]);
   });
 
+  // 远程会话引用注入失败的回归:深链冻结的 `?device=` 必须在实时查表 miss
+  // (被控端离线 / relay 重连窗口注册表被 clear)时仍能把引用判定为远程。
+  it('binds the device frozen into the link even when the live lookup misses', () => {
+    expect(
+      reconcileSessionRefsForText(
+        '看这个 cindy://session/remote-1?device=dev-studio',
+        undefined,
+        () => undefined,
+      ),
+    ).toEqual([{ sessionId: 'remote-1', deviceId: 'dev-studio' }]);
+  });
+
+  it('prefers the frozen link device over live lookup and previous hints', () => {
+    expect(
+      reconcileSessionRefsForText(
+        'cindy://session/remote-1?message=client-1&device=dev-frozen.',
+        [{ sessionId: 'remote-1', deviceId: 'dev-hint' }],
+        () => 'dev-live',
+      ),
+    ).toEqual([
+      { sessionId: 'remote-1', messageClientId: 'client-1', deviceId: 'dev-frozen' },
+    ]);
+  });
+
+  it('falls back to live lookup then previous hints for links without a device parameter', () => {
+    expect(
+      reconcileSessionRefsForText('cindy://session/remote-1', undefined, () => 'dev-live'),
+    ).toEqual([{ sessionId: 'remote-1', deviceId: 'dev-live' }]);
+    expect(
+      reconcileSessionRefsForText(
+        'cindy://session/remote-1',
+        [{ sessionId: 'remote-1', deviceId: 'dev-hint' }],
+        () => undefined,
+      ),
+    ).toEqual([{ sessionId: 'remote-1', deviceId: 'dev-hint' }]);
+  });
+
+  it('treats an empty or malformed device parameter as absent', () => {
+    expect(
+      reconcileSessionRefsForText('cindy://session/remote-1?device=', undefined, () => undefined),
+    ).toEqual([{ sessionId: 'remote-1' }]);
+    expect(
+      reconcileSessionRefsForText(
+        'cindy://session/remote-1?device=%ZZ&message=client-1',
+        undefined,
+        () => undefined,
+      ),
+    ).toEqual([{ sessionId: 'remote-1', messageClientId: 'client-1' }]);
+  });
+
   it('projects encoded quote markers for Agent use without changing queue or persistence wire', () => {
     const entry = queuedMessage(undefined);
     const text = '> <!-- cindy-composer-quote -->\n> selected\n\nreply';

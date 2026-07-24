@@ -13,11 +13,15 @@ import type { TFunction } from 'i18next';
 import type { TabCloseInterceptor } from './store';
 
 /**
- * 第一版支持的 4 种 tab kind 字符串字面量联合。
+ * tab kind 联合:内置字面量 + 插件页签的动态 kind。
  * - `file-browser` / `web-browser`:Phase 3 / Phase 5 注册真实 plugin。
  * - `terminal` / `review`:占位扩展点,Phase 1 在「+」dropdown 里灰显;未来注册新 plugin 时只需在此 union 添加值 + 调 `registerTabKind`,壳子不动。
+ * - `ghost:<id>`:panel.position:'tab' 的插件面板页签,由
+ *   renderer/cindy-brain/ghostTabPlugins.tsx 随已装清单动态注册/注销
+ *   (字符串与顶层布局的 ghostPanelKind 同形,DB kind 列无枚举约束可直存)。
  */
-export type TabKindId = 'file-browser' | 'web-browser' | 'terminal' | 'review' | 'orca-workers';
+export type BuiltinTabKindId = 'file-browser' | 'web-browser' | 'terminal' | 'review' | 'orca-workers';
+export type TabKindId = BuiltinTabKindId | `ghost:${string}`;
 
 /** 一个 tab 运行时实例。`state` 由各 plugin 自管理结构 + 序列化,壳子只搬运。 */
 export interface TabState<TKindState = unknown> {
@@ -34,6 +38,11 @@ export interface TabKindMenuMeta {
   kind: TabKindId;
   /** i18n key, e.g. 'rightSidebar.tabs.kinds.fileBrowser' */
   labelKey: string;
+  /**
+   * 用户内容原文标签(如插件名),优先于 `t(labelKey)` 渲染 —— 插件名不是
+   * i18n 资源,进不了 labelKey 体系。内置 plugin 不填。
+   */
+  labelText?: string;
   icon: LucideIcon;
   /** 排序值,小的在前 */
   order: number;

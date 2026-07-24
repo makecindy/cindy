@@ -348,8 +348,9 @@ export function SessionCard({
     }
   }, [session.id, navigate]);
 
+  // 远程会话把归属设备冻进 `?device=`:发送时的引用解析不再依赖被控端此刻在线。
   const handleCopyDeepLinkSelect = useCallback(async () => {
-    const link = buildSessionDeepLink(session.id);
+    const link = buildSessionDeepLink(session.id, { deviceId: session.deviceLinkDeviceId });
     try {
       await navigator.clipboard.writeText(link);
       toast.success(t('ccAgent.sidebar.deepLink.copied'));
@@ -357,7 +358,7 @@ export function SessionCard({
       log.warn('clipboard write failed', err);
       toast.warning(t('ccAgent.sidebar.deepLink.copyFailed'));
     }
-  }, [session.id, t]);
+  }, [session.deviceLinkDeviceId, session.id, t]);
 
   // 单项「复制对话链接」:直接复制 cindy://session/<id> 深链。原「复制会话 ID」
   // 二级菜单(深度链接 / 仅 ID / Agent)已按产品决策收敛为这一项;不自带分隔线,

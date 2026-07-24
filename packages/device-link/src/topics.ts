@@ -72,6 +72,12 @@ const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:patched',
   'local-db:session:error-persisted',
   SESSION_ACTIVITY_CHANNEL,
+  // session 终身累计 cost / token(sessions 行级字段的裸 UPDATE 补偿推送):归 sessions
+  // topic 而非 session:<id> —— 会话未在控制端打开时 session:<id> 无人订阅,镜像会停在
+  // 旧值,下次打开 chip 先显示过期累计;列表订阅常开保证镜像始终新鲜。低频(turn 结束
+  // 各一条)、payload 极小。
+  'usage:session-spend-changed',
+  'usage:session-tokens-changed',
 ]);
 
 /**

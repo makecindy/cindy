@@ -83,6 +83,16 @@ describe('topicForPush', () => {
     );
   });
 
+  it('session 累计 cost / token 镜像 → sessions(列表订阅常开,会话未打开也不丢更新)', () => {
+    // 若走 session:<id>,未打开的会话无人订阅 → 镜像停在旧值,下次打开 chip 先显示过期累计。
+    expect(topicForPush('usage:session-spend-changed', { sessionId: 's8', totalCostUsd: 1.23 })).toBe(
+      'sessions',
+    );
+    expect(topicForPush('usage:session-tokens-changed', { sessionId: 's8', totalTokens: 42 })).toBe(
+      'sessions',
+    );
+  });
+
   it('orca:worker-changed 用 leadSessionId(不同 key)', () => {
     expect(topicForPush('maker:orca:worker-changed', { leadSessionId: 'lead-1' })).toBe(
       'session:lead-1',

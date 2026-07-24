@@ -30,6 +30,7 @@ export class ConflictDetector {
   private readonly reconnectThreshold: number;
   private reconnectCount = 0;
   private resolved = false;
+  private verdict: ConnectVerdict | null = null;
   private resolver: ((v: ConnectVerdict) => void) | null = null;
   private timer: NodeJS.Timeout | null = null;
   private readonly verdictPromise: Promise<ConnectVerdict>;
@@ -56,37 +57,44 @@ export class ConflictDetector {
     }, this.readyTimeoutMs);
   }
 
-  markReady(): void {
-    if (this.resolved) return;
-    this.resolve({ kind: 'connected' });
+  markReady(): boolean {
+    return this.resolve({ kind: 'connected' });
   }
 
-  markReconnecting(): void {
-    if (this.resolved) return;
+  markReconnecting(): boolean {
+    if (this.resolved) return false;
     this.reconnectCount++;
+    return true;
   }
 
-  markReconnected(): void {
-    if (this.resolved) return;
-    this.resolve({ kind: 'connected' });
+  markReconnected(): boolean {
+    return this.resolve({ kind: 'connected' });
   }
 
-  markError(err: Error): void {
-    if (this.resolved) return;
-    this.resolve({ kind: 'error', message: err.message ?? 'Unknown error' });
+  markConflict(): boolean {
+    return this.resolve({ kind: 'conflict' });
+  }
+
+  markError(err: Error): boolean {
+    return this.resolve({ kind: 'error', message: err.message ?? 'Unknown error' });
+  }
+
+  getVerdict(): ConnectVerdict | null {
+    return this.verdict;
   }
 
   waitForVerdict(): Promise<ConnectVerdict> {
     return this.verdictPromise;
   }
 
-  abandon(): void {
-    if (this.resolved) return;
-    this.resolve({ kind: 'error', message: 'Abandoned by caller.' });
+  abandon(): boolean {
+    return this.resolve({ kind: 'error', message: 'Abandoned by caller.' });
   }
 
-  private resolve(v: ConnectVerdict): void {
+  private resolve(v: ConnectVerdict): boolean {
+    if (this.resolved) return false;
     this.resolved = true;
+    this.verdict = v;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -95,5 +103,6 @@ export class ConflictDetector {
       this.resolver(v);
       this.resolver = null;
     }
+    return true;
   }
 }

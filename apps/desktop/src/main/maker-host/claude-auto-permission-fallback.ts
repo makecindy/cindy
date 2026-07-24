@@ -1,5 +1,5 @@
 /**
- * Claude Code Auto 权限分类器故障检测与会话降级。
+ * Auto 权限分类器故障检测与会话降级。
  *
  * 观察器只读 proxy 响应元数据，不改写响应；coordinator 在确认持久态仍为 auto 后，
  * 把单个活跃 Claude 会话切到 ask。分类器不可用时 fail-to-prompt，而不是让所有工具
@@ -14,6 +14,8 @@ const CLASSIFIER_SYSTEM_PREFIX = 'You are a security monitor for autonomous AI c
 /** Proxy 识别出的单次分类器故障。 */
 export interface ClaudeAutoClassifierUnavailableSignal {
   sessionId: string;
+  /** Legacy proxy signals omit this and default to Claude. */
+  agentKind?: 'claude-code' | 'codex';
   status: number;
 }
 
@@ -55,6 +57,13 @@ let unavailableListener: UnavailableListener = () => {};
 /** 由 maker IPC 接线层注入；传 no-op 可在测试/退出时解除。 */
 export function setClaudeAutoClassifierUnavailableListener(listener: UnavailableListener): void {
   unavailableListener = listener;
+}
+
+/** Vendor adapters use the same host-owned persistence/broadcast coordinator. */
+export function notifyAutoPermissionClassifierUnavailable(
+  signal: ClaudeAutoClassifierUnavailableSignal,
+): void {
+  unavailableListener(signal);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,7 +137,11 @@ export function createClaudeAutoClassifierFailureObserver(
     if (!sessionId || !isClaudeAutoClassifierRequest(ctx.requestBody)) return undefined;
 
     try {
-      unavailableListener({ sessionId, status: ctx.status });
+      notifyAutoPermissionClassifierUnavailable({
+        sessionId,
+        agentKind: 'claude-code',
+        status: ctx.status,
+      });
     } catch {
       // observer 只能旁路通知；listener 异常不得影响上游响应 pipe。
     }
@@ -171,6 +184,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
   };
 
   return async (signal) => {
+    const signalAgentKind = signal.agentKind ?? 'claude-code';
     counters.detected += 1;
     if (inFlight.has(signal.sessionId)) {
       counters.dedupedRetries += 1;
@@ -186,7 +200,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       }
 
       session = deps.getSession(signal.sessionId);
-      if (!session || session.agentKind !== 'claude-code') {
+      if (!session || session.agentKind !== signalAgentKind) {
         counters.skippedNonClaude += 1;
         return false;
       }
@@ -215,6 +229,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       deps.broadcast(event);
       deps.logger.info('auto permission classifier unavailable; session downgraded to ask', {
         sessionId: signal.sessionId,
+        agentKind: signalAgentKind,
         status: signal.status,
         counters: { ...counters },
       });

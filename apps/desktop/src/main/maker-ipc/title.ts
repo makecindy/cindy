@@ -96,11 +96,15 @@ export async function generateMakerSessionTitle(
   agentKind: AgentKind,
   sessionId?: string,
 ): Promise<string | null> {
+  // 空消息(如仅图片/附件的首条输入)不发标题请求:LLM 收到空素材会把
+  // "请提供用户消息内容"式回复当标题返回。直接放弃,调用方保留默认名。
+  const trimmed = message.trim();
+  if (!trimmed) return null;
   return generateTitleViaProvider(
     {
       sessionId: sessionId ?? '',
       agentKind,
-      prompt: TITLE_PROMPT_TEMPLATE(message),
+      prompt: TITLE_PROMPT_TEMPLATE(trimmed),
     },
     {
       readSessionProviderId: readSessionProviderIdFromDb,

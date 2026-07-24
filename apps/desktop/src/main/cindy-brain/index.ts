@@ -99,7 +99,6 @@ import { sanitizeGhostCardHtml } from './cardSanitizer.js';
 import { getGhostCard, listGhostCardsBySession, reassignGhostCards, updateGhostCardHeight, upsertGhostCard } from './cardStoreDb.js';
 import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
-import { reviewPostProcessedOutput } from '../content-moderation/postProcessedOutput.js';
 import { GATEWAY_IMAGE_MODELS, GATEWAY_VIDEO_MODELS } from '../cindy-proxy-media/types.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
@@ -1018,11 +1017,6 @@ export function runGhostAssistantReplyHook(sessionId: string, clientId: string, 
       hasHook: hasEnabledGhostAssistantHook,
       isEligible: async (sid) => (await isGhostEligibleSession(sid)).outcome === 'eligible',
       screen: (sid, t) => getGhostSubscriptionGateway().screenAssistantMessage({ sessionId: sid, text: t }),
-      approveReplacement: (sid, cid, replacement) => reviewPostProcessedOutput(
-        sid,
-        `ghost:${cid}`,
-        replacement,
-      ),
       persistRewrite: async (sid, cid, t) => {
         await updateMessageContent(sid, cid, t);
       },
@@ -1395,6 +1389,22 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 在途并发上限:用户级隐藏配置(ghost-cindy-prefs.json 的 inflightLimits),
       // 缺省 null = 不限并发;每单现读,改配置即生效。
       getInflightLimit: (ghostId) => readGhostCindyInflightLimit(ghostId),
+      // 管子续命挂钩:同步视频代办(署名单)在途期间替 tool-call 续命,
+      // 免得分钟级生成被管子 330s 基础窗口掐掉(任务后台继续烧钱、结果作废)。
+      // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
+      holdPipeCall: (ghostId, callId, budgetMs) => getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
+      releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
+      // 视频型号预期耗时(registry 登记值;hold 预算与异步受理返回共用)。
+      // registry 缺席/型号查无 → null,cindySlot 用自己的缺省。
+      videoExpectedSeconds: (model) => {
+        try {
+          const registry = getCindyProxyMediaService().backend.videoRegistry;
+          if (!registry || !registry.hasAny()) return null;
+          return registry.resolveByAlias(model).expectedSeconds;
+        } catch {
+          return null;
+        }
+      },
       resolveOwnedMedia: async (ghostId, hash) => {
         // 归属(账本)→ 落盘元数据(账本)→ 磁盘路径(指纹仓校验),
         // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。
@@ -2165,7 +2175,8 @@ export function registerGhostIpc(): void {
 
   // ── 管子(脑机接口)main 侧 handler(docs/dev-rules/plugin-security-and-authoring.md)──────────────
   // 身份不信任 sender 自报,一律按 webContents id 反查绑定表验身。
-  // 上行白名单:tool-result(交卷,派发器配对验身)/ host-request(公开宿主上下文)/ cindy-request(cindy 槽
+  // 上行白名单:tool-result(交卷,派发器配对验身)/ tool-progress(长任务
+  // 心跳续命,派发器配对验身)/ host-request(公开宿主上下文)/ cindy-request(cindy 槽
   // 代办,返回值即结果)/ card-update(卡槽③供片,cardService 校验链)/
   // notify(系统提示,notifySlot 资格审+限速)/ fs-request(fs 槽代写文件,
   // fsSlot 三档守门)/ agent-request(Agent 新回合,一次性用户票或后台权限
@@ -2187,6 +2198,13 @@ export function registerGhostIpc(): void {
       // 交卷结果不回传细节(accepted=false 的原因只进日志,不给沙箱探测面)。
       const outcome = getGhostPipeDispatcher().handleToolResult(id, payload);
       if (!outcome.accepted) log.warn('ghost tool-result rejected', { id, reason: outcome.reason });
+      return { ok: true };
+    }
+    // tool-progress = 长任务心跳续命(配对/验身/天花板都在派发器;
+    // 拒因只进日志,恒回 ok,与 tool-result 同纪律不给沙箱探测面)。
+    if (type === 'tool-progress') {
+      const outcome = getGhostPipeDispatcher().handleToolProgress(id, payload);
+      if (!outcome.accepted) log.warn('ghost tool-progress rejected', { id, reason: outcome.reason });
       return { ok: true };
     }
     // host-request = 读取宿主公开上下文;不要求卡槽,只返回构建 region,

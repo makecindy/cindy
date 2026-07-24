@@ -253,24 +253,26 @@ export const GHOST_LAUNCH_MODES = ['on-demand', 'resident'] as const;
 export type GhostLaunchMode = (typeof GHOST_LAUNCH_MODES)[number];
 
 /**
- * 面板停靠位置(相对主聊天窗)。当前布局引擎支持 left / right;
+ * 面板显示形态(相对主聊天窗)。left / right = 顶层布局树停靠 pane;
+ * 'tab' = 不进布局树,作为右侧栏(right-tabs)里的每会话单例页签
+ * (2026-07-24 定案,注册链路见 renderer/cindy-brain/ghostTabPlugins.tsx)。
  * top / bottom 需要嵌套上下分割(树操作/拖缝/卸载查找全链路),排期中——
  * 校验层先收词并明确拒绝,不静默降级(规则 9)。
  */
-export const GHOST_PANEL_POSITIONS = ['left', 'right'] as const;
+export const GHOST_PANEL_POSITIONS = ['left', 'right', 'tab'] as const;
 export type GhostPanelPosition = (typeof GHOST_PANEL_POSITIONS)[number];
 
 /** 面板声明(五个卡槽中的「面板」槽,一段意识至多一块)。 */
 export interface GhostPanelDecl {
   /** 面板标准头(PanelChrome)标题;缺省用意识 name。 */
   title?: string;
-  /** 停靠位置(相对主聊天窗);缺省 = right(2026-07-12 Lizi 定案)。 */
+  /** 显示形态:left / right 停靠,或 'tab' 右侧栏页签;缺省 = right(2026-07-12 Lizi 定案)。 */
   position?: GhostPanelPosition;
   /** 面板界面入口(安装目录内相对路径,意识自绘)。 */
   html: string;
-  /** 面板最小宽度(px),布局引擎拖缝时的下限。 */
+  /** 面板最小宽度(px),布局引擎拖缝时的下限。仅停靠形态有效,'tab' 时禁用。 */
   minWidth?: number;
-  /** 装入布局时的初始宽度占比(与 layoutTree 的 fraction 同语义)。 */
+  /** 装入布局时的初始宽度占比(与 layoutTree 的 fraction 同语义)。仅停靠形态有效,'tab' 时禁用。 */
   defaultFraction?: number;
 }
 
@@ -1241,7 +1243,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     items.push({
       key: `panel:${position}`,
       kind: 'panel',
-      labelKey: position === 'left' ? 'panelLeft' : 'panelRight',
+      labelKey: position === 'left' ? 'panelLeft' : position === 'tab' ? 'panelTab' : 'panelRight',
       labelArgs: { title: manifest.panel.title ?? manifest.name },
     });
   }
@@ -1389,11 +1391,13 @@ export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
  * 装入带面板的意识后,把面板停进布局树(main 侧随 install 调用)。
  * - 树上已有同 kind 的 pane(重装)→ 返回 null:不动树,位置记忆保留、原位复活;
  * - 意识没声明面板 → null;
+ * - position:'tab' → null:页签形态不进布局树,由右侧栏页签(ghostTabPlugins)承载;
  * - 否则停在聊天区右侧(index 1),宽度占比/最小宽取清单声明。
  * 卸下时**不做**逆操作 —— 树数据保留正是"重装复活"的记忆来源(§6 规则 5)。
  */
 export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): Layout | null {
   if (!manifest.panel) return null;
+  if (manifest.panel.position === 'tab') return null;
   const kind = ghostPanelKind(manifest.id);
   if (findSplitChildByPanelKind(layout, kind)) return null;
   // 停靠位置(相对主聊天窗):按 chat-main 的实际下标定插入点,不写死
@@ -1505,10 +1509,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (p.position !== undefined) {
       if (p.position === 'top' || p.position === 'bottom') {
         // 收词但明确拒绝(规则 9 不静默降级):上下停靠等布局引擎嵌套分割就绪后开放。
-        return { ok: false, reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / right' };
+        return { ok: false, reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / right / tab' };
       }
       if (!(GHOST_PANEL_POSITIONS as readonly string[]).includes(p.position as string)) {
         return { ok: false, reason: `panel.position 必须是 ${GHOST_PANEL_POSITIONS.join(' / ')}` };
+      }
+      // 页签形态没有拖缝宽度语义:收词明确拒绝而非静默忽略(规则 9)。
+      if (p.position === 'tab' && (p.minWidth !== undefined || p.defaultFraction !== undefined)) {
+        return {
+          ok: false,
+          reason: "panel.minWidth / panel.defaultFraction 仅停靠形态(left / right)有效,position:'tab' 时请移除",
+        };
       }
     }
     panel = {
@@ -2755,6 +2766,27 @@ export type GhostPipeToolResult =
   | { type: 'tool-result'; callId: string; ok: true; result: unknown }
   | { type: 'tool-result'; callId: string; ok: false; errorCode?: string; message: string };
 
+/**
+ * 上行:工具调用进度心跳(长任务续命)。在途 tool-call 每收到一次心跳,
+ * 主机把该卷的超时窗口重新续满一个基础档(缺省 330s),从派发起算不超过
+ * GHOST_PIPE_CALL_MAX_TOTAL_MS 天花板。经 cindy-request 请主机代办且带
+ * callId 的署名单在途时主机自动续命,无需心跳;意识自己经 network 槽轮询
+ * 外部长任务时才需要发。验身与交卷同纪律:callId 不是派给你的即丢弃。
+ */
+export interface GhostPipeToolProgress {
+  type: 'tool-progress';
+  callId: string;
+}
+
+/**
+ * 管子 tool-call 从派发起算的绝对上限(毫秒,30 分钟):代办自动续命与
+ * tool-progress 心跳共用的天花板——盖住视频代办 expected×3 的最大轮询
+ * 预算(seedance-pro 为 900s)+ 余量,又不给真死掉的调用无限吊着的机会。
+ * (2026-07-24 管子长任务续命定案:此前 330s 固定超时令分钟级视频代办
+ * 必超时,任务在后台继续烧钱、结果却作废。)
+ */
+export const GHOST_PIPE_CALL_MAX_TOTAL_MS = 30 * 60_000;
+
 /** 主机公开给意识的构建区域。与 desktop CURRENT_CINDY_REGION 同口径。 */
 export type GhostAppRegion = 'cn' | 'global';
 
@@ -3189,6 +3221,22 @@ export const GHOST_MODEL_TIERS = ['draft', 'standard', 'best'] as const;
 export type GhostModelTier = (typeof GHOST_MODEL_TIERS)[number];
 
 /**
+ * 异步代办(mode:'submit')完成结果的保留时长(毫秒,30 分钟):完成后
+ * 过期即清,query_job 查无此单。TTL 之外还有每意识完成记录条数上限
+ * (cindySlot 的 settled-job eviction):快速提交循环下最旧的完成记录会
+ * 在 TTL 未到时被提前淘汰。任务表在内存(主进程重启即丢),意识须把
+ * "查无此单"当作可重新提交的正常失败面。
+ */
+export const GHOST_CINDY_JOB_TTL_MS = 30 * 60_000;
+
+/**
+ * 每意识后台异步代办在途上限。同步代办天然被管子超时与 agent 节奏限流,
+ * 异步提交是瞬时的,必须有内置闸防批量提交刷爆付费通道;用户配置的
+ * inflightLimit(同时约束同步+异步)更严时以更严者为准。
+ */
+export const GHOST_CINDY_MAX_ASYNC_JOBS = 2;
+
+/**
  * 上行:cindy 槽代办请求(请 Cindy 本体出图 / 改图)。协议 type 为
  * 'cindy-request'(2026-07-11 由 'model-request' 更名,主机对旧名保持
  * 静默兼容)。选型双轨:
@@ -3234,6 +3282,13 @@ export type GhostPipeCindyRequest =
       model?: string;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
+      /**
+       * 异步模式(仅视频类代办):'submit' = 资格审与源图校验通过后立即
+       * 返回 jobId,生成在后台继续,用 kind:'query_job' 轮询取件。适合
+       * 可能超过管子超时窗口的超长任务;缺省同步等待(主机会为署名单
+       * 自动续命,分钟级任务推荐同步)。
+       */
+      mode?: 'submit';
     }
   | {
       type: 'cindy-request';
@@ -3248,6 +3303,14 @@ export type GhostPipeCindyRequest =
       model?: string;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
+      /** 异步模式(同 gen_video 分支)。 */
+      mode?: 'submit';
+    }
+  | {
+      type: 'cindy-request';
+      kind: 'query_job';
+      /** mode:'submit' 受理时返回的任务号(仅本意识自己的任务可查)。 */
+      jobId: string;
     };
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
@@ -3271,6 +3334,30 @@ export type GhostPipeModelResult =
        */
       width?: number;
       height?: number;
+    }
+  | {
+      ok: true;
+      /** 异步受理(mode:'submit')与 query_job 进行中共用本分支。 */
+      jobId: string;
+      status: 'running';
+      /** 该型号预期耗时(秒;registry 登记值,供意识决定轮询节奏)。 */
+      expectedSeconds?: number;
+      /** 已耗时(秒;仅 query_job 返回)。 */
+      elapsedSeconds?: number;
+    }
+  | {
+      /**
+       * query_job 完成态(独立成员,jobId/status 必填):`'status' in r`
+       * 即可与同步成功分支可靠判别。取件字段与同步成功分支同形。
+       */
+      ok: true;
+      jobId: string;
+      status: 'done';
+      url: string;
+      hash: string;
+      ext: string;
+      model: string;
+      modelLabel: string;
     }
   | { ok: false; message: string };
 

@@ -19,8 +19,6 @@ const VALID_MANIFEST = {
   websiteUrl: 'https://www.example.com',
   modelAccessApiBaseUrl: 'https://model-access.example.com',
   voiceApiBaseUrl: 'https://voice.example.com',
-  moderationSignApiBaseUrl: 'https://moderation-sign.example.com',
-  moderationSignTestApiBaseUrl: 'https://moderation-sign-test.example.com',
   githubApiBaseUrl: 'https://github-api.example.com',
   skillhubApiBaseUrl: 'https://skillhub.example.com',
   cdnBaseUrl: 'https://cdn.example.com/app',

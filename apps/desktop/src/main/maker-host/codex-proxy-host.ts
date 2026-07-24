@@ -61,6 +61,7 @@ import { composeResponseObservers } from './claude-rate-limit-headers-observer.j
 import { createProviderUpstreamErrorObserver, reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -250,6 +251,18 @@ function createChatBridgeDecision(
             ? existing
             : [existing, instructions].filter(Boolean).join('\n\n'),
         };
+      }
+      // localHandler 在 transform 链**之前**执行(引擎按路由决策短路),跨来源恢复的
+      // 加密压缩块不会被 createCrossProviderCompactionCompatTransform 处理;而 bridge
+      // 的翻译层遇到 compaction 项会按不支持的输入 400(Greptile P1 第二轮)。Chat
+      // bridge 目标上游定义上永远不是 ChatGPT,这里无条件做同一份替换。
+      const compactionSafe = replaceEncryptedCompactionItems(body);
+      if (compactionSafe) {
+        log.info('replaced encrypted compaction history for chat-bridge upstream', {
+          providerId,
+          upstreamBase: route.routing.upstream,
+        });
+        body = compactionSafe;
       }
       return handler.handle({ parsedBody: body, res });
     },
@@ -599,6 +612,78 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       changed = true;
     }
     return changed ? current : null;
+  };
+}
+
+/**
+ * 跨来源恢复的加密压缩历史兼容(Greptile P1, PR #265):
+ *
+ * OpenAI 远端压缩会把早期历史替换成加密 compaction 块(只有 ChatGPT 后端能解)。
+ * 该会话切到 XD / xAI / 自定义供应商后按原 thread id resume,持久化历史里的加密块
+ * 会被逐请求重放给读不懂它的上游 → 请求被拒、会话卡死。客户端无法解密转换,
+ * 唯一可行的降级是:发往**非 ChatGPT 上游**时把加密块替换成明文占位 user message,
+ * 明确告知模型「压缩点之前的上下文不可用」,保留压缩点之后仍在历史里的对话继续跑。
+ * 判断去向用 ctx.upstreamBase(引擎按最终路由注入),不复刻路由逻辑。
+ * ChatGPT 路由(chatgpt.com)原样透传,远端压缩语义不受影响。
+ */
+const COMPACTION_UNAVAILABLE_NOTE =
+  '[context note] Earlier conversation history was compacted into an encrypted snapshot by the ' +
+  'OpenAI subscription backend and is not readable on the current model provider. Treat the ' +
+  'conversation from this point on as the available context; ask the user if earlier details are needed.';
+
+function isChatGptUpstreamBase(upstreamBase: string | undefined): boolean {
+  if (!upstreamBase) return false;
+  try {
+    return new URL(upstreamBase).hostname === new URL(CODEX_OAUTH_UPSTREAM).hostname;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把 body.input 里**确实携带加密内容**的压缩项替换为明文占位 user message。
+ * 返回 null = 无压缩项,零改写。透明转发路径(transform 链)与 Chat bridge
+ * localHandler 路径共用——两条路都可能重放跨来源恢复的加密压缩历史。
+ *
+ * 只替换 encrypted_content 非空的项(codex wire 上 Compaction.encrypted_content
+ * 必填、ContextCompaction 可选):未来若出现可读/非加密的 compaction 变体,
+ * 不在「上游解不开」的问题域内,原样透传交给目标上游/翻译层自行处理。
+ */
+function replaceEncryptedCompactionItems(body: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+  let changed = false;
+  const input = body.input.map((item) => {
+    if (
+      isPlainObject(item) &&
+      (item.type === 'compaction' || item.type === 'context_compaction') &&
+      typeof item.encrypted_content === 'string' &&
+      item.encrypted_content.length > 0
+    ) {
+      changed = true;
+      return {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: COMPACTION_UNAVAILABLE_NOTE }],
+      };
+    }
+    return item;
+  });
+  return changed ? { ...body, input } : null;
+}
+
+export function createCrossProviderCompactionCompatTransform(): RequestTransform {
+  return (body, ctx) => {
+    // upstreamBase 未注入(理论不发生)按非 ChatGPT 保守处理?否——保守方向是不改写:
+    // 改写会丢加密块,误伤真 ChatGPT 请求的代价(远端压缩语义被破坏)高于维持现状。
+    if (!ctx.upstreamBase || isChatGptUpstreamBase(ctx.upstreamBase)) return null;
+    const replaced = replaceEncryptedCompactionItems(body);
+    if (!replaced) return null;
+    log.info('replaced encrypted compaction history for non-ChatGPT upstream', {
+      reqId: ctx.reqId,
+      upstreamBase: ctx.upstreamBase,
+      threadId: selectedThreadIdFromHeaders(ctx.headers),
+    });
+    return replaced;
   };
 }
 
@@ -952,6 +1037,9 @@ function createTransformRequestChain(): RequestTransform[] {
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
+    // 针对具体供应商的 input 归一化才能按标准 message 处理它。
+    createCrossProviderCompactionCompatTransform(),
     createXaiResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
@@ -1013,6 +1101,9 @@ export async function ensureCodexProxyReady(): Promise<void> {
           }),
         ],
         logger: log,
+        // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
+        // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
+        resolveOutboundProxy: resolveDesktopOutboundProxy,
       });
       if (generation !== _disposeGeneration) {
         await handle.dispose().catch((err) => {
