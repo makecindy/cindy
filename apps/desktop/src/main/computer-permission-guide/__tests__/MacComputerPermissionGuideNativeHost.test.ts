@@ -77,6 +77,21 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).not.toContain('"Computer Use · Step');
   });
 
+  it('detects auth modals from AX modal relationships instead of window count', () => {
+    const source = fs.readFileSync(
+      new URL(
+        '../../../../native/computer-permission-guide/macos-computer-permission-guide-helper.swift',
+        import.meta.url,
+      ),
+      'utf8',
+    );
+
+    expect(source).toContain('kAXChildrenAttribute');
+    expect(source).toContain('kAXSheetRole');
+    expect(source).toContain('kAXModalAttribute');
+    expect(source).not.toContain('layerZeroCount');
+  });
+
   it('starts the packaged helper and sends permission state after ready', async () => {
     const child = createFakeChild();
     const writes: string[] = [];

@@ -913,6 +913,14 @@ export async function showComputerPermissionGuideWindow(
   });
   guide.webContents.on('render-process-gone', (_event, details) => {
     log.warn('computer permission guide renderer exited', { reason: details.reason });
+    if (
+      !isGuideLifecycleActive(generation)
+      || guideWindow !== guide
+    ) {
+      return;
+    }
+    closeComputerPermissionGuideWindow();
+    broadcastPermissionGuideCancelled();
   });
   loadPermissionView(guide, 'computer-permission-guide');
 

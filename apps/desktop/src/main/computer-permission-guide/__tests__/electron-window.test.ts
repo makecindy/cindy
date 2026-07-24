@@ -510,6 +510,26 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
   });
 
+  it('closes the guide and resumes permission probes when its renderer exits', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    harness.resumeComputerDriverPermissionProbe.mockClear();
+    harness.closeComputerUseSwitchLocator.mockClear();
+    harness.broadcastSend.mockClear();
+
+    harness.windows[1].listeners.get('render-process-gone')?.(
+      {},
+      { reason: 'crashed' },
+    );
+
+    expect(harness.resumeComputerDriverPermissionProbe).toHaveBeenCalledOnce();
+    expect(harness.nativeDismiss).toHaveBeenCalledOnce();
+    expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
+    expect(harness.broadcastSend).toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
+  });
+
   it('cancels the guide when the attached native guide exits unexpectedly', async () => {
     const guide = await import('../window');
     await guide.showComputerPermissionGuideWindow(null);

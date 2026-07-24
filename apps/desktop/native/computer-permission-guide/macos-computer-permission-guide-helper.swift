@@ -921,6 +921,54 @@ private struct SystemSettingsWindowInfo {
     let hasModalSheet: Bool
 }
 
+/** Read an AX array without treating an unavailable accessibility tree as modal. */
+private func accessibilityElements(
+    of element: AXUIElement,
+    attribute: CFString
+) -> [AXUIElement] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+          let elements = value as? [AXUIElement] else { return [] }
+    return elements
+}
+
+private func accessibilityRole(of element: AXUIElement) -> String? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+        element,
+        kAXRoleAttribute as CFString,
+        &value
+    ) == .success else { return nil }
+    return value as? String
+}
+
+/** Detect only actual System Settings sheets or windows marked modal by AppKit. */
+private func systemSettingsHasModalPresentation(pid: pid_t) -> Bool {
+    let application = AXUIElementCreateApplication(pid)
+    let windows = accessibilityElements(of: application, attribute: kAXWindowsAttribute as CFString)
+    for window in windows {
+        if accessibilityRole(of: window) == kAXSheetRole as String {
+            return true
+        }
+        let hasSheetChild = accessibilityElements(
+            of: window,
+            attribute: kAXChildrenAttribute as CFString
+        ).contains { accessibilityRole(of: $0) == kAXSheetRole as String }
+        if hasSheetChild { return true }
+        var modalValue: CFTypeRef?
+        if AXUIElementCopyAttributeValue(
+            window,
+            kAXModalAttribute as CFString,
+            &modalValue
+        ) == .success,
+           let isModal = modalValue as? Bool,
+           isModal {
+            return true
+        }
+    }
+    return false
+}
+
 /** Finds the largest visible layer-zero window owned by System Settings. */
 private func systemSettingsWindowInfo(pid: pid_t) -> SystemSettingsWindowInfo? {
     guard let rawList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
@@ -928,7 +976,6 @@ private func systemSettingsWindowInfo(pid: pid_t) -> SystemSettingsWindowInfo? {
     var bestArea: CGFloat = 0
     var bestRect: CGRect?
     var bestWindowID: CGWindowID = 0
-    var layerZeroCount = 0
     for info in rawList {
         guard let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber,
               ownerPID.int32Value == pid,
@@ -936,9 +983,6 @@ private func systemSettingsWindowInfo(pid: pid_t) -> SystemSettingsWindowInfo? {
               layer.intValue == 0,
               let bounds = info[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
-        if rect.width > 100 && rect.height > 80 {
-            layerZeroCount += 1
-        }
         guard rect.width > 360, rect.height > 260 else { continue }
         let area = rect.width * rect.height
         guard let windowID = info[kCGWindowNumber as String] as? NSNumber,
@@ -951,7 +995,7 @@ private func systemSettingsWindowInfo(pid: pid_t) -> SystemSettingsWindowInfo? {
     return SystemSettingsWindowInfo(
         frame: appKitRect(fromQuartz: cgFrame),
         windowNumber: Int(bestWindowID),
-        hasModalSheet: layerZeroCount >= 2
+        hasModalSheet: systemSettingsHasModalPresentation(pid: pid)
     )
 }
 
