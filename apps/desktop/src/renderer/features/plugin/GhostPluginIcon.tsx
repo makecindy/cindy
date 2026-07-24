@@ -92,6 +92,7 @@ export function GhostPluginIcon({
           src={resolvedIconDataUrl}
           alt=""
           draggable={false}
+          referrerPolicy="no-referrer"
           onError={() => setFailedSrc(resolvedIconDataUrl)}
           className={cn(
             svg ? SVG_ICON_CLASSES[size] : 'size-full object-cover',
