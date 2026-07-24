@@ -2182,7 +2182,7 @@ export class CodexAgent extends BaseAgent {
     // CodexExtraSpawnConfig.codexRemoteCompactionProviderId),② 本会话的凭证家族
     // 解析为 oauth-bearer(显式 openai 来源,或隐式来源 + host 归一化形态为订阅)
     // 时,才让 thread 选 OpenAI 身份 provider → codex 走 OpenAI 远端压缩。
-    // codex/ 骨折(gateway-key)、xai//chatgpt/ 与显式第三方来源(provider-oauth)
+    // codex/ 骨折(gateway-key)、xai/、chatgpt/ 与显式第三方来源(provider-oauth)
     // 都被 resolveAgentCredentialMode 排除 —— 它们的上游不支持远端压缩,且 codex
     // 远端压缩失败无本地回退,错配会打断长会话。
     const threadModelProvider = (() => {
