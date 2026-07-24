@@ -29,9 +29,9 @@ export function TemplateCard({ template, selected = false, onSelect }: TemplateC
   const { t } = useTranslation();
   const Icon = iconForTemplate(template.id);
   const scheduleText = template.cronExpr ? cronToHuman(template.cronExpr) : '';
-  // Object.hasOwn 而不是 in：user/project 模板的 capabilities 不受包词表约束，
-  // 'toString' 这类原型链上的 key 不能穿过守卫。
-  const capabilities = (template.capabilities ?? []).filter(
+  // user/project 模板的 capabilities 不受包词表约束：Object.hasOwn（而不是 in）挡住
+  // 'toString' 这类原型链 key，Set 去重避免重复项撞 React key。
+  const capabilities = [...new Set(template.capabilities ?? [])].filter(
     (capability): capability is TemplateCapability => Object.hasOwn(CAPABILITY_ICONS, capability),
   );
 
