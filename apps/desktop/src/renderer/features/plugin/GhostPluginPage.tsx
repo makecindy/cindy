@@ -686,7 +686,7 @@ export function GhostPluginPage() {
               </div>
               <div
                 className="flex max-w-full items-center gap-1 overflow-x-auto"
-                role="tablist"
+                role="group"
                 aria-label={t('settings.ghosts.page.filtersAria')}
                 style={WINDOW_NO_DRAG_STYLE}
               >
@@ -697,8 +697,7 @@ export function GhostPluginPage() {
                     <button
                       key={filter}
                       type="button"
-                      role="tab"
-                      aria-selected={selected}
+                      aria-pressed={selected}
                       onClick={() => setOriginFilter(filter)}
                       className={cn(
                         'shrink-0 select-none rounded-full px-3.5 py-2 text-12 transition-colors duration-150',
@@ -722,7 +721,13 @@ export function GhostPluginPage() {
 
             {marketSnapshot?.unavailableReason ? (
               <p className="mb-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 text-[var(--text-secondary)]">
-                {t('settings.ghosts.market.unavailable')}
+                {t(
+                  marketSnapshot.unavailableReason === 'authentication-required'
+                    ? 'settings.ghosts.market.authenticationRequired'
+                    : marketSnapshot.unavailableReason === 'not-configured'
+                      ? 'settings.ghosts.market.notConfigured'
+                      : 'settings.ghosts.market.unavailable',
+                )}
               </p>
             ) : null}
 
@@ -804,7 +809,9 @@ function MarketPluginCard({
             </span>
           </span>
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
-            <span>{t(`settings.ghosts.market.scope.${item.scope}`)}</span>
+            <span>
+              {t(`settings.ghosts.page.origin.${pluginPresentationOrigin(item)}`)}
+            </span>
             <span aria-hidden="true">·</span>
             <span>v{item.version}</span>
             <span aria-hidden="true">·</span>
