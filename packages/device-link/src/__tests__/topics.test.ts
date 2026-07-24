@@ -81,12 +81,15 @@ describe('topicForPush', () => {
     expect(topicForPush('usage:message-turn-cost', { sessionId: 's7', clientId: 'm1' })).toBe(
       'session:s7',
     );
-    // session 终身累计 cost / token 镜像:payload 顶层 sessionId → 默认路由到 session:<id>。
+  });
+
+  it('session 累计 cost / token 镜像 → sessions(列表订阅常开,会话未打开也不丢更新)', () => {
+    // 若走 session:<id>,未打开的会话无人订阅 → 镜像停在旧值,下次打开 chip 先显示过期累计。
     expect(topicForPush('usage:session-spend-changed', { sessionId: 's8', totalCostUsd: 1.23 })).toBe(
-      'session:s8',
+      'sessions',
     );
     expect(topicForPush('usage:session-tokens-changed', { sessionId: 's8', totalTokens: 42 })).toBe(
-      'session:s8',
+      'sessions',
     );
   });
 

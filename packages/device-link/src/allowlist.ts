@@ -405,9 +405,9 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // 本轮模型降级标记(payload 顶层 sessionId → 默认路由到 session:<id> topic):
   // 控制端把 agent_meta.modelMismatch 实时 patch 进已打开的远程会话消息流。
   'usage:message-model-mismatch',
-  // session 终身累计 cost / token(payload 顶层 sessionId → 默认路由到 session:<id> topic):
-  // 被控端 sessionSpendBroadcaster 走裸 UPDATE 落库、不发 sessions:patched,控制端打开的
-  // 远程会话底部 $ chip 依赖这两条把累计值镜像成被控端真相。
+  // session 终身累计 cost / token(topics.ts 归入 sessions topic:列表订阅常开,会话
+  // 未打开也保持镜像新鲜):被控端 sessionSpendBroadcaster 走裸 UPDATE 落库、不发
+  // sessions:patched,控制端远程会话底部 $ chip 依赖这两条把累计值镜像成被控端真相。
   'usage:session-spend-changed',
   'usage:session-tokens-changed',
   // local-db 推送(读模型增量)
