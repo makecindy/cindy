@@ -294,6 +294,14 @@ describe('mobile schedule form model', () => {
     expect(draft.useWorktree).toBe(true);
     expect(validateMobileScheduleDraft(draft)).toMatchObject({ field: 'workingDir' });
     expect(buildMobileScheduleInput({ ...draft, workingDir: '/repo' }).useWorktree).toBe(true);
+
+    // 绑定会话的 draft 上应用 worktree 模板：绑定与 worktree 互斥，必须清掉
+    // targetSessionId，否则序列化的 heartbeat 分支同样会打回 false。
+    const boundDraft = updateDraftBoundSessionId(createMobileScheduleDraft(null), 'session-1');
+    const fromBound = applyTemplateToMobileScheduleDraft(boundDraft, template);
+    expect(fromBound.targetSessionId).toBe('');
+    expect(fromBound.useWorktree).toBe(true);
+    expect(buildMobileScheduleInput({ ...fromBound, workingDir: '/repo' }).useWorktree).toBe(true);
   });
 
   it('flags missing required template parameters without defaults', () => {
