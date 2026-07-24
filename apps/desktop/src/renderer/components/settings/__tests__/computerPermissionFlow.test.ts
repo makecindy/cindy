@@ -58,9 +58,17 @@ describe('computer permission flow', () => {
       },
     };
 
+    expect(isComputerPermissionReady(null)).toBe(false);
     expect(isComputerPermissionReady(unknown)).toBe(false);
     expect(shouldStartComputerPermissionGuide(true, unknown)).toBe(false);
     expect(shouldStartComputerPermissionGuide(true, null)).toBe(false);
+  });
+
+  it('treats a loaded status without platform permissions as ready', () => {
+    const { permissionState: _permissionState, ...withoutPermissionState } =
+      status('granted', 'granted');
+
+    expect(isComputerPermissionReady(withoutPermissionState)).toBe(true);
   });
 
   it('never starts onboarding while disabling the feature', () => {

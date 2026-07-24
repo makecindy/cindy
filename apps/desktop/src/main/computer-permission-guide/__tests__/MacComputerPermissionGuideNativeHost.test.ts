@@ -100,6 +100,20 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('return didEncounterUnavailableAttribute ? nil : false');
     expect(source).not.toContain('attribute: kAXChildrenAttribute as CFString\n        ) ?? []');
     expect(source).not.toContain('layerZeroCount');
+
+    const resolver = source.slice(
+      source.indexOf('private func resolveModalSheetState'),
+      source.indexOf('private func attachedPanelFrame'),
+    );
+    expect(resolver).toContain(
+      'fallbackModalWindowIDs = info.attachedSheetCandidateWindowIDs',
+    );
+    expect(resolver).toContain(
+      'if !hadTrackedFallbackModal && fallbackModalWindowIDs.isEmpty',
+    );
+    expect(resolver.indexOf('if authSheetVisible')).toBeLessThan(
+      resolver.indexOf('if !didEstablishFallbackWindowBaseline'),
+    );
   });
 
   it('uses app locale copy and appearance-aware colors in the native helper', () => {

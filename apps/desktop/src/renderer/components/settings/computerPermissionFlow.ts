@@ -1,6 +1,7 @@
 /** Whether the current runtime permission snapshot is sufficient for use. */
 export function isComputerPermissionReady(status: ComputerDriverStatus | null): boolean {
-  const permissionState = status?.permissionState;
+  if (status === null) return false;
+  const permissionState = status.permissionState;
   return !permissionState?.required || permissionState.status === 'granted';
 }
 

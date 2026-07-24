@@ -980,9 +980,33 @@ private final class PermissionGuideCoordinator {
      */
     private func resolveModalSheetState(_ info: SystemSettingsWindowInfo) -> Bool {
         if let hasModalSheet = info.axHasModalSheet {
-            knownFallbackWindowIDs.formUnion(info.layerZeroWindowIDs)
-            fallbackModalWindowIDs.removeAll()
+            didEstablishFallbackWindowBaseline = true
+            if hasModalSheet {
+                // Seed the geometry fallback while AX is authoritative. If an
+                // AX attribute is temporarily unavailable on the next tick,
+                // keep the confirmed sheet visible until its window vanishes.
+                fallbackModalWindowIDs = info.attachedSheetCandidateWindowIDs
+                knownFallbackWindowIDs.formUnion(
+                    info.layerZeroWindowIDs.subtracting(fallbackModalWindowIDs)
+                )
+            } else {
+                knownFallbackWindowIDs.formUnion(info.layerZeroWindowIDs)
+                fallbackModalWindowIDs.removeAll()
+            }
             return hasModalSheet
+        }
+        if authSheetVisible {
+            let hadTrackedFallbackModal = !fallbackModalWindowIDs.isEmpty
+            if !hadTrackedFallbackModal {
+                fallbackModalWindowIDs = info.attachedSheetCandidateWindowIDs
+            }
+            fallbackModalWindowIDs.formIntersection(info.layerZeroWindowIDs)
+            if !hadTrackedFallbackModal && fallbackModalWindowIDs.isEmpty {
+                // AX confirmed the sheet, but Quartz could not identify its
+                // window. Do not invent a dismissal from an unknown AX sample.
+                return true
+            }
+            return !fallbackModalWindowIDs.isEmpty
         }
         if !didEstablishFallbackWindowBaseline {
             didEstablishFallbackWindowBaseline = true
