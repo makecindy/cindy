@@ -211,7 +211,7 @@ export interface AgentDeps {
   onAutoPermissionClassifierUnavailable?: (args: {
     sessionId: string;
     agentKind: 'claude-code' | 'codex';
-    /** HTTP status when available; Codex reviewer timeout uses synthetic 408. */
+    /** HTTP status when available; Codex reviewer timeout/failure use synthetic 408/500. */
     status: number;
   }) => void;
 

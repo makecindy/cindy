@@ -3227,15 +3227,156 @@ describe('CodexAgent MCP thread context hooks', () => {
       review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: 'review timed out' },
       action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
     });
+    expect(classifierUnavailable).not.toHaveBeenCalled();
     await expect(nextEvent(iterator)).resolves.toMatchObject({
       type: 'error',
-      data: { reason: 'codex-auto-review-timeout', isTerminal: false },
+      data: {
+        reason: 'codex-auto-review-unavailable',
+        isTerminal: false,
+        reviewRationale: 'review timed out',
+      },
     });
+    await Promise.resolve();
     expect(classifierUnavailable).toHaveBeenCalledWith({
       sessionId: 'session-guardian-timeout',
       agentKind: 'codex',
       status: 408,
     });
+    await handle.close();
+  });
+
+  it('switches the local runtime to Ask before notifying the host about a Guardian timeout', async () => {
+    const classifierUnavailable = vi.fn();
+    const agent = new CodexAgent(createDeps({}, {
+      onAutoPermissionClassifierUnavailable: classifierUnavailable,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-after-guardian-timeout' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-guardian-timeout-runtime',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
+
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-guardian',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-timeout-runtime',
+      targetItemId: 'item-network-runtime',
+      decisionSource: 'agent',
+      review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: null },
+      action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
+    });
+
+    expect(classifierUnavailable).not.toHaveBeenCalled();
+    await handle.send({ type: 'user', content: 'retry after fallback' });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+    };
+    expect(turnParams.approvalPolicy).toBe('on-request');
+    expect(turnParams).not.toHaveProperty('approvalsReviewer');
+    expect(classifierUnavailable).toHaveBeenCalledWith({
+      sessionId: 'session-guardian-timeout-runtime',
+      agentKind: 'codex',
+      status: 408,
+    });
+    await handle.close();
+  });
+
+  it('treats Guardian reviewer failures as unavailable and contains host callback errors', async () => {
+    const classifierUnavailable = vi.fn(() => {
+      throw new Error('host callback failed');
+    });
+    const agent = new CodexAgent(createDeps({}, {
+      onAutoPermissionClassifierUnavailable: classifierUnavailable,
+    }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-guardian-reviewer-failure',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
+
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-guardian',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-failed-1',
+      targetItemId: 'item-command-failed',
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'high',
+        userAuthorization: 'unknown',
+        rationale: 'Automatic approval review failed: invalid reviewer response',
+      },
+      action: { type: 'command', source: 'shell', command: 'pwd', cwd: '/repo' },
+    });
+    expect(classifierUnavailable).not.toHaveBeenCalled();
+
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'error',
+      data: { reason: 'codex-auto-review-unavailable', isTerminal: false },
+    });
+    await Promise.resolve();
+    expect(classifierUnavailable).toHaveBeenCalledWith({
+      sessionId: 'session-guardian-reviewer-failure',
+      agentKind: 'codex',
+      status: 500,
+    });
+    await handle.close();
+  });
+
+  it('ignores a stale Guardian timeout from a previous turn', async () => {
+    const classifierUnavailable = vi.fn();
+    const agent = new CodexAgent(createDeps({}, {
+      onAutoPermissionClassifierUnavailable: classifierUnavailable,
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-current' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-guardian-stale-timeout',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    await handle.send({ type: 'user', content: 'current turn' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
+
+    handlers.autoApprovalReviewCompleted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-previous',
+      startedAtMs: 1,
+      completedAtMs: 2,
+      reviewId: 'review-stale-timeout',
+      targetItemId: 'item-stale',
+      decisionSource: 'agent',
+      review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: null },
+      action: { type: 'command', source: 'shell', command: 'pwd', cwd: '/repo' },
+    });
+
+    await Promise.resolve();
+    expect(classifierUnavailable).not.toHaveBeenCalled();
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(turnParams.approvalsReviewer).toBe('auto_review');
     await handle.close();
   });
 

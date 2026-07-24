@@ -999,6 +999,22 @@ export interface GuardianWarningNotification {
   message: string;
 }
 
+/** JSON-RPC envelopes for the Guardian notification params above. */
+export interface ItemGuardianApprovalReviewStartedServerNotification {
+  method: 'item/autoApprovalReview/started';
+  params: ItemGuardianApprovalReviewStartedNotification;
+}
+
+export interface ItemGuardianApprovalReviewCompletedServerNotification {
+  method: 'item/autoApprovalReview/completed';
+  params: ItemGuardianApprovalReviewCompletedNotification;
+}
+
+export interface GuardianWarningServerNotification {
+  method: 'guardianWarning';
+  params: GuardianWarningNotification;
+}
+
 /**
  * v2 ThreadItem 的 envelope — 至少有 id / type, 余字段按 type narrow。
  * 完整 union 在 v2.rs ThreadItem (太大, 不在 Phase 1 全列)。translator 用
@@ -1025,9 +1041,9 @@ export type ServerNotification =
   | ThreadStatusChangedNotification
   | ThreadSettingsUpdatedNotification
   | ServerRequestResolvedNotification
-  | ItemGuardianApprovalReviewStartedNotification
-  | ItemGuardianApprovalReviewCompletedNotification
-  | GuardianWarningNotification
+  | ItemGuardianApprovalReviewStartedServerNotification
+  | ItemGuardianApprovalReviewCompletedServerNotification
+  | GuardianWarningServerNotification
   | ErrorNotification;
 
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────

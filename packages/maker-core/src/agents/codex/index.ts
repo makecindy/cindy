@@ -3517,34 +3517,80 @@ export class CodexAgent extends BaseAgent {
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
-    const emitGuardianTimeout = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
-      const rationale = params.review.rationale?.trim();
+    const GUARDIAN_REVIEW_FAILURE_PREFIX = 'Automatic approval review failed:';
+
+    const emitGuardianUnavailable = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
+      const timedOut = params.review.status === 'timedOut';
       eventQueue.push({
         type: 'error',
         data: {
-          message: rationale
-            ? `Codex automatic approval review timed out: ${rationale}`
-            : 'Codex automatic approval review timed out. The action was blocked and this session is switching to Ask mode.',
+          // Renderer uses reason for localized copy. Keep an English fallback for
+          // non-renderer consumers while always stating the blocked action + downgrade.
+          message: timedOut
+            ? 'Codex automatic approval review timed out. The action was blocked and this session is switching to Ask mode.'
+            : 'Codex automatic approval review failed. The action was blocked and this session is switching to Ask mode.',
           isTerminal: false,
-          reason: 'codex-auto-review-timeout',
+          reason: 'codex-auto-review-unavailable',
           reviewId: params.reviewId,
+          reviewRationale: params.review.rationale,
         },
         source: 'codex',
+      });
+    };
+
+    /**
+     * Close the race between a Guardian failure notification and the async host
+     * persistence coordinator. The current action is already blocked; changing the
+     * local mode synchronously ensures a message sent immediately afterwards starts
+     * in Ask instead of launching another auto_review turn that is then interrupted.
+     */
+    const switchAutoRuntimeToAskImmediately = (): boolean => {
+      if (mutablePermissionMode !== 'auto') return false;
+      dismissAllPending('permission_mode_changed_to_ask', 'deny');
+      mutablePermissionMode = 'ask';
+      if (!closed && turnLaunchedUnattended) {
+        if (currentTurnId !== null) {
+          void interruptTurnForPermissionTighten(currentTurnId);
+        } else if (isTurnStartPending) {
+          pendingTightenInterrupt = true;
+        }
+      }
+      return true;
+    };
+
+    const notifyAutoPermissionClassifierUnavailable = (
+      params: ItemGuardianApprovalReviewCompletedNotification,
+    ): void => {
+      if (!switchAutoRuntimeToAskImmediately() || typeof opts.sessionId !== 'string') return;
+      const notify = this.deps.onAutoPermissionClassifierUnavailable;
+      if (!notify) return;
+      const status = params.review.status === 'timedOut' ? 408 : 500;
+      queueMicrotask(() => {
+        try {
+          notify({
+            sessionId: opts.sessionId as string,
+            agentKind: 'codex',
+            status,
+          });
+        } catch (error) {
+          log.warn('Codex Auto fallback notification threw', {
+            reviewId: params.reviewId,
+            error: String(error),
+          });
+        }
       });
     };
 
     const handleGuardianReviewCompleted = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
       if (seenGuardianReviewIds.has(params.reviewId)) return;
       seenGuardianReviewIds.add(params.reviewId);
-      if (params.review.status === 'timedOut') {
-        emitGuardianTimeout(params);
-        if (mutablePermissionMode === 'auto' && typeof opts.sessionId === 'string') {
-          this.deps.onAutoPermissionClassifierUnavailable?.({
-            sessionId: opts.sessionId,
-            agentKind: 'codex',
-            status: 408,
-          });
-        }
+      const rationale = params.review.rationale?.trim();
+      const failedClosedBecauseReviewerUnavailable =
+        params.review.status === 'denied' &&
+        rationale?.startsWith(GUARDIAN_REVIEW_FAILURE_PREFIX) === true;
+      if (params.review.status === 'timedOut' || failedClosedBecauseReviewerUnavailable) {
+        emitGuardianUnavailable(params);
+        notifyAutoPermissionClassifierUnavailable(params);
         return;
       }
       if (params.review.status === 'denied') {
@@ -3719,6 +3765,7 @@ export class CodexAgent extends BaseAgent {
         }
       },
       autoApprovalReviewStarted: (params: ItemGuardianApprovalReviewStartedNotification) => {
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         log.debug('Codex automatic approval review started', {
           reviewId: params.reviewId,
           turnId: params.turnId,
@@ -3727,6 +3774,7 @@ export class CodexAgent extends BaseAgent {
         });
       },
       autoApprovalReviewCompleted: (params) => {
+        if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         handleGuardianReviewCompleted(params);
       },
       guardianWarning: (params: GuardianWarningNotification) => {

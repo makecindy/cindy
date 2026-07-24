@@ -28,6 +28,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'turn-failed': 'logic.errors.turnFailed',
   'silent-stop-exhausted': 'logic.errors.silentStopExhausted',
   'permission-tighten-interrupt-failed': 'logic.errors.permissionTightenInterruptFailed',
+  'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
 };
 
 export function ErrorMessageCard({ message, reason }: { message: string; reason?: string }) {
