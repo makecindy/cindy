@@ -153,6 +153,11 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     fireEvent.click(screen.getByText('settings.providers.button.authorize'));
 
     await waitFor(() => expect(triggerLogin).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(onDone).not.toHaveBeenCalled());
+    // 先等授权流程 settle(按钮从「取消」回到「授权」= loggingIn 已复位),
+    // 再做负向断言——避免「负向 waitFor」首查即过、断言早于异步流程收尾。
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.button.authorize')).not.toBeNull(),
+    );
+    expect(onDone).not.toHaveBeenCalled();
   });
 });
