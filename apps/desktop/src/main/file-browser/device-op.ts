@@ -8,14 +8,13 @@
  * 过旧"占位。
  *
  * 安全:
- *  - workdir 参数经 `checkRemoteWorkingDir` 收敛(recents → 已有会话
- *    workdir → 真实存在目录)。判据顺序对嵌套至关重要:被控端 SSH remote
- *    会话的 workdir 是远端路径,只能靠"已有会话 workdir"命中,fs 存在性
- *    检查对它必然 false。
+ *  - workdir 先经 `checkRemoteWorkingDir` 探测被控端本地可访问性,再结合已有
+ *    SSH session 的 remoteHostId 解析唯一执行端点。本地与 SSH 同时命中或
+ *    多个 SSH host 命中时显式拒绝,不猜测执行位置。
  *  - 路径穿越在 scanner 层拦(assertInsideWorkdir + realpath),与本地一致。
  *
- * 嵌套(device-link 套 SSH):guard 通过但 workdir 非本地目录时,查该 workdir
- * 对应会话的 remoteHostId → 经 RemoteFileBrowserManager 二跳到 SSH daemon,
+ * 嵌套(device-link 套 SSH):本地探测即使失败或超时,唯一 SSH 归属仍经
+ * RemoteFileBrowserManager 二跳到 SSH daemon,
  * 控制端免费获得二级转发(写进 PR 测试路径)。
  *
  * oversize:readFile 结果超 relay 帧限(MAX_FRAME_BYTES=2MiB)前主动预判,
@@ -65,7 +64,6 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import {
   checkRemoteWorkingDir,
-  probeRemoteDirectory,
   remoteWorkingDirRejectionToIpcError,
   type RemoteWorkingDirCheckResult,
 } from '../device-link/remote-workdir-guard.js';
@@ -180,9 +178,8 @@ type WorkdirExecution =
  */
 async function resolveWorkdirExecution(
   workdir: string,
-  knownProbe?: RemoteWorkingDirCheckResult,
+  localProbe: RemoteWorkingDirCheckResult,
 ): Promise<WorkdirExecution> {
-  const localProbe = knownProbe ?? (await probeRemoteDirectory(workdir));
   const isLocalDir = localProbe.allowed;
   let sshHosts: string[] = [];
   try {
@@ -212,11 +209,11 @@ async function resolveWorkdirExecution(
       reason: `workdir belongs to multiple SSH hosts [${sshHosts.join(', ')}]`,
     };
   }
+  if (isLocalDir) return { kind: 'local' };
+  if (sshHosts.length === 1) return { kind: 'ssh', hostId: sshHosts[0] };
   if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
     return { kind: 'unavailable', reason: localProbe.reason };
   }
-  if (isLocalDir) return { kind: 'local' };
-  if (sshHosts.length === 1) return { kind: 'ssh', hostId: sshHosts[0] };
   return { kind: 'local' };
 }
 
@@ -366,7 +363,25 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     return { ok: true as const, gzip: true as const };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
-  if (!guardResult.allowed) {
+  if (!guardResult.allowed && guardResult.reason === 'invalid') {
+    const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+    throwIpcError(rejection.code, rejection.message);
+  }
+
+  const exec = await resolveWorkdirExecution(args.workdir, guardResult);
+  const workdir = args.workdir;
+
+  if (exec.kind === 'unavailable') {
+    const rejection = remoteWorkingDirRejectionToIpcError(exec.reason);
+    throwIpcError(rejection.code, rejection.message);
+  }
+  if (exec.kind === 'ambiguous') {
+    // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
+    // throw 理由同上 guard 分支:renderer 需要 reject 才能走 loadError 通路。
+    log.warn('remote-op workdir endpoint ambiguous', { op: args.op, workdir, reason: exec.reason });
+    throw new Error(`workdir endpoint ambiguous: ${exec.reason}`);
+  }
+  if (exec.kind === 'local' && !guardResult.allowed) {
     log.warn('remote-op workdir rejected by guard', {
       op: args.op,
       workdir: args.workdir,
@@ -380,9 +395,8 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     throwIpcError(rejection.code, rejection.message);
   }
 
-  // writeFile 内容的 gzip 形态在入口统一解码:本地与 SSH 二跳分支拿到的都是
-  // 明文,嵌套场景(device-link 套 SSH)天然成立。解码失败(损坏/伪造)返回
-  // 结构化错误,不落任何写操作。
+  // 先完成目录授权和执行端点判定,再处理可能昂贵的压缩输入。解码后的明文
+  // 同时供本地与 SSH 二跳分支使用;失败时不落任何写操作。
   let writeContent = args.content;
   if (typeof args.contentGz === 'string') {
     try {
@@ -395,23 +409,6 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       log.warn('remote-op contentGz decode failed', { op: args.op, error: String(err) });
       return bad('invalid contentGz');
     }
-  }
-
-  const exec = await resolveWorkdirExecution(
-    args.workdir,
-    guardResult.source === 'filesystem' ? guardResult : undefined,
-  );
-  const workdir = args.workdir;
-
-  if (exec.kind === 'unavailable') {
-    const rejection = remoteWorkingDirRejectionToIpcError(exec.reason);
-    throwIpcError(rejection.code, rejection.message);
-  }
-  if (exec.kind === 'ambiguous') {
-    // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
-    // throw 理由同上 guard 分支:renderer 需要 reject 才能走 loadError 通路。
-    log.warn('remote-op workdir endpoint ambiguous', { op: args.op, workdir, reason: exec.reason });
-    throw new Error(`workdir endpoint ambiguous: ${exec.reason}`);
   }
 
   // —— SSH 二跳:直接透传给本机的 SSH file-service 路由 ——
@@ -667,20 +664,21 @@ async function onFsWatchSubscribed(workdir: string): Promise<void> {
 
 async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
   const guardResult = await checkRemoteWorkingDir(workdir);
-  if (!guardResult.allowed) {
+  if (!guardResult.allowed && guardResult.reason === 'invalid') {
     log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
     return;
   }
-  const exec = await resolveWorkdirExecution(
-    workdir,
-    guardResult.source === 'filesystem' ? guardResult : undefined,
-  );
+  const exec = await resolveWorkdirExecution(workdir, guardResult);
   if (exec.kind === 'unavailable') {
     log.warn('device fs-watch skipped: workdir unavailable', { workdir, reason: exec.reason });
     return;
   }
   if (exec.kind === 'ambiguous') {
     log.warn('device fs-watch skipped: workdir endpoint ambiguous', { workdir, reason: exec.reason });
+    return;
+  }
+  if (exec.kind === 'local' && !guardResult.allowed) {
+    log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
     return;
   }
   if (exec.kind === 'local') {

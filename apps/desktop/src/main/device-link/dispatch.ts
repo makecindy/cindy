@@ -111,7 +111,7 @@ type RemoteWorkingDirGuardValue = boolean | RemoteWorkingDirCheckResult;
 /** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
 let workingDirGuard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null = null;
 
-/** 注入远程 create/fork 的 workingDir 校验器(register.ts 在 maker 就绪后接入)。 */
+/** 注入远程 create-session/worktree:create 的本地目录校验器(register.ts 在 maker 就绪后接入)。 */
 export function setRemoteWorkingDirGuard(
   guard: ((dir: string) => RemoteWorkingDirGuardValue | Promise<RemoteWorkingDirGuardValue>) | null,
 ): void {
@@ -939,8 +939,8 @@ export async function runInvoke(
   }
 
   // 参数级收敛:create-session 的 workingDir / worktree:create 的 baseRepo 决定 agent
-  // 在哪个目录起进程或跑 git,allowlist 只挡 channel 不挡 args。把目录限定到被控端
-  // 已知集合,挡掉任意路径越权执行。
+  // 在哪个目录起进程或跑 git,allowlist 只挡 channel 不挡 args。路径必须在被控端
+  // 当前可访问且确为目录,历史记录不能替代实时探测。
   const guardedField = PATH_GUARDED_CHANNELS.get(payload.channel);
   if (guardedField && workingDirGuard) {
     const dir = extractGuardedPath(payload.args ?? [], guardedField);

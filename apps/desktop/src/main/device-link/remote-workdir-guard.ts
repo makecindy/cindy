@@ -6,34 +6,25 @@
  * allowlist 只挡 channel、不挡 args,故此处对 workingDir 收敛,挡掉「不存在 / 非目录」的
  * 伪造或笔误路径。
  *
- * 放行判据(任一命中即可):
- *   1. 在被控端最近工作目录(recentWorkdirs)里;
- *   2. 是被控端某个已有会话的 workingDir;
- *   3. **当前在被控端真实存在、且是一个目录**。
+ * 放行判据:路径必须**当前在被控端真实存在、且是一个目录**。
  *
- * 第 3 条是必须的:本版本开放了远程文件浏览(AddRemoteProjectDialog + fs:* 隧道),
- * 控制端可浏览 / 新建被控端任意目录并在其下建首个会话——这类目录尚不在 recents / sessions
- * 里,但确实是用户经「已被 remoteControlEnabled 门禁」的浏览流程显式选定的真实目录。
+ * 本地目录探测是必须的:本版本开放了远程文件浏览(AddRemoteProjectDialog + fs:* 隧道),
+ * 控制端可浏览 / 新建被控端任意目录并在其下建首个会话,但目录的历史记录不能证明它
+ * 当前仍可访问。尤其是断线 UNC/SMB,必须走受控异步探测。
  * 阈值仍有意义:remoteControlEnabled 已开 + 文件浏览已开时,控制端本就能驱动 agent 读写
  * 任意目录,故「限定到已存在目录」是此处剩余的、成本极低的越权兜底(挡掉不存在路径 /
  * 把文件当目录),并非完全放开。
  *
- * 路径比较复用 normalizeWorkingDirForStorage,只做路径形态归一,不复用 recentWorkdirs
- * 的列表准入规则。后者会刻意过滤托管 worktree,若在安全闸复用会让刚创建成功的
- * `.cindy-worktrees/*` 在 fs 存在性检查前被误判为非法。空 / 非法 / 不存在 / 非目录
- * 路径仍一律不放行。
+ * 路径比较复用 normalizeWorkingDirForStorage,只做路径形态归一。SSH endpoint 的
+ * 归属由 file-browser 在本地探测后单独解析;create-session / worktree:create / 远程
+ * `/cmd` 不得借 SSH 会话记录绕过本地目录校验。空 / 非法 / 不存在 / 非目录路径仍拒绝。
  */
 
 import { stat } from 'node:fs/promises';
 
 import type { IpcErrorCode } from '../../shared/ipc-errors';
 
-import { getDbClient } from '../localDb/client/current';
-import { sessions, recentWorkdirs } from '../localDb/schema';
-import { createLogger } from '../logger';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
-
-const log = createLogger('device-link-workdir-guard');
 
 /** 网络目录探测不能占满 device-link 默认 invoke 的整个等待窗口。 */
 export const REMOTE_WORKDIR_PROBE_TIMEOUT_MS = 5_000;
@@ -48,20 +39,63 @@ export type RemoteWorkingDirRejectionReason =
   'invalid' | 'not-found' | 'not-directory' | 'unavailable' | 'timeout';
 
 export type RemoteWorkingDirCheckResult =
-  | { allowed: true; source: 'known' | 'filesystem' }
+  | { allowed: true; source: 'filesystem' }
   | { allowed: false; reason: RemoteWorkingDirRejectionReason };
 
 export interface RemoteDirectoryProbeOptions {
   stat?: RemoteDirectoryStat;
   timeoutMs?: number;
+  pool?: RemoteDirectoryProbePool;
 }
+
+/** 同一路径复用底层 stat,且只在原始 I/O 真正结束后释放全局并发槽。 */
+export class RemoteDirectoryProbePool {
+  private readonly inFlight = new Map<string, Promise<DirectoryStatLike>>();
+  private active = 0;
+
+  constructor(
+    private readonly statDirectory: RemoteDirectoryStat,
+    private readonly maxActive = 2,
+  ) {}
+
+  acquire(dir: string): Promise<DirectoryStatLike> | null {
+    const key = normalizeWorkingDirForStorage(dir) ?? dir;
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+    if (this.active >= this.maxActive) return null;
+
+    this.active += 1;
+    const tracked = Promise.resolve()
+      .then(() => this.statDirectory(dir))
+      .then(
+        (entry) => {
+          this.release(key);
+          return entry;
+        },
+        (err) => {
+          this.release(key);
+          throw err;
+        },
+      );
+    this.inFlight.set(key, tracked);
+    return tracked;
+  }
+
+  private release(key: string): void {
+    this.inFlight.delete(key);
+    this.active -= 1;
+  }
+}
+
+const defaultDirectoryProbePool = new RemoteDirectoryProbePool(stat);
 
 function classifyStatError(err: unknown): RemoteWorkingDirRejectionReason {
   const code =
     err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
       ? (err as { code: string }).code
       : '';
-  if (code === 'ENOENT' || code === 'ENOTDIR') return 'not-found';
+  if (code === 'ENOENT') return 'not-found';
+  if (code === 'ENOTDIR') return 'not-directory';
   if (code === 'EINVAL' || code === 'ENAMETOOLONG') return 'invalid';
   return 'unavailable';
 }
@@ -75,10 +109,13 @@ export async function probeRemoteDirectory(
   dir: string,
   options: RemoteDirectoryProbeOptions = {},
 ): Promise<RemoteWorkingDirCheckResult> {
-  const statDirectory = options.stat ?? stat;
   const timeoutMs = options.timeoutMs ?? REMOTE_WORKDIR_PROBE_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const probe = statDirectory(dir).then<RemoteWorkingDirCheckResult, RemoteWorkingDirCheckResult>(
+  const pool = options.pool ??
+    (options.stat ? new RemoteDirectoryProbePool(options.stat) : defaultDirectoryProbePool);
+  const rawProbe = pool.acquire(dir);
+  if (!rawProbe) return { allowed: false, reason: 'unavailable' };
+  const probe = rawProbe.then<RemoteWorkingDirCheckResult, RemoteWorkingDirCheckResult>(
     (entry) =>
       entry.isDirectory()
         ? { allowed: true, source: 'filesystem' }
@@ -94,28 +131,14 @@ export async function probeRemoteDirectory(
   });
 }
 
-/** 该 workingDir 是否在被控端已知目录集合内,或在被控端真实存在的目录。 */
+/** 该 workingDir 是否在被控端本地真实存在。SSH 端点由 file-browser 单独解析。 */
 export async function checkRemoteWorkingDir(
   dir: string,
   probeOptions: RemoteDirectoryProbeOptions = {},
 ): Promise<RemoteWorkingDirCheckResult> {
   const target = normalizeWorkingDirForStorage(dir);
   if (!target) return { allowed: false, reason: 'invalid' };
-  try {
-    const db = getDbClient().drizzle;
-    const recents = await db.select({ path: recentWorkdirs.path }).from(recentWorkdirs);
-    if (recents.some((r) => normalizeWorkingDirForStorage(r.path) === target)) {
-      return { allowed: true, source: 'known' };
-    }
-    const rows = await db.select({ workingDir: sessions.workingDir }).from(sessions);
-    if (rows.some((r) => normalizeWorkingDirForStorage(r.workingDir) === target)) {
-      return { allowed: true, source: 'known' };
-    }
-  } catch (err) {
-    // DB 查询失败不直接拒:继续走「目录是否真实存在」兜底(下面),仍能挡掉不存在 / 非目录。
-    log.warn('workingDir guard db query failed, falling back to fs check', err);
-  }
-  // 远程浏览选定的新目录:接受被控端上真实存在的目录(挡掉不存在路径 / 文件冒充目录)。
+  // 所有本地目录都必须确认当前仍可访问,避免历史记录让断线网络盘绕过超时。
   return await probeRemoteDirectory(dir, probeOptions);
 }
 

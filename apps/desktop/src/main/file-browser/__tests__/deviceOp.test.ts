@@ -8,7 +8,7 @@
  *   5. watch 订阅生命周期:onFsWatchSubscribed → 真实 fs 变更 → push 出口收到事件
  */
 
-import { mkdtemp, mkdir, rm, stat as fsStat, writeFile as fsWriteFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile as fsWriteFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,9 +20,8 @@ import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workd
 const pushSpy = vi.fn();
 const guardMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>(async () => ({
   allowed: true,
-  source: 'known',
+  source: 'filesystem',
 }));
-const probeMock = vi.fn<(dir: string) => Promise<RemoteWorkingDirCheckResult>>();
 const sshRequestMock = vi.fn();
 const dbRowsMock = vi.fn((): Array<{ remoteHostId: string | null }> => []);
 
@@ -38,7 +37,6 @@ vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
   return {
     ...actual,
     checkRemoteWorkingDir: (dir: string) => guardMock(dir),
-    probeRemoteDirectory: (dir: string) => probeMock(dir),
   };
 });
 vi.mock('../../device-link/dispatch.js', () => ({
@@ -85,17 +83,7 @@ describe('file-browser device-op', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    guardMock.mockResolvedValue({ allowed: true, source: 'known' });
-    probeMock.mockImplementation(async (dir: string) => {
-      try {
-        const entry = await fsStat(dir);
-        return entry.isDirectory()
-          ? { allowed: true as const, source: 'filesystem' as const }
-          : { allowed: false as const, reason: 'not-directory' as const };
-      } catch {
-        return { allowed: false as const, reason: 'not-found' as const };
-      }
-    });
+    guardMock.mockResolvedValue({ allowed: true, source: 'filesystem' });
     dbRowsMock.mockReturnValue([]);
     workdir = await mkdtemp(path.join(os.tmpdir(), 'device-op-'));
     await mkdir(path.join(workdir, 'src'));
@@ -118,11 +106,24 @@ describe('file-browser device-op', () => {
   });
 
   it('known network workdir whose async endpoint probe times out is rejected clearly', async () => {
-    probeMock.mockResolvedValue({ allowed: false, reason: 'timeout' });
+    guardMock.mockResolvedValue({ allowed: false, reason: 'timeout' });
 
     await expect(handleRemoteOp({ op: 'listDir', workdir })).rejects.toThrow(
       /REMOTE_WORKDIR_UNAVAILABLE/,
     );
+  });
+
+  it('guard rejection wins before compressed input decoding', async () => {
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+
+    await expect(
+      handleRemoteOp({
+        op: 'writeFile',
+        workdir,
+        relPath: 'src/a.ts',
+        contentGz: 'not-a-gzip-stream',
+      }),
+    ).rejects.toThrow(/REMOTE_WORKDIR_NOT_FOUND/);
   });
 
   it('local listDir / readFile / stat match local handler shapes', async () => {
@@ -244,6 +245,7 @@ describe('file-browser device-op', () => {
 
   it('nested: non-local workdir with SSH session rows forwards to the SSH route', async () => {
     const sshWorkdir = '/remote/home/user/proj';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
     dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
     sshRequestMock.mockResolvedValue({ entries: [{ name: 'r.ts' }] });
 
@@ -259,7 +261,29 @@ describe('file-browser device-op', () => {
     });
   });
 
+  it.each(['timeout', 'unavailable'] as const)(
+    'nested: local probe %s does not mask a unique SSH route',
+    async (reason) => {
+      const sshWorkdir = '/remote/home/user/offline-locally';
+      guardMock.mockResolvedValue({ allowed: false, reason });
+      dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+      sshRequestMock.mockResolvedValue({ entries: [{ name: 'remote.ts' }] });
+
+      const entries = (await handleRemoteOp({ op: 'listDir', workdir: sshWorkdir })) as Array<{
+        name: string;
+      }>;
+      expect(entries.map((entry) => entry.name)).toEqual(['remote.ts']);
+      expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'listDir', {
+        workdir: sshWorkdir,
+        relPath: '',
+        hideMetaFiles: true,
+        docMode: undefined,
+      });
+    },
+  );
+
   it('ambiguous: workdir belonging to multiple SSH hosts is rejected, not guessed', async () => {
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
     dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }, { remoteHostId: 'host-2' }]);
     // throw(而非 resolve {ok:false}):经 invoke error 信封让控制端 reject,
     // 命中 renderer 既有 catch/loadError 通路(与 SSH 通道错误形态对齐)。
@@ -304,6 +328,21 @@ describe('file-browser device-op', () => {
     await fsWriteFile(path.join(workdir, 'src', 'nope.ts'), 'n\n', 'utf8');
     await new Promise((r) => setTimeout(r, 250));
     expect(pushSpy).not.toHaveBeenCalled();
+  });
+
+  it('watch: unavailable local probe still starts a unique SSH watch route', async () => {
+    const sshWorkdir = '/remote/home/user/watch-project';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'unavailable' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockResolvedValue({ ok: true });
+
+    await onFsWatchSubscribed(sshWorkdir);
+
+    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
+      workdir: sshWorkdir,
+      hideMetaFiles: true,
+    });
+    onFsWatchReleased(sshWorkdir);
   });
 
   // ── gzip(应用层压缩)────────────────────────────────────────────────────
@@ -410,6 +449,7 @@ describe('file-browser device-op', () => {
 
   it('nested SSH: contentGz is decoded before the two-hop forward (daemon sees plaintext)', async () => {
     const sshWorkdir = '/remote/home/user/proj';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
     dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
     sshRequestMock.mockResolvedValue({ size: 4, mtimeMs: 1 });
     const original = 'ssh 二跳明文 payload\n'.repeat(100);
@@ -473,6 +513,7 @@ describe('file-browser device-op', () => {
     });
 
     it('nested SSH: 返回 THUMB_UNSUPPORTED,不发起二跳', async () => {
+      guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
       dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
       const res = (await handleRemoteOp({
         op: 'thumbnail',
