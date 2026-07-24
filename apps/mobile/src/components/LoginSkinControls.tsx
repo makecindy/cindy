@@ -224,7 +224,7 @@ export function LoginConsentRow({
       <LegalStatementText
         color={login.controlText}
         fontSize={LOGIN_CONSENT_ROW.font}
-        lineHeight={LOGIN_CONSENT_ROW.textLineHeight}
+        lineHeight={LOGIN_CONSENT_ROW.lineHeight}
         onOpenPrivacy={onOpenPrivacy}
         onOpenTerms={onOpenTerms}
         statement={statement}
@@ -393,7 +393,7 @@ export function LoginConsentDialog({
             <LegalStatementText
               color={login.secondaryText}
               fontSize={D.body.font}
-              lineHeight={D.body.textLineHeight}
+              lineHeight={D.body.lineHeight}
               onOpenPrivacy={onOpenPrivacy}
               onOpenTerms={onOpenTerms}
               statement={body}

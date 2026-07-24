@@ -59,13 +59,14 @@ import {
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 
 /**
- * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库,PR1 stage 框架)。
+ * LoginPage — 桌面登录(wave4 白底体系 + figma §4 组件库)。
  *
- * 呈现层职责不变:凭证/票据全在 main(useLogin dispatch IPC)。
- * PR1 精修态 = identifier 主视图 / ssoOrgMode 子视图(含 sso-org-list = method-choice
- * 的 SSO 入口来源变体)/ preparing 伪态;其余状态以同一组件库承载功能等价渲染,
- * 组件级变体精修(倒计时契约、Text_link 全态、560↔440 锚定切换、错误码全覆盖、
- * chrome 双描边 overlay)归 PR2a/2b(implementation-plan Step 3/3b)。
+ * 呈现层职责:凭证/票据全在 main(useLogin dispatch IPC),本组件只做视图状态机
+ * 渲染与本地格式校验。覆盖全部登录步骤:identifier 主视图 / ssoOrgMode 子视图
+ * (含 sso-org-list = method-choice 的 SSO 入口来源变体)/ method-choice /
+ * verification-code / account-selection / binding / preparing / error,以及
+ * 协议同意链路(radio + 拦截弹窗)与游客入口。倒计时契约、Text_link 全态、
+ * 错误码映射均已落地(历史施工批次见 git log,不再在注释中引用)。
  */
 export function LoginPage() {
   const {
@@ -526,7 +527,7 @@ export function LoginPage() {
     </LoginPanel>
   );
 
-  /* ── method-choice(含 sso-org-list 来源变体;方式行精修归 PR2a) ── */
+  /* ── method-choice(含 sso-org-list 来源变体) ── */
   const renderMethodChoice = () => {
     if (loginState?.step !== 'method-choice') return null;
     const ssoMethods = loginState.methods.filter((method) => method.type === 'sso');
@@ -593,7 +594,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── verification-code(倒计时契约/Text_link 全态归 PR2a Step 3a) ── */
+  /* ── verification-code(42s 重发倒计时 = 绝对 deadline 模型,双端同契约) ── */
   const renderVerification = () => {
     if (loginState?.step !== 'verification-code') return null;
     const submit = (event: FormEvent) => {
@@ -655,7 +656,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── account-selection(行样式复用方式行;精修归 PR2a) ── */
+  /* ── account-selection(行样式复用方式行) ── */
   const renderAccountSelection = () => {
     if (loginState?.step !== 'account-selection') return null;
     return (
@@ -754,7 +755,7 @@ export function LoginPage() {
     );
   };
 
-  /* ── binding 两阶段(精修归 PR2a) ── */
+  /* ── binding 两阶段 ── */
   const renderBinding = () => {
     if (loginState?.step !== 'binding') return null;
     const contact = loginState.contact ?? bindingContact;
@@ -940,7 +941,7 @@ export function LoginPage() {
   return (
     // 根级 z-[9990] 建立 LoginPage 自己的 stacking context:整体压过品牌 overlay
     // (LoginBrandStage z-[9980])、低于 SplashScreen(z-[9999]);内部 stage(z-auto)
-    // / 窗框描边(z-30)/ 拖拽条(z-40)沿 PR2a 相对层序不变(PR2b handoff 合流)。
+    // / 窗框描边(z-30)/ 拖拽条(z-40)相对层序固定(handoff 合流时序依赖此序)。
     <div className="relative z-[9990] min-h-screen">
       <LoginStage
         ssoOrgGroupY={ssoOrgGroupY}

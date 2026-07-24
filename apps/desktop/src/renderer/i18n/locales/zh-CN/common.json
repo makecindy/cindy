@@ -2761,9 +2761,9 @@
     "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
     "consentDialog": {
       "title": "服务条款和隐私协议",
-      "body": "已阅读并同意 Cindy 的以下协议：<terms>服务条款</terms>、<privacy>隐私协议</privacy>",
-      "agree": "同意",
-      "disagree": "不同意"
+      "body": "请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>",
+      "agree": "同意并继续",
+      "disagree": "暂不同意"
     },
     "ssoOrgTitle": "企业 SSO 登录",
     "ssoOrgSubtitle": "输入企业 ID、组织 slug 或已验证域名，跳转到企业单点登录",

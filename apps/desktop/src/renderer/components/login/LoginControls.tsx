@@ -644,7 +644,7 @@ function LegalStatementText({
             }}
             className={cn(
               'inline border-0 bg-transparent p-0 font-bold underline',
-              'transition-colors duration-150',
+              'transition-colors duration-[var(--motion-fast,150ms)]',
               'hover:[color:var(--login-link-hover)] active:[color:var(--login-link-pressed)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
             )}
@@ -717,7 +717,7 @@ export function LoginConsentRow({
         style={{ width: hitSize, height: hitSize, cursor: 'pointer' }}
       >
         <span
-          className="grid place-items-center transition-colors duration-150"
+          className="grid place-items-center transition-colors duration-[var(--motion-fast,150ms)]"
           style={{
             width: ringSize,
             height: ringSize,
@@ -834,7 +834,7 @@ export function LoginConsentDialog({
   const smallButtonBase = cn(
     'absolute box-border flex items-center justify-center overflow-hidden font-bold',
     'after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit]',
-    'after:opacity-0 after:transition-opacity after:content-[""]',
+    'after:opacity-0 after:transition-opacity after:duration-[var(--motion-fast,150ms)] after:content-[""]',
   );
   return (
     <div

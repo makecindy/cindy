@@ -398,7 +398,7 @@ export const LOGIN_CONSENT_ROW = {
   gap: 6.5,
   font: 20,
   /** 声明文字行高(figma 600:661 文本框 23 高,与桌面协议行同值) */
-  textLineHeight: 23,
+  lineHeight: 23,
   /** 行底(622)超出登录组(560)的设计 px,安全区抬升按此追加预留 */
   bottomOverflow: 62,
   /** 对勾线宽 3(figma 600:632 stroke-width 3 round,设计 px) */
@@ -416,7 +416,7 @@ export const LOGIN_CONSENT_DIALOG = {
   height: 380,
   radius: 36,
   title: { y: 31, height: 38, font: 32 },
-  body: { x: 41, y: 122, width: 599, font: 26, textLineHeight: 40 },
+  body: { x: 41, y: 122, width: 599, font: 26, lineHeight: 40 },
   button: { y: 260, width: 260, height: 80, radius: 40, font: 24, disagreeX: 70, agreeX: 350 },
 } as const;
 

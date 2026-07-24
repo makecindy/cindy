@@ -2761,8 +2761,8 @@
     "consentStatement": "<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다",
     "consentDialog": {
       "title": "서비스 이용약관 및 개인정보 처리방침",
-      "body": "Cindy의 <terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 이에 동의합니다.",
-      "agree": "동의",
+      "body": "계속하려면 Cindy의 <terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의해 주세요.",
+      "agree": "동의하고 계속",
       "disagree": "동의하지 않음"
     },
     "ssoOrgTitle": "기업 SSO 로그인",

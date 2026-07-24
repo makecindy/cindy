@@ -106,6 +106,24 @@ describe('consent 文案(4 语 catalog 全给标记链接段)', () => {
     expect(messages.consentAgree.length).toBeGreaterThan(0);
     expect(messages.consentDisagree.length).toBeGreaterThan(0);
   });
+
+  // parser 对坏标记 fail-open(嵌套/未闭合时原样显示)——法律文案不许依赖这种降级,
+  // 全部 catalog 必须过严校验:恰一 terms + 恰一 privacy,链接文本非空,
+  // 纯文本段无残留尖括号(codex 审查 P2:翻译误改标记时在 CI 就地拦截)
+  it.each(['zh-CN', 'en', 'ja', 'ko'] as const)('%s:catalog 过 parser 严校验', (locale) => {
+    const messages = loginMessages[locale];
+    for (const key of ['consentStatement', 'consentDialogBody'] as const) {
+      const segments = parseLegalSegments(messages[key]);
+      expect(segments.filter((s) => s.kind === 'terms')).toHaveLength(1);
+      expect(segments.filter((s) => s.kind === 'privacy')).toHaveLength(1);
+      for (const s of segments) {
+        expect(s.text.length).toBeGreaterThan(0);
+        // 所有段(含链接段)禁残留尖括号:嵌套坏标记的残余会落在链接段文本里
+        expect(s.text).not.toMatch(/[<>]/);
+        if (s.kind !== 'text') expect(s.text.length).toBeGreaterThan(1);
+      }
+    }
+  });
 });
 
 describe('login.tsx 接线(源码断言)', () => {
@@ -134,6 +152,16 @@ describe('login.tsx 接线(源码断言)', () => {
     const ssoEntryBlock = loginSource.slice(start, end);
     expect(ssoEntryBlock).toContain('setSsoOrgMode(true)');
     expect(ssoEntryBlock).not.toContain('requireConsent');
+  });
+
+  it('P1 回归锁:容器 bounds 恒含协议行区间;弹窗前收键盘;radio 无 hitSlop', () => {
+    // ① 外层测量盒与内层设计容器都用 flowBottomDesignPx(622),协议行在父 bounds 内
+    expect(loginSource).toMatch(/height: flowBottomDesignPx \* groupScale/);
+    expect(loginSource).toMatch(/height: flowBottomDesignPx,/);
+    // ⑤ flow bottom 全步骤恒定(不随 showConsentRow 切换,消除步骤跳变)
+    expect(loginSource).not.toMatch(/showConsentRow\s*\?\s*LOGIN_CONSENT_ROW\.bottomOverflow/);
+    // ② requireConsent 打开弹窗前收键盘(同意钮不被键盘遮挡)
+    expect(loginSource).toMatch(/Keyboard\.dismiss\(\);[\s\S]{0,400}?setConsentDialogOpen\(true\)/);
   });
 
   it('协议行 + 弹窗已挂载;安全区抬升含协议行溢出量;手机端无游客入口', () => {

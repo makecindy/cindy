@@ -33,9 +33,9 @@ const messages = {
     ssoEntry: '使用企业 SSO 登录',
     consentStatement: '我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>',
     consentDialogTitle: '服务条款和隐私协议',
-    consentDialogBody: '已阅读并同意 Cindy 的以下协议：<terms>服务条款</terms>、<privacy>隐私协议</privacy>',
-    consentAgree: '同意',
-    consentDisagree: '不同意',
+    consentDialogBody: '请阅读并同意 Cindy 的以下协议后继续：<terms>服务条款</terms>、<privacy>隐私协议</privacy>',
+    consentAgree: '同意并继续',
+    consentDisagree: '暂不同意',
     ssoOrgTitle: '企业 SSO 登录',
     ssoOrgSubtitle: '输入企业 ID、组织 slug 或已验证域名，跳转到企业单点登录。',
     ssoOrgPlaceholder: '企业 ID、组织 slug 或已验证域名',
@@ -136,9 +136,9 @@ const messages = {
       'I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>',
     consentDialogTitle: 'Terms of Service & Privacy Policy',
     consentDialogBody:
-      "You have read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>.",
-    consentAgree: 'Agree',
-    consentDisagree: 'Disagree',
+      "Read and agree to Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy> to continue.",
+    consentAgree: 'Agree and Continue',
+    consentDisagree: "Don't Agree",
     ssoOrgTitle: 'Enterprise SSO',
     ssoOrgSubtitle:
       'Enter a company ID, organization slug, or verified domain to continue with single sign-on.',
@@ -253,8 +253,8 @@ const messages = {
       '<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します',
     consentDialogTitle: '利用規約とプライバシーポリシー',
     consentDialogBody:
-      'Cindy の<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、これに同意します。',
-    consentAgree: '同意する',
+      '続行するには、Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を確認し、同意してください。',
+    consentAgree: '同意して続行',
     consentDisagree: '同意しない',
     ssoOrgTitle: 'エンタープライズ SSO',
     ssoOrgSubtitle:
@@ -363,8 +363,8 @@ const messages = {
       '<terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의합니다',
     consentDialogTitle: '서비스 이용약관 및 개인정보 처리방침',
     consentDialogBody:
-      'Cindy의 <terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 이에 동의합니다.',
-    consentAgree: '동의',
+      '계속하려면 Cindy의 <terms>서비스 이용약관</terms> 및 <privacy>개인정보 처리방침</privacy>을 읽고 동의해 주세요.',
+    consentAgree: '동의하고 계속',
     consentDisagree: '동의하지 않음',
     ssoOrgTitle: '기업 SSO 로그인',
     ssoOrgSubtitle: '회사 ID를 입력하면 소속 조직의 SSO 로그인으로 이동합니다.',
