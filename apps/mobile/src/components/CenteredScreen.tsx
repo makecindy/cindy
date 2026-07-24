@@ -6,7 +6,6 @@ import {
   useTheme,
   useThemedStyles,
   type ThemeColors,
-  type ThemeMode,
 } from '@/theme';
 import { spacing, typeScale } from '@/theme/tokens';
 
@@ -26,12 +25,10 @@ export function CenteredScreen({
   title,
   subtitle,
   variant = 'default',
-  splashThemeOverride,
 }: {
   title: string;
   subtitle?: string;
   variant?: 'default' | 'splash';
-  splashThemeOverride?: ThemeMode;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -41,7 +38,6 @@ export function CenteredScreen({
       <MobileLoginHandoffStage
         accessibilityLabel={title}
         testID="startup.splash"
-        themeOverride={splashThemeOverride}
       />
     );
   }

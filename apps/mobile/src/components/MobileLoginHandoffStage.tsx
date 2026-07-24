@@ -25,7 +25,7 @@ import {
 } from '@/auth/loginHandoff';
 import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
-import { ThemeOverrideProvider, useTheme, type ThemeMode } from '@/theme';
+import { ThemeOverrideProvider, useTheme } from '@/theme';
 
 /**
  * MobileLoginHandoffStage —— 白底体系登录/闸门**唯一 full-viewport 品牌宿主**
@@ -147,8 +147,6 @@ export function MobileLoginHandoffStage(props: {
   showBrand?: boolean;
   /** 键盘位移(物理 px,向上为正;只作用品牌层——children 位移由登录页自管) */
   keyboardShiftPx?: number;
-  /** 启动覆盖层可固定主题,让原生页与 JS 首帧使用同一画布。 */
-  themeOverride?: ThemeMode;
   testID?: string;
   accessibilityLabel?: string;
 }) {
@@ -158,11 +156,9 @@ export function MobileLoginHandoffStage(props: {
   // pending(AsyncStorage 未决,eager kick 下近零时长且宿主在 auth.initialized
   // 后才挂载,实际几乎不会命中)时不渲染品牌内容:按任何主题渲染都可能产出
   // 错误主题帧(真首启透传系统暗色 → 判定后切亮),等判定完成再上。
-  if (firstLaunchGate === 'pending' && props.themeOverride == null) return null;
-  const themeOverride =
-    props.themeOverride ?? (firstLaunchGate === 'light' ? 'light' : null);
+  if (firstLaunchGate === 'pending') return null;
   return (
-    <ThemeOverrideProvider mode={themeOverride}>
+    <ThemeOverrideProvider mode={firstLaunchGate === 'light' ? 'light' : null}>
       <MobileLoginHandoffStageInner {...props} />
     </ThemeOverrideProvider>
   );
@@ -172,7 +168,6 @@ function MobileLoginHandoffStageInner({
   children,
   showBrand = true,
   keyboardShiftPx = 0,
-  themeOverride: _themeOverride,
   testID,
   accessibilityLabel,
 }: {
@@ -181,8 +176,6 @@ function MobileLoginHandoffStageInner({
   showBrand?: boolean;
   /** 键盘位移(物理 px,向上为正;只作用品牌层——children 位移由登录页自管) */
   keyboardShiftPx?: number;
-  /** 仅由外层主题 provider 消费,避免透传到原生 View。 */
-  themeOverride?: ThemeMode;
   testID?: string;
   accessibilityLabel?: string;
 }) {

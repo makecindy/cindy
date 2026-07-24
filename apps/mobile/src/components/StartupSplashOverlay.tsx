@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Animated, Platform, StyleSheet } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import { CenteredScreen } from '@/components/CenteredScreen';
 
 /** splash 释放后的淡出时长(ms):盖住底下首屏首帧的绘制间隙,避免红→白闪帧 */
@@ -81,11 +81,7 @@ export function StartupSplashOverlay({
           pointerEvents={released ? 'none' : 'auto'}
           style={[StyleSheet.absoluteFill, styles.overlay, { opacity }]}
         >
-          <CenteredScreen
-            title="Cindy"
-            variant="splash"
-            splashThemeOverride={Platform.OS === 'android' ? 'light' : undefined}
-          />
+          <CenteredScreen title="Cindy" variant="splash" />
         </Animated.View>
       ) : null}
     </StartupSplashContext.Provider>

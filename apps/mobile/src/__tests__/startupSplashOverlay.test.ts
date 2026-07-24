@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { lightColors } from "@/theme/tokens";
+import { darkColors, lightColors } from "@/theme/tokens";
 
 /**
  * 启动 splash 覆盖层契约:启动闸门链全程共用根部一个常驻 splash 实例。
@@ -51,10 +51,10 @@ describe("startup splash overlay", () => {
     expect(overlay).toContain('variant="splash"');
   });
 
-  it("keeps iOS unchanged while Android hands off to a light JS startup splash", () => {
+  it("keeps iOS unchanged while Android uses a theme-independent brand anchor", () => {
     // ios/android 目录是 prebuild 产物(gitignored),app.json 是原生启动页的权威来源。
-    // iOS 保留旧的红底无图配置;Android light/night 与 JS startup overlay 固定亮色,
-    // 再由 overlay 淡出到用户主题,避免首启亮色门与系统深色资源冲突。
+    // iOS 保留旧的红底无图配置;Android light/night 使用同一品牌红与同源 hero,
+    // 不在原生 starting window 阶段猜测 JS 才能读取的「是否首启」状态。
     const appConfig = JSON.parse(read("app.json")) as {
       expo: { plugins: (string | [string, Record<string, unknown>])[] };
     };
@@ -77,31 +77,21 @@ describe("startup splash overlay", () => {
     };
 
     expect(splashConfig).not.toHaveProperty("image");
-    expect(splashConfig.backgroundColor).toBe("#DF0C27");
-    expect(splashConfig.dark).toEqual({ backgroundColor: "#DF0C27" });
+    expect(splashConfig.backgroundColor).toBe(
+      lightColors.brandSplashBackground,
+    );
+    expect(splashConfig.dark).toEqual({
+      backgroundColor: darkColors.brandSplashBackground,
+    });
     expect(splashConfig.android).toEqual({
-      backgroundColor: lightColors.login.bgBase,
+      backgroundColor: lightColors.brandSplashBackground,
       image: "./assets/login/login-hero@2x.png",
       imageWidth: 128,
       dark: {
-        backgroundColor: lightColors.login.bgBase,
+        backgroundColor: darkColors.brandSplashBackground,
         image: "./assets/login/login-hero@2x.png",
       },
     });
-    const overlay = read("src/components/StartupSplashOverlay.tsx");
-    const centeredScreen = read("src/components/CenteredScreen.tsx");
-    const loginStage = read("src/components/MobileLoginHandoffStage.tsx");
-    expect(overlay).toContain(
-      "splashThemeOverride={Platform.OS === 'android' ? 'light' : undefined}",
-    );
-    expect(centeredScreen).toContain("themeOverride={splashThemeOverride}");
-    expect(centeredScreen).not.toContain('themeOverride="light"');
-    expect(loginStage).toContain(
-      "firstLaunchGate === 'pending' && props.themeOverride == null",
-    );
-    expect(loginStage).toContain(
-      "props.themeOverride ?? (firstLaunchGate === 'light' ? 'light' : null)",
-    );
 
     // Android 12 无 icon background 的安全圆直径是 192dp。prebuild 后对 288dp
     // splashscreen_logo 做 alpha 像素扫描,这份 hero 在 imageWidth=128 时的最远不透明

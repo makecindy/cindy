@@ -67,11 +67,11 @@
             "backgroundColor": "#DF0C27"
           },
           "android": {
-            "backgroundColor": "#EDEDED",
+            "backgroundColor": "#DF0C27",
             "image": "./assets/login/login-hero@2x.png",
             "imageWidth": 128,
             "dark": {
-              "backgroundColor": "#EDEDED",
+              "backgroundColor": "#DF0C27",
               "image": "./assets/login/login-hero@2x.png"
             }
           }
