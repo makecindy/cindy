@@ -96,6 +96,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadRequestVersionRef = useRef(0);
   const statusPushVersionRef = useRef(0);
   const latestStatusPushRef = useRef<{
     status: FeishuBotStatus;
@@ -108,9 +109,11 @@ export function useFeishuBot(): UseFeishuBotReturn {
   // 仍然停留在初始空字符串, 导致 ConnectedCard 显示空 + 跳转链接拼成
   // /app//event 落到飞书 app 列表页。
   const reloadState = useCallback(async (): Promise<void> => {
+    const reloadRequestVersion = ++reloadRequestVersionRef.current;
     const statusPushVersion = statusPushVersionRef.current;
     try {
       const state = await window.electronAPI.feishuBot.getState();
+      if (reloadRequestVersion !== reloadRequestVersionRef.current) return;
       const nextAppId = state.appId ?? '';
       const nextAppSecret = state.appSecret ?? '';
       const newerStatusPush =

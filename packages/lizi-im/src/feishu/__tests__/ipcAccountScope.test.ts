@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
     () => null as { appId: string; appSecret: string } | null,
   ),
   writeCredentials: vi.fn(() => true),
-  writeOwnerOpenId: vi.fn(),
+  writeOwnerOpenId: vi.fn(() => true),
   clearAll: vi.fn(),
   clearOwner: vi.fn(),
   loadOwner: vi.fn(),
@@ -128,6 +128,7 @@ beforeEach(() => {
   mocks.stop.mockResolvedValue(undefined);
   mocks.start.mockResolvedValue('connected');
   mocks.writeCredentials.mockReturnValue(true);
+  mocks.writeOwnerOpenId.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -311,6 +312,20 @@ describe('Feishu credential connection semantics', () => {
     expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.writeOwnerOpenId.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it('does not connect when a replacement registration owner cannot be persisted', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+    mocks.writeOwnerOpenId.mockReturnValue(false);
+
+    await expect(
+      saveAndConnect('cli_registered', 'registered-secret', {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).rejects.toThrow('[OWNER_PERSIST_FAILED]');
+
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
   });
 
   it('preserves the owner when only the secret changes for the same app ID', async () => {

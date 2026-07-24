@@ -202,7 +202,10 @@ export async function saveAndConnect(
     clearOwnerBeforeIdle: saved?.appId !== appId,
   });
   if (options.replacementOwnerOpenId) {
-    storage.writeOwnerOpenId(options.replacementOwnerOpenId);
+    const ownerWritten = storage.writeOwnerOpenId(options.replacementOwnerOpenId);
+    if (!ownerWritten) {
+      throw new Error('[OWNER_PERSIST_FAILED] Failed to persist Feishu owner');
+    }
     ownerGuard.loadFromDisk();
   }
   const verdict = await wsClient.start({ appId, appSecret }, { reason: 'credentials-replaced' });
