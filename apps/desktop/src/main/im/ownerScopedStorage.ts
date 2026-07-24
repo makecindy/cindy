@@ -128,12 +128,23 @@ export function ownerScopedImUserDataPath(...parts: string[]): string {
   return ownerScopedUserDataPath(...parts);
 }
 
+/**
+ * 某 owner 的 IM 凭证文件名前缀(`im_owner_<key>_`;文件形如 `<前缀><name>.enc`)。
+ * 导出给 localOwnerDataAdoption:local 模式数据认领时按前缀改名到账号命名空间,
+ * 与 providerSecretStore.ownerSecretStoragePrefix 同一搬迁语义。
+ */
+export function ownerScopedImSecretPrefix(ownerId: string): string {
+  return `im_owner_${dataOwnerStorageKey(ownerId)}_`;
+}
+
 function scopedSecretPath(name: string): string | null {
   if (!SAFE_SECRET_NAME.test(name)) return null;
   const session = getActiveAppSession();
   if (!session.dataOwnerId) return null;
-  const ownerKey = dataOwnerStorageKey(session.dataOwnerId);
-  return path.join(safeStorageDir(), `im_owner_${ownerKey}_${name}.enc`);
+  return path.join(
+    safeStorageDir(),
+    `${ownerScopedImSecretPrefix(session.dataOwnerId)}${name}.enc`,
+  );
 }
 
 function prepareSecretPath(name: string): string | null {

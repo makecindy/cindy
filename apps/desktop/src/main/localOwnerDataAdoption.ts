@@ -43,11 +43,18 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import Database from 'better-sqlite3';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
-import { LOCAL_DATA_OWNER_ID, dataOwnerStorageKey } from './appSessionState.js';
+import {
+  LOCAL_DATA_OWNER_ID,
+  dataOwnerStorageKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+} from './appSessionState.js';
+import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import {
   SAFE_STORAGE_DIR_NAME,
   ownerSecretStoragePrefix,
 } from './secrets/providerSecretStore.js';
+import { ownerScopedImSecretPrefix } from './im/ownerScopedStorage.js';
 import {
   hasConcurrentLiveInstancesSharingUserData,
   moveWithoutOverwrite,
@@ -142,6 +149,12 @@ export interface LocalOwnerAdoptionDeps {
    * 此时绝不能动账号库文件;worker 持有的场景由 sidecar 检查兜底。
    */
   accountDbCurrentlyOpen(userId: string): boolean;
+  /**
+   * userId 是否仍是当前有效登录 owner。确认窗可以停留任意久,期间另一窗口
+   * 登出/切号会让本次认领的目标 owner 过期——搬移前必须复查,过期即中止,
+   * 绝不把数据并进已失效的账号命名空间。
+   */
+  isOwnerStillCurrent(userId: string): boolean;
   now(): Date;
   log: { info(msg: string, ...args: unknown[]): void; warn(msg: string, ...args: unknown[]): void };
   ui: LocalAdoptionUiDeps;
@@ -166,6 +179,7 @@ export type LocalOwnerAdoptionResult =
         | 'account-db-busy';
     }
   | { status: 'declined' }
+  | { status: 'stale-owner' }
   | { status: 'adopted'; ownersMoved: number; ownersConflicts: number }
   | { status: 'failed'; error: string };
 
@@ -357,8 +371,15 @@ export async function runLocalOwnerDataAdoption(
 
     deps.ui.publish('running');
     try {
-      // 5. 确认窗可能停留很久,搬移前重做独占确认(与 ownerNamespaceMigration 的
-      //    mid-claim 复查同一姿势);账号库若在窗口期出现也绝不覆盖。
+      // 5. 确认窗可能停留很久,搬移前重做三重复查:owner 仍有效(另一窗口可能
+      //    已登出/切号——绝不并进失效账号)、独占仍成立(与 ownerNamespaceMigration
+      //    的 mid-claim 复查同一姿势)、账号库若在窗口期出现也绝不覆盖。
+      if (!deps.isOwnerStillCurrent(userId)) {
+        deps.log.info('local owner adoption aborted: owner changed while confirming');
+        deps.ui.publish('done');
+        await recordPendingAdoption(deps, markerPath, marker, ownerKey);
+        return { status: 'stale-owner' };
+      }
       if (deps.hasConcurrentLiveInstances()) {
         deps.log.info('local owner adoption interrupted: instance appeared while confirming');
         deps.ui.publish('failed');
@@ -407,19 +428,30 @@ export async function runLocalOwnerDataAdoption(
         ownersMoved = moveResult.moved;
         ownersConflicts = moveResult.conflicts;
       }
-      // 加密凭证不在 owners/ 树内,而在 safe-storage/owner_<key>_*.enc(providerSecretStore
-      // 的 owner 前缀命名空间):随认领按前缀改名到账号命名空间,否则被并入的自定义
-      // 供应商/MCP/ghost 配置全部缺鉴权(Codex review)。目标已存在跳过不覆盖;幂等。
+      // 加密凭证不在 owners/ 树内,而在 safe-storage 下的两族 owner 前缀文件
+      // (providerSecretStore 的 owner_<key>_* 与 IM 的 im_owner_<key>_*):随认领
+      // 按前缀改名到账号命名空间,否则被并入的自定义供应商/MCP/ghost/IM 配置
+      // 全部缺鉴权(Codex review)。目标已存在跳过不覆盖;幂等。
       const secretsDir = path.join(deps.userDataDir, SAFE_STORAGE_DIR_NAME);
-      const localSecretPrefix = ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID);
-      const accountSecretPrefix = ownerSecretStoragePrefix(userId);
+      const secretPrefixPairs: ReadonlyArray<{ from: string; to: string }> = [
+        {
+          from: ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID),
+          to: ownerSecretStoragePrefix(userId),
+        },
+        {
+          from: ownerScopedImSecretPrefix(LOCAL_DATA_OWNER_ID),
+          to: ownerScopedImSecretPrefix(userId),
+        },
+      ];
       let secretsMoved = 0;
       let secretsConflicts = 0;
       if (await deps.fs.pathExists(secretsDir)) {
         for (const name of await deps.fs.readdir(secretsDir)) {
-          if (!name.startsWith(localSecretPrefix) || !name.endsWith('.enc')) continue;
+          if (!name.endsWith('.enc')) continue;
+          const pair = secretPrefixPairs.find((candidate) => name.startsWith(candidate.from));
+          if (!pair) continue;
           await abortCheck();
-          const target = `${accountSecretPrefix}${name.slice(localSecretPrefix.length)}`;
+          const target = `${pair.to}${name.slice(pair.from.length)}`;
           try {
             await deps.fs.renameNoReplace(
               path.join(secretsDir, name),
@@ -432,6 +464,16 @@ export async function runLocalOwnerDataAdoption(
           }
         }
       }
+      // 提交前最后一次复查:owner 未过期 + 独占仍成立(owners/secrets 搬移可能
+      // 耗时)。renameNoReplace 的 EEXIST 原子性兜住目标侧,这里把「新实例已
+      // 打开旧名」的窗口也收到最小。
+      if (!deps.isOwnerStillCurrent(userId)) {
+        deps.log.info('local owner adoption aborted: owner changed before db commit');
+        deps.ui.publish('done');
+        await recordPendingAdoption(deps, markerPath, marker, ownerKey);
+        return { status: 'stale-owner' };
+      }
+      if (deps.hasConcurrentLiveInstances()) throw new AdoptionInterruptedError();
       if (accountDbToDisplace) {
         // 空账号库(前置已验证未被使用)改名备份让位:文件保留不删,时间戳后缀
         // 防多次重试撞名。窗口期内该库可能残留的少量非关键数据随备份保留,可找回。
@@ -567,12 +609,18 @@ const realFsDeps: LocalAdoptionFsDeps = {
     try {
       await fsp.unlink(source);
     } catch (err) {
-      // link 已成功 = 目标已就位;源清理失败只留一个同 inode 的冗余名,不影响
-      // 正确性(下次登录 local 库若仍在,账号库已「被使用」,前置探测自然跳过)。
-      log.warn(
-        'local owner adoption: source cleanup after link failed (harmless duplicate): %s',
-        err instanceof Error ? err.message : String(err),
-      );
+      // 源清理失败不能当成功:留下同 inode 双名,库文件场景意味着 local 模式
+      // 与账号会打开同一个数据库(跨 owner 串库)。回滚目标名并把错误上抛,
+      // 让调用方按失败重试;回滚也失败时如实上抛(下次登录前置探测 fail-safe)。
+      try {
+        await fsp.unlink(target);
+      } catch (rollbackErr) {
+        log.warn(
+          'local owner adoption: rollback of linked target failed: %s',
+          rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        );
+      }
+      throw err;
     }
   },
 };
@@ -607,6 +655,8 @@ const ACCOUNT_USAGE_TABLES = [
   'custom_mcp_servers',
   'im_bindings',
   'project_aliases',
+  'recent_workdirs',
+  'project_automation_consents',
 ] as const;
 
 async function accountDbLooksUsedInClosedDb(dbPath: string): Promise<boolean> {
@@ -619,8 +669,12 @@ async function accountDbLooksUsedInClosedDb(dbPath: string): Promise<boolean> {
           | { c?: number | bigint }
           | undefined;
         count = Number(row?.c ?? 0);
-      } catch {
-        continue;
+      } catch (err) {
+        // fail-closed:只有「表不存在」(更老 schema,不可能有数据)可跳过;
+        // SQLITE_CORRUPT/BUSY 等一律上抛,调用方按不可读跳过认领,绝不让位。
+        const message = err instanceof Error ? err.message : String(err);
+        if (/no such table/i.test(message)) continue;
+        throw err;
       }
       if (count > 0) return true;
     }
@@ -628,6 +682,19 @@ async function accountDbLooksUsedInClosedDb(dbPath: string): Promise<boolean> {
   } finally {
     db.close();
   }
+}
+
+/**
+ * 与 registerLocalDbIpc 的 isOwnerCurrent 同一判定语义(isLocalDbOwnerCurrent):
+ * dataOwnerId 直接取 appSessionState 提交态(authManager.getAuthState 的
+ * dataOwnerId 亦源于此),避免把 authManager 拉进本模块依赖图。
+ */
+function isOwnerStillCurrentDefault(userId: string): boolean {
+  return isLocalDbOwnerCurrent(
+    { dataOwnerId: getActiveAppSession().dataOwnerId },
+    userId,
+    isAppSessionBoundaryPending(),
+  );
 }
 
 const electronUiDeps: LocalAdoptionUiDeps = {
@@ -690,6 +757,7 @@ export async function runLocalOwnerDataAdoptionForUser(userId: string): Promise<
       if (getCurrentUserId() === LOCAL_DATA_OWNER_ID) closeDb();
     },
     accountDbCurrentlyOpen: (uid) => getCurrentUserId() === uid,
+    isOwnerStillCurrent: (uid) => isOwnerStillCurrentDefault(uid),
     now: () => new Date(),
     log,
     ui: electronUiDeps,

@@ -143,6 +143,7 @@ interface HarnessOverrides {
   accountProbeThrows?: boolean;
   /** now() 每次调用递增的毫秒步长(默认 0 = 固定时钟)。 */
   nowStepMs?: number;
+  ownerStillCurrent?: () => boolean;
   fsOverrides?: Partial<LocalAdoptionFsDeps>;
 }
 
@@ -169,6 +170,7 @@ function createHarness(overrides: HarnessOverrides = {}) {
     hasConcurrentLiveInstances: overrides.concurrent ?? (() => false),
     closeLocalDbIfOpen: vi.fn(),
     accountDbCurrentlyOpen: () => overrides.accountDbOpen ?? false,
+    isOwnerStillCurrent: overrides.ownerStillCurrent ?? (() => true),
     now: (() => {
       let tick = 0;
       const base = new Date('2026-07-24T00:00:00.000Z').getTime();
@@ -416,10 +418,11 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
     expect(marker.adoptedAt).toBe('2026-07-24T00:00:00.000Z');
   });
 
-  it('并入时 safe-storage 的 owner 前缀凭证一并改名到账号命名空间(冲突跳过)', async () => {
+  it('并入时 safe-storage 的 owner 前缀凭证(含 IM 前缀)一并改名到账号命名空间(冲突跳过)', async () => {
     const { mem, deps } = createHarness({ decision: 'adopt' });
     const secretsDir = path.join(USER_DATA, 'safe-storage');
     mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(path.join(secretsDir, `im_owner_${LOCAL_KEY}_feishu.enc`), 'im-secret');
     mem.addFile(path.join(secretsDir, `owner_${LOCAL_KEY}_provider_key_x.enc`), 'secret-x');
     mem.addFile(path.join(secretsDir, `owner_${LOCAL_KEY}_custom_mcp_y.enc`), 'secret-y');
     // 账号侧已有同逻辑键 → 冲突跳过,双方都保留。
@@ -443,6 +446,31 @@ describe('runLocalOwnerDataAdoption 用户裁决', () => {
     expect(
       mem.files.has(path.normalize(path.join(secretsDir, `owner_${LOCAL_KEY}_provider_key_x.enc`))),
     ).toBe(false);
+    expect(
+      mem.files.get(path.normalize(path.join(secretsDir, `im_owner_${USER_KEY}_feishu.enc`))),
+    ).toBe('im-secret');
+    expect(
+      mem.files.has(path.normalize(path.join(secretsDir, `im_owner_${LOCAL_KEY}_feishu.enc`))),
+    ).toBe(false);
+  });
+
+  it('确认窗停留期间 owner 失效(另一窗口登出/切号):中止,不搬任何文件', async () => {
+    let ownerCurrent = true;
+    const { mem, deps, phases } = createHarness({
+      ownerStillCurrent: () => ownerCurrent,
+      decision: async () => {
+        ownerCurrent = false; // 用户点按钮前,另一窗口已把 owner 切走
+        return 'adopt';
+      },
+    });
+    mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result).toEqual({ status: 'stale-owner' });
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'))).toBe(true);
+    expect(mem.files.has(path.normalize(ACCOUNT_DB))).toBe(false);
   });
 
   it('并入时 local 无 owners 目录也成立(只搬库)', async () => {
