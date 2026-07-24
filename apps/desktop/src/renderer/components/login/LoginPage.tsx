@@ -330,6 +330,8 @@ export function LoginPage() {
               testId={`login-social-${provider}`}
               label={t('login.socialButton', { provider: t(`login.social.${provider}`) })}
               isLoading={isLoading}
+              // Apple 圆钮走 ADR 官方配色(亮黑圆白标/暗白圆黑标,无描边;Guideline 4)
+              variant={provider === 'apple' ? 'apple' : 'default'}
               onClick={() => {
                 // SC-SOC-7: in-flight(isLoading)期间 no-op 防重复发起;行为层 guard,
                 // 零视觉变化(圆钮已无 disabled 态 per §10 拍板,不回填 disabled 视觉)。

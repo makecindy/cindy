@@ -661,6 +661,11 @@ registerColor('login-loading-ring-track', {
   dark: 'rgba(212, 212, 212, 0.18)',
 }, 'Login — loading 环轨(亮色深半透 / 暗色浅半透 推导,待 Figma)');
 
+registerColor('login-apple-circle-bg', {
+  light: '#000000',
+  dark: '#FFFFFF',
+}, 'Login — Apple 圆钮底(ADR Black/White 官方按钮底色;亮黑圆白标/暗白圆黑标,无描边)');
+
 registerColor('lightbox-cta-bg', {
   light: 'var(--accent-cta-bg-pure)',
   dark: 'var(--accent-cta-bg-pure)',

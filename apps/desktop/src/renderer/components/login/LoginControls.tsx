@@ -413,6 +413,7 @@ export function LoginSocialButton({
   children,
   testId,
   isLoading,
+  variant = 'default',
 }: {
   label: string;
   onClick: () => void;
@@ -425,7 +426,14 @@ export function LoginSocialButton({
    * 与本组件对称的移动端 LoginSkinButton `accessibilityState={{ busy }}` 语义一致。
    */
   isLoading?: boolean;
+  /**
+   * apple = Apple 登录专属样式(App Store Guideline 4,用户标准图 2026-07-24):
+   * 亮色黑圆(ADR Black button)/ 暗色白圆(ADR White button),无描边;
+   * 其余圆钮维持 primaryButton 反相底 + 1px 描边。
+   */
+  variant?: 'default' | 'apple';
 }) {
+  const isApple = variant === 'apple';
   return (
     <button
       data-testid={testId}
@@ -446,8 +454,8 @@ export function LoginSocialButton({
         width: SOCIAL.size,
         height: SOCIAL.size,
         borderRadius: SOCIAL.radius,
-        background: LOGIN_COLORS.primaryButtonBg,
-        border: `1px solid ${LOGIN_COLORS.primaryButtonBorder}`,
+        background: isApple ? LOGIN_COLORS.appleCircleBg : LOGIN_COLORS.primaryButtonBg,
+        border: isApple ? 'none' : `1px solid ${LOGIN_COLORS.primaryButtonBorder}`,
       }}
     >
       <span

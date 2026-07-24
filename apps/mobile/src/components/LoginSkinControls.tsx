@@ -543,15 +543,18 @@ export function LoginErrorText({
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
+  // 外层定高容器承载垂直居中(iOS Text 不支持 textAlignVertical,统一用 View 布局)
   return (
-    <Text
-      accessibilityRole="alert"
-      numberOfLines={2}
-      style={styles.errorText}
-      testID={testID}
-    >
-      {children}
-    </Text>
+    <View pointerEvents="none" style={styles.errorText}>
+      <Text
+        accessibilityRole="alert"
+        numberOfLines={2}
+        style={styles.errorTextLabel}
+        testID={testID}
+      >
+        {children}
+      </Text>
+    </View>
   );
 }
 
@@ -836,9 +839,9 @@ function SsoIcon() {
   );
 }
 
-/** Apple logo(ADR 官方 SIWA Logo-only 变体,path d 逐字节原样未改动,脚本提取自
- *  _tmp/apple-adr/Logo - SIWA - Logo-only - White.svg;黑白两版 path 相同仅 fill 不同,
- *  这里 fill 随圆钮底反相 = colors.login.appleLogoInk)。
+/** Apple logo(ADR 官方「SIWA Logo-only」变体,path d 逐字节原样未改动,与桌面端
+ *  apps/desktop/src/renderer/assets/login/icons/apple.svg 同源同值,由单测逐字节对比
+ *  防漂移;黑白两版 path 相同仅 fill 不同,这里 fill 随圆钮底反相 = colors.login.appleLogoInk)。
  *  HIG 允许 logo-only 自定义按钮(圆形),artwork 来自 Apple Design Resources 未改动,
  *  对齐 App Store Guideline 4(用户标准图 2026-07-24);viewBox 15.7 13.2 24.6 24.6
  *  按 logo 光学中心裁切,logo≈圆钮 46% 高,与桌面端同口径。供后续苹果审核回复引用。 */
@@ -1077,16 +1080,22 @@ const makeStyles = (colors: ThemeColors) =>
     width: LOGIN_BACK.size,
     zIndex: 2,
   },
+  // 错误提示定位:主按钮底(380)与面板底(440)之间的整段区间,文案垂直居中
+  // (用户拍板 2026-07-24;旧实现 top 380 顶对齐视觉上紧贴按钮)。
   errorText: {
+    alignItems: 'center',
+    height: LOGIN_ERROR_TEXT.height,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    top: LOGIN_ERROR_TEXT.y,
+    width: LOGIN_ERROR_TEXT.width,
+  },
+  errorTextLabel: {
     color: colors.login.loginError,
     fontSize: LOGIN_ERROR_TEXT.font,
     fontWeight: fontWeight.regular,
-    left: 0,
-    position: 'absolute',
     textAlign: 'center',
-    textAlignVertical: 'center',
-    top: LOGIN_ERROR_TEXT.y,
-    width: LOGIN_ERROR_TEXT.width,
   },
   methodRow: {
     backgroundColor: colors.login.actionControlBg,

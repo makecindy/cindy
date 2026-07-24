@@ -357,8 +357,8 @@ export const LOGIN_SPINNER = { size: 24, x: 487, y: 27 } as const;
 export const LOGIN_SOCIAL = { y: 480, size: 80, gap: 70, icon: 48 } as const;
 /** 返回按钮(figma §4.6:@(20,20) 60×60 r40)。 */
 export const LOGIN_BACK = { x: 20, y: 20, size: 60, radius: 40, icon: 24 } as const;
-/** 错误文本(figma §4.8:680×50 @(0,380) 20 Regular 居中)。 */
-export const LOGIN_ERROR_TEXT = { y: 380, width: 680, height: 50, font: 20 } as const;
+/** 错误提示:占满主按钮底(380)→面板底(440)整段,文案在段内垂直居中(2026-07-24 拍板)。 */
+export const LOGIN_ERROR_TEXT = { y: 380, width: 680, height: 60, font: 20 } as const;
 /**
  * 方式行(figma §4.9 + demo method-row:540×100 r60;标题 24 Bold/副行 20 左对齐 x=67;
  * 左 icon 24 box @(27,37)/person 18×20 @(30,39);右 share 18 @(490,40);

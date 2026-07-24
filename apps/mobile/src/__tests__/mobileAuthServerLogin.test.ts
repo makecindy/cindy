@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -63,7 +63,7 @@ describe('mobile auth-server login', () => {
     expect(nativeSource).toMatch(/\|\|\s*!WECHAT_UNIVERSAL_LINK/);
   });
 
-  it('AppleLogoGlyph path d 与 ADR 源文件逐字节一致(防手抄)', () => {
+  it('AppleLogoGlyph path d 与桌面 ADR 官方资产逐字节一致(防手抄/跨端漂移)', () => {
     const controlsSource = readFileSync(
       resolve(process.cwd(), 'src/components/LoginSkinControls.tsx'),
       'utf8',
@@ -74,14 +74,18 @@ describe('mobile auth-server login', () => {
       .find((d) => d.startsWith('M28.2226562,20.3846154'));
     expect(glyphD).toBeDefined();
     expect(glyphD?.length).toBe(1228);
-    // _tmp 是 lead 临时拷入的 ADR 源;本地存在则逐字节对比,CI 无 _tmp 则跳过(长度+前缀已兜底)
-    const adrPath =
-      '/Users/praise/AI-Agent/Claude/projects/Project CINDY/_tmp/apple-adr/Logo - SIWA - Logo-only - White.svg';
-    if (existsSync(adrPath)) {
-      const adrD = (readFileSync(adrPath, 'utf8').match(/ d="([^"]+)"/) ?? [])[1];
-      expect(adrD).toBeTruthy();
-      expect(glyphD).toBe(adrD);
-    }
+    // 桌面 apple.svg 从 ADR「Logo-only」源逐字节导入(见其文件头注释);双端共用同一
+    // 官方 path,以仓库内桌面资产为对比锚,防止任一端被手抄改动后静默漂移。
+    const desktopAdrSvg = readFileSync(
+      resolve(
+        process.cwd(),
+        '../desktop/src/renderer/assets/login/icons/apple.svg',
+      ),
+      'utf8',
+    );
+    const adrD = (desktopAdrSvg.match(/ d="([^"]+)"/) ?? [])[1];
+    expect(adrD).toBeTruthy();
+    expect(glyphD).toBe(adrD);
   });
 
   it('releases timed-out WeChat requests in both native coordinators', () => {
