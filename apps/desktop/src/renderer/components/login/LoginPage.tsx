@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type CSSProperties,
@@ -109,6 +110,14 @@ export function LoginPage() {
     reportLoginPanelMounted();
     return () => reportLoginPanelUnmounted();
   }, [reportLoginPanelMounted, reportLoginPanelUnmounted]);
+  const showLocalModeFooter =
+    loginState?.step !== 'browser-redirect' && loginState?.step !== 'completed';
+  const panelBottomReserve = showLocalModeFooter ? LOGIN_LOCAL_MODE.reservedHeight : 0;
+  const { reportPanelBottomReserve } = handoff;
+  useLayoutEffect(() => {
+    reportPanelBottomReserve(panelBottomReserve);
+    return () => reportPanelBottomReserve(null);
+  }, [panelBottomReserve, reportPanelBottomReserve]);
   const isGlobalBuild = import.meta.env.VITE_CINDY_AUTH_REGION === 'global';
   // identifier 形态 = 构建区域确定性推导(用户拍板 2026-07-21:手机/邮箱分区互斥,
   // 双 tab 切换移除);providers 仅兜底区域首选方式未下发的场景。
@@ -789,7 +798,7 @@ export function LoginPage() {
       : undefined,
   };
   const localModeFooter =
-    loginState?.step !== 'browser-redirect' ? (
+    showLocalModeFooter ? (
       <>
         <button
           data-testid="login-local-mode"
@@ -804,7 +813,7 @@ export function LoginPage() {
         </button>
         <span
           id="login-local-mode-description"
-          className="mt-2 max-w-full text-12 text-[var(--text-secondary)]"
+          className="mt-2 line-clamp-2 max-w-full text-12 text-[var(--text-secondary)]"
           style={{ lineHeight: `${LOGIN_LOCAL_MODE.descriptionLineHeight}px` }}
         >
           {t('login.localModeDescription')}
@@ -821,6 +830,7 @@ export function LoginPage() {
         ssoOrgGroupY={ssoOrgGroupY}
         groupStyle={groupStyle}
         footer={localModeFooter}
+        bottomReserve={panelBottomReserve}
       >
         {accountDeletionStatus && (
           <AccountDeletionStatusPanel

@@ -35,6 +35,7 @@ export function LoginStage({
   ssoOrgGroupY = false,
   groupStyle,
   footer,
+  bottomReserve = 0,
 }: {
   children: ReactNode;
   /** sso-org 族状态登录组 y=1227,其余 1229(figma §5.1 / demo loginY)。 */
@@ -43,15 +44,12 @@ export function LoginStage({
   groupStyle?: CSSProperties;
   /** 登录组下方的辅助操作区；相对于 stage 定位并参与视口底部避让计算。 */
   footer?: ReactNode;
+  /** 登录组下方内容需要预留的屏幕高度，由 LoginPage 与品牌层共享同一值。 */
+  bottomReserve?: number;
 }) {
   const { width, height } = useViewportSize();
   const groupY = ssoOrgGroupY ? LOGIN_GROUP.ySsoOrg : LOGIN_GROUP.yDefault;
-  const placement = panelPlacement(
-    width,
-    height,
-    groupY,
-    footer ? LOGIN_LOCAL_MODE.reservedHeight : 0,
-  );
+  const placement = panelPlacement(width, height, groupY, bottomReserve);
 
   return (
     <div
@@ -92,8 +90,8 @@ export function LoginStage({
               LOGIN_GROUP.height * placement.scale +
               LOGIN_LOCAL_MODE.gap,
             width: `min(${LOGIN_GROUP.width}px, calc(100vw - 32px))`,
-            // footer 与登录面板共享 handoff 入场态，避免品牌 splash 期间先露出
-            // “跳过登录”而面板仍不可点击。
+            // footer 只共享面板的可见性、交互门控与过渡时长；不复用 translateY，
+            // 避免它与父级 scale 下的面板产生不同步位移。
             opacity: groupStyle?.opacity,
             transform: 'translateX(-50%)',
             pointerEvents: groupStyle?.pointerEvents,
