@@ -230,7 +230,7 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
       ? null
       : (boundedString(value.displayName, MAX_NAME_LENGTH) ?? undefined);
   const originalAmount = ledgerDecimal(value.originalAmount);
-  const usedAmount = value.usedAmount === null ? null : ledgerDecimal(value.usedAmount);
+  const usedAmount = ledgerDecimal(value.usedAmount);
   const remainingAmount = ledgerDecimal(value.remainingAmount);
   const expiresAt = observedAt(value.expiresAt);
   const state =
@@ -242,23 +242,20 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
     !grantId ||
     displayName === undefined ||
     !originalAmount ||
+    !usedAmount ||
     !remainingAmount ||
     originalAmount.scaled <= 0n ||
+    usedAmount.scaled < 0n ||
     remainingAmount.scaled < 0n ||
     !expiresAt ||
     !state ||
     (state === 'active' &&
       (remainingAmount.scaled === 0n ||
-        !usedAmount ||
-        usedAmount.scaled < 0n ||
         usedAmount.scaled + remainingAmount.scaled !== originalAmount.scaled)) ||
     (state === 'depleted' &&
-      (remainingAmount.scaled !== 0n ||
-      (!usedAmount ||
-        usedAmount.scaled < 0n ||
-        usedAmount.scaled !== originalAmount.scaled))) ||
+      (remainingAmount.scaled !== 0n || usedAmount.scaled !== originalAmount.scaled)) ||
     ((state === 'expired' || state === 'voided') &&
-      (value.usedAmount !== null || remainingAmount.scaled !== 0n))
+      (remainingAmount.scaled !== 0n || usedAmount.scaled > originalAmount.scaled))
   ) {
     invalidResponse();
   }
@@ -266,7 +263,7 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
     grantId,
     displayName,
     originalAmount: originalAmount.source,
-    usedAmount: usedAmount?.source ?? null,
+    usedAmount: usedAmount.source,
     remainingAmount: remainingAmount.source,
     expiresAt,
     state,
@@ -280,7 +277,7 @@ export function projectModelAccessCreditUsage(value: unknown): ModelAccessCredit
     !Array.isArray(value.promotionalGrants) ||
     value.promotionalGrants.length > MAX_PROMOTIONAL_GRANTS ||
     typeof value.promotionalGrantsComplete !== 'boolean' ||
-    value.promotionalGrantConsistency !== 'LAST_SETTLED'
+    value.promotionalGrantConsistency !== 'OBSERVED'
   ) {
     invalidResponse();
   }
@@ -329,7 +326,7 @@ export function projectModelAccessCreditUsage(value: unknown): ModelAccessCredit
     promotional: promotional.value,
     promotionalGrants,
     promotionalGrantsComplete: value.promotionalGrantsComplete,
-    promotionalGrantConsistency: 'LAST_SETTLED',
+    promotionalGrantConsistency: 'OBSERVED',
     ledgerUpdatedAt,
     scale: 9,
     observedAt: snapshotTime,

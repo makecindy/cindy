@@ -68,7 +68,7 @@ function harness() {
           },
         ],
         promotionalGrantsComplete: true,
-        promotionalGrantConsistency: 'LAST_SETTLED',
+        promotionalGrantConsistency: 'OBSERVED',
         ledgerUpdatedAt: now,
         scale: 9,
         observedAt: now,
@@ -140,7 +140,15 @@ describe('billing IPC', () => {
     await expect(call(BILLING_INVOKE.GET_CREDIT_USAGE)).resolves.toMatchObject({
       available: '12.345678901',
       plan: { remaining: '7.000000001', used: '3', total: '10.000000001' },
-      promotionalGrants: [{ grantId: 'welcome', state: 'active' }],
+      promotionalGrants: [
+        {
+          grantId: 'welcome',
+          state: 'active',
+          usedAmount: '0.654321102',
+          remainingAmount: '0.345678898',
+        },
+      ],
+      promotionalGrantConsistency: 'OBSERVED',
     });
     expect(fetch).toHaveBeenCalledWith('/api/model-access/credit-usage', {
       baseUrl: 'https://model-access.example',

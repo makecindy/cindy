@@ -7014,11 +7014,10 @@
       "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
       "promotionalDetails": {
         "title": "Promotional Credit Details",
-        "description": "Each grant has its own status and expiration. Remaining amounts come from the last ledger settlement and may be slightly delayed.",
+        "description": "Current grants and the total balance use the same credit snapshot. Used amounts include model consumption only.",
         "count": "{{count}} grants",
         "empty": "No promotional credit grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
-        "historicalUsageUnavailable": "Gateway cannot currently reconstruct actual usage for expired or voided grants; “—” is shown.",
         "unnamed": "Promotional credit",
         "original": "Original",
         "used": "Used",

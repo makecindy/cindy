@@ -57,8 +57,7 @@ export interface ModelAccessPromotionalGrantUsage {
   grantId: string;
   displayName: string | null;
   originalAmount: string;
-  /** expired / voided 时 Gateway 当前 contract 无法还原真实已用量。 */
-  usedAmount: string | null;
+  usedAmount: string;
   remainingAmount: string;
   expiresAt: string;
   state: ModelAccessPromotionalGrantState;
@@ -73,8 +72,8 @@ export interface ModelAccessCreditUsage {
   promotionalGrants: ModelAccessPromotionalGrantUsage[];
   /** false 表示 Gateway 历史超过 Server 的安全分页上限，列表只含最近记录。 */
   promotionalGrantsComplete: boolean;
-  /** 逐笔 remainingAmount 来自 Gateway 上次持久化结算，不是实时扣减值。 */
-  promotionalGrantConsistency: 'LAST_SETTLED';
+  /** 当前逐笔赠送与总余额来自同一次 Gateway 额度快照。 */
+  promotionalGrantConsistency: 'OBSERVED';
   ledgerUpdatedAt: string | null;
   scale: 9;
   observedAt: string;

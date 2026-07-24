@@ -99,14 +99,23 @@ describe('billing response projection', () => {
             grantId: 'expired',
             displayName: null,
             originalAmount: '5',
-            usedAmount: null,
+            usedAmount: '1.25',
             remainingAmount: '0',
             expiresAt: '2026-07-01T00:00:00Z',
             state: 'expired',
           },
+          {
+            grantId: 'voided',
+            displayName: 'Voided',
+            originalAmount: '3',
+            usedAmount: '0.5',
+            remainingAmount: '0',
+            expiresAt: '2026-08-01T00:00:00Z',
+            state: 'voided',
+          },
         ],
         promotionalGrantsComplete: true,
-        promotionalGrantConsistency: 'LAST_SETTLED',
+        promotionalGrantConsistency: 'OBSERVED',
         ledgerUpdatedAt: '2026-07-23T11:00:00Z',
         scale: 9,
         observedAt: '2026-07-23T12:00:00.123456789Z',
@@ -131,14 +140,23 @@ describe('billing response projection', () => {
           grantId: 'expired',
           displayName: null,
           originalAmount: '5',
-          usedAmount: null,
+          usedAmount: '1.25',
           remainingAmount: '0',
           expiresAt: '2026-07-01T00:00:00Z',
           state: 'expired',
         },
+        {
+          grantId: 'voided',
+          displayName: 'Voided',
+          originalAmount: '3',
+          usedAmount: '0.5',
+          remainingAmount: '0',
+          expiresAt: '2026-08-01T00:00:00Z',
+          state: 'voided',
+        },
       ],
       promotionalGrantsComplete: true,
-      promotionalGrantConsistency: 'LAST_SETTLED',
+      promotionalGrantConsistency: 'OBSERVED',
       ledgerUpdatedAt: '2026-07-23T11:00:00Z',
       scale: 9,
       observedAt: '2026-07-23T12:00:00.123456789Z',
@@ -163,7 +181,7 @@ describe('billing response projection', () => {
         },
       ],
       promotionalGrantsComplete: true,
-      promotionalGrantConsistency: 'LAST_SETTLED',
+      promotionalGrantConsistency: 'OBSERVED',
       ledgerUpdatedAt: null,
       scale: 9,
       observedAt: now,
@@ -190,14 +208,50 @@ describe('billing response projection', () => {
     expect(() =>
       projectModelAccessCreditUsage({
         ...valid,
+        promotionalGrantConsistency: ['LAST', 'SETTLED'].join('_'),
+      }),
+    ).toThrow();
+
+    const historical = {
+      ...valid,
+      available: '5',
+      promotional: { remaining: '0', used: null, total: null },
+      promotionalGrants: [
+        {
+          ...valid.promotionalGrants[0],
+          state: 'expired',
+          usedAmount: '1',
+          remainingAmount: '0',
+          expiresAt: '2026-07-01T00:00:00Z',
+        },
+      ],
+      promotionalGrantsComplete: false,
+    };
+    expect(projectModelAccessCreditUsage(historical)).toMatchObject({
+      promotionalGrants: [{ state: 'expired', usedAmount: '1', remainingAmount: '0' }],
+    });
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...historical,
+        promotionalGrants: [{ ...historical.promotionalGrants[0], usedAmount: '2.000000001' }],
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...historical,
         promotionalGrants: [
           {
-            ...valid.promotionalGrants[0],
-            state: 'expired',
-            usedAmount: '2',
-            remainingAmount: '0',
+            ...historical.promotionalGrants[0],
+            state: 'voided',
+            remainingAmount: '1',
           },
         ],
+      }),
+    ).toThrow();
+    expect(() =>
+      projectModelAccessCreditUsage({
+        ...historical,
+        promotionalGrants: [{ ...historical.promotionalGrants[0], usedAmount: null }],
       }),
     ).toThrow();
     expect(() =>

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const checkout = {
@@ -338,7 +338,7 @@ describe('BillingPage remote catalog rendering', () => {
       available: '66',
       plan: { remaining: '40', used: '60', total: '100' },
       purchased: { remaining: '20', used: '30', total: '50' },
-      promotional: { remaining: '6', used: '4', total: '10' },
+      promotional: { remaining: '6', used: '6', total: '12' },
       promotionalGrants: [
         {
           grantId: 'welcome',
@@ -350,17 +350,35 @@ describe('BillingPage remote catalog rendering', () => {
           state: 'active' as const,
         },
         {
+          grantId: 'depleted',
+          displayName: 'Depleted grant',
+          originalAmount: '2',
+          usedAmount: '2',
+          remainingAmount: '0',
+          expiresAt: '2026-08-02T00:00:00Z',
+          state: 'depleted' as const,
+        },
+        {
           grantId: 'expired',
           displayName: null,
           originalAmount: '5',
-          usedAmount: null,
+          usedAmount: '1.25',
           remainingAmount: '0',
           expiresAt: '2026-07-01T00:00:00Z',
           state: 'expired' as const,
         },
+        {
+          grantId: 'voided',
+          displayName: 'Voided grant',
+          originalAmount: '3',
+          usedAmount: '0.5',
+          remainingAmount: '0',
+          expiresAt: '2026-08-03T00:00:00Z',
+          state: 'voided' as const,
+        },
       ],
       promotionalGrantsComplete: true,
-      promotionalGrantConsistency: 'LAST_SETTLED' as const,
+      promotionalGrantConsistency: 'OBSERVED' as const,
       ledgerUpdatedAt: '2026-07-23T12:00:00Z',
       scale: 9 as const,
       observedAt: '2026-07-23T12:00:00Z',
@@ -371,10 +389,26 @@ describe('BillingPage remote catalog rendering', () => {
     expect(await screen.findByText('Welcome grant')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.active')).toBeTruthy();
+    expect(screen.getByText('billing.usage.promotionalDetails.states.depleted')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.expired')).toBeTruthy();
-    expect(
-      screen.getByText('billing.usage.promotionalDetails.historicalUsageUnavailable'),
-    ).toBeTruthy();
+    expect(screen.getByText('billing.usage.promotionalDetails.states.voided')).toBeTruthy();
+
+    const grantRows = within(screen.getByRole('list')).getAllByRole('listitem');
+    const formatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'CNY' });
+    for (const [row, usedAmount] of [
+      [grantRows[0], 4],
+      [grantRows[1], 2],
+      [grantRows[2], 1.25],
+      [grantRows[3], 0.5],
+    ] as const) {
+      const usedLabel = within(row).getByText('billing.usage.promotionalDetails.used');
+      expect(usedLabel.nextElementSibling?.textContent).toBe(formatter.format(usedAmount));
+    }
+    const legacyWarningKey = `billing.usage.promotionalDetails.${[
+      'historical',
+      'UsageUnavailable',
+    ].join('')}`;
+    expect(screen.queryByText(legacyWarningKey)).toBeNull();
     expect(screen.getAllByRole('progressbar')).toHaveLength(3);
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
