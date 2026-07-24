@@ -12,6 +12,7 @@ import { BUNDLED_CATALOG } from '../catalog.js';
 import {
   loadCatalog,
   resolveCatalogUrl,
+  resolveFallbackCatalogUrl,
   mergeWithBundled,
   CATALOG_CFG_PATH,
   type CatalogIO,
@@ -77,8 +78,13 @@ describe('resolveCatalogUrl', () => {
   it('prefers explicit url', () => {
     expect(resolveCatalogUrl({ url: 'https://x/y.json', baseUrl: 'https://b' })).toBe('https://x/y.json');
   });
-  it('builds from baseUrl + cfg path', () => {
-    expect(resolveCatalogUrl({ baseUrl: 'https://cdn.example.com/base/' })).toBe(
+  it('builds from baseUrl + public catalog API path', () => {
+    expect(resolveCatalogUrl({ baseUrl: 'https://model-access.example.com/' })).toBe(
+      'https://model-access.example.com/api/model-catalog/catalog',
+    );
+  });
+  it('builds the migration OSS fallback URL', () => {
+    expect(resolveFallbackCatalogUrl({ fallbackBaseUrl: 'https://cdn.example.com/base/' })).toBe(
       `https://cdn.example.com/base${CATALOG_CFG_PATH}`,
     );
   });
@@ -179,13 +185,44 @@ describe('loadCatalog', () => {
     expect(cat.providers.find((p) => p.id === 'anthropic')).toBeTruthy();
   });
 
-  it('fetches remote then merges bundled', async () => {
-    const io: CatalogIO = { fetchText: vi.fn(async () => JSON.stringify(MINIMAL)) };
-    const cat = await loadCatalog({ url: 'https://x/y.json' }, io);
-    expect(io.fetchText).toHaveBeenCalledWith('https://x/y.json');
+  it('falls back from public API to legacy OSS before bundled', async () => {
+    const fetchText = vi.fn()
+      .mockRejectedValueOnce(new Error('api unavailable'))
+      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
+    const cat = await loadCatalog(
+      { baseUrl: 'https://model-access.example.com', fallbackBaseUrl: 'https://cdn.example.com/cindy' },
+      { fetchText },
+    );
+    expect(fetchText).toHaveBeenNthCalledWith(1, 'https://model-access.example.com/api/model-catalog/catalog');
+    expect(fetchText).toHaveBeenNthCalledWith(2, 'https://cdn.example.com/cindy/cfg/providers.json');
     expect(cat.version).toBe('test');
-    // 远端目录裁剪到只有 anthropic，bundled 补回 openai/xai/xd（mergeWithBundled）。
-    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
+  });
+  it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
+    const fetchText = vi.fn()
+      .mockResolvedValueOnce('{"version":"broken","providers":[]}')
+      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
+    const cat = await loadCatalog(
+      { baseUrl: 'https://model-access.example.com', fallbackBaseUrl: 'https://cdn.example.com/cindy' },
+      { fetchText },
+    );
+    expect(fetchText).toHaveBeenNthCalledWith(1, 'https://model-access.example.com/api/model-catalog/catalog');
+    expect(fetchText).toHaveBeenNthCalledWith(2, 'https://cdn.example.com/cindy/cfg/providers.json');
+    expect(cat.version).toBe('test');
+  });
+
+  it('uses explicit URL without also retrying the legacy OSS fallback', async () => {
+    const fetchText = vi.fn().mockRejectedValue(new Error('override unavailable'));
+    const cat = await loadCatalog(
+      {
+        url: 'https://override.example.com/providers.json',
+        baseUrl: 'https://model-access.example.com',
+        fallbackBaseUrl: 'https://cdn.example.com/cindy',
+      },
+      { fetchText },
+    );
+    expect(fetchText).toHaveBeenCalledTimes(1);
+    expect(fetchText).toHaveBeenCalledWith('https://override.example.com/providers.json');
+    expect(cat.version).toBe(BUNDLED_CATALOG.version);
   });
 
   it('falls back to bundled when fetch fails', async () => {
