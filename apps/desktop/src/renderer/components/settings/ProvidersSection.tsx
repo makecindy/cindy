@@ -1180,13 +1180,13 @@ export function ProvidersSection() {
    *   - wizard=1 → 打开向导目录第一步。
    */
   const [searchParams, setSearchParams] = useSearchParams();
-  const deepLinkConsumedRef = useRef(false);
   useEffect(() => {
-    if (loading || deepLinkConsumedRef.current) return;
+    if (loading) return;
     const connect = searchParams.get('connect');
     const wizardFlag = searchParams.get('wizard');
     if (!connect && !wizardFlag) return;
-    deepLinkConsumedRef.current = true;
+    // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
+    // 再次带参导航(如二次深链)仍应生效(review 反馈)。
     if (connect) {
       const target = byId.get(connect);
       if (listProviders.some((p) => p.id === connect)) {

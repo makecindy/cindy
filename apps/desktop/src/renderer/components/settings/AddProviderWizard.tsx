@@ -557,7 +557,7 @@ export function AddProviderWizard({
     } finally {
       setSaving(false);
     }
-  }, [sel, picks, name, apiKey, providers, onDone, t]);
+  }, [sel, picks, name, apiKey, providers, onDone, t, i18n.language]);
 
   // ── 步骤指示(OAuth 路径只有 2 步)─────────────────────────────────────
   const totalSteps = sel?.kind === 'preset' ? 3 : 2;
