@@ -753,7 +753,7 @@ export function LoginTextLinkSlot({
   children: ReactNode;
   top?: number;
   tone?: 'placeholder' | 'secondary';
-  /** top:说明/提示类顶对齐 ≤2 行槽,槽高=行高×2(DESIGN.md §16.2,与桌面 SSO_ORG_HINT 同构)。 */
+  /** align="top":说明/提示类顶对齐 ≤2 行槽,槽高=行高×2(DESIGN.md §16.2,与桌面 SSO_ORG_HINT 同构);"center":与倒计时/重发同位垂直居中。 */
   align?: 'center' | 'top';
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -1187,7 +1187,7 @@ const makeStyles = (colors: ThemeColors) =>
   },
   // 顶对齐变体:说明/提示类 ≤2 行,槽高=行高×2,折行只向下伸展(DESIGN.md §16.2)
   textLinkSlotBoxTop: {
-    height: LOGIN_SUBTITLE.height * 2,
+    height: LOGIN_TEXT_LINK.lineHeight * 2,
     justifyContent: 'flex-start',
   },
   resendLinkText: {
@@ -1200,7 +1200,7 @@ const makeStyles = (colors: ThemeColors) =>
     fontSize: LOGIN_TEXT_LINK.font,
     fontWeight: fontWeight.regular,
     // 显式行高:两行(numberOfLines=2)共 46 ≤ 槽高 50,不再依赖平台默认行高
-    lineHeight: LOGIN_SUBTITLE.height,
+    lineHeight: LOGIN_TEXT_LINK.lineHeight,
     textAlign: 'center',
     width: LOGIN_TEXT_LINK.width,
   },

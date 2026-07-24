@@ -338,8 +338,10 @@ export function resolveLoginSurface(
 export const LOGIN_GROUP = { x: 35, width: 680, height: 560 } as const;
 /** 标题(figma §5.1:y=31 h=38 32 Bold 居中)。 */
 export const LOGIN_TITLE = { y: 31, height: 38, font: 32 } as const;
+/** 说明/提示类行高(DESIGN.md §16.2:20px 字号 → 23px;副标题与 Text_link 槽共用,与桌面 SUBTITLE / SSO_ORG_HINT.lineHeight 同值)。 */
+export const LOGIN_COPY_LINE_HEIGHT = 23;
 /** 副标题:540@70 ≤2 行顶对齐,height=行高(DESIGN.md §16.2,2026-07-24 拍板;原单行 599@41 作废)。 */
-export const LOGIN_SUBTITLE = { x: 70, y: 75, width: 540, height: 23, font: 20, maxLines: 2 } as const;
+export const LOGIN_SUBTITLE = { x: 70, y: 75, width: 540, height: LOGIN_COPY_LINE_HEIGHT, font: 20, maxLines: 2 } as const;
 /** 输入/主按钮(figma §4.1/§4.3:540×80 r40;文本 x=31 §4.1)。 */
 export const LOGIN_CONTROL = {
   x: 70,
@@ -382,8 +384,8 @@ export const LOGIN_METHOD_ROW = {
 } as const;
 /** 大 loading 环(figma §5.2:64×64 @(308,158 browser / 193 preparing))。 */
 export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size: 64 } as const;
-/** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20)。 */
-export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20 } as const;
+/** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20;行高走 LOGIN_COPY_LINE_HEIGHT)。 */
+export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20, lineHeight: LOGIN_COPY_LINE_HEIGHT } as const;
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
 
