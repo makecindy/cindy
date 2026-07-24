@@ -6,10 +6,14 @@ import type { TemplateCapability } from '../types.js';
 
 const CAPABILITY_VOCABULARY: TemplateCapability[] = ['worktree', 'pr', 'web', 'params'];
 
-/** 提取 prompt 里的 {{param}} 占位符集合。 */
+/**
+ * 提取 prompt 里的 {{param}} 占位符集合。
+ * 正则与运行时替换（engine/template.ts）完全一致：更宽松的写法（如 `{{ topic }}`）
+ * 会测试通过但运行时不替换。
+ */
 function promptPlaceholders(prompt: string): Set<string> {
   const keys = new Set<string>();
-  for (const match of prompt.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)) {
+  for (const match of prompt.matchAll(/\{\{([A-Za-z0-9_-]+)\}\}/g)) {
     keys.add(match[1]);
   }
   return keys;

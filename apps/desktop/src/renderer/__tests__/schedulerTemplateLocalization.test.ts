@@ -39,8 +39,10 @@ const LOCALES: Record<string, SchedulerL10n> = {
   ko: (koCommon as { scheduler: SchedulerL10n }).scheduler,
 };
 
+// 正则与运行时替换（maker-scheduler engine/template.ts）完全一致：更宽松的写法
+// （如 `{{ topic }}`）会测试通过但运行时不替换。
 function promptPlaceholders(prompt: string): string[] {
-  return [...prompt.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)].map((m) => m[1]).sort();
+  return [...prompt.matchAll(/\{\{([A-Za-z0-9_-]+)\}\}/g)].map((m) => m[1]).sort();
 }
 
 describe.each(Object.entries(LOCALES))('scheduler.builtinTemplates (%s)', (_locale, scheduler) => {
