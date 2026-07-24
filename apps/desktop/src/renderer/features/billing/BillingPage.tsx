@@ -188,7 +188,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         .getCurrentSubscription()
         .then(
           (result) => setCurrentSubscription(result.subscription),
-          () => setSubscriptionError(true),
+          () => {
+            setCurrentSubscription(null);
+            setSubscriptionError(true);
+          },
         )
         .finally(() => setLoadingSubscription(false)),
       billingApi

@@ -425,6 +425,54 @@ describe('BillingPage remote catalog rendering', () => {
     );
   });
 
+  it('clears a previously loaded subscription when refresh fails', async () => {
+    window.electronAPI.billing.getCurrentSubscription = vi
+      .fn()
+      .mockResolvedValueOnce({
+        subscription: {
+          subscriptionId: 'subscription_fixture',
+          status: 'ACTIVE' as const,
+          currentPeriodStartAt: null,
+          currentPeriodEndAt: null,
+          entitlementValidUntil: null,
+          cancelAtPeriodEnd: false,
+          effectivePlan: {
+            version: 1 as const,
+            product: {
+              code: 'plus',
+              kind: 'SUBSCRIPTION' as const,
+              level: 1,
+            },
+            offer: {
+              code: 'plus_month',
+              interval: 'MONTH' as const,
+            },
+            terms: {
+              amount: '9',
+              currency: 'usd',
+              creditAmount: '100',
+              rolloverCap: '0',
+            },
+            capturedAt: '2026-07-23T12:00:00.000Z',
+          },
+          purchaseAttemptId: null,
+          paymentAction: null,
+        },
+      })
+      .mockRejectedValueOnce(new Error('subscription status unavailable'));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Configured subscription')).toBeTruthy();
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+
+    expect(await screen.findByText('billing.settings.subscriptionCard.unavailable')).toBeTruthy();
+    expect(screen.queryByText('Configured subscription')).toBeNull();
+    expect(
+      screen.getByText('billing.settings.subscriptionCard.action').closest('button'),
+    ).toHaveProperty('disabled', true);
+  });
+
   it('renders multiple remote subscription offers as independent choices', async () => {
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({
       products: (['alipay', 'stripe', 'alipay'] as const).map((provider, index) => ({
