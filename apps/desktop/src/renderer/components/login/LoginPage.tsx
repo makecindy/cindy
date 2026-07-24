@@ -48,7 +48,7 @@ import {
   LOADING_RING,
   LOGIN_COLORS,
   LOGIN_LOCAL_MODE,
-  TEXT_LINK,
+  SSO_ORG_HINT,
 } from './loginDesignTokens';
 
 /**
@@ -387,15 +387,16 @@ export function LoginPage() {
           error={!!errorCode}
           testId="login-sso-org-input"
         />
-        {/* 帮助行(demo ssoOrgPanel:text-link 位、无下划线、次级色) */}
+        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
         <span
-          className="absolute flex items-center justify-center"
+          className="absolute line-clamp-2 text-center"
           style={{
-            left: TEXT_LINK.x,
-            top: TEXT_LINK.y,
-            width: TEXT_LINK.width,
-            height: 36,
-            fontSize: TEXT_LINK.fontSize,
+            left: SSO_ORG_HINT.x,
+            top: SSO_ORG_HINT.y,
+            width: SSO_ORG_HINT.width,
+            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+            fontSize: SSO_ORG_HINT.fontSize,
             color: LOGIN_COLORS.secondaryText,
           }}
         >

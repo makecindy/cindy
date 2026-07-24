@@ -2776,7 +2776,7 @@
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
     "ssoOrgTitle": "Enterprise SSO",
     "ssoOrgSubtitle": "Enter a company ID, organization slug, or verified domain to continue with single sign-on",
-    "ssoOrgPlaceholder": "Company ID, organization slug, or verified domain",
+    "ssoOrgPlaceholder": "Company ID, slug, or domain",
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
     "ssoVerificationTitle": "Verify Your Work Identity",

@@ -58,7 +58,8 @@ export function LoginPanel({ children, testId }: { children: ReactNode; testId?:
 }
 
 /**
- * 标题块(figma §5.1:标题 y=31 h=38 32 Bold;副标题 x=41 y=75 w=599 20 Regular)。
+ * 标题块(figma §5.1:标题 y=31 h=38 32 Bold;副标题 @(70,75) 540 宽 ≤2 行顶对齐
+ * 20 Regular——2026-07-24 拍板,原 figma 单行 599@41 作废,见 DESIGN.md §16.2)。
  * global 变体:标题文字 span @(185,w236) + Global pill @(425,4)(§4.10,demo titleBlock)。
  */
 export function LoginTitleBlock({
@@ -120,18 +121,16 @@ export function LoginTitleBlock({
       </div>
       {subtitle != null && (
         <div
-          className="absolute overflow-hidden whitespace-nowrap text-center"
+          className="absolute line-clamp-2 text-center"
           style={{
             left: SUBTITLE.x,
             top: SUBTITLE.y,
             width: SUBTITLE.width,
-            height: 23,
-            // 同标题:显式行高 = 容器高,避免继承行高溢出后被 overflow-hidden 裁字形
-            // (与回调页 .body line-height:23px 同款)。
-            lineHeight: '23px',
+            height: SUBTITLE.lineHeight * SUBTITLE.maxLines,
+            // 显式行高:继承行高(body 1.5)大于槽高会被 clamp 裁字形(MT-7)。
+            lineHeight: `${SUBTITLE.lineHeight}px`,
             fontSize: SUBTITLE.fontSize,
             color: LOGIN_COLORS.secondaryText,
-            textOverflow: 'ellipsis',
           }}
         >
           {subtitle}
