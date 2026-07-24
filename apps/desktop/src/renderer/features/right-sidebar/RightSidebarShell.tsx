@@ -24,8 +24,10 @@ import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
+import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { TabBar, TabStrip } from './TabBar';
 import { EmptyState } from './EmptyState';
 import {
@@ -92,6 +94,12 @@ interface RightSidebarShellProps {
   onMaximize?: () => void;
   /** maximize 态 — 用来让 TabBar 把 maximize 按钮换图标(Maximize2 ↔ Minimize2)。 */
   isMaximized?: boolean;
+  /**
+   * 主窗口左栏完全收起且当前面板 maximize 时，右栏 unified topbar 需要为
+   * MainLayout 的浮动 ChromeActions 预留左侧 no-drag 占位；普通右栏/rail/独立
+   * 子窗口不应消费这段空间。
+   */
+  reserveLeftChromeActions?: boolean;
   /** 「在新窗口中打开侧边栏」;仅 Win 端 TabBar 内渲染按钮(Mac 走 MainLayout 浮层)。 */
   onDetach?: () => void;
   /** TabBar 横带是否作为窗口拖拽区(见 TabBar 同名 prop):主窗口内嵌形态传
@@ -124,7 +132,19 @@ export function RightSidebarShell({
   chromeWindowDrag = true,
   panelSide = 'right',
   onAllTabsClosed,
+  reserveLeftChromeActions = false,
 }: RightSidebarShellProps) {
+  const { isFullscreen } = useMacFullscreen();
+  const chromeActionsLeft =
+    isMac && !isFullscreen
+      ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
+      : CHROME_ACTIONS_GEOMETRY.defaultLeft;
+  // unifiedTopbar 本身有 px-2(8px) 左内边距。加上 chromeActionsLeft 后，
+  // spacer 的布局起点正好落在 ChromeActions 簇之前，并在簇后保留 8px 呼吸间距。
+  const leftChromeActionsSpacerWidth =
+    unifiedTopbar && reserveLeftChromeActions
+      ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
+      : 0;
   const { t } = useTranslation();
 
   // RSB browser bridge (Phase 2):在 Shell 整个生命周期内只 init 一次。bridge 内部
@@ -363,6 +383,19 @@ export function RightSidebarShell({
           className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
+          {leftChromeActionsSpacerWidth > 0 && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-left-chrome-actions-spacer"
+              className="h-full shrink-0"
+              style={
+                {
+                  width: leftChromeActionsSpacerWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
           {/* pillVariant="chip":pills 垂直居中的浮动 chip(完整圆角 + 四边框),
               与「+」、右侧浮层按钮共享宿主栏水平中线(对齐 Codex)——贴底 flush
               样式在 46px 高栏里会与居中控件错位。

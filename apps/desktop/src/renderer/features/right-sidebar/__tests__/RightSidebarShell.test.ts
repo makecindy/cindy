@@ -21,6 +21,7 @@ vi.mock('../plugins', () => ({}));
 import { RightSidebarShell } from '../RightSidebarShell';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { _resetStore, closeTab } from '../store';
+import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
 interface RightSidebarTabsIpcStub {
   list: ReturnType<typeof vi.fn>;
@@ -50,7 +51,7 @@ function makeRightSidebarTabsIpc(): RightSidebarTabsIpcStub {
   };
 }
 
-function installElectronApi(tabsIpc: RightSidebarTabsIpcStub): void {
+function installElectronApi(tabsIpc: RightSidebarTabsIpcStub, fullscreen = false): void {
   (
     window as unknown as {
       electronAPI: {
@@ -69,6 +70,8 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub): void {
         onRsbBrowserCommand: (
           callback: (payload: { command: RsbBrowserCommand }) => void,
         ) => () => void;
+        getFullscreenState: () => Promise<boolean>;
+        onFullscreenChange: (callback: (fullscreen: boolean) => void) => () => void;
         appShortcuts: {
           getState: () => { platform: string; overrides: AppShortcutOverrides };
           onChanged: ReturnType<typeof vi.fn>;
@@ -120,6 +123,8 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub): void {
         rsbBrowserCommandListeners = rsbBrowserCommandListeners.filter((cb) => cb !== callback);
       };
     },
+    getFullscreenState: vi.fn(async () => fullscreen),
+    onFullscreenChange: vi.fn(() => () => undefined),
     appShortcuts: {
       getState: () => ({ platform: 'darwin', overrides: {} }),
       onChanged: vi.fn(() => () => undefined),
@@ -327,6 +332,61 @@ describe('RightSidebarShell empty state', () => {
     // 合并顶栏走 chip 变体:strip 垂直居中,与「+」/ 浮层按钮同一水平中线。
     expect(strip.className).toContain('items-center');
     expect(screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' })).toBeTruthy();
+  });
+
+  it('reserves the fullscreen ChromeActions area in the maximized unified topbar', async () => {
+    installElectronApi(tabsIpc, true);
+    const { rerender } = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        reserveLeftChromeActions: true,
+      }),
+    );
+
+    await waitFor(() => {
+      const spacer = screen.getByTestId('right-sidebar-left-chrome-actions-spacer');
+      expect(spacer.style.width).toBe(
+        `${CHROME_ACTIONS_GEOMETRY.defaultLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth}px`,
+      );
+    });
+    const spacer = screen.getByTestId('right-sidebar-left-chrome-actions-spacer');
+    expect(
+      (spacer.style as CSSStyleDeclaration & { WebkitAppRegion: string }).WebkitAppRegion,
+    ).toBe('no-drag');
+
+    rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        reserveLeftChromeActions: false,
+      }),
+    );
+    expect(screen.queryByTestId('right-sidebar-left-chrome-actions-spacer')).toBeNull();
+  });
+
+  it('keeps the traffic-light offset when reserving ChromeActions outside fullscreen', async () => {
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        reserveLeftChromeActions: true,
+      }),
+    );
+
+    const spacer = await screen.findByTestId('right-sidebar-left-chrome-actions-spacer');
+    expect(spacer.style.width).toBe(
+      `${CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth}px`,
+    );
   });
 
   it('renders detach/maximize in the topbar when panel is docked left (mac M2), spacer when right or maximized', async () => {
