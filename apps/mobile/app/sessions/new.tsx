@@ -914,7 +914,6 @@ export default function NewRemoteSessionScreen() {
       // resolution has not claimed audio resources and must survive that event.
       if (nextState !== 'background') return;
       if (shouldCancelMobileVoiceForBackground({
-        permissionRequestInFlight: voicePermissionRequestInFlightRef.current,
         startupInFlight: voiceStartupInFlightRef.current,
         recordingActive: voiceRecordingActiveRef.current,
         hasController: Boolean(voiceControllerSessionRef.current),
@@ -1447,6 +1446,10 @@ export default function NewRemoteSessionScreen() {
         setVoiceError(mobileVoiceMicPermissionError());
         return;
       }
+      if (
+        voicePermissionRequestSeqRef.current !== permissionRequestSeq
+        || AppState.currentState !== 'active'
+      ) return;
       startupSeq = voiceStartupSeqRef.current + 1;
       voiceStartupSeqRef.current = startupSeq;
       voiceStartupInFlightRef.current = true;

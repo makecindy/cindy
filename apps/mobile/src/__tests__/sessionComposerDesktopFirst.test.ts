@@ -561,6 +561,12 @@ describe('mobile session composer desktop-first surface', () => {
     );
     expect(voiceSource).toContain('getPermission: getRecordingPermissionsAsync');
     expect(voiceSource).toContain("isAppActive: () => AppState.currentState === 'active'");
+    expect(voiceSource).toContain(
+      "voicePermissionRequestSeqRef.current !== permissionRequestSeq\n"
+      + "        || AppState.currentState !== 'active'\n"
+      + "      ) return;\n"
+      + "      startupSeq = voiceStartupSeqRef.current + 1;",
+    );
     expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;');
     expect(voiceSource).toContain('onDraftChanged: setComposerDraft');
     expect(voiceSource).toContain('isMobileRealtimeAudioAvailable()');

@@ -108,7 +108,6 @@ describe('mobileVoiceStartup', () => {
     await Promise.resolve();
     appActive = false;
     expect(shouldCancelMobileVoiceForBackground({
-      permissionRequestInFlight: true,
       startupInFlight: false,
       recordingActive: false,
       hasController: false,
@@ -150,7 +149,6 @@ describe('mobileVoiceStartup', () => {
     })).resolves.toBe('cancelled');
     expect(waitForAppActive).not.toHaveBeenCalled();
     expect(shouldCancelMobileVoiceForBackground({
-      permissionRequestInFlight: false,
       startupInFlight: true,
       recordingActive: false,
       hasController: false,

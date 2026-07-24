@@ -871,6 +871,12 @@ describe('new session composer surface', () => {
     );
     expect(newSource).toContain('getPermission: getRecordingPermissionsAsync');
     expect(newSource).toContain("isAppActive: () => AppState.currentState === 'active'");
+    expect(newSource).toContain(
+      "voicePermissionRequestSeqRef.current !== permissionRequestSeq\n"
+      + "        || AppState.currentState !== 'active'\n"
+      + "      ) return;\n"
+      + "      startupSeq = voiceStartupSeqRef.current + 1;",
+    );
     expect(newSource).toContain('const cancelVoiceForDeviceSwitch = useCallback(() => {');
     expect(selectDeviceSource).toContain('voicePermissionRequestInFlightRef.current');
     expect(selectDeviceSource).toContain('|| voiceStopInFlightRef.current');

@@ -3415,6 +3415,10 @@ export default function SessionScreen() {
         setVoiceError(mobileVoiceMicPermissionError());
         return;
       }
+      if (
+        voicePermissionRequestSeqRef.current !== permissionRequestSeq
+        || AppState.currentState !== 'active'
+      ) return;
       startupSeq = voiceStartupSeqRef.current + 1;
       voiceStartupSeqRef.current = startupSeq;
       voiceStartupInFlightRef.current = true;
@@ -3577,7 +3581,6 @@ export default function SessionScreen() {
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
     const ownsActiveRun = shouldCancelMobileVoiceForBackground({
-      permissionRequestInFlight: voicePermissionRequestInFlightRef.current,
       startupInFlight: voiceStartupInFlightRef.current,
       recordingActive: voiceRecordingActiveRef.current,
       hasController: Boolean(controller),

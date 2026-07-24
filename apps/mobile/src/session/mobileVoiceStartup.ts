@@ -15,7 +15,6 @@ type ResolveMobileVoiceRecordingPermissionOptions = {
 };
 
 type MobileVoiceBackgroundState = {
-  permissionRequestInFlight: boolean;
   startupInFlight: boolean;
   recordingActive: boolean;
   hasController: boolean;
