@@ -175,6 +175,19 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
   });
 
+  it('takes bounded local snapshots instead of reading the ledger per market item', async () => {
+    const items = Array.from({ length: 50 }, (_, index) => summary({
+      id: `c${index.toString(36).padStart(24, '0')}`,
+      ghostId: `cindy-test-${index}`,
+    }));
+    const h = harness(items);
+    const read = vi.spyOn(h.ledger, 'read');
+
+    await h.service.snapshot();
+
+    expect(read.mock.calls.length).toBeLessThan(10);
+  });
+
   it('does not query the authenticated market in account-free local mode', async () => {
     runtime.session = {
       mode: 'local',

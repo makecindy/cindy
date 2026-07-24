@@ -43,6 +43,7 @@ import {
 } from './ledger.js';
 
 const log = createLogger('plugin-market');
+const NO_DUPLICATE_GHOST_IDS: ReadonlySet<string> = new Set();
 
 function captureCloudOwner(): ActiveAppSession {
   const session = getActiveAppSession();
@@ -121,6 +122,24 @@ function legacyRecordFrom(
     installed: true,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function ghostIdCounts(
+  plugins: readonly VisiblePluginSummary[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const plugin of plugins) {
+    counts.set(plugin.ghostId, (counts.get(plugin.ghostId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Stable local facts reused while projecting one market catalog response. */
+interface LocalInstallSnapshot {
+  /** Installed Ghost runtime facts indexed once for one market operation. */
+  ghostsById: ReadonlyMap<string, InstalledGhost>;
+  /** Parsed provenance records from one ledger read. */
+  installations: Readonly<Record<string, PluginMarketInstallationRecord>>;
 }
 
 /**
@@ -298,22 +317,23 @@ export class PluginMarketService {
   }
 
   private toItems(plugins: readonly VisiblePluginSummary[]): PluginMarketItem[] {
+    const counts = ghostIdCounts(plugins);
     const duplicateGhostIds = new Set(
       plugins
-        .map((plugin) => plugin.ghostId)
-        .filter((ghostId, index, all) => all.indexOf(ghostId) !== index),
+        .filter((plugin) => (counts.get(plugin.ghostId) ?? 0) > 1)
+        .map((plugin) => plugin.ghostId),
     );
-    return plugins.map((plugin) => this.toItem(plugin, duplicateGhostIds));
+    const local = this.localInstallSnapshot();
+    return plugins.map((plugin) => this.toItem(plugin, duplicateGhostIds, local));
   }
 
   private toItem(
     plugin: VisiblePluginSummary | VisiblePluginDetail,
-    duplicateGhostIds: ReadonlySet<string> = new Set(),
+    duplicateGhostIds: ReadonlySet<string> = NO_DUPLICATE_GHOST_IDS,
+    local = this.localInstallSnapshot(),
   ): PluginMarketItem {
-    const ghost = getGhostManager()
-      .list()
-      .find((candidate) => candidate.manifest.id === plugin.ghostId);
-    const record = this.ledger.installationForGhost(plugin.ghostId);
+    const ghost = local.ghostsById.get(plugin.ghostId);
+    const record = local.installations[plugin.ghostId];
     const ownsInstall = Boolean(
       ghost && record?.installed && record.pluginId === plugin.id,
     );
@@ -347,12 +367,10 @@ export class PluginMarketService {
   }
 
   private adoptLegacyInstallations(plugins: readonly VisiblePluginSummary[]): void {
-    const counts = new Map<string, number>();
-    for (const plugin of plugins) {
-      counts.set(plugin.ghostId, (counts.get(plugin.ghostId) ?? 0) + 1);
-    }
+    const counts = ghostIdCounts(plugins);
+    const installations = this.ledger.read().installations;
     for (const ghost of getGhostManager().list()) {
-      if (this.ledger.installationForGhost(ghost.manifest.id)) continue;
+      if (installations[ghost.manifest.id]) continue;
       if (!isOfficialGhostId(ghost.manifest.id)) continue;
       const matches = plugins.filter(
         (plugin) =>
@@ -363,6 +381,7 @@ export class PluginMarketService {
       if (matches.length !== 1) continue;
       const record = legacyRecordFrom(matches[0], ghost);
       this.ledger.upsertInstallation(record);
+      installations[record.ghostId] = record;
       log.info('legacy plugin adopted into market ledger', {
         ghostId: ghost.manifest.id,
         pluginId: matches[0].id,
@@ -389,19 +408,19 @@ export class PluginMarketService {
   ): Promise<void> {
     const user = getAuthState().user;
     if (!user) return;
+    const counts = ghostIdCounts(plugins);
     const uniqueGhostIds = new Set(
       plugins
-        .map((plugin) => plugin.ghostId)
-        .filter(
-          (ghostId, index, all) =>
-            all.indexOf(ghostId) === index && all.lastIndexOf(ghostId) === index,
-        ),
+        .filter((plugin) => counts.get(plugin.ghostId) === 1)
+        .map((plugin) => plugin.ghostId),
     );
+    const ledger = this.ledger.read();
+    const local = this.localInstallSnapshot(ledger.installations);
     for (const summary of plugins) {
       if (!summary.defaultInstall || !uniqueGhostIds.has(summary.ghostId)) continue;
-      if (this.ledger.isDefaultInstallSuppressed(user.id, summary.id)) continue;
+      if (ledger.defaultInstallOptOuts[user.id]?.includes(summary.id)) continue;
       if (isBuiltinGhostRemovedByUser(summary.ghostId)) continue;
-      const state = this.toItem(summary).installState;
+      const state = this.toItem(summary, NO_DUPLICATE_GHOST_IDS, local).installState;
       if (state !== 'not-installed') continue;
       try {
         await this.withMutation(summary.id, async () => {
@@ -417,6 +436,17 @@ export class PluginMarketService {
         });
       }
     }
+  }
+
+  private localInstallSnapshot(
+    installations = this.ledger.read().installations,
+  ): LocalInstallSnapshot {
+    return {
+      ghostsById: new Map(
+        getGhostManager().list().map((ghost) => [ghost.manifest.id, ghost]),
+      ),
+      installations,
+    };
   }
 
   private withMutation<T>(pluginId: string, operation: () => Promise<T>): Promise<T> {

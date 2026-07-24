@@ -79,6 +79,13 @@ const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
   'local',
 ];
 
+function marketErrorMessage(error: unknown, fallback: string): string {
+  const ipcMessage = extractIpcError(error)?.message;
+  if (ipcMessage) return ipcMessage;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return fallback;
+}
+
 /**
  * Ghost-backed Plugin page.
  *
@@ -351,7 +358,7 @@ export function GhostPluginPage() {
         );
         await refreshMarket();
       } catch (error) {
-        toast.error(extractIpcError(error)?.message ?? t('settings.ghosts.errors.generic'));
+        toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
       } finally {
         setMarketBusyId(null);
       }
@@ -479,7 +486,7 @@ export function GhostPluginPage() {
       try {
         setMarketDetail(await window.electronAPI.pluginMarket.detail(pluginId));
       } catch (error) {
-        toast.error(extractIpcError(error)?.message ?? t('settings.ghosts.errors.generic'));
+        toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
       } finally {
         setMarketBusyId(null);
       }
@@ -511,7 +518,7 @@ export function GhostPluginPage() {
       setSelectedId(result.ghost.manifest.id);
       await refreshMarket();
     } catch (error) {
-      toast.error(extractIpcError(error)?.message ?? t('settings.ghosts.errors.generic'));
+      toast.error(marketErrorMessage(error, t('settings.ghosts.errors.generic')));
     } finally {
       setMarketBusyId(null);
     }
