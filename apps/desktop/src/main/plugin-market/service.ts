@@ -7,7 +7,7 @@ import {
   type VisiblePluginDetail,
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
-import { app } from 'electron';
+import { app, type WebContents } from 'electron';
 
 import {
   diffGhostPermissionItems,
@@ -220,7 +220,10 @@ export class PluginMarketService {
 
   async install(
     pluginId: string,
-    options?: { allowPermissionExpansion?: boolean },
+    options?: {
+      allowPermissionExpansion?: boolean;
+      nodeAuthorizationWebContents?: WebContents;
+    },
   ): Promise<{ ghost: InstalledGhost }> {
     if (!isValidPluginResourceId(pluginId)) throw new Error('Plugin ID 不合法');
     this.requireConfigured();
@@ -244,6 +247,9 @@ export class PluginMarketService {
           {
             allowPermissionExpansion:
               options?.allowPermissionExpansion === true,
+            ...(options?.nodeAuthorizationWebContents
+              ? { nodeAuthorizationWebContents: options.nodeAuthorizationWebContents }
+              : {}),
           },
           owner,
           ledger,
@@ -312,6 +318,7 @@ export class PluginMarketService {
     options: {
       allowPermissionExpansion?: boolean;
       initiallyEnabled?: boolean;
+      nodeAuthorizationWebContents?: WebContents;
     } = {},
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -363,6 +370,9 @@ export class PluginMarketService {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
         initiallyEnabled: options.initiallyEnabled === true,
+        ...(options.nodeAuthorizationWebContents
+          ? { nodeAuthorizationWebContents: options.nodeAuthorizationWebContents }
+          : {}),
       });
       // Once the package directory is committed, finish provenance against the
       // owner captured at operation start even if the active session changes.

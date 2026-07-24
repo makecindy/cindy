@@ -1802,6 +1802,7 @@ export async function installOrUpdateMarketGhostPackage(
     ghostId: string;
     version: string;
     initiallyEnabled?: boolean;
+    nodeAuthorizationWebContents?: WebContents;
   },
 ): Promise<InstalledGhost> {
   const releaseMutation = beginGhostMutation();
@@ -1822,6 +1823,24 @@ export async function installOrUpdateMarketGhostPackage(
     rejectUnauthorizedTokenBroker(inspected.manifest);
 
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
+    if (inspected.manifest.node) {
+      const sender = expected.nodeAuthorizationWebContents;
+      if (
+        !sender ||
+        !(await requestNodeInstallAuthorization(
+          sender,
+          inspected.manifest,
+          installed ? 'update' : 'install',
+        ))
+      ) {
+        throwIpcError(
+          'PERMISSION_DENIED',
+          sender
+            ? '用户取消了 Node Plugin 安装授权'
+            : 'Node Plugin 需要用户显式授权，不能自动安装',
+        );
+      }
+    }
     if (!installed) {
       // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
       return installAndDock(manager, cindyFilePath, {

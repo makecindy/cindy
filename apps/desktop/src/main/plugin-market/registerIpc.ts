@@ -38,6 +38,7 @@ export function registerPluginMarketIpc(): void {
         (options as { allowPermissionExpansion?: unknown }).allowPermissionExpansion === true;
       return service().install(requireString(pluginId, 'pluginId'), {
         allowPermissionExpansion,
+        nodeAuthorizationWebContents: event.sender,
       });
     },
   );
