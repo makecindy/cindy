@@ -276,6 +276,58 @@ describe('Feishu credential connection semantics', () => {
     });
   });
 
+  it('clears the per-app owner before connecting a different app ID', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+
+    await expect(saveAndConnect('cli_other', 'other-secret')).resolves.toEqual({
+      verdict: 'connected',
+    });
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-replaced',
+      clearOwnerBeforeIdle: true,
+    });
+    expect(mocks.start).toHaveBeenCalledWith(
+      { appId: 'cli_other', appSecret: 'other-secret' },
+      { reason: 'credentials-replaced' },
+    );
+  });
+
+  it('installs a replacement app registration owner after clearing the previous owner', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+
+    await expect(
+      saveAndConnect('cli_registered', 'registered-secret', {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).resolves.toEqual({ verdict: 'connected' });
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-replaced',
+      clearOwnerBeforeIdle: true,
+    });
+    expect(mocks.writeOwnerOpenId).toHaveBeenCalledWith('ou_registered_owner');
+    expect(mocks.loadOwner).toHaveBeenCalledOnce();
+    expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.writeOwnerOpenId.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('preserves the owner when only the secret changes for the same app ID', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+
+    await expect(saveAndConnect(credentials.appId, 'rotated-secret')).resolves.toEqual({
+      verdict: 'connected',
+    });
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-replaced',
+      clearOwnerBeforeIdle: false,
+    });
+    expect(mocks.writeOwnerOpenId).not.toHaveBeenCalled();
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
+  });
+
   it('does not tear down the current transport when saving new credentials fails', async () => {
     mocks.readCredentials.mockReturnValue(credentials);
     mocks.writeCredentials.mockReturnValue(false);
