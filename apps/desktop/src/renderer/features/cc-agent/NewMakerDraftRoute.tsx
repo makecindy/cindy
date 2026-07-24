@@ -327,8 +327,10 @@ export function NewMakerDraftRoute() {
   const { t } = useTranslation();
   const draft = useNewMakerDraft();
   const navigate = useNavigate();
-  // minWidth=640:自适应内容列在大屏封顶 1220(hook 内 MAX),小屏兜一个体面下限
-  // (与对话页的 max 对称);窄于下限时 hook 自动回落成"填满容器",不溢出。
+  // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
+  // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
+  // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
+  // "填满容器",不溢出。
   const { containerRef, inputWidth } = useProportionalWidth(914, { minWidth: 640 });
   // The available rail can shrink when either sidebar opens while the
   // viewport itself remains wide. Keep the draft layout responsive to that
@@ -2074,8 +2076,9 @@ export function NewMakerDraftRoute() {
             <div
               className="relative flex w-full flex-col items-start"
               // 与进行中对话页同源:内容列宽度跟随 useProportionalWidth 算出的
-              // inputWidth(封顶 1220px),不再死锁 800——大屏自适应变宽,且发送后
-              // 同一个 ChatInput 无宽度跳变。inputWidth 由 useLayoutEffect 同步量出
+              // inputWidth(封顶 914+20=934px,见 hook 首参),不再死锁 800——大屏留出
+              // 左右呼吸空间、窄屏自适应收窄,且发送后同一个 ChatInput 无宽度跳变。
+              // inputWidth 由 useLayoutEffect 同步量出
               // (paint 前已就绪);极端未量到(0)时回落旧默认 800,不放大到全宽。
               style={{ maxWidth: inputWidth || 800 }}
             >
