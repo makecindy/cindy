@@ -71,16 +71,24 @@ export function gatewayModelPriceQuote(
   ) {
     return undefined;
   }
+  const discount =
+    typeof model.costDiscount === 'number' &&
+    Number.isFinite(model.costDiscount) &&
+    model.costDiscount > 0 &&
+    model.costDiscount <= 1
+      ? model.costDiscount
+      : 0;
+  const multiplier = 1 - discount;
   return applyCodexBudgetDiscount({
     providerId: 'xd',
     modelId,
     currency: gatewayCurrencyForRegion(region),
     source: 'gateway',
     approximate: false,
-    inputPerMtok,
-    outputPerMtok,
-    ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
-    ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    inputPerMtok: inputPerMtok * multiplier,
+    outputPerMtok: outputPerMtok * multiplier,
+    ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok: cacheReadPerMtok * multiplier } : {}),
+    ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok: cacheCreatePerMtok * multiplier } : {}),
   });
 }
 
