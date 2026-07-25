@@ -235,6 +235,53 @@ describe('useBillingCheckout ephemeral sessions', () => {
     expect(result.current.state.phase).toBe('AWAITING_PAYMENT');
   });
 
+  it('ignores in-flight responses after the dialog is closed instead of reopening it', async () => {
+    let release!: (value: unknown) => void;
+    api.createTopup.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
+
+    let started!: Promise<void>;
+    act(() => {
+      started = result.current.startTopup({
+        offerCode: 'credit_topup_20',
+        purchaseOptionId: 'option_1',
+      });
+    });
+    act(() => result.current.close());
+    expect(result.current.state.open).toBe(false);
+
+    await act(async () => {
+      release(pendingOrder());
+      await started;
+    });
+
+    // 关闭已结束该结算会话：迟到的创建响应不得重开弹窗或恢复旧支付动作。
+    expect(result.current.state).toMatchObject({ open: false, phase: 'IDLE', order: null });
+  });
+
+  it('ignores a late refresh error after the dialog is closed', async () => {
+    const order = pendingOrder();
+    api.createTopup.mockResolvedValue(order);
+    let reject!: (error: unknown) => void;
+    api.refreshTopup.mockImplementation(() => new Promise((_, rej) => (reject = rej)));
+    const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
+
+    await act(() =>
+      result.current.startTopup({ offerCode: 'credit_topup_20', purchaseOptionId: 'option_1' }),
+    );
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = result.current.refreshActive();
+    });
+    act(() => result.current.close());
+    await act(async () => {
+      reject(new Error('offline'));
+      await refreshing;
+    });
+
+    expect(result.current.state).toMatchObject({ open: false, phase: 'IDLE', error: false });
+  });
+
   it('retries a failed order through the retry endpoint with a new key', async () => {
     const failed = { ...pendingOrder(), status: 'FAILED' as const, paymentAction: null };
     api.createTopup.mockResolvedValueOnce(failed);

@@ -63,24 +63,29 @@ export function useBillingCheckout(accountId: string | null) {
   const stateRef = useRef(state);
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
+  // 会话代次：close/切换账号使当前会话失效，迟到的异步响应不得重开已结束的会话。
+  const sessionRef = useRef(0);
   stateRef.current = state;
 
-  const applyOrder = useCallback((order: BillingPaymentOrder, intent: BillingCheckoutIntent | null) => {
-    if (!mountedRef.current) return;
-    setState({
-      open: true,
-      kind: 'TOPUP',
-      phase: phaseForOrder(order),
-      intent,
-      order,
-      subscription: null,
-      error: false,
-    });
-  }, []);
+  const applyOrder = useCallback(
+    (order: BillingPaymentOrder, intent: BillingCheckoutIntent | null, session: number) => {
+      if (!mountedRef.current || session !== sessionRef.current) return;
+      setState({
+        open: true,
+        kind: 'TOPUP',
+        phase: phaseForOrder(order),
+        intent,
+        order,
+        subscription: null,
+        error: false,
+      });
+    },
+    [],
+  );
 
   const applySubscription = useCallback(
-    (subscription: BillingSubscription, intent: BillingCheckoutIntent | null) => {
-      if (!mountedRef.current) return;
+    (subscription: BillingSubscription, intent: BillingCheckoutIntent | null, session: number) => {
+      if (!mountedRef.current || session !== sessionRef.current) return;
       setState({
         open: true,
         kind: 'SUBSCRIPTION',
@@ -94,9 +99,14 @@ export function useBillingCheckout(accountId: string | null) {
     [],
   );
 
-  const failCurrentOperation = useCallback(() => {
-    if (!mountedRef.current) return;
+  const failCurrentOperation = useCallback((session: number) => {
+    if (!mountedRef.current || session !== sessionRef.current) return;
     setState((current) => ({ ...current, phase: 'FAILED', error: true }));
+  }, []);
+
+  const flagError = useCallback((session: number) => {
+    if (!mountedRef.current || session !== sessionRef.current) return;
+    setState((value) => ({ ...value, error: true }));
   }, []);
 
   const withRequestLock = useCallback(async (request: () => Promise<void>) => {
@@ -112,6 +122,7 @@ export function useBillingCheckout(accountId: string | null) {
   const startTopup = useCallback(
     async (request: CreateBillingTopupRequest) => {
       if (!accountId || inFlightRef.current) return;
+      const session = ++sessionRef.current;
       const intent: BillingCheckoutIntent = {
         kind: 'TOPUP',
         idempotencyKey: newBillingIdempotencyKey('topup'),
@@ -128,9 +139,9 @@ export function useBillingCheckout(accountId: string | null) {
       });
       await withRequestLock(async () => {
         try {
-          applyOrder(await billingApi.createTopup(request, intent.idempotencyKey), intent);
+          applyOrder(await billingApi.createTopup(request, intent.idempotencyKey), intent, session);
         } catch {
-          failCurrentOperation();
+          failCurrentOperation(session);
         }
       });
     },
@@ -140,6 +151,7 @@ export function useBillingCheckout(accountId: string | null) {
   const startSubscription = useCallback(
     async (request: CreateBillingSubscriptionRequest) => {
       if (!accountId || inFlightRef.current) return;
+      const session = ++sessionRef.current;
       const intent: BillingCheckoutIntent = {
         kind: 'SUBSCRIPTION',
         idempotencyKey: newBillingIdempotencyKey('subscription'),
@@ -159,9 +171,10 @@ export function useBillingCheckout(accountId: string | null) {
           applySubscription(
             await billingApi.createSubscription(request, intent.idempotencyKey),
             intent,
+            session,
           );
         } catch {
-          failCurrentOperation();
+          failCurrentOperation(session);
         }
       });
     },
@@ -171,26 +184,28 @@ export function useBillingCheckout(accountId: string | null) {
   const refreshActive = useCallback(async () => {
     await withRequestLock(async () => {
       const current = stateRef.current;
+      const session = sessionRef.current;
       try {
         if (current.kind === 'TOPUP' && current.order) {
           const order =
             current.phase === 'AWAITING_PAYMENT'
               ? await billingApi.refreshTopup(current.order.orderId)
               : await billingApi.getOrder(current.order.orderId);
-          applyOrder(order, current.intent);
+          applyOrder(order, current.intent, session);
           return;
         }
         if (current.kind === 'SUBSCRIPTION' && current.subscription?.purchaseAttemptId) {
           applySubscription(
             await billingApi.refreshSubscriptionPurchase(current.subscription.purchaseAttemptId),
             current.intent,
+            session,
           );
         }
       } catch {
-        if (mountedRef.current) setState((value) => ({ ...value, error: true }));
+        flagError(session);
       }
     });
-  }, [applyOrder, applySubscription, withRequestLock]);
+  }, [applyOrder, applySubscription, flagError, withRequestLock]);
 
   const retry = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -211,27 +226,34 @@ export function useBillingCheckout(accountId: string | null) {
     // same in-memory intent (same idempotency key) once more.
     if (current.intent?.kind === 'TOPUP' && !current.order) {
       const intent = current.intent;
+      const session = sessionRef.current;
       setState((value) => ({ ...value, phase: 'CREATING', error: false }));
       await withRequestLock(async () => {
         try {
-          applyOrder(await billingApi.createTopup(intent.request, intent.idempotencyKey), intent);
+          applyOrder(
+            await billingApi.createTopup(intent.request, intent.idempotencyKey),
+            intent,
+            session,
+          );
         } catch {
-          failCurrentOperation();
+          failCurrentOperation(session);
         }
       });
       return;
     }
     if (current.intent?.kind === 'SUBSCRIPTION' && !current.subscription) {
       const intent = current.intent;
+      const session = sessionRef.current;
       setState((value) => ({ ...value, phase: 'CREATING', error: false }));
       await withRequestLock(async () => {
         try {
           applySubscription(
             await billingApi.createSubscription(intent.request, intent.idempotencyKey),
             intent,
+            session,
           );
         } catch {
-          failCurrentOperation();
+          failCurrentOperation(session);
         }
       });
     }
@@ -242,6 +264,7 @@ export function useBillingCheckout(accountId: string | null) {
   ) {
     const previousOrder =
       stateRef.current.order?.orderId === intent.orderId ? stateRef.current.order : null;
+    const session = sessionRef.current;
     setState({
       open: true,
       kind: 'TOPUP',
@@ -253,9 +276,13 @@ export function useBillingCheckout(accountId: string | null) {
     });
     await withRequestLock(async () => {
       try {
-        applyOrder(await billingApi.retryTopup(intent.orderId, intent.idempotencyKey), intent);
+        applyOrder(
+          await billingApi.retryTopup(intent.orderId, intent.idempotencyKey),
+          intent,
+          session,
+        );
       } catch {
-        failCurrentOperation();
+        failCurrentOperation(session);
       }
     });
   }
@@ -263,23 +290,27 @@ export function useBillingCheckout(accountId: string | null) {
   const cancel = useCallback(async () => {
     const current = stateRef.current;
     if (current.kind !== 'TOPUP' || !current.order) return;
+    const session = sessionRef.current;
     await withRequestLock(async () => {
       try {
-        applyOrder(await billingApi.cancelTopup(current.order!.orderId), current.intent);
+        applyOrder(await billingApi.cancelTopup(current.order!.orderId), current.intent, session);
       } catch {
-        if (mountedRef.current) setState((value) => ({ ...value, error: true }));
+        flagError(session);
       }
     });
-  }, [applyOrder, withRequestLock]);
+  }, [applyOrder, flagError, withRequestLock]);
 
-  // Closing the dialog ends the checkout session entirely; reopening the
-  // purchase flow starts over with a new idempotency key.
+  // Closing the dialog ends the checkout session entirely: the generation bump
+  // invalidates in-flight responses so they cannot reopen the dialog, and the
+  // next selection starts over with a new idempotency key.
   const close = useCallback(() => {
+    sessionRef.current += 1;
     setState(INITIAL_STATE);
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
+    sessionRef.current += 1;
     setState(INITIAL_STATE);
     clearLegacyBillingIntentStorage(accountId);
     return () => {

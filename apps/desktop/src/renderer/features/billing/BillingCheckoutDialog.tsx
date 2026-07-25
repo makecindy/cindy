@@ -82,8 +82,12 @@ export function BillingCheckoutDialog({
   };
 
   // 动作到期后不再展示二维码/跳转入口；轮询会把服务端终态收敛过来，用户也可
-  // 直接关闭并重新选择（下一次确认使用新的幂等键）。
-  const actionExpired = action !== null && remainingSeconds === 0;
+  // 直接关闭并重新选择（下一次确认使用新的幂等键）。remainingSeconds 由 effect
+  // 驱动，首帧仍为 null，此时直接按到期时间判断，避免已过期动作闪现。
+  const actionExpired =
+    action !== null &&
+    (remainingSeconds === 0 ||
+      (remainingSeconds === null && Date.parse(action.expiresAt) - Date.now() <= 0));
 
   const canRetry =
     (state.error && state.intent !== null && state.order === null && state.subscription === null) ||
