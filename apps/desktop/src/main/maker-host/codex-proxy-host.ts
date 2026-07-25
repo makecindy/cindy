@@ -708,6 +708,8 @@ function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<stri
  * by its tool result, while Codex may persist an assistant progress message between
  * the Responses function_call and function_call_output items. Codex may also persist
  * empty assistant output_text items, which Moonshot rejects after history conversion.
+ * Consecutive calls form one parallel assistant group, so their matched outputs must
+ * be moved after the whole group rather than inserted between calls.
  */
 function normalizeStrictGatewayHistory(body: Record<string, unknown>): Record<string, unknown> | null {
   if (
@@ -718,20 +720,27 @@ function normalizeStrictGatewayHistory(body: Record<string, unknown>): Record<st
     return null;
   }
 
+  const originalInput = body.input;
+  const normalizedInput: unknown[] = [];
+  for (const item of originalInput) {
+    const normalized = stripEmptyResponseMessage(item);
+    if (normalized) normalizedInput.push(normalized.item);
+  }
+
   const matchedOutputs = new Map<number, number>();
   const usedOutputIndexes = new Set<number>();
   const outputIndexesByCallId = new Map<string, number[]>();
   const outputCursorByCallId = new Map<string, number>();
-  for (let index = 0; index < body.input.length; index += 1) {
-    const outputCallId = responseToolCallId(body.input[index], true);
+  for (let index = 0; index < normalizedInput.length; index += 1) {
+    const outputCallId = responseToolCallId(normalizedInput[index], true);
     if (!outputCallId) continue;
     const indexes = outputIndexesByCallId.get(outputCallId) ?? [];
     indexes.push(index);
     outputIndexesByCallId.set(outputCallId, indexes);
   }
 
-  for (let callIndex = 0; callIndex < body.input.length; callIndex += 1) {
-    const callId = responseToolCallId(body.input[callIndex], false);
+  for (let callIndex = 0; callIndex < normalizedInput.length; callIndex += 1) {
+    const callId = responseToolCallId(normalizedInput[callIndex], false);
     if (!callId) continue;
 
     const outputIndexes = outputIndexesByCallId.get(callId);
@@ -746,20 +755,42 @@ function normalizeStrictGatewayHistory(body: Record<string, unknown>): Record<st
     usedOutputIndexes.add(outputIndex);
   }
 
-  let changed = [...matchedOutputs].some(([callIndex, outputIndex]) => outputIndex !== callIndex + 1);
-  const input: unknown[] = [];
-  for (let index = 0; index < body.input.length; index += 1) {
-    if (usedOutputIndexes.has(index)) continue;
-    const normalized = stripEmptyResponseMessage(body.input[index]);
-    if (!normalized) {
-      changed = true;
-    } else {
-      if (normalized.changed) changed = true;
-      input.push(normalized.item);
+  const outputIndexesByGroupEnd = new Map<number, number[]>();
+  for (let groupStart = 0; groupStart < normalizedInput.length;) {
+    if (!responseToolCallId(normalizedInput[groupStart], false)) {
+      groupStart += 1;
+      continue;
     }
-    const outputIndex = matchedOutputs.get(index);
-    if (outputIndex !== undefined) input.push(body.input[outputIndex]);
+    let groupEnd = groupStart;
+    while (
+      groupEnd + 1 < normalizedInput.length &&
+      responseToolCallId(normalizedInput[groupEnd + 1], false)
+    ) {
+      groupEnd += 1;
+    }
+    const outputIndexes: number[] = [];
+    for (let callIndex = groupStart; callIndex <= groupEnd; callIndex += 1) {
+      const outputIndex = matchedOutputs.get(callIndex);
+      if (outputIndex !== undefined) outputIndexes.push(outputIndex);
+    }
+    if (outputIndexes.length > 0) {
+      outputIndexesByGroupEnd.set(groupEnd, outputIndexes.sort((a, b) => a - b));
+    }
+    groupStart = groupEnd + 1;
   }
+
+  const input: unknown[] = [];
+  for (let index = 0; index < normalizedInput.length; index += 1) {
+    if (usedOutputIndexes.has(index)) continue;
+    input.push(normalizedInput[index]);
+    const outputIndexes = outputIndexesByGroupEnd.get(index);
+    if (outputIndexes) {
+      for (const outputIndex of outputIndexes) input.push(normalizedInput[outputIndex]);
+    }
+  }
+  const changed =
+    input.length !== originalInput.length ||
+    input.some((item, index) => item !== originalInput[index]);
   return changed ? { ...body, input } : null;
 }
 

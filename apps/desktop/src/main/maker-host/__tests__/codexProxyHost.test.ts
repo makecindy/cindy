@@ -728,6 +728,55 @@ describe('codex proxy host', () => {
     });
   });
 
+  it('keeps parallel strict-gateway tool calls grouped before their matched outputs', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'moonshot/kimi-k3',
+      parallel_tool_calls: true,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '两个命令都在执行。' }],
+        },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'moonshot/kimi-k3',
+      parallel_tool_calls: true,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '两个命令都在执行。' }],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    });
+  });
+
   it('keeps interleaved tool history unchanged for non-strict gateway models', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
