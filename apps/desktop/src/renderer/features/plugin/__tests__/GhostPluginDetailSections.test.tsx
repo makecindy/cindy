@@ -157,6 +157,49 @@ describe('Ghost plugin detail sections', () => {
     expect(backButton?.className).toContain('-ml-3');
   });
 
+  it('disables every market update entry while an update is busy', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onUpdate = vi.fn();
+
+    render(
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={onUpdate}
+        updateLabel="Update from market"
+        updateVersion="1.2.4"
+        updateBusy
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    expect(
+      (screen.getByRole('button', {
+        name: 'settings.ghosts.market.updateTo',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    const menuUpdate = screen.getByRole('menuitem', { name: 'Update from market' });
+    expect(menuUpdate.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(menuUpdate);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it('uses one metadata color and orders author, then version', () => {
     const { container } = render(<GhostPluginMetadata author="Cindy" version="1.1.4" />);
 

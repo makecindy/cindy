@@ -123,6 +123,10 @@ export function GhostPluginPage() {
     marketBusyLockRef.current = null;
     setMarketBusyId((current) => (current === lease.pluginId ? null : current));
   }, []);
+  const isMarketBusyLeaseActive = useCallback(
+    (lease: { pluginId: string }) => marketBusyLockRef.current === lease,
+    [],
+  );
   const marketRefreshRequestRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
   const refreshMarket = useCallback(async (preserveOnError = false) => {
@@ -387,6 +391,7 @@ export function GhostPluginPage() {
       if (!marketBusyLease) return;
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         const diff = diffGhostPermissionItems(
           installedGhost?.manifest ?? next.manifest,
           next.manifest,
@@ -402,10 +407,11 @@ export function GhostPluginPage() {
           confirmText: t('settings.ghosts.updateConfirm.confirm'),
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
-        if (!approved) return;
+        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
           allowPermissionExpansion: diff.added.length > 0,
         });
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
           t('settings.ghosts.toast.updated', {
             name: result.ghost.manifest.name,
@@ -414,12 +420,23 @@ export function GhostPluginPage() {
         );
         await refreshMarket();
       } catch (error) {
-        toast.error(t(pluginMarketErrorKey(error)));
+        if (isMarketBusyLeaseActive(marketBusyLease)) {
+          toast.error(t(pluginMarketErrorKey(error)));
+        }
       } finally {
         releaseMarketBusy(marketBusyLease);
       }
     },
-    [acquireMarketBusy, confirm, ghosts, marketByGhostId, refreshMarket, releaseMarketBusy, t],
+    [
+      acquireMarketBusy,
+      confirm,
+      ghosts,
+      isMarketBusyLeaseActive,
+      marketByGhostId,
+      refreshMarket,
+      releaseMarketBusy,
+      t,
+    ],
   );
 
   const handleUpdate = useCallback(async () => {
@@ -548,16 +565,24 @@ export function GhostPluginPage() {
       const requestId = ++marketDetailRequestRef.current;
       try {
         const detail = await window.electronAPI.pluginMarket.detail(pluginId);
-        if (requestId === marketDetailRequestRef.current) setMarketDetail(detail);
+        if (
+          requestId === marketDetailRequestRef.current &&
+          isMarketBusyLeaseActive(marketBusyLease)
+        ) {
+          setMarketDetail(detail);
+        }
       } catch (error) {
-        if (requestId === marketDetailRequestRef.current) {
+        if (
+          requestId === marketDetailRequestRef.current &&
+          isMarketBusyLeaseActive(marketBusyLease)
+        ) {
           toast.error(t(pluginMarketErrorKey(error)));
         }
       } finally {
         releaseMarketBusy(marketBusyLease);
       }
     },
-    [acquireMarketBusy, releaseMarketBusy, t],
+    [acquireMarketBusy, isMarketBusyLeaseActive, releaseMarketBusy, t],
   );
 
   const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
@@ -591,24 +616,23 @@ export function GhostPluginPage() {
 
   const handleInstallFromMarket = useCallback(async () => {
     if (!marketDetail) return;
-    // 与 handleMarketUpdate 共用同一互斥锁:其它市场操作进行中不叠加安装。
-    // 弹确认框前只做只读检查;真正占锁在用户确认之后(确认框是模态的,
-    // 不存在两个确认同时到达的并发窗口)。
-    if (marketBusyLockRef.current !== null) return;
-    const confirmed = await confirm({
-      title: t('settings.ghosts.market.installConfirmTitle', {
-        name: marketDetail.name,
-      }),
-      description: t('settings.ghosts.market.installConfirmDescription'),
-      confirmText: t('settings.ghosts.market.install'),
-      cancelText: t('settings.ghosts.installConfirm.cancel'),
-      autoFocusConfirm: true,
-    });
-    if (!confirmed) return;
+    // 确认框等待期间也持有 lease。账号/模式切换会清除当前 lease,
+    // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
     const marketBusyLease = acquireMarketBusy(marketDetail.pluginId);
     if (!marketBusyLease) return;
     try {
+      const confirmed = await confirm({
+        title: t('settings.ghosts.market.installConfirmTitle', {
+          name: marketDetail.name,
+        }),
+        description: t('settings.ghosts.market.installConfirmDescription'),
+        confirmText: t('settings.ghosts.market.install'),
+        cancelText: t('settings.ghosts.installConfirm.cancel'),
+        autoFocusConfirm: true,
+      });
+      if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
+      if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       toast.success(
         t('settings.ghosts.toast.installedAsleep', {
           name: result.ghost.manifest.name,
@@ -618,11 +642,21 @@ export function GhostPluginPage() {
       setSelectedId(result.ghost.manifest.id);
       await refreshMarket();
     } catch (error) {
-      toast.error(t(pluginMarketErrorKey(error)));
+      if (isMarketBusyLeaseActive(marketBusyLease)) {
+        toast.error(t(pluginMarketErrorKey(error)));
+      }
     } finally {
       releaseMarketBusy(marketBusyLease);
     }
-  }, [acquireMarketBusy, confirm, marketDetail, refreshMarket, releaseMarketBusy, t]);
+  }, [
+    acquireMarketBusy,
+    confirm,
+    isMarketBusyLeaseActive,
+    marketDetail,
+    refreshMarket,
+    releaseMarketBusy,
+    t,
+  ]);
 
   if (marketDetail) {
     return (

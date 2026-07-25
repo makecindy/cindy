@@ -268,6 +268,7 @@ export function GhostPluginDetailView({
                 >
                   <DropdownMenuItem
                     onSelect={onUpdate}
+                    disabled={updateBusy}
                     className="h-10 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
                   >
                     {updateLabel ?? t('settings.ghosts.detail.updateFromFile')}
