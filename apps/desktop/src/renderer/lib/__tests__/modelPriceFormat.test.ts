@@ -103,6 +103,19 @@ describe('modelPriceFormat', () => {
     });
   });
 
+  it('ignores sub-threshold floating-point discount noise', () => {
+    const standard = quote({ inputPerMtok: 12, outputPerMtok: 36 });
+    expect(
+      modelPricePresentation(standard, {
+        input: 12 * (1 - 1e-12),
+        output: 36 * (1 - 1e-12),
+      }),
+    ).toEqual({
+      kind: 'priced',
+      current: standard,
+    });
+  });
+
   it('keeps missing or inconsistent display costs on the existing fallback path', () => {
     const standard = quote({ inputPerMtok: 12, outputPerMtok: 36 });
     expect(modelPricePresentation(standard, { input: 6 })).toEqual({

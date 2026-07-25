@@ -5,6 +5,8 @@ interface EffectiveModelCost {
   output?: number;
 }
 
+const MIN_DISPLAY_DISCOUNT = 0.0005;
+
 export type ModelPricePresentation =
   | { kind: 'free' }
   | {
@@ -59,7 +61,7 @@ function inferDiscount(
       continue;
     }
     const candidate = 1 - current / original;
-    if (candidate <= 0 || candidate > 1) return undefined;
+    if (candidate < MIN_DISPLAY_DISCOUNT || candidate > 1) return undefined;
     candidates.push(candidate);
   }
   if (candidates.length === 0) return undefined;
