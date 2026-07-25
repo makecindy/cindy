@@ -166,7 +166,7 @@ const harness = vi.hoisted(() => {
             x: number;
             y: number;
             permission: 'accessibility' | 'screenRecording';
-            enabled: boolean;
+            enabled: boolean | null;
           };
           systemWindowBounds?: { x: number; y: number; width: number; height: number };
         }
@@ -261,7 +261,7 @@ type SwitchLocation = Awaited<
 >;
 
 function foundSwitchLocation(
-  enabled: boolean,
+  enabled: boolean | null,
   {
     x = 901,
     y = 442,
@@ -296,7 +296,6 @@ async function startObserverThrottleTest(
 ): Promise<typeof import('../window')> {
   vi.useFakeTimers();
   vi.setSystemTime(10_000);
-  writeDragState({ accessibility: true, screenRecording: true });
   const locations = [firstLocation, ...nextLocations];
   for (const location of locations.slice(0, -1)) {
     harness.locateComputerUseSwitchTarget.mockResolvedValueOnce(location);
@@ -307,6 +306,7 @@ async function startObserverThrottleTest(
 
   const guide = await import('../window');
   await guide.showComputerPermissionGuideWindow(null, harness.computerStatus());
+  finishTestDrag(guide);
   await expectPermissionProbeCounts(1, 0);
   return guide;
 }
@@ -625,7 +625,8 @@ describe('Electron Computer Use permission guide window', () => {
     );
   });
 
-  it('does not query through CuaDriver before a confirmed app drag', async () => {
+  it('does not reuse a persisted drag from an earlier guide lifecycle', async () => {
+    writeDragState({ accessibility: true, screenRecording: true });
     harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
     const guide = await import('../window');
     await guide.showComputerPermissionGuideWindow(null);
@@ -634,6 +635,10 @@ describe('Electron Computer Use permission guide window', () => {
       expect(harness.windows).toHaveLength(2);
     });
     expect(harness.locateComputerUseSwitchTarget).not.toHaveBeenCalled();
+    expect(guide.readPermissionDragState()).toEqual({
+      accessibility: false,
+      screenRecording: false,
+    });
   });
 
   it('reuses an observer-provided location instead of locating twice', async () => {
@@ -670,7 +675,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.locateComputerUseSwitchTarget).toHaveBeenCalledOnce();
   });
 
-  it('runs the first observer bypass immediately', async () => {
+  it('establishes the first full bypass on drag completion', async () => {
     await startObserverThrottleTest(foundSwitchLocation(false));
   });
 
@@ -708,7 +713,7 @@ describe('Electron Computer Use permission guide window', () => {
         switchTargetY: 460,
       }));
     });
-    expect(harness.locateComputerUseSwitchTarget).toHaveBeenCalledTimes(4);
+    expect(harness.locateComputerUseSwitchTarget).toHaveBeenCalledTimes(3);
     expect(fullPermissionProbeCalls()).toHaveLength(2);
   });
 
@@ -718,7 +723,7 @@ describe('Electron Computer Use permission guide window', () => {
     >>>();
     const guide = await startObserverThrottleTest(
       foundSwitchLocation(false),
-      foundSwitchLocation(true, { x: 902 }),
+      foundSwitchLocation(false),
     );
     harness.getComputerDriverStatus.mockImplementationOnce(() => blockedRefresh.promise);
     guide.refreshComputerPermissionGuideWindow();
@@ -741,7 +746,7 @@ describe('Electron Computer Use permission guide window', () => {
     >>>();
     const guide = await startObserverThrottleTest(
       foundSwitchLocation(false),
-      foundSwitchLocation(true, { x: 902 }),
+      foundSwitchLocation(false),
     );
     await vi.advanceTimersByTimeAsync(900);
     await expectPermissionProbeCounts(1, 1);
@@ -765,7 +770,7 @@ describe('Electron Computer Use permission guide window', () => {
     >>>();
     const guide = await startObserverThrottleTest(
       foundSwitchLocation(false),
-      foundSwitchLocation(true, { x: 902 }),
+      foundSwitchLocation(false),
     );
     await vi.advanceTimersByTimeAsync(900);
     await expectPermissionProbeCounts(1, 1);
@@ -777,23 +782,35 @@ describe('Electron Computer Use permission guide window', () => {
 
     guide.closeComputerPermissionGuideWindow();
     await guide.showComputerPermissionGuideWindow(null, harness.computerStatus());
-    await expectPermissionProbeCounts(2, 2);
+    await expectPermissionProbeCounts(1, 2);
 
     blockedRefresh.resolve(harness.computerStatus());
     await vi.advanceTimersByTimeAsync(900);
-    await expectPermissionProbeCounts(2, 2);
+    await expectPermissionProbeCounts(1, 2);
   });
 
-  it('allows a new observer bypass after the 2,000ms boundary', async () => {
+  it('keeps observer probing across the 2,000ms throttle boundary', async () => {
     const unchangedLocation = foundSwitchLocation(false);
     await startObserverThrottleTest(
-      unchangedLocation,
       unchangedLocation,
       unchangedLocation,
       foundSwitchLocation(true, { x: 903 }),
     );
     await vi.advanceTimersByTimeAsync(2_700);
-    await expectPermissionProbeCounts(2, 0);
+    await expectPermissionProbeCounts(2, 2);
+  });
+
+  it('keeps probing when the located switch state remains unknown', async () => {
+    await startObserverThrottleTest(
+      foundSwitchLocation(null),
+      foundSwitchLocation(null),
+      foundSwitchLocation(null),
+      foundSwitchLocation(null),
+      foundSwitchLocation(null),
+    );
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await expectPermissionProbeCounts(3);
   });
 
   it('serializes explicit and observer refreshes in invocation order', async () => {
@@ -1004,16 +1021,16 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.locateComputerUseSwitchTarget).not.toHaveBeenCalled();
   });
 
-  it('starts the native guide with a newer same-lifecycle re-show status', async () => {
-    writeDragState({ accessibility: true, screenRecording: false });
+  it('updates the active native guide with a newer same-lifecycle re-show status', async () => {
     harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
     const deferredPreflight = createDeferred<{ status: 'unavailable' }>();
     harness.locateComputerUseSwitchTarget.mockReturnValueOnce(deferredPreflight.promise);
     const guide = await import('../window');
-    const showA = guide.showComputerPermissionGuideWindow(
+    await guide.showComputerPermissionGuideWindow(
       null,
       harness.computerStatus(),
     );
+    finishTestDrag(guide);
     await vi.waitFor(() => {
       expect(harness.locateComputerUseSwitchTarget).toHaveBeenCalledOnce();
     });
@@ -1024,20 +1041,16 @@ describe('Electron Computer Use permission guide window', () => {
     );
     deferredPreflight.resolve({ status: 'unavailable' });
     await showB;
-    await showA;
 
-    expect(harness.nativeShow).toHaveBeenCalledWith(
-      '/Applications/CuaDriver.app',
-      expect.objectContaining({
+    await vi.waitFor(() => {
+      expect(harness.nativeUpdate).toHaveBeenCalledWith(expect.objectContaining({
         accessibilityGranted: true,
         screenRecordingGranted: false,
-      }),
-      'ja',
-    );
+      }));
+    });
   });
 
   it('keeps an older observer bound to its status snapshot when an active guide is re-shown', async () => {
-    writeDragState({ accessibility: true, screenRecording: true });
     const nativeStarted = createDeferred<boolean>();
     const olderLocation = createDeferred<{ status: 'not-found' }>();
     harness.nativeShow.mockReturnValueOnce(nativeStarted.promise);
@@ -1045,6 +1058,14 @@ describe('Electron Computer Use permission guide window', () => {
     const guide = await import('../window');
     const accessibilityStatus = harness.computerStatus();
     await guide.showComputerPermissionGuideWindow(null, accessibilityStatus);
+    harness.nativeHostState.options?.onDragEnded?.('accessibility', 1);
+    harness.nativeHostState.options?.onDragEnded?.('screenRecording', 1);
+    await vi.waitFor(() => {
+      expect(guide.readPermissionDragState()).toEqual({
+        accessibility: true,
+        screenRecording: true,
+      });
+    });
 
     harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
     nativeStarted.resolve(true);
@@ -1238,13 +1259,13 @@ describe('Electron Computer Use permission guide window', () => {
   });
 
   it('centers the guide vertically on the real System Settings window', async () => {
-    writeDragState({ accessibility: true, screenRecording: false });
     harness.locateComputerUseSwitchTarget.mockResolvedValue({
       status: 'not-found',
       systemWindowBounds: { x: 200, y: 100, width: 1000, height: 500 },
     });
     const guide = await import('../window');
     await guide.showComputerPermissionGuideWindow(null);
+    finishTestDrag(guide);
     const guideWindow = harness.windows[1];
 
     await vi.waitFor(() => {
@@ -1261,13 +1282,13 @@ describe('Electron Computer Use permission guide window', () => {
     expect(PERMISSION_GUIDE_WINDOW_WIDTH).toBe(480);
     expect(PERMISSION_GUIDE_WINDOW_HEIGHT).toBe(272);
 
-    writeDragState({ accessibility: true, screenRecording: false });
     harness.locateComputerUseSwitchTarget.mockResolvedValue({
       status: 'not-found',
       systemWindowBounds: { x: 200, y: 100, width: 1000, height: 500 },
     });
     const guide = await import('../window');
     await guide.showComputerPermissionGuideWindow(null);
+    finishTestDrag(guide);
 
     await vi.waitFor(() => {
       expect(harness.windows[1].setBounds).toHaveBeenCalledWith(
@@ -1296,7 +1317,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(dragState.screenRecording).toBe(false);
   });
 
-  it('does not write drag state when the drag restore timeout fires', async () => {
+  it('persists drag state when Chromium omits dragend and the restore timeout fires', async () => {
     vi.useFakeTimers();
     const guide = await import('../window');
     await guide.showComputerPermissionGuideWindow(null);
@@ -1308,7 +1329,7 @@ describe('Electron Computer Use permission guide window', () => {
     await vi.advanceTimersByTimeAsync(12_000);
 
     const dragState = guide.readPermissionDragState();
-    expect(dragState.accessibility).toBe(false);
+    expect(dragState.accessibility).toBe(true);
     expect(dragState.screenRecording).toBe(false);
     expect(guideWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(false);
   });

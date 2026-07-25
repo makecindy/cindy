@@ -5,6 +5,14 @@ export function isComputerPermissionReady(status: ComputerDriverStatus | null): 
   return !permissionState?.required || permissionState.status === 'granted';
 }
 
+/** Whether passive preflight could not establish the current permission state. */
+export function isComputerPermissionPreflightInconclusive(
+  status: ComputerDriverStatus | null,
+): boolean {
+  return status?.permissionState?.required === true
+    && status.permissionState.status === 'unknown';
+}
+
 /** Start onboarding only after preflight proves at least one permission is missing. */
 export function shouldStartComputerPermissionGuide(
   enabling: boolean,

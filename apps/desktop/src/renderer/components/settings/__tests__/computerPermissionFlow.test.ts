@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isComputerPermissionPreflightInconclusive,
   isComputerPermissionReady,
   shouldStartComputerPermissionGuide,
 } from '../computerPermissionFlow';
@@ -60,6 +61,9 @@ describe('computer permission flow', () => {
 
     expect(isComputerPermissionReady(null)).toBe(false);
     expect(isComputerPermissionReady(unknown)).toBe(false);
+    expect(isComputerPermissionPreflightInconclusive(unknown)).toBe(true);
+    expect(isComputerPermissionPreflightInconclusive(missing)).toBe(false);
+    expect(isComputerPermissionPreflightInconclusive(null)).toBe(false);
     expect(shouldStartComputerPermissionGuide(true, unknown)).toBe(false);
     expect(shouldStartComputerPermissionGuide(true, null)).toBe(false);
   });

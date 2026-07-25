@@ -77,6 +77,15 @@ describe('MacComputerPermissionGuideNativeHost', () => {
     expect(source).toContain('setAccessibilityLabel("CuaDriver")');
     expect(source).not.toContain('setAccessibilityLabel("Computer Use")');
     expect(source).not.toContain('"Computer Use · Step');
+    expect(source).toContain(
+      'if let desiredFrame = attachedSwitchGuideFrame(settingsFrame: settingsFrame)',
+    );
+    expect(source).toContain(
+      '// until a precise switch target becomes available.',
+    );
+    expect(source).not.toContain(
+      'guard let desiredFrame = attachedSwitchGuideFrame(settingsFrame: settingsFrame) else',
+    );
   });
 
   it('detects auth modals from AX modal relationships instead of window count', () => {

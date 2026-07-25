@@ -136,6 +136,38 @@ describe('computer use UI feedback invariants', () => {
     expect(successToast).toBeGreaterThanOrEqual(0);
     expect(deferredWarning).toBeGreaterThan(successToast);
   });
+
+  it('keeps a live permission poll for legacy CLI-only grants', () => {
+    const sectionSource = fs.readFileSync(
+      path.resolve(__dirname, '../../renderer/components/settings/ComputerUseSection.tsx'),
+      'utf-8',
+    );
+
+    expect(sectionSource).toContain("refreshComputerPermissionStatus('permission-poll'");
+    expect(sectionSource).toContain('bypassCache: true');
+    expect(sectionSource).toContain('computerPermissionGrantInProgressRef.current');
+    expect(sectionSource).toContain('COMPUTER_PERMISSION_POLL_TIMEOUT_MS');
+  });
+
+  it('refreshes an inconclusive passive preflight before enabling Computer Use', () => {
+    const sectionSource = fs.readFileSync(
+      path.resolve(__dirname, '../../renderer/components/settings/ComputerUseSection.tsx'),
+      'utf-8',
+    );
+    const inconclusiveGuard = sectionSource.indexOf(
+      'isComputerPermissionPreflightInconclusive(nextStatus)',
+    );
+    const enableCall = sectionSource.indexOf(
+      'await persistComputerEnabled(next)',
+      inconclusiveGuard,
+    );
+
+    expect(inconclusiveGuard).toBeGreaterThanOrEqual(0);
+    expect(sectionSource.slice(inconclusiveGuard, enableCall)).toContain(
+      "refreshComputerPermissionStatus('toggle-inconclusive-preflight'",
+    );
+    expect(enableCall).toBeGreaterThan(inconclusiveGuard);
+  });
 });
 
 describe('computer use platform copy invariants', () => {

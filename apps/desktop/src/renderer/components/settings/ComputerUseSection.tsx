@@ -45,6 +45,7 @@ import { createLogger } from '@/lib/logger';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { androidDeviceLabel, androidStatusFallback, describeAndroidDeviceStatus } from './androidStatusPresentation';
 import {
+  isComputerPermissionPreflightInconclusive,
   isComputerPermissionReady,
   shouldStartComputerPermissionGuide,
 } from './computerPermissionFlow';
@@ -56,6 +57,8 @@ const CUA_GITHUB_URL = 'https://github.com/trycua/cua';
 const ANDROID_PLUGIN_ID = 'android';
 const BROWSER_PLUGIN_ID = 'browser';
 const COMPUTER_PLUGIN_ID = 'computer';
+const COMPUTER_PERMISSION_POLL_INTERVAL_MS = 1_500;
+const COMPUTER_PERMISSION_POLL_TIMEOUT_MS = 300_000;
 const MAC_ACCESSIBILITY_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 const MAC_SCREEN_RECORDING_SETTINGS_URL =
@@ -204,6 +207,7 @@ export function ComputerUseSection({
   const [computerPermissionRecheckPending, setComputerPermissionRecheckPending] = useState(false);
   const [computerDetailsOpen, setComputerDetailsOpen] = useState(false);
   const computerPermissionPendingRef = useRef(false);
+  const computerPermissionPollTimerRef = useRef<number | null>(null);
   // Native grant remains cancellable while the user is moving between Settings panes.
   const computerPermissionGrantInProgressRef = useRef(false);
   const computerEnableIntentRef = useRef(false);
@@ -645,6 +649,81 @@ export function ComputerUseSection({
     );
   }, [t]);
 
+  // CLI-only CuaDriver installs use the legacy `permissions grant` process and
+  // have no native-guide broadcasts. Keep checking that live permission state
+  // while the shared pending UI is visible. The completion ref also prevents a
+  // native broadcast and this fallback poll from enabling the plugin twice.
+  useEffect(() => {
+    if (!computerPermissionPending) {
+      if (computerPermissionPollTimerRef.current !== null) {
+        window.clearTimeout(computerPermissionPollTimerRef.current);
+        computerPermissionPollTimerRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const deadline = Date.now() + COMPUTER_PERMISSION_POLL_TIMEOUT_MS;
+    const poll = async () => {
+      try {
+        if (!computerPermissionGrantInProgressRef.current) {
+          const status = await refreshComputerPermissionStatus('permission-poll', {
+            bypassCache: true,
+          });
+          if (cancelled) return;
+          if (isComputerPermissionReady(status)) {
+            if (computerPermissionCompletionInFlightRef.current) return;
+            computerPermissionCompletionInFlightRef.current = true;
+            setComputerPermissionPending(false);
+            resetComputerPermissionFlow();
+            cancelNativeComputerPermissionGrant();
+            try {
+              if (computerEnableIntentRef.current || computerEnabled) {
+                await persistComputerEnabled(true);
+              }
+            } finally {
+              computerPermissionCompletionInFlightRef.current = false;
+            }
+            return;
+          }
+        }
+      } catch (err) {
+        log.warn('computer permission poll failed', err);
+      }
+
+      if (cancelled) return;
+      if (Date.now() >= deadline) {
+        setComputerPermissionPending(false);
+        resetComputerPermissionFlow();
+        cancelNativeComputerPermissionGrant();
+        if (!computerEnabled) computerEnableIntentRef.current = false;
+        toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
+        return;
+      }
+      computerPermissionPollTimerRef.current = window.setTimeout(
+        poll,
+        COMPUTER_PERMISSION_POLL_INTERVAL_MS,
+      );
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (computerPermissionPollTimerRef.current !== null) {
+        window.clearTimeout(computerPermissionPollTimerRef.current);
+        computerPermissionPollTimerRef.current = null;
+      }
+    };
+  }, [
+    cancelNativeComputerPermissionGrant,
+    computerEnabled,
+    computerPermissionPending,
+    persistComputerEnabled,
+    refreshComputerPermissionStatus,
+    resetComputerPermissionFlow,
+    t,
+  ]);
+
   const handleToggleBrowser = useCallback(
     async (next: boolean) => {
       if (!workingDir) return;
@@ -777,7 +856,7 @@ export function ComputerUseSection({
       if (next) computerPermissionCompletionInFlightRef.current = false;
       // Page entry already refreshed the source of truth. If it found a
       // missing permission, reveal the two-step state immediately on enable.
-      if (next && !isComputerPermissionReady(computerStatus)) {
+      if (shouldStartComputerPermissionGuide(next, computerStatus)) {
         setComputerPermissionPending(true);
       }
       let nextStatus = computerStatus;
@@ -789,6 +868,19 @@ export function ComputerUseSection({
           setComputerStatus(installResult.status);
           if (!installResult.status.installed) {
             throw new Error(installResult.status.error ?? 'cua-driver install did not produce an installed driver');
+          }
+        }
+        if (next && isComputerPermissionPreflightInconclusive(nextStatus)) {
+          nextStatus = await refreshComputerPermissionStatus('toggle-inconclusive-preflight', {
+            fresh: true,
+            bypassCache: true,
+          });
+          if (isComputerPermissionPreflightInconclusive(nextStatus)) {
+            computerEnableIntentRef.current = false;
+            setComputerPermissionPending(false);
+            resetComputerPermissionFlow();
+            toast.error(t('settings.computerUse.directControl.toast.permissionFailed'));
+            return;
           }
         }
         if (shouldStartComputerPermissionGuide(next, nextStatus)) {
@@ -844,6 +936,7 @@ export function ComputerUseSection({
       computerStatus,
       cancelNativeComputerPermissionGrant,
       persistComputerEnabled,
+      refreshComputerPermissionStatus,
       requestComputerPermissionGrant,
       resetComputerPermissionFlow,
       t,

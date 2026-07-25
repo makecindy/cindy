@@ -927,29 +927,32 @@ private final class PermissionGuideCoordinator {
             switchPanel.orderOut(nil)
             return
         case .switchGuide:
-            panel.orderOut(nil)
-            guard let desiredFrame = attachedSwitchGuideFrame(settingsFrame: settingsFrame) else {
+            if let desiredFrame = attachedSwitchGuideFrame(settingsFrame: settingsFrame) {
+                panel.orderOut(nil)
+                if !NSEqualRects(switchPanel.frame, desiredFrame) {
+                    switchPanel.setFrame(desiredFrame, display: switchPanel.isVisible, animate: false)
+                }
+                if !switchPanel.isVisible {
+                    switchGuideController.prepareForDisplay()
+                    switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
+                    emit([
+                        "type": "attached",
+                        "systemX": settingsFrame.origin.x,
+                        "systemY": settingsFrame.origin.y,
+                        "systemWidth": settingsFrame.width,
+                        "systemHeight": settingsFrame.height,
+                        "panelX": desiredFrame.origin.x,
+                        "panelY": desiredFrame.origin.y,
+                    ])
+                }
+                return
+            } else {
+                // The row may exist before Accessibility can inspect its
+                // checkbox. Keep the full "turn on CuaDriver" card visible
+                // until a precise switch target becomes available.
                 switchGuideController.prepareForDismissal()
                 switchPanel.orderOut(nil)
-                return
             }
-            if !NSEqualRects(switchPanel.frame, desiredFrame) {
-                switchPanel.setFrame(desiredFrame, display: switchPanel.isVisible, animate: false)
-            }
-            if !switchPanel.isVisible {
-                switchGuideController.prepareForDisplay()
-                switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
-                emit([
-                    "type": "attached",
-                    "systemX": settingsFrame.origin.x,
-                    "systemY": settingsFrame.origin.y,
-                    "systemWidth": settingsFrame.width,
-                    "systemHeight": settingsFrame.height,
-                    "panelX": desiredFrame.origin.x,
-                    "panelY": desiredFrame.origin.y,
-                ])
-            }
-            return
         case .drag:
             switchGuideController.prepareForDismissal()
             switchPanel.orderOut(nil)

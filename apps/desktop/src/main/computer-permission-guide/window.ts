@@ -50,6 +50,7 @@ const log = createLogger('computer-permission-guide');
 // stale record survives when the user removes CuaDriver from System Settings,
 // and the old locator can then re-register the app while checking the page.
 // v2 is an interaction hint only and is written after a confirmed copy drag.
+// It is reset whenever a new guide lifecycle starts.
 const DRAG_STATE_FILE_NAME = 'cua-driver-drag-state-v2.json';
 const SWITCH_OBSERVER_INTERVAL_MS = 900;
 const PERMISSION_PROBE_BYPASS_MIN_INTERVAL_MS = 2_000;
@@ -233,6 +234,10 @@ function beginGuideLifecycle(): void {
   guideStatus = null;
   lastSwitchObservation = '';
   lastSwitchLocation = null;
+  // A drag is evidence only for the guide lifecycle where it happened. A
+  // historical flag must never authorize a locator probe in a later run,
+  // because starting that locator can itself re-register the Accessibility row.
+  writePermissionDragState({ accessibility: false, screenRecording: false });
 }
 
 function serializePermissionGuideUpdate(
@@ -577,7 +582,9 @@ async function observePermissionSwitchSerialized(generation: number): Promise<vo
       writePermissionDragState(state);
     }
   }
-  if (changed) {
+  const needsFreshPermissionProbe = changed
+    || (location.status === 'found' && location.target.enabled === null);
+  if (needsFreshPermissionProbe) {
     const bypassIntervalElapsed = lastPermissionProbeBypassAt === null
       || Date.now() - lastPermissionProbeBypassAt
         >= PERMISSION_PROBE_BYPASS_MIN_INTERVAL_MS;
@@ -642,12 +649,35 @@ function restoreGuideAfterDrag(): void {
   }
 }
 
+function completeElectronPermissionAppDrag(permission: PermissionKind | null): void {
+  cancelPendingObserverTrailingProbe();
+  void serializePermissionGuideUpdate(
+    'Electron permission guide drag completion refresh',
+    async (generation) => {
+      cancelPendingObserverTrailingProbe();
+      if (permission) {
+        const state = readPermissionDragState();
+        state[permission] = true;
+        writePermissionDragState(state);
+      }
+      await refreshElectronPermissionGuideStateSerialized({
+        freshPermissionProbe: true,
+        bypassPermissionProbeCache: true,
+      }, generation);
+    },
+  );
+}
+
 function armDragRestore(): void {
   if (dragRestoreTimer) clearTimeout(dragRestoreTimer);
   dragRestoreTimer = setTimeout(() => {
     log.debug('restoring Electron permission guide after drag fallback');
+    const permission = draggedPermission;
     restoreGuideAfterDrag();
-    void refreshElectronPermissionGuideState();
+    // Chromium can omit dragend after startDrag returns. The timeout is the
+    // renderer's completion fallback, so preserve the same per-lifecycle drag
+    // evidence and refresh path as an explicit dragend.
+    completeElectronPermissionAppDrag(permission);
   }, DRAG_RESTORE_TIMEOUT_MS);
 }
 
@@ -794,22 +824,7 @@ export function finishComputerPermissionAppDrag(sender: WebContents): void {
   if (!isComputerPermissionGuideWebContents(sender) || !dragInProgress) return;
   const permission = draggedPermission;
   restoreGuideAfterDrag();
-  cancelPendingObserverTrailingProbe();
-  void serializePermissionGuideUpdate(
-    'Electron permission guide drag completion refresh',
-    async (generation) => {
-      cancelPendingObserverTrailingProbe();
-      if (permission) {
-        const state = readPermissionDragState();
-        state[permission] = true;
-        writePermissionDragState(state);
-      }
-      await refreshElectronPermissionGuideStateSerialized({
-        freshPermissionProbe: true,
-        bypassPermissionProbeCache: true,
-      }, generation);
-    },
-  );
+  completeElectronPermissionAppDrag(permission);
 }
 
 /** Show (or bring back) the independent Electron permission coach. */
