@@ -19,12 +19,48 @@ test('PLATFORM_ARCHS: linux 支持 x64 与 arm64', () => {
   assert.deepEqual([...PLATFORM_ARCHS.darwin].sort(), ['arm64', 'x64']);
 });
 
-test('parsePackageArgs: linux 显式 --arch 两种架构都放行', () => {
+test('parsePackageArgs: linux 显式 --arch 指向宿主架构时放行', () => {
+  // defaults 注入宿主身份,让断言不依赖跑测试的机器。
   for (const arch of ['x64', 'arm64']) {
-    const out = parsePackageArgs(['--platform', 'linux', '--arch', arch]);
+    const out = parsePackageArgs(['--platform', 'linux', '--arch', arch], {
+      platform: 'linux',
+      arch,
+    });
     assert.equal(out.platform, 'linux');
     assert.deepEqual(out.archs, [arch]);
   }
+});
+
+// 这是本层最该守住的约束:linux 原生模块要按目标 arch 重编,vec0.so 也是预编译
+// 平台件。放行跨架构只会把失败推到 forge rebuild(烧掉整个 package 阶段),带
+// --skip-smoke 时更会静默产出跑不起来的 deb。必须在参数解析就拒。
+test('parsePackageArgs: linux 拒绝跨架构打包(两个方向)', () => {
+  assert.throws(
+    () => parsePackageArgs(['--platform', 'linux', '--arch', 'arm64'], {
+      platform: 'linux',
+      arch: 'x64',
+    }),
+    /linux 不支持交叉打包\(当前 x64,目标 arm64\)/,
+  );
+  assert.throws(
+    () => parsePackageArgs(['--platform', 'linux', '--arch', 'x64'], {
+      platform: 'linux',
+      arch: 'arm64',
+    }),
+    /linux 不支持交叉打包\(当前 arm64,目标 x64\)/,
+  );
+});
+
+// darwin 不受上面的约束:Rosetta 2 让 Apple Silicon 主机能打并 smoke darwin-x64,
+// 这是发布侧一直在用的路径,别被 linux 的收紧顺手掐掉。
+test('parsePackageArgs: darwin 仍允许显式跨架构', () => {
+  assert.deepEqual(
+    parsePackageArgs(['--platform', 'darwin', '--arch', 'x64'], {
+      platform: 'darwin',
+      arch: 'arm64',
+    }).archs,
+    ['x64'],
+  );
 });
 
 test('parsePackageArgs: linux 缺省取宿主 arch，不连打双架构', () => {
