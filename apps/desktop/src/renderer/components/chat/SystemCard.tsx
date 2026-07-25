@@ -787,7 +787,7 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           {toModel && (
             <>
               <span className="opacity-50">·</span>
-              <span title={toModel} className="truncate font-mono">{toModel}</span>
+              <span title={toModel} className="min-w-0 truncate font-mono">{toModel}</span>
             </>
           )}
           {Boolean(data?.resumed) && (
