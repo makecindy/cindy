@@ -89,7 +89,12 @@ export function modelPricePresentation(
     hasEffectiveCost &&
     input === 0 &&
     output === 0 &&
-    (quote === null || (quote.inputPerMtok === 0 && quote.outputPerMtok === 0))
+    (quote === null || (
+      quote.inputPerMtok === 0 &&
+      quote.outputPerMtok === 0 &&
+      (!quote.cacheReadPerMtok || quote.cacheReadPerMtok === 0) &&
+      (!quote.cacheCreatePerMtok || quote.cacheCreatePerMtok === 0)
+    ))
   ) {
     return { kind: 'free' };
   }
