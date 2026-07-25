@@ -655,12 +655,13 @@ export function ModelSelectorContent({
         : null);
     const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
+      if (!quote && pricing == null) return null;
       const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
       const effectiveCost =
         effectiveProvider && currentAgentKind
           ? getModel(effectiveProvider, id, currentAgentKind)?.cost
           : undefined;
-      return modelPricePresentation(quote, effectiveCost);
+      return modelPricePresentation(quote ?? null, effectiveCost);
     }
     if (!quote) return null;
     const displayQuote = quote.approximate ? { ...quote, approximate: false } : quote;
@@ -1602,8 +1603,9 @@ export function ModelSelector({
     if (activeSourceId !== 'xd' || !triggerActiveProvider || !currentAgentKind) return null;
     const quote = getModelPriceQuote(pricing, activeSourceId, modelId);
     if (quote && quote.source !== 'gateway') return null;
+    if (!quote && pricing == null) return null;
     return modelPricePresentation(
-      quote,
+      quote ?? null,
       getModel(triggerActiveProvider, modelId, currentAgentKind)?.cost,
     );
   })();

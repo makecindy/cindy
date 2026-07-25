@@ -77,6 +77,8 @@ export function modelPricePresentation(
   quote: ModelPriceQuote | null | undefined,
   effectiveCost: EffectiveModelCost | null | undefined,
 ): ModelPricePresentation | null {
+  if (quote === undefined) return null;
+
   const input = effectiveCost?.input;
   const output = effectiveCost?.output;
   const hasEffectiveCost = isNonNegativeFinite(input) && isNonNegativeFinite(output);
@@ -85,11 +87,11 @@ export function modelPricePresentation(
     hasEffectiveCost &&
     input === 0 &&
     output === 0 &&
-    (!quote || (quote.inputPerMtok === 0 && quote.outputPerMtok === 0))
+    (quote === null || (quote.inputPerMtok === 0 && quote.outputPerMtok === 0))
   ) {
     return { kind: 'free' };
   }
-  if (!quote) return null;
+  if (quote === null) return null;
   if (!hasEffectiveCost) return { kind: 'priced', current: quote };
 
   const discount = inferDiscount(quote, { input, output });

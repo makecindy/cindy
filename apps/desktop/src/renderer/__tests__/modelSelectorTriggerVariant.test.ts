@@ -789,9 +789,26 @@ describe('ModelSelector trigger variants', () => {
         },
       },
     ];
-    pricingRef.pricing = {};
+    pricingRef.pricing = null;
 
     try {
+      const loading = render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'free-gateway-model',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      expect(
+        within(screen.getByRole('option', { name: /Free Gateway Model/ })).queryByText('限时免费'),
+      ).toBeNull();
+      loading.unmount();
+
+      pricingRef.pricing = {};
       render(
         React.createElement(ModelSelectorContent, {
           modelId: 'free-gateway-model',

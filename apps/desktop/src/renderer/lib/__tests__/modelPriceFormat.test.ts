@@ -78,10 +78,11 @@ describe('modelPriceFormat', () => {
     ]);
   });
 
-  it('marks only an explicit double-zero model price without a quote as free', () => {
-    expect(modelPricePresentation(undefined, { input: 0, output: 0 })).toEqual({
+  it('marks only an explicit double-zero model price with a confirmed missing quote as free', () => {
+    expect(modelPricePresentation(null, { input: 0, output: 0 })).toEqual({
       kind: 'free',
     });
+    expect(modelPricePresentation(undefined, { input: 0, output: 0 })).toBeNull();
   });
 
   it('keeps double-zero effective prices as a 100% discount when the quote is nonzero', () => {
