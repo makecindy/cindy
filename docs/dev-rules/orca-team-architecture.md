@@ -309,7 +309,7 @@ Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已�
 
 再次向该 Worker 派发任务时，既有 resume 链路会复用或重建 runtime，并在任务被接受时恢复运行态。共享 userData 多实例下，watcher 只释放本进程实际持有 runtime 的 Worker；没有本地 runtime 的记录保持不变，由其 runtime owner 负责处理。
 
-这套机制只等价于无损 hibernate，不等价于 archive/delete。`idle_worker/archive_worker/end_team` 仍保留显式控制语义；其中 runtime release marker 只是这些操作完成最终持久化前的恢复护栏。`Session.close({ releaseRuntime: true })` 是比普通 resumable close 更强的关闭意图：两者并发时必须在 Session 进入 closed 前升级并补做 provider runtime release，普通 close 不能代替它报告成功。Worker 创建失败的补偿路径例外使用普通 close，因为首个 rollout 可能尚未建立；close 失败时必须保留 Worker 记录供后续清理，不能继续删除持久化关联。Codex `thread/archive` 超时后仍按失败处理，只有重试收到结构化且明确表示 thread 已归档的响应，或 app-server transport 已退出并确认 runtime 不再存活时，才允许完成本地关闭；旧版 `idle_since` marker 的 unarchive 兼容也只接受结构化且明确表示 thread 未归档的响应，其他 `INVALID_REQUEST` 必须 fail closed。长期 Worker 的自动有损回收，以及 persistent/ephemeral 分型后的差异化回收策略，仍应保持保守并在后续单独落地。
+这套机制只等价于无损 hibernate，不等价于 archive/delete。`idle_worker/archive_worker/end_team` 仍保留显式控制语义；其中 runtime release marker 只是这些操作完成最终持久化前的恢复护栏。`Session.close({ releaseRuntime: true })` 是比普通 resumable close 更强的关闭意图：两者并发时必须在 Session 进入 closed 前升级并补做 provider runtime release，普通 close 不能代替它报告成功。Worker 创建失败的补偿路径例外使用普通 close，因为首个 rollout 可能尚未建立；close 失败时必须保留 Worker 记录供后续清理，不能继续删除持久化关联。Codex `thread/archive` 超时后仍按失败处理，只有重试收到结构化且明确表示 thread 已归档的响应，或 app-server transport 已退出并确认 runtime 不再存活时，才允许完成本地关闭；旧版 `idle_since` marker 的 unarchive 兼容只在收到结构化 `INVALID_REQUEST` 后尝试一次真实 `thread/resume`，resume 成功才清理 marker，失败继续 fail closed，不解析人类可读错误文案。长期 Worker 的自动有损回收，以及 persistent/ephemeral 分型后的差异化回收策略，仍应保持保守并在后续单独落地。
 
 ## Part 2 · 未来规划
 

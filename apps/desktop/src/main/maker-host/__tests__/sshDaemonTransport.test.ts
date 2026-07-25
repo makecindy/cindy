@@ -75,6 +75,13 @@ describe('isManagedCodexDaemonVersion', () => {
     expect(isManagedCodexDaemonVersion({ cli_version: 'codex-cli 0.144.0' })).toBe(false);
     expect(isManagedCodexDaemonVersion({ socketPath: '/tmp/codex.sock' })).toBe(false);
   });
+
+  it('rejects a stale app-server even when the local CLI is managed', () => {
+    expect(isManagedCodexDaemonVersion({
+      cliVersion: 'codex-cli 0.145.0',
+      appServerVersion: 'codex-app-server 0.144.0',
+    })).toBe(false);
+  });
 });
 
 describe('decideCodexDaemonVersionAction', () => {

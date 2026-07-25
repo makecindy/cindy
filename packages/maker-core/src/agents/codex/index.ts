@@ -234,16 +234,10 @@ function isAlreadyArchivedThreadError(error: unknown): boolean {
   return /\b(?:already|is)\s+archived\b/i.test(message);
 }
 
-function isNotArchivedThreadError(error: unknown): boolean {
+function isInvalidRequestError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = 'code' in error ? error.code : undefined;
-  if (code !== JSONRPC_ERROR_CODE.INVALID_REQUEST) return false;
-  const message = error instanceof Error
-    ? error.message
-    : 'message' in error && typeof error.message === 'string'
-      ? error.message
-      : '';
-  return /\bis not archived\b/i.test(message);
+  return code === JSONRPC_ERROR_CODE.INVALID_REQUEST;
 }
 
 function hasUnsafeForkRolloutPayload(line: string): boolean {
@@ -2481,6 +2475,7 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
+        let resumedAfterInvalidUnarchive: ThreadResumeResponse | undefined;
         // idle_since is the persisted acknowledgement that this Worker's
         // runtime was released. Avoid parsing Codex's human-readable error
         // text to decide whether thread/unarchive is required.
@@ -2499,15 +2494,19 @@ export class CodexAgent extends BaseAgent {
             // PR #340 wrote idle_since after thread/unsubscribe. A Worker that
             // was already dormant before this archive-based release shipped
             // therefore has a legacy marker but no archived Codex thread.
-            // Only the structured INVALID_REQUEST whose message explicitly
-            // confirms "is not archived" is that deterministic compatibility
-            // case. Other invalid requests, timeouts, and transport/server
-            // failures still block thread/resume.
-            if (!isNotArchivedThreadError(error)) throw error;
-            log.warn('thread/unarchive rejected legacy Worker release marker; continuing resume', {
+            // INVALID_REQUEST is the only structured compatibility signal, but
+            // it can also mean an unknown thread. A real resume distinguishes
+            // those cases without relying on the app-server's English text.
+            if (!isInvalidRequestError(error)) throw error;
+            log.warn('thread/unarchive rejected Worker release marker; probing thread/resume', {
               resumeSessionId: releasedThreadId,
               code: JSONRPC_ERROR_CODE.INVALID_REQUEST,
             });
+            resumedAfterInvalidUnarchive = await host.request<ThreadResumeResponse>(
+              Method.ThreadResume,
+              params,
+            );
+            assertCurrentHost('thread/resume after invalid unarchive');
           }
           // thread/unarchive is not idempotent. Persist its success before
           // thread/resume so a temporary resume failure does not cause the next
@@ -2525,7 +2524,8 @@ export class CodexAgent extends BaseAgent {
           }
           assertCurrentHost('thread/resume after unarchive');
         }
-        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
+        const resp = resumedAfterInvalidUnarchive
+          ?? await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;

@@ -169,13 +169,18 @@ type State = 'connecting' | 'open' | 'closed';
 
 /** The remote daemon must match the managed CLI that provides archive/unarchive. */
 export function isManagedCodexDaemonVersion(output: DaemonVersionOutput): boolean {
-  const reported = output.cliVersion
-    ?? output.cli_version
-    ?? output.appServerVersion
-    ?? output.app_server_version;
-  if (typeof reported !== 'string') return false;
-  const version = /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(reported)?.[0];
-  return version === PINNED_CODEX_RELEASE_VERSION;
+  const reportedVersions = [
+    output.cliVersion,
+    output.cli_version,
+    output.appServerVersion,
+    output.app_server_version,
+  ].filter((reported) => reported !== undefined);
+  if (reportedVersions.length === 0) return false;
+  return reportedVersions.every((reported) => {
+    if (typeof reported !== 'string') return false;
+    const version = /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(reported)?.[0];
+    return version === PINNED_CODEX_RELEASE_VERSION;
+  });
 }
 
 export type CodexDaemonVersionAction = 'reuse' | 'restart' | 'reject';

@@ -3479,7 +3479,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadUnarchive) {
         throw Object.assign(
-          new Error('thread is not archived'),
+          new Error('restore precondition failed'),
           { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
         );
       }
@@ -3513,6 +3513,9 @@ describe('CodexAgent MCP thread context hooks', () => {
           { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
         );
       }
+      if (method === Method.ThreadResume) {
+        throw new Error('thread/resume failed: unknown thread id');
+      }
       return undefined;
     });
 
@@ -3522,10 +3525,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
       resumeSessionId: '123e4567-e89b-12d3-a456-426614174009',
       vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
-    })).rejects.toThrow('unknown thread id');
+    })).rejects.toThrow('thread/resume failed: unknown thread id');
 
     expect(host.unarchiveThread).toHaveBeenCalledOnce();
-    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     expect(onCodexThreadUnarchived).not.toHaveBeenCalled();
     await agent.dispose();
   });
