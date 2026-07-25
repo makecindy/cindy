@@ -699,7 +699,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       try {
         finalAssessment = getGhostSetupAssessment(ghostId);
       } catch {
-        return { ok: false, errorCode: 'INTERNAL', message: 'Failed to read plugin setup state after setup completed.' };
+        return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
       }
       if (finalAssessment.state !== 'ready') {
         return {
@@ -712,7 +712,8 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // 批量预授权(grant_only):只过户不派发。它与普通调用共用上面的
       // Host-authoritative setup gate，确保任何授权副作用之前插件已经 ready。
       if (grantOnly) {
-        // Setup gate: confirm target is still available before creating grants.
+        // Full pre-grant gate: confirm target, workdir, and setup readiness
+        // BEFORE grantAttachmentUrls creates durable ledger entries.
         const grantTarget = getGhostManager()
           .list()
           .find((g) => g.manifest.id === ghostId);
@@ -721,6 +722,17 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         }
         if (!grantTarget.enabled) {
           return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+        }
+        if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+          return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
+        }
+        try {
+          const grantOnlyAssessment = getGhostSetupAssessment(ghostId);
+          if (grantOnlyAssessment.state !== 'ready') {
+            return { ok: false, errorCode: 'SETUP_REQUIRED', message: '插件尚未完成配置。', setup: grantOnlyAssessment };
+          }
+        } catch {
+          return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
         }
         const grant = await grantAttachmentUrls({
           ghostId,
@@ -845,7 +857,20 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         };
       }
       if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: t('newChat.pluginSetup.targetToolNotFound') };
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
+      }
+      try {
+        const preDispatchAssessment = getGhostSetupAssessment(ghostId);
+        if (preDispatchAssessment.state !== 'ready') {
+          return {
+            ok: false,
+            errorCode: 'SETUP_REQUIRED',
+            message: '插件配置在调用恢复前发生变化，请完成设置后重试。',
+            setup: preDispatchAssessment,
+          };
+        }
+      } catch {
+        return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
       }
       // Session-context slot: use the revalidated manifest to decide injection
       if (preDispatch.manifest.slots?.includes('session-context')) {

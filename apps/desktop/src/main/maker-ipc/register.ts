@@ -1209,7 +1209,7 @@ initGhostSetupCoordinator({
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
-        message: t('newChat.pluginSetup.targetToolNotFound'),
+        message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})`,
       };
     }
     return { ok: true };
