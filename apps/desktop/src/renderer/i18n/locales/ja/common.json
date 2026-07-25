@@ -7186,7 +7186,6 @@
     "checkout": {
       "creatingTitle": "支払いを作成中",
       "awaitingTitle": "支払い待ち",
-      "fulfillingTitle": "クレジットを反映中",
       "completedTitle": "支払い完了",
       "failedTitle": "完了できませんでした",
       "expiredTitle": "支払い期限切れ",
@@ -7201,7 +7200,6 @@
       "redirectHint": "支払いページで完了後、Cindyに戻ってください。",
       "openPayment": "支払いページを開く",
       "refreshingAction": "支払い情報を取得中…",
-      "creditingBody": "支払いが完了しました。クレジットの反映を待っています…",
       "paymentCompleted": "支払いが完了しました。",
       "requestFailed": "リクエストに失敗しました。不明な作成結果では同じ冪等キーで安全に再試行します。",
       "expiredBody": "支払いリンクの期限が切れました。新しい支払いを作成してください。",

@@ -7197,7 +7197,6 @@
     "checkout": {
       "creatingTitle": "Creating payment",
       "awaitingTitle": "Awaiting payment",
-      "fulfillingTitle": "Crediting your account",
       "completedTitle": "Payment successful",
       "failedTitle": "Unable to complete",
       "expiredTitle": "Payment expired",
@@ -7212,7 +7211,6 @@
       "redirectHint": "Complete payment on the provider page, then return to Cindy.",
       "openPayment": "Open payment page",
       "refreshingAction": "Loading payment instructions…",
-      "creditingBody": "Payment succeeded. Waiting for the credits to be applied…",
       "paymentCompleted": "Your payment was completed.",
       "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
       "expiredBody": "This payment link expired. Create a new payment to continue.",

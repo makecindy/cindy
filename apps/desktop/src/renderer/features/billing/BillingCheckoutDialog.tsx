@@ -71,7 +71,6 @@ export function BillingCheckoutDialog({
   const title = useMemo(() => {
     if (state.phase === 'CREATING') return t('billing.checkout.creatingTitle');
     if (state.phase === 'AWAITING_PAYMENT') return t('billing.checkout.awaitingTitle');
-    if (state.phase === 'FULFILLING') return t('billing.checkout.fulfillingTitle');
     if (state.phase === 'COMPLETED') return t('billing.checkout.completedTitle');
     if (state.phase === 'EXPIRED') return t('billing.checkout.expiredTitle');
     if (state.phase === 'CANCELED') return t('billing.checkout.canceledTitle');
@@ -192,15 +191,6 @@ export function BillingCheckoutDialog({
               </>
             )}
 
-            {state.phase === 'FULFILLING' && (
-              <>
-                <Spinner size={26} className="text-[var(--text-secondary)]" />
-                <p className="mt-4 text-sm text-[var(--text-secondary)]">
-                  {t('billing.checkout.creditingBody')}
-                </p>
-              </>
-            )}
-
             {state.phase === 'COMPLETED' && (
               <>
                 <div className="grid size-14 place-items-center rounded-full bg-[var(--text-primary)] text-[var(--surface)]">
@@ -243,7 +233,7 @@ export function BillingCheckoutDialog({
               )}
             </div>
             <div className="flex items-center gap-2">
-              {(state.phase === 'AWAITING_PAYMENT' || state.phase === 'FULFILLING') && (
+              {state.phase === 'AWAITING_PAYMENT' && (
                 <button
                   type="button"
                   onClick={onRefresh}

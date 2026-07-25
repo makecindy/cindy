@@ -7186,7 +7186,6 @@
     "checkout": {
       "creatingTitle": "결제 생성 중",
       "awaitingTitle": "결제 대기",
-      "fulfillingTitle": "크레딧 반영 중",
       "completedTitle": "결제 완료",
       "failedTitle": "완료할 수 없음",
       "expiredTitle": "결제 만료",
@@ -7201,7 +7200,6 @@
       "redirectHint": "결제 페이지에서 완료한 뒤 Cindy로 돌아오세요.",
       "openPayment": "결제 페이지 열기",
       "refreshingAction": "결제 정보를 불러오는 중…",
-      "creditingBody": "결제가 완료되었습니다. 크레딧이 반영되기를 기다리는 중입니다…",
       "paymentCompleted": "결제가 완료되었습니다.",
       "requestFailed": "요청에 실패했습니다. 결과가 불확실한 생성 요청은 같은 멱등성 키로 안전하게 재시도합니다.",
       "expiredBody": "결제 링크가 만료되었습니다. 새 결제를 생성하세요.",
