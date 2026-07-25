@@ -285,7 +285,10 @@ export function PermissionSelector({
           sideOffset={4}
           collisionPadding={8}
           className={cn(
-            'w-[300px] rounded-[12px] p-2',
+            // 面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
+            // 控件更宽或更窄;Radix 语义即 --radix-popover-trigger-width)。行内容自带
+            // truncate,窄字段下文案省略号收尾,描述仍有行级 tooltip 兜底。
+            'w-[var(--radix-popover-trigger-width)] rounded-[12px] p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',
           )}
