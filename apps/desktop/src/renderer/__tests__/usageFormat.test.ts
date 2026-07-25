@@ -35,6 +35,6 @@ describe('formatTurnCostMoney', () => {
         approximate: true,
         kind: 'value-estimate',
       }),
-    ).toBe('≈$0.00');
+    ).toBe('$0.00');
   });
 });

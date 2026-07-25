@@ -64,7 +64,7 @@ describe('buildTurnUsageTooltipLines — 按模型成本明细', () => {
         (l) =>
           l.startsWith('usageDetails.modelCostLine') &&
           l.includes('Opus 4.8') &&
-          l.includes('≈¥6.30'),
+          l.includes('¥6.30'),
       ),
     ).toBe(true);
     expect(
@@ -72,7 +72,7 @@ describe('buildTurnUsageTooltipLines — 按模型成本明细', () => {
         (l) =>
           l.startsWith('usageDetails.modelCostLine') &&
           l.includes('Haiku 4.5') &&
-          l.includes('≈¥5.36'),
+          l.includes('¥5.36'),
       ),
     ).toBe(true);
     expect(out.some((l) => l.startsWith('usageDetails.modelLine'))).toBe(false);

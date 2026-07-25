@@ -1024,7 +1024,6 @@ function ModelSelectorContentView({
                       </span>
                       <span className="flex items-center justify-end gap-1.5 tabular-nums">
                         <span className="text-[var(--model-item-text)]">
-                          {editingPricePresentation.current.approximate ? '≈' : ''}
                           {row.value}
                         </span>
                       </span>

@@ -25,7 +25,7 @@ describe('modelPriceFormat', () => {
     expect(formatModelPricePair(quote())).toBe('¥3 / ¥15');
   });
 
-  it('adds the approximate marker only once', () => {
+  it('renders approximate quotes without an approximate marker', () => {
     expect(
       formatModelPricePair(
         quote({
@@ -35,7 +35,7 @@ describe('modelPriceFormat', () => {
           outputPerMtok: 100.5,
         }),
       ),
-    ).toBe('≈¥20.1 / ¥100.5');
+    ).toBe('¥20.1 / ¥100.5');
   });
 
   it('includes configured cache prices in details', () => {
