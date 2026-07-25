@@ -1,5 +1,5 @@
 /**
- * Regression coverage for the shared Plugin and Skill management shell.
+ * Regression coverage for the shared Plugin and Skill shell, including search accessibility.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -13,6 +13,8 @@ vi.mock('react-i18next', () => ({
     t: (key: string) =>
       ({
         'settings.ghosts.title': 'Plugins',
+        'settings.ghosts.page.search': 'Search plugins',
+        'settings.ghosts.page.clearSearch': 'Clear Plugin Search',
         'skillhub.home.title': 'Skills',
         'sidebar.horizontalTabbarAria': 'Plugin and skill navigation',
         'skillhub.home.search': 'Search skills',
@@ -131,6 +133,25 @@ describe('PluginManagementLayout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear skill search' }));
     expect(onQueryChange).toHaveBeenCalledWith('');
   });
+
+  it.each([
+    ['plugins', 'Search plugins', 'Clear Plugin Search'],
+    ['skills', 'Search skills', 'Clear skill search'],
+  ] as const)(
+    'provides accessible search defaults for the %s tab',
+    (activeTab, searchLabel, clearLabel) => {
+      render(
+        <MemoryRouter>
+          <PluginManagementLayout activeTab={activeTab} query="calendar" onQueryChange={vi.fn()}>
+            <span>Content</span>
+          </PluginManagementLayout>
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByRole('textbox', { name: searchLabel })).toBeTruthy();
+      expect(screen.getByRole('button', { name: clearLabel })).toBeTruthy();
+    },
+  );
 
   it('keeps search directly editable and blurs an empty search with Escape', async () => {
     render(

@@ -1,7 +1,7 @@
 /**
  * Shared list-page shell for the Plugin and Skill product surfaces.
  *
- * Inputs: active tab, shared search state, and page-specific header actions.
+ * Inputs: active tab, shared search state, optional labels with tab-derived defaults, and actions.
  * Outputs: one width, adaptive one/two-row toolbar, scrolling frame, and transition contract.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -91,6 +91,12 @@ export function PluginManagementHeader({
   const navigate = useNavigate();
   const searchable = query !== undefined && onQueryChange !== undefined;
   const searchInputId = `plugin-management-${activeTab}-search`;
+  const resolvedSearchPlaceholder =
+    searchPlaceholder ??
+    t(activeTab === 'plugins' ? 'settings.ghosts.page.search' : 'skillhub.home.search');
+  const resolvedClearSearchLabel =
+    clearSearchLabel ??
+    t(activeTab === 'plugins' ? 'settings.ghosts.page.clearSearch' : 'skillhub.home.clearSearch');
 
   // Catalog scroll surfaces reserve a 12px gutter on both edges; mirror it here.
   return (
@@ -159,15 +165,15 @@ export function PluginManagementHeader({
                       event.currentTarget.blur();
                     }
                   }}
-                  placeholder={searchPlaceholder}
-                  aria-label={searchPlaceholder}
+                  placeholder={resolvedSearchPlaceholder}
+                  aria-label={resolvedSearchPlaceholder}
                   className="plugin-management-search-input min-w-0 flex-1 appearance-none border-0 bg-transparent text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)]"
                 />
                 {query ? (
                   <button
                     type="button"
                     onClick={() => onQueryChange('')}
-                    aria-label={clearSearchLabel}
+                    aria-label={resolvedClearSearchLabel}
                     className="plugin-management-search-clear grid size-6 shrink-0 place-items-center rounded-full text-[var(--text-tertiary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     <X size={13} strokeWidth={1.75} aria-hidden="true" />
