@@ -81,6 +81,10 @@ export function BillingCheckoutDialog({
     if (action?.type === 'REDIRECT') void billingApi.openPaymentRedirect(action.url);
   };
 
+  // 动作到期后不再展示二维码/跳转入口；轮询会把服务端终态收敛过来，用户也可
+  // 直接关闭并重新选择（下一次确认使用新的幂等键）。
+  const actionExpired = action !== null && remainingSeconds === 0;
+
   const canRetry =
     (state.error && state.intent !== null && state.order === null && state.subscription === null) ||
     (state.kind === 'TOPUP' &&
@@ -138,7 +142,18 @@ export function BillingCheckoutDialog({
               </>
             )}
 
-            {state.phase === 'AWAITING_PAYMENT' && action?.type === 'QR_CODE' && (
+            {state.phase === 'AWAITING_PAYMENT' && actionExpired && (
+              <>
+                <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
+                  <CircleAlert size={23} />
+                </div>
+                <p className="mt-4 max-w-[320px] text-sm text-[var(--text-secondary)]">
+                  {t('billing.checkout.actionExpiredBody')}
+                </p>
+              </>
+            )}
+
+            {state.phase === 'AWAITING_PAYMENT' && !actionExpired && action?.type === 'QR_CODE' && (
               <>
                 <div
                   className="grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
@@ -165,7 +180,7 @@ export function BillingCheckoutDialog({
               </>
             )}
 
-            {state.phase === 'AWAITING_PAYMENT' && action?.type === 'REDIRECT' && (
+            {state.phase === 'AWAITING_PAYMENT' && !actionExpired && action?.type === 'REDIRECT' && (
               <>
                 <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
                   <ExternalLink size={22} />

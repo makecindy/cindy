@@ -7287,13 +7287,6 @@
       "CANCELED": "Canceled",
       "PAUSED": "Paused"
     },
-    "recovery": {
-      "title": "Unfinished payment found",
-      "description": "Continue the previous payment and confirm its latest state with the server.",
-      "continueTopup": "Continue {{amount}} payment",
-      "continueSubscription": "Continue subscription payment",
-      "continueFailed": "Continue interrupted payment"
-    },
     "checkout": {
       "creatingTitle": "Creating payment",
       "awaitingTitle": "Awaiting payment",
@@ -7314,6 +7307,7 @@
       "paymentCompleted": "Your payment was completed.",
       "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
       "expiredBody": "This payment link expired. Create a new payment to continue.",
+      "actionExpiredBody": "This code expired. Close this window and choose again to generate a new one.",
       "canceledBody": "This payment was canceled.",
       "failedBody": "Payment failed. Try again later or contact support."
     },
@@ -7357,9 +7351,6 @@
       "abandon": "Discard",
       "targetLabel": "Target plan: {{name}}",
       "pendingDowngrade": "Downgrade to {{name}} is scheduled for {{date}}.",
-      "pendingPayment": "The upgrade to {{name}} is waiting for payment.",
-      "pendingQuote": "A plan change to {{name}} is in progress.",
-      "resume": "Continue",
       "undo": "Undo downgrade"
     }
   },

@@ -1,233 +1,39 @@
-import type {
-  CreateBillingSubscriptionRequest,
-  CreateBillingTopupRequest,
-} from '../../../shared/billing';
+/**
+ * Checkout state is ephemeral: the idempotency key and the current server
+ * response live only in hook memory for the open dialog. Nothing is persisted
+ * across restarts anymore — closing the dialog abandons the session and the
+ * server replaces any stale payment action on the next create call.
+ */
 
-const LEGACY_BILLING_CHECKOUT_INTENT_KEY = 'cindy.billing.checkout-intent.v1';
-const BILLING_CHECKOUT_INTENT_KEY_PREFIX = 'cindy.billing.checkout-intent.v2';
+const LEGACY_STORAGE_KEYS = [
+  'cindy.billing.checkout-intent.v1',
+] as const;
 
-export type BillingCheckoutIntentV1 =
-  | {
-      version: 1;
-      kind: 'TOPUP';
-      idempotencyKey: string;
-      request: CreateBillingTopupRequest;
-      orderId: string | null;
-      createdAt: string;
-    }
-  | {
-      version: 1;
-      kind: 'SUBSCRIPTION';
-      idempotencyKey: string;
-      request: CreateBillingSubscriptionRequest;
-      subscriptionId: string | null;
-      purchaseAttemptId: string | null;
-      createdAt: string;
-    }
-  | {
-      version: 1;
-      kind: 'TOPUP_RETRY';
-      idempotencyKey: string;
-      orderId: string;
-      createdAt: string;
-    };
+const LEGACY_STORAGE_KEY_PREFIXES = [
+  'cindy.billing.checkout-intent.v2',
+  'cindy.billing.plan-change-intent.v1',
+] as const;
 
-const KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
-const CODE_PATTERN = /^[a-z][a-z0-9_]{1,63}$/;
-const AMOUNT_PATTERN = /^(0|[1-9]\d{0,14})(?:\.\d{1,9})?$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isRequiredString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 128;
-}
-
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return Object.keys(value).every((key) => keys.includes(key));
-}
-
-function isTopupRequest(value: unknown): value is CreateBillingTopupRequest {
-  if (!isRecord(value)) return false;
-  return (
-    hasOnlyKeys(value, ['offerCode', 'amount', 'purchaseOptionId']) &&
-    typeof value.offerCode === 'string' &&
-    CODE_PATTERN.test(value.offerCode) &&
-    isRequiredString(value.purchaseOptionId) &&
-    (value.amount === undefined ||
-      (typeof value.amount === 'string' && AMOUNT_PATTERN.test(value.amount)))
-  );
-}
-
-function isSubscriptionRequest(value: unknown): value is CreateBillingSubscriptionRequest {
-  if (!isRecord(value)) return false;
-  return (
-    hasOnlyKeys(value, ['offerCode', 'purchaseOptionId']) &&
-    typeof value.offerCode === 'string' &&
-    CODE_PATTERN.test(value.offerCode) &&
-    isRequiredString(value.purchaseOptionId)
-  );
-}
-
-export function isBillingCheckoutIntent(value: unknown): value is BillingCheckoutIntentV1 {
-  if (
-    !isRecord(value) ||
-    value.version !== 1 ||
-    typeof value.idempotencyKey !== 'string' ||
-    !KEY_PATTERN.test(value.idempotencyKey) ||
-    typeof value.createdAt !== 'string' ||
-    !Number.isFinite(Date.parse(value.createdAt))
-  )
-    return false;
-  if (value.kind === 'TOPUP') {
-    return (
-      hasOnlyKeys(value, [
-        'version',
-        'kind',
-        'idempotencyKey',
-        'request',
-        'orderId',
-        'createdAt',
-      ]) &&
-      isTopupRequest(value.request) &&
-      (value.orderId === null || isRequiredString(value.orderId))
-    );
-  }
-  if (value.kind === 'SUBSCRIPTION') {
-    return (
-      hasOnlyKeys(value, [
-        'version',
-        'kind',
-        'idempotencyKey',
-        'request',
-        'subscriptionId',
-        'purchaseAttemptId',
-        'createdAt',
-      ]) &&
-      isSubscriptionRequest(value.request) &&
-      (value.subscriptionId === null || isRequiredString(value.subscriptionId)) &&
-      (value.purchaseAttemptId === null || isRequiredString(value.purchaseAttemptId))
-    );
-  }
-  if (value.kind === 'TOPUP_RETRY') {
-    return (
-      hasOnlyKeys(value, ['version', 'kind', 'idempotencyKey', 'orderId', 'createdAt']) &&
-      isRequiredString(value.orderId)
-    );
-  }
-  return false;
-}
-
-export function billingCheckoutIntentKey(accountId: string): string {
-  return `${BILLING_CHECKOUT_INTENT_KEY_PREFIX}:${encodeURIComponent(accountId)}`;
-}
-
-export function readBillingCheckoutIntent(accountId: string): BillingCheckoutIntentV1 | null {
-  const storageKey = billingCheckoutIntentKey(accountId);
+/**
+ * Old app versions persisted checkout / plan-change intents in localStorage
+ * and replayed them on startup. Remove them without replaying: the server no
+ * longer exposes recoverable payment tasks.
+ */
+export function clearLegacyBillingIntentStorage(accountId: string | null): void {
   try {
-    // A v1 intent has no account identity and must never be replayed after an
-    // account switch. Drop it instead of guessing who created it.
-    localStorage.removeItem(LEGACY_BILLING_CHECKOUT_INTENT_KEY);
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (isBillingCheckoutIntent(parsed)) return parsed;
-    localStorage.removeItem(storageKey);
-  } catch {
-    try {
-      localStorage.removeItem(storageKey);
-    } catch {
-      // Storage is unavailable; checkout remains server-recoverable.
+    for (const key of LEGACY_STORAGE_KEYS) localStorage.removeItem(key);
+    if (accountId) {
+      for (const prefix of LEGACY_STORAGE_KEY_PREFIXES) {
+        localStorage.removeItem(`${prefix}:${encodeURIComponent(accountId)}`);
+      }
     }
+  } catch {
+    // Storage unavailable; nothing to clean.
   }
-  return null;
-}
-
-export function writeBillingCheckoutIntent(
-  accountId: string,
-  intent: BillingCheckoutIntentV1,
-): void {
-  localStorage.removeItem(LEGACY_BILLING_CHECKOUT_INTENT_KEY);
-  localStorage.setItem(billingCheckoutIntentKey(accountId), JSON.stringify(intent));
-}
-
-export function clearBillingCheckoutIntent(accountId: string): void {
-  localStorage.removeItem(LEGACY_BILLING_CHECKOUT_INTENT_KEY);
-  localStorage.removeItem(billingCheckoutIntentKey(accountId));
 }
 
 export function newBillingIdempotencyKey(
   kind: 'topup' | 'subscription' | 'retry' | 'plan-change',
 ): string {
   return `desktop:${kind}:${crypto.randomUUID()}`;
-}
-
-const BILLING_PLAN_CHANGE_INTENT_KEY_PREFIX = 'cindy.billing.plan-change-intent.v1';
-
-/**
- * Request-level recovery only. The server's `pendingPlanChange` projection is
- * the source of truth for what is actually open; a stored intent must never
- * override it.
- */
-export type BillingPlanChangeIntentV1 = {
-  version: 1;
-  targetOfferCode: string;
-  idempotencyKey: string;
-  planChangeId: string | null;
-  createdAt: string;
-};
-
-export function isBillingPlanChangeIntent(value: unknown): value is BillingPlanChangeIntentV1 {
-  return (
-    isRecord(value) &&
-    value.version === 1 &&
-    hasOnlyKeys(value, [
-      'version',
-      'targetOfferCode',
-      'idempotencyKey',
-      'planChangeId',
-      'createdAt',
-    ]) &&
-    typeof value.targetOfferCode === 'string' &&
-    CODE_PATTERN.test(value.targetOfferCode) &&
-    typeof value.idempotencyKey === 'string' &&
-    KEY_PATTERN.test(value.idempotencyKey) &&
-    (value.planChangeId === null || isRequiredString(value.planChangeId)) &&
-    typeof value.createdAt === 'string' &&
-    Number.isFinite(Date.parse(value.createdAt))
-  );
-}
-
-export function billingPlanChangeIntentKey(accountId: string): string {
-  return `${BILLING_PLAN_CHANGE_INTENT_KEY_PREFIX}:${encodeURIComponent(accountId)}`;
-}
-
-export function readBillingPlanChangeIntent(accountId: string): BillingPlanChangeIntentV1 | null {
-  const storageKey = billingPlanChangeIntentKey(accountId);
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (isBillingPlanChangeIntent(parsed)) return parsed;
-    localStorage.removeItem(storageKey);
-  } catch {
-    try {
-      localStorage.removeItem(storageKey);
-    } catch {
-      // Storage is unavailable; the server projection still recovers state.
-    }
-  }
-  return null;
-}
-
-export function writeBillingPlanChangeIntent(
-  accountId: string,
-  intent: BillingPlanChangeIntentV1,
-): void {
-  localStorage.setItem(billingPlanChangeIntentKey(accountId), JSON.stringify(intent));
-}
-
-export function clearBillingPlanChangeIntent(accountId: string): void {
-  localStorage.removeItem(billingPlanChangeIntentKey(accountId));
 }

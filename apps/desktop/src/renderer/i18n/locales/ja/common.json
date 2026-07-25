@@ -7276,13 +7276,6 @@
       "CANCELED": "キャンセル済み",
       "PAUSED": "一時停止"
     },
-    "recovery": {
-      "title": "未完了の支払いがあります",
-      "description": "前回の支払いを続け、最新状態をサーバーで確認できます。",
-      "continueTopup": "{{amount}}の支払いを続ける",
-      "continueSubscription": "サブスクリプションの支払いを続ける",
-      "continueFailed": "中断した支払いを続ける"
-    },
     "checkout": {
       "creatingTitle": "支払いを作成中",
       "awaitingTitle": "支払い待ち",
@@ -7303,6 +7296,7 @@
       "paymentCompleted": "支払いが完了しました。",
       "requestFailed": "リクエストに失敗しました。不明な作成結果では同じ冪等キーで安全に再試行します。",
       "expiredBody": "支払いリンクの期限が切れました。新しい支払いを作成してください。",
+      "actionExpiredBody": "コードの有効期限が切れました。閉じてから再度選択し、新しい支払いを作成してください。",
       "canceledBody": "この支払いはキャンセルされました。",
       "failedBody": "支払いに失敗しました。しばらくしてからもう一度お試しください。"
     },
@@ -7346,9 +7340,6 @@
       "abandon": "破棄",
       "targetLabel": "変更先プラン:{{name}}",
       "pendingDowngrade": "{{name}} へのダウングレードが {{date}} に予約されています。",
-      "pendingPayment": "{{name}} へのアップグレードは差額のお支払い待ちです。",
-      "pendingQuote": "{{name}} へのプラン変更が進行中です。",
-      "resume": "続行",
       "undo": "ダウングレードを取り消す"
     }
   },

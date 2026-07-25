@@ -7276,13 +7276,6 @@
       "CANCELED": "已取消",
       "PAUSED": "已暂停"
     },
-    "recovery": {
-      "title": "发现未完成的支付",
-      "description": "你可以继续上次的支付，状态将从服务端重新确认。",
-      "continueTopup": "继续支付 {{amount}}",
-      "continueSubscription": "继续订阅支付",
-      "continueFailed": "继续未完成的支付"
-    },
     "checkout": {
       "creatingTitle": "正在创建支付",
       "awaitingTitle": "等待支付",
@@ -7303,6 +7296,7 @@
       "paymentCompleted": "支付已完成。",
       "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
       "expiredBody": "支付链接已过期，请重新创建支付。",
+      "actionExpiredBody": "二维码已过期，请关闭后重新选择以生成新的支付。",
       "canceledBody": "本次支付已取消。",
       "failedBody": "支付失败，请稍后重试或联系支持。"
     },
@@ -7346,9 +7340,6 @@
       "abandon": "放弃",
       "targetLabel": "目标套餐：{{name}}",
       "pendingDowngrade": "已排期降级至 {{name}}，{{date}} 生效。",
-      "pendingPayment": "升级到 {{name}} 的差价待支付。",
-      "pendingQuote": "有一笔切换到 {{name}} 的套餐变更进行中。",
-      "resume": "继续",
       "undo": "撤销降级"
     }
   },

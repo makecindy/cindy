@@ -14,11 +14,6 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', () => ({ billingApi: api }));
 
 import { usePlanChange } from '../usePlanChange';
-import {
-  billingPlanChangeIntentKey,
-  readBillingPlanChangeIntent,
-  writeBillingPlanChangeIntent,
-} from '../checkoutIntent';
 import type { BillingPlanChange } from '../../../../shared/billing';
 
 const ACCOUNT_ID = 'account-fixture';
@@ -71,10 +66,6 @@ describe('usePlanChange', () => {
       phase: 'QUOTE_READY',
       targetPlan: TARGET_PLAN,
     });
-    expect(readBillingPlanChangeIntent(ACCOUNT_ID)).toMatchObject({
-      targetOfferCode: 'max_month',
-      planChangeId: 'plan_change_1',
-    });
 
     await act(() => result.current.confirm());
     expect(result.current.state.phase).toBe('AWAITING_PAYMENT');
@@ -84,7 +75,6 @@ describe('usePlanChange', () => {
     expect(result.current.state.phase).toBe('APPLIED');
     expect(onSettled).toHaveBeenCalledTimes(1);
     expect(onSettled).toHaveBeenCalledWith('APPLIED');
-    expect(readBillingPlanChangeIntent(ACCOUNT_ID)).toBeNull();
   });
 
   it.each(['FAILED', 'EXPIRED'] as const)(
@@ -164,7 +154,6 @@ describe('usePlanChange', () => {
 
     expect(result.current.state.phase).toBe('SCHEDULED');
     expect(onSettled).toHaveBeenCalledWith('SCHEDULED');
-    expect(readBillingPlanChangeIntent(ACCOUNT_ID)).toBeNull();
   });
 
   it('cancels a scheduled downgrade (undo)', async () => {
@@ -259,36 +248,6 @@ describe('usePlanChange', () => {
     });
   });
 
-  it('adopts the server pending projection when the quote request fails', async () => {
-    api.quotePlanChange.mockRejectedValue(new Error('conflict'));
-    api.getCurrentSubscription.mockResolvedValue({
-      subscription: {
-        subscriptionId: 'subscription_1',
-        status: 'ACTIVE',
-        currentPeriodStartAt: null,
-        currentPeriodEndAt: null,
-        entitlementValidUntil: null,
-        cancelAtPeriodEnd: false,
-        effectivePlan: null,
-        purchaseAttemptId: null,
-        paymentAction: null,
-        pendingPlanChange: {
-          ...change({ status: 'SCHEDULED', changeType: 'DOWNGRADE' }),
-          targetPlan: TARGET_PLAN,
-        },
-      },
-    });
-    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
-
-    await act(() => result.current.startQuote('plus_month', null));
-
-    expect(result.current.state).toMatchObject({
-      open: true,
-      phase: 'SCHEDULED',
-      targetPlan: TARGET_PLAN,
-    });
-  });
-
   it.each([
     ['[PLAN_CHANGE_NOT_AVAILABLE] target offer is not allowed', 'TARGET_NOT_ALLOWED'],
     [
@@ -310,7 +269,8 @@ describe('usePlanChange', () => {
     });
   });
 
-  it('reuses the same idempotency key when retrying the same target after a failure', async () => {
+  it('generates a fresh idempotency key for every new quote attempt', async () => {
+    // 服务端在新报价时自动撤销旧未完成变更；客户端不再复用失败请求的键。
     api.quotePlanChange.mockRejectedValueOnce(new Error('network'));
     api.quotePlanChange.mockResolvedValueOnce(change());
     const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
@@ -319,63 +279,26 @@ describe('usePlanChange', () => {
     await act(() => result.current.startQuote('max_month', TARGET_PLAN));
 
     expect(api.quotePlanChange).toHaveBeenCalledTimes(2);
-    expect(api.quotePlanChange.mock.calls[0]![1]).toBe(api.quotePlanChange.mock.calls[1]![1]);
+    expect(api.quotePlanChange.mock.calls[0]![1]).not.toBe(api.quotePlanChange.mock.calls[1]![1]);
   });
 
-  it('recovers a persisted in-flight change on restart and reopens the payment step', async () => {
-    writeBillingPlanChangeIntent(ACCOUNT_ID, {
-      version: 1,
-      targetOfferCode: 'max_month',
-      idempotencyKey: 'desktop:plan-change:12345678',
-      planChangeId: 'plan_change_1',
-      createdAt: '2026-07-24T00:00:00.000Z',
-    });
-    api.refreshPlanChange.mockResolvedValue(
-      change({
-        status: 'AWAITING_PAYMENT',
-        paymentAction: {
-          type: 'QR_CODE',
-          value: 'https://qr.alipay.example/pay',
-          expiresAt: '2099-01-01T00:00:00.000Z',
-        },
+  it('starts from a clean state on mount and never replays persisted intents', async () => {
+    localStorage.setItem(
+      `cindy.billing.plan-change-intent.v1:${encodeURIComponent(ACCOUNT_ID)}`,
+      JSON.stringify({
+        version: 1,
+        targetOfferCode: 'max_month',
+        idempotencyKey: 'desktop:plan-change:12345678',
+        planChangeId: 'plan_change_1',
+        createdAt: '2026-07-24T00:00:00.000Z',
       }),
     );
     const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
 
-    await waitFor(() => expect(result.current.state.phase).toBe('AWAITING_PAYMENT'));
-    expect(result.current.state.open).toBe(true);
-    expect(api.refreshPlanChange).toHaveBeenCalledWith('plan_change_1');
-    expect(api.quotePlanChange).not.toHaveBeenCalled();
-  });
-
-  it('clears a keyed intent that never produced a plan change instead of re-quoting', async () => {
-    writeBillingPlanChangeIntent(ACCOUNT_ID, {
-      version: 1,
-      targetOfferCode: 'max_month',
-      idempotencyKey: 'desktop:plan-change:12345678',
-      planChangeId: null,
-      createdAt: '2026-07-24T00:00:00.000Z',
-    });
-    renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
-
-    await waitFor(() => expect(readBillingPlanChangeIntent(ACCOUNT_ID)).toBeNull());
-    expect(api.quotePlanChange).not.toHaveBeenCalled();
-    expect(api.refreshPlanChange).not.toHaveBeenCalled();
-  });
-
-  it("never reads another account's intent", async () => {
-    writeBillingPlanChangeIntent('other-account', {
-      version: 1,
-      targetOfferCode: 'max_month',
-      idempotencyKey: 'desktop:plan-change:12345678',
-      planChangeId: 'plan_change_other',
-      createdAt: '2026-07-24T00:00:00.000Z',
-    });
-    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
-
     await Promise.resolve();
-    expect(api.refreshPlanChange).not.toHaveBeenCalled();
     expect(result.current.state.phase).toBe('IDLE');
-    expect(localStorage.getItem(billingPlanChangeIntentKey('other-account'))).not.toBeNull();
+    expect(result.current.state.open).toBe(false);
+    expect(api.refreshPlanChange).not.toHaveBeenCalled();
+    expect(api.quotePlanChange).not.toHaveBeenCalled();
   });
 });
