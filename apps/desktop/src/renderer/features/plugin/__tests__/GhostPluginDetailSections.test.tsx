@@ -212,6 +212,8 @@ describe('Ghost plugin detail sections', () => {
     expect(metadata.textContent).toBe('By Cindy·v1.1.4');
     expect(metadata.className).toContain('text-[var(--text-tertiary)]');
     expect(metadata.innerHTML).not.toContain('text-[var(--text-secondary)]');
+    expect(screen.getByText('By Cindy').className).toContain('min-w-0');
+    expect(screen.getByText('By Cindy').className).toContain('truncate');
   });
 
   it('marks Cindy model preferences as a card-width responsive control group', () => {

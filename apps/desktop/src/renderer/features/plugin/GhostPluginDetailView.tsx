@@ -386,7 +386,9 @@ export function GhostPluginMetadata({
     <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden whitespace-nowrap text-13 leading-5 text-[var(--text-tertiary)]">
       {author ? (
         <>
-          <span className="truncate">{t('settings.ghosts.detail.byAuthor', { author })}</span>
+          <span className="min-w-0 truncate">
+            {t('settings.ghosts.detail.byAuthor', { author })}
+          </span>
           <MetadataDivider />
         </>
       ) : null}
