@@ -628,9 +628,11 @@ function getClaudeChipWindows(
   return windows;
 }
 
-// 告警判定 (chip 变红 / tooltip 高亮的口径, 含 allowed_warning 为何不染红的取舍)
-// 已收进 shared/claudeSubscriptionUsage.ts: isClaudeUsageWindowAlerting /
+// 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
+// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts: isClaudeUsageWindowAlerting /
 // hasAlertingClaudeSessionWindow / isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
+// tooltip 不逐行高亮, 它比 chip 宽一档的那一档在 buildClaudeSubscriptionTooltipNode 里
+// (整体 status 的 allowed_warning 也出「接近限额」行)。
 
 function buildClaudeSubscriptionTooltipNode(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,
