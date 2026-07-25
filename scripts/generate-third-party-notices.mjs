@@ -1024,17 +1024,22 @@ function buildSpdxDocument(artifact, components) {
         : {}),
     };
   });
+  // licenseId -> (componentKey -> licenseText)。必须按组件分别留存,不能先到先得:
+  // SPDX 的 hasExtractedLicensingInfos 对一个 licenseId 只存一份 extractedText,
+  // 而同一个 LicenseRef 会被多个组件共用(desktop-linux 的 x64/arm64 两份 libvips
+  // 预编译包就是如此)。只留其中一份,另一个组件就会引用到不属于它的说明和版本表。
   const licenseRefs = new Map();
   for (const component of sorted) {
     for (const match of component.license.matchAll(
       /LicenseRef-[A-Za-z0-9.-]+/g,
     )) {
-      if (!licenseRefs.has(match[0])) {
-        licenseRefs.set(
-          match[0],
+      if (!licenseRefs.has(match[0])) licenseRefs.set(match[0], new Map());
+      licenseRefs
+        .get(match[0])
+        .set(
+          componentKey(component),
           component.licenseText || "No standalone license text available.",
         );
-      }
     }
   }
   return {
@@ -1056,9 +1061,17 @@ function buildSpdxDocument(artifact, components) {
     ...(licenseRefs.size
       ? {
           hasExtractedLicensingInfos: [...licenseRefs].map(
-            ([licenseId, extractedText]) => ({
+            ([licenseId, textsByComponent]) => ({
               licenseId,
-              extractedText,
+              // 独占该 licenseId 的组件保持原样输出(不给 win/macos 等单组件产物
+              // 引入无谓的格式变化);多组件共用时按组件加标题分段,让每个 package
+              // 条目都能在文本里找到属于自己的那段。
+              extractedText:
+                textsByComponent.size === 1
+                  ? [...textsByComponent.values()][0]
+                  : [...textsByComponent]
+                      .map(([key, text]) => `### ${key}\n\n${text}`)
+                      .join(`\n\n${"-".repeat(72)}\n\n`),
             }),
           ),
         }
