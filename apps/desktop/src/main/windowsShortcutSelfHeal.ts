@@ -39,10 +39,10 @@ const log = createLogger('shortcutSelfHeal');
 const LEGACY_SHORTCUT_BASENAMES = ['xdt-maker', 'XDMaker'] as const;
 
 /**
- * 重建目标快捷方式名 = 本区域 NSIS shortcutName(cn 'Cindy' / global
- * 'CindyGlobal',与 forge.config 同源)。不能用共享的 BRAND_NAME:同机双装时
- * global 实例若写出 Cindy.lnk 会与 cn 安装的快捷方式互抢(实际上 legacy lnk
- * 的 target 只可能是 cn 系老安装,global 侧本函数天然 no-op,这里是防御性对齐)。
+ * 重建目标快捷方式名 = 本区域 NSIS shortcutName(cn/global 'Cindy' /
+ * dev 'CindyDev',与 forge.config 同源;2026-07-26 起 cn/global 同名,
+ * 双装 .lnk 互抢已被 owner 接受)。仍从 brandExecutableName 派生而不用共享的
+ * BRAND_NAME:dev 包必须写自己的 CindyDev.lnk,不能抢正式包的 Cindy.lnk。
  */
 const SHORTCUT_BASENAME = brandExecutableName(CURRENT_CINDY_REGION);
 

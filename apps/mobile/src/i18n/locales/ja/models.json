@@ -8,6 +8,7 @@
     "emptyDefault": "利用可能なモデルがありません",
     "loadingDefault": "モデルを読み込み中…",
     "subscriptionBadge": "サブスク",
+    "discountBadge": "特別割引",
     "backToModels": "モデル一覧に戻る",
     "agentSwitchHint": "モデルを選択すると、次のメッセージから {{agent}} に切り替わります",
     "crossAgentEmptyHint": "先に操作対象のパソコンで {{agent}} のモデルソースを接続してください",

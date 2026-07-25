@@ -833,10 +833,6 @@ export function projectBillingSubscription(value: unknown): BillingSubscription 
     typeof value.provider === 'string' && SUPPORTED_PROVIDERS.has(value.provider)
       ? value.provider
       : undefined;
-  const managementAction =
-    value.managementAction === 'API_CANCEL' || value.managementAction === 'PORTAL'
-      ? value.managementAction
-      : undefined;
   const entitlementStatus =
     typeof value.entitlementStatus === 'string' &&
     FULFILLMENT_STATUSES.has(value.entitlementStatus as BillingFulfillmentStatus)
@@ -848,7 +844,6 @@ export function projectBillingSubscription(value: unknown): BillingSubscription 
     subscriptionId,
     status,
     ...(provider ? { provider } : {}),
-    ...(managementAction ? { managementAction } : {}),
     ...(entitlementStatus ? { entitlementStatus } : {}),
     currentPeriodStartAt,
     currentPeriodEndAt,

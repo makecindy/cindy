@@ -15,6 +15,9 @@
 //                                   双架构连打(arm64 + x64,同一版本号,
 //                                   与发布侧 canary/promote 的 mac 双架构
 //                                   默认行为对齐),win/linux 取当前 arch
+//                                   (linux 两种 arch 都可打,但只能在同架构
+//                                   宿主上——原生模块与 vec0.so 不交叉编译;
+//                                   win32 仅 x64)
 //   --region   cn|global|dev        默认 cn;决定应用身份、端点清单与发布目标
 //   --version  x.y.z|major|minor|patch
 //              缺省 = 版本无关打包:占位版本 0.0.0,包不参与热更新
@@ -31,7 +34,8 @@
 //                                   该环境的机器打版本无关包时用它
 //
 // 产物: release/artifacts/<region>/<version|unversioned>/<platform-arch>/
-//   cindy-<version|unversioned>-Setup.exe / -<arch>.dmg / .deb   安装包
+//   cindy-<version|unversioned>-Setup.exe / -<arch>.dmg /
+//              -<amd64|arm64>.deb                        安装包
 //   cindy-<version>-hotfix.zip                           热更包(仅有版本时)
 //   build-info.json                                      发布侧唯一输入
 // =============================================================================
@@ -71,6 +75,7 @@ import {
   artifactRelDir,
   artifactBaseName,
   buildBuildInfo,
+  debianArch,
 } from './ci/package-lib.mjs';
 import { applyMacSigningConfigToEnv, applyReleaseCdnBaseUrlToEnv } from './ci/release-regions.mjs';
 
@@ -354,8 +359,8 @@ async function finishDarwin({ artifactDir, baseName, appName, arch, versionless,
 
     const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
     console.log('==> Creating DMG...');
-    // DMG 卷名 = 安装窗口标题,走 '<appName> Installer'(cn 'Cindy Installer',
-    // global 'CindyGlobal Installer',双装机器仍可区分挂载卷);版本号不进卷名,
+    // DMG 卷名 = 安装窗口标题,走 '<appName> Installer'(cn/global
+    // 'Cindy Installer' / dev 'CindyDev Installer');版本号不进卷名,
     // 安装包文件名里已有。
     createMacDMG(appPath, dmgPath, `${appName} Installer`, identity);
     files.push(fileEntry('installer', dmgPath));
@@ -378,14 +383,16 @@ async function finishDarwin({ artifactDir, baseName, appName, arch, versionless,
   return { files, signing: { mode: signingMode } };
 }
 
-async function finishLinux({ artifactDir, baseName }) {
+async function finishLinux({ artifactDir, baseName, arch }) {
   const makeBaseDir = path.join(DESKTOP_ROOT, 'out', 'make');
   const debPath = findInstallerArtifact(makeBaseDir, 'deb');
   if (!debPath) {
     console.error(`ERROR: No .deb found under ${makeBaseDir}`);
     process.exit(1);
   }
-  const installerPath = path.join(artifactDir, `${baseName}-amd64.deb`);
+  // 架构后缀跟随 deb 命名规范(x64 → amd64,arm64 → arm64),与 MakerDeb 写出的
+  // 包一致:归集时写死 amd64 会让 arm64 产物顶着 amd64 的名字发出去。
+  const installerPath = path.join(artifactDir, `${baseName}-${debianArch(arch)}.deb`);
   fs.copyFileSync(debPath, installerPath);
   // Linux 首发无热更链路(见 ci/lib.mjs createLinuxFirstReleaseManifest),只出安装包。
   return { files: [fileEntry('installer', installerPath)], signing: { mode: 'none' } };
@@ -435,7 +442,12 @@ async function main() {
   // agent 二进制,这里按 pin 预 ensure(缓存命中即跳过),在昂贵的 forge make
   // 之前尽早失败;forge prePackage 的 stageRipgrep 仍会兜底校验。
   if (platform === 'linux') {
-    await ensureLinuxRuntimeAssets();
+    // 必须按目标 arch 校验:vec0.so 是 per-arch 的预编译件,缺省的 linux-x64
+    // 在 aarch64 机器上通常还是未 pull 的 LFS 指针,校验错了目标既漏检真正要
+    // 进包的那份,又会拿另一个架构的缺失把打包拦死。
+    for (const platformKey of archs.map((a) => `${platform}-${a}`)) {
+      await ensureLinuxRuntimeAssets({ platformKey });
+    }
     logLinuxPackagingRequirements();
   } else {
     for (const platformKey of archs.map((a) => `${platform}-${a}`)) {
@@ -448,7 +460,7 @@ async function main() {
   // 版本号临时写入 package.json(asar 内 app.getVersion() 的来源),退出自动恢复。
   writePackageVersion(version);
 
-  // 产物基名按区域派生(cn 'Cindy' / global 'CindyGlobal',out 目录 / exe /
+  // 产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev',out 目录 / exe /
   // .app 同名;forge.config 的 packagerConfig.name 同源)。
   const appName = packagedAppName(region);
   const baseName = artifactBaseName({ version, versionless });

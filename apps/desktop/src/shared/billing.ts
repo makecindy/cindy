@@ -19,6 +19,7 @@ export const BILLING_INVOKE = {
   RETRY_TOPUP: 'billing:retry-topup',
   CREATE_SUBSCRIPTION: 'billing:create-subscription',
   GET_CURRENT_SUBSCRIPTION: 'billing:get-current-subscription',
+  CANCEL_CURRENT_SUBSCRIPTION: 'billing:cancel-current-subscription',
   REFRESH_SUBSCRIPTION_PURCHASE: 'billing:refresh-subscription-purchase',
   QUOTE_PLAN_CHANGE: 'billing:quote-plan-change',
   CONFIRM_PLAN_CHANGE: 'billing:confirm-plan-change',
@@ -149,7 +150,6 @@ export type BillingSubscription = {
   subscriptionId: string;
   status: BillingSubscriptionStatus;
   provider?: string;
-  managementAction?: 'API_CANCEL' | 'PORTAL';
   entitlementStatus?: BillingFulfillmentStatus;
   currentPeriodStartAt: string | null;
   currentPeriodEndAt: string | null;
@@ -225,6 +225,7 @@ export interface BillingRendererApi {
     idempotencyKey: string;
   }) => Promise<BillingSubscription>;
   getCurrentSubscription: () => Promise<BillingCurrentSubscription>;
+  cancelCurrentSubscription: () => Promise<BillingSubscription>;
   refreshSubscriptionPurchase: (payload: {
     purchaseAttemptId: string;
   }) => Promise<BillingSubscription>;

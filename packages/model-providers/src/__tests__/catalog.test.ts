@@ -170,6 +170,13 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     }
   });
 
+  it('enables DeepSeek V4 Flash by default', () => {
+    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
+      models?: Record<string, { defaultEnabled?: boolean }>;
+    };
+    expect(metadata.models?.['deepseek/deepseek-v4-flash']?.defaultEnabled).toBeUndefined();
+  });
+
   it('models are grouped per-agent (no flat array, no rogue agent keys)', () => {
     for (const p of BUNDLED_CATALOG.providers) {
       expect(Array.isArray(p.models), `${p.id} models must be a per-agent map`).toBe(false);

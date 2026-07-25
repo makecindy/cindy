@@ -324,6 +324,15 @@ export function createBillingHandlers(
         projectBillingCurrentSubscription,
       );
     }),
+    [BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'subscription cancellation does not accept a payload');
+      }
+      return projectResponse(
+        await invoke<unknown>('/api/billing/subscription', { method: 'DELETE' }),
+        projectBillingSubscription,
+      );
+    }),
     [BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE]: protect(async (raw) => {
       const { purchaseAttemptId } = parseIdPayload(raw, 'purchaseAttemptId');
       return projectResponse(

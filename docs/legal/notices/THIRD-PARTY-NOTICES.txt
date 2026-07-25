@@ -109,6 +109,92 @@ Exact bundled library versions:
 Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3.
 
 ------------------------------------------------------------------------------
+@img/sharp-libvips-linux-arm64 embedded native libraries 1.3.2
+License: LicenseRef-Sharp-Third-Party-Licenses
+Source: https://github.com/lovell/sharp-libvips/tree/v1.3.2
+------------------------------------------------------------------------------
+# `@img/sharp-libvips-linux-arm64`
+
+Prebuilt libvips and dependencies for use with sharp on Linux (glibc) 64-bit ARM.
+
+## Licensing
+
+This software contains third-party libraries
+used under the terms of the following licenses:
+
+| Library       | Used under the terms of                                                                                   |
+|---------------|-----------------------------------------------------------------------------------------------------------|
+| aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |
+| cairo         | Mozilla Public License 2.0                                                                                |
+| cgif          | MIT License                                                                                               |
+| expat         | MIT License                                                                                               |
+| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
+| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
+| fribidi       | LGPLv3                                                                                                    |
+| glib          | LGPLv3                                                                                                    |
+| harfbuzz      | MIT License                                                                                               |
+| highway       | BSD 3-Clause                                                                                              |
+| lcms          | MIT License                                                                                               |
+| libarchive    | BSD 2-Clause                                                                                              |
+| libexif       | LGPLv3                                                                                                    |
+| libffi        | MIT License                                                                                               |
+| libheif       | LGPLv3                                                                                                    |
+| libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |
+| libnsgif      | MIT License                                                                                               |
+| libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |
+| librsvg       | LGPLv3                                                                                                    |
+| libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |
+| libultrahdr   | MIT License                                                                                               |
+| libvips       | LGPLv3                                                                                                    |
+| libwebp       | New BSD License                                                                                           |
+| libxml2       | MIT License                                                                                               |
+| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
+| pango         | LGPLv3                                                                                                    |
+| pixman        | MIT License                                                                                               |
+| proxy-libintl | LGPLv3                                                                                                    |
+| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
+
+Use of libraries under the terms of the LGPLv3 is via the
+"any later version" clause of the LGPLv2 or LGPLv2.1.
+
+Please report any errors or omissions via
+https://github.com/lovell/sharp-libvips/issues/new
+
+Exact bundled library versions:
+{
+  "aom": "3.14.1",
+  "archive": "3.8.8",
+  "cairo": "1.18.4",
+  "cgif": "0.5.3",
+  "exif": "0.6.26",
+  "expat": "2.8.2",
+  "ffi": "3.6.0",
+  "fontconfig": "2.18.1",
+  "freetype": "2.14.3",
+  "fribidi": "1.0.16",
+  "glib": "2.89.1",
+  "harfbuzz": "14.2.1",
+  "heif": "1.23.1",
+  "highway": "1.4.0",
+  "imagequant": "2.4.1",
+  "lcms": "2.19.1",
+  "mozjpeg": "0826579",
+  "pango": "1.58.0",
+  "pixman": "0.46.4",
+  "png": "1.6.58",
+  "proxy-libintl": "0.5",
+  "rsvg": "2.62.90",
+  "tiff": "d01a94b",
+  "uhdr": "1acdbed",
+  "vips": "8.18.3",
+  "webp": "1.6.0",
+  "xml2": "2.15.3",
+  "zlib-ng": "2.3.3"
+}
+
+Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3.
+
+------------------------------------------------------------------------------
 @img/sharp-libvips-linux-x64 embedded native libraries 1.3.2
 License: LicenseRef-Sharp-Third-Party-Licenses
 Source: https://github.com/lovell/sharp-libvips/tree/v1.3.2
@@ -3539,7 +3625,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-OpenAI Codex CLI (bundled binary) 0.144.6
+OpenAI Codex CLI (bundled binary) 0.145.0
 License: Apache-2.0
 Source: https://github.com/openai/codex
 ------------------------------------------------------------------------------
@@ -4068,7 +4154,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-SECTION 2: npm packages (1327 packages)
+SECTION 2: npm packages (1310 packages)
 ==============================================================================
 
 - @adobe/css-tools@4.5.0 — MIT — https://github.com/adobe/css-tools
@@ -4241,18 +4327,10 @@ SECTION 2: npm packages (1327 packages)
 - @img/sharp-libvips-linux-arm64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-linux-x64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-linux-x64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-linuxmusl-arm64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-linuxmusl-arm64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-linuxmusl-x64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
-- @img/sharp-libvips-linuxmusl-x64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-linux-arm64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-arm64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-x64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-x64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-linuxmusl-arm64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-linuxmusl-arm64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-linuxmusl-x64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
-- @img/sharp-linuxmusl-x64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-win32-arm64@0.34.5 — Apache-2.0 AND LGPL-3.0-or-later — https://github.com/lovell/sharp
 - @img/sharp-win32-arm64@0.35.3 — Apache-2.0 AND LGPL-3.0-or-later — https://github.com/lovell/sharp
 - @img/sharp-win32-x64@0.34.5 — Apache-2.0 AND LGPL-3.0-or-later — https://github.com/lovell/sharp
@@ -4298,18 +4376,14 @@ SECTION 2: npm packages (1327 packages)
 - @napi-rs/canvas-darwin-arm64@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-darwin-x64@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-linux-arm64-gnu@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-musl@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-linux-x64-gnu@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-musl@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-win32-arm64-msvc@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-win32-x64-msvc@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/woff-build@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-darwin-arm64@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-darwin-x64@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-linux-arm64-gnu@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
-- @napi-rs/woff-build-linux-arm64-musl@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-linux-x64-gnu@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
-- @napi-rs/woff-build-linux-x64-musl@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-win32-arm64-msvc@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-win32-x64-msvc@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @noble/hashes@1.8.0 — MIT — https://github.com/paulmillr/noble-hashes
@@ -4318,9 +4392,7 @@ SECTION 2: npm packages (1327 packages)
 - @parcel/watcher-darwin-arm64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-darwin-x64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-linux-arm64-glibc@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
-- @parcel/watcher-linux-arm64-musl@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-linux-x64-glibc@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
-- @parcel/watcher-linux-x64-musl@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-win32-arm64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-win32-x64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @pkgjs/parseargs@0.11.0 — MIT — https://github.com/pkgjs/parseargs
@@ -4713,13 +4785,13 @@ SECTION 2: npm packages (1327 packages)
 - execa@5.1.1 — MIT — https://github.com/sindresorhus/execa
 - expand-template@2.0.3 — (MIT OR WTFPL) — https://github.com/ralphtheninja/expand-template
 - expo@56.0.16 — MIT — https://github.com/expo/expo
-- expo-app-metrics@56.0.22 — MIT — https://github.com/expo/expo
 - expo-apple-authentication@56.0.4 — MIT — https://github.com/expo/expo
 - expo-application@56.0.3 — MIT — https://github.com/expo/expo
 - expo-asset@56.0.20 — MIT — https://github.com/expo/expo
 - expo-audio@56.0.12 — MIT — https://github.com/expo/expo
 - expo-auth-session@56.0.15 — MIT — https://github.com/expo/expo
 - expo-blur@56.0.4 — MIT — https://github.com/expo/expo
+- expo-build-properties@56.0.23 — MIT — https://github.com/expo/expo
 - expo-clipboard@56.0.4 — MIT — https://github.com/expo/expo
 - expo-constants@56.0.21 — MIT — https://github.com/expo/expo
 - expo-constants@56.0.22 — MIT — https://github.com/expo/expo
@@ -4743,7 +4815,6 @@ SECTION 2: npm packages (1327 packages)
 - expo-modules-core@56.0.21 — MIT — https://github.com/expo/expo
 - expo-modules-jsi@56.0.12 — MIT — https://github.com/expo/expo
 - expo-notifications@56.0.22 — MIT — https://github.com/expo/expo
-- expo-observe@56.0.25 — MIT — https://github.com/expo/expo
 - expo-paste-input@0.2.2 — MIT — https://github.com/arunabhverma/expo-paste-input
 - expo-router@56.2.15 — MIT — https://github.com/expo/expo
 - expo-secure-store@56.0.4 — MIT — https://github.com/expo/expo
@@ -4933,9 +5004,7 @@ SECTION 2: npm packages (1327 packages)
 - lightningcss-darwin-arm64@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
 - lightningcss-darwin-x64@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
 - lightningcss-linux-arm64-gnu@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
-- lightningcss-linux-arm64-musl@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
 - lightningcss-linux-x64-gnu@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
-- lightningcss-linux-x64-musl@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
 - lightningcss-win32-arm64-msvc@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
 - lightningcss-win32-x64-msvc@1.32.0 — MPL-2.0 — https://github.com/parcel-bundler/lightningcss
 - lit@3.3.3 — BSD-3-Clause — https://github.com/lit/lit
@@ -27673,7 +27742,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[136] Applies to: npm:@expo/cli@56.1.20, npm:@expo/config@56.0.12, npm:@expo/config-plugins@56.0.13, npm:@expo/devtools@56.0.2, npm:@expo/dom-webview@56.0.6, npm:@expo/expo-modules-macros-plugin@0.2.2, npm:@expo/fingerprint@0.19.8, npm:@expo/image-utils@0.10.3, npm:@expo/image-utils@0.10.4, npm:@expo/inline-modules@0.0.14, npm:@expo/json-file@10.2.0, npm:@expo/json-file@11.0.1, npm:@expo/local-build-cache-provider@56.0.10, npm:@expo/log-box@56.0.14, npm:@expo/metro-config@56.0.17, npm:@expo/metro-file-map@56.0.3, npm:@expo/metro-runtime@56.0.17, npm:@expo/osascript@2.7.1, npm:@expo/package-manager@1.13.1, npm:@expo/plist@0.7.0, npm:@expo/prebuild-config@56.0.20, npm:@expo/router-server@56.0.16, npm:babel-preset-expo@56.0.17, npm:expo@56.0.16, npm:expo-app-metrics@56.0.22, npm:expo-apple-authentication@56.0.4, npm:expo-application@56.0.3, npm:expo-asset@56.0.20, npm:expo-audio@56.0.12, npm:expo-auth-session@56.0.15, npm:expo-blur@56.0.4, npm:expo-clipboard@56.0.4, npm:expo-constants@56.0.21, npm:expo-constants@56.0.22, npm:expo-crypto@56.0.4, npm:expo-document-picker@56.0.4, npm:expo-eas-client@56.0.1, npm:expo-file-system@56.0.8, npm:expo-font@56.0.7, npm:expo-glass-effect@56.0.4, npm:expo-image@56.0.11, npm:expo-image-loader@56.0.3, npm:expo-image-manipulator@56.0.22, npm:expo-image-picker@56.0.21, npm:expo-keep-awake@56.0.3, npm:expo-linking@56.0.15, npm:expo-localization@56.0.6, npm:expo-manifests@56.0.4, npm:expo-media-library@56.0.9, npm:expo-modules-autolinking@56.0.20, npm:expo-modules-core@56.0.21, npm:expo-modules-jsi@56.0.12, npm:expo-notifications@56.0.22, npm:expo-observe@56.0.25, npm:expo-secure-store@56.0.4, npm:expo-server@56.0.5, npm:expo-sharing@56.0.22, npm:expo-splash-screen@56.0.13, npm:expo-status-bar@56.0.4, npm:expo-symbols@56.0.6, npm:expo-updates-interface@56.0.2, npm:expo-web-browser@56.0.5
+[136] Applies to: npm:@expo/cli@56.1.20, npm:@expo/config@56.0.12, npm:@expo/config-plugins@56.0.13, npm:@expo/devtools@56.0.2, npm:@expo/dom-webview@56.0.6, npm:@expo/expo-modules-macros-plugin@0.2.2, npm:@expo/fingerprint@0.19.8, npm:@expo/image-utils@0.10.3, npm:@expo/image-utils@0.10.4, npm:@expo/inline-modules@0.0.14, npm:@expo/json-file@10.2.0, npm:@expo/json-file@11.0.1, npm:@expo/local-build-cache-provider@56.0.10, npm:@expo/log-box@56.0.14, npm:@expo/metro-config@56.0.17, npm:@expo/metro-file-map@56.0.3, npm:@expo/metro-runtime@56.0.17, npm:@expo/osascript@2.7.1, npm:@expo/package-manager@1.13.1, npm:@expo/plist@0.7.0, npm:@expo/prebuild-config@56.0.20, npm:@expo/router-server@56.0.16, npm:babel-preset-expo@56.0.17, npm:expo@56.0.16, npm:expo-apple-authentication@56.0.4, npm:expo-application@56.0.3, npm:expo-asset@56.0.20, npm:expo-audio@56.0.12, npm:expo-auth-session@56.0.15, npm:expo-blur@56.0.4, npm:expo-build-properties@56.0.23, npm:expo-clipboard@56.0.4, npm:expo-constants@56.0.21, npm:expo-constants@56.0.22, npm:expo-crypto@56.0.4, npm:expo-document-picker@56.0.4, npm:expo-eas-client@56.0.1, npm:expo-file-system@56.0.8, npm:expo-font@56.0.7, npm:expo-glass-effect@56.0.4, npm:expo-image@56.0.11, npm:expo-image-loader@56.0.3, npm:expo-image-manipulator@56.0.22, npm:expo-image-picker@56.0.21, npm:expo-keep-awake@56.0.3, npm:expo-linking@56.0.15, npm:expo-localization@56.0.6, npm:expo-manifests@56.0.4, npm:expo-media-library@56.0.9, npm:expo-modules-autolinking@56.0.20, npm:expo-modules-core@56.0.21, npm:expo-modules-jsi@56.0.12, npm:expo-notifications@56.0.22, npm:expo-secure-store@56.0.4, npm:expo-server@56.0.5, npm:expo-sharing@56.0.22, npm:expo-splash-screen@56.0.13, npm:expo-status-bar@56.0.4, npm:expo-symbols@56.0.6, npm:expo-updates-interface@56.0.2, npm:expo-web-browser@56.0.5
 ------------------------------------------------------------------------------
 The MIT License (MIT)
 
@@ -28228,7 +28297,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[150] Applies to: npm:@img/sharp-darwin-arm64@0.34.5, npm:@img/sharp-darwin-arm64@0.35.3, npm:@img/sharp-darwin-x64@0.34.5, npm:@img/sharp-darwin-x64@0.35.3, npm:@img/sharp-linux-arm64@0.34.5, npm:@img/sharp-linux-arm64@0.35.3, npm:@img/sharp-linux-x64@0.34.5, npm:@img/sharp-linux-x64@0.35.3, npm:@img/sharp-linuxmusl-arm64@0.34.5, npm:@img/sharp-linuxmusl-arm64@0.35.3, npm:@img/sharp-linuxmusl-x64@0.34.5, npm:@img/sharp-linuxmusl-x64@0.35.3, npm:@img/sharp-win32-arm64@0.34.5, npm:@img/sharp-win32-arm64@0.35.3, npm:@img/sharp-win32-x64@0.34.5, npm:@img/sharp-win32-x64@0.35.3, npm:sharp@0.35.3
+[150] Applies to: npm:@img/sharp-darwin-arm64@0.34.5, npm:@img/sharp-darwin-arm64@0.35.3, npm:@img/sharp-darwin-x64@0.34.5, npm:@img/sharp-darwin-x64@0.35.3, npm:@img/sharp-linux-arm64@0.34.5, npm:@img/sharp-linux-arm64@0.35.3, npm:@img/sharp-linux-x64@0.34.5, npm:@img/sharp-linux-x64@0.35.3, npm:@img/sharp-win32-arm64@0.34.5, npm:@img/sharp-win32-arm64@0.35.3, npm:@img/sharp-win32-x64@0.34.5, npm:@img/sharp-win32-x64@0.35.3, npm:sharp@0.35.3
 ------------------------------------------------------------------------------
 Apache License
 Version 2.0, January 2004
@@ -28949,7 +29018,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[173] Applies to: npm:@parcel/watcher@2.5.6, npm:@parcel/watcher-darwin-arm64@2.5.6, npm:@parcel/watcher-darwin-x64@2.5.6, npm:@parcel/watcher-linux-arm64-glibc@2.5.6, npm:@parcel/watcher-linux-arm64-musl@2.5.6, npm:@parcel/watcher-linux-x64-glibc@2.5.6, npm:@parcel/watcher-linux-x64-musl@2.5.6, npm:@parcel/watcher-win32-arm64@2.5.6, npm:@parcel/watcher-win32-x64@2.5.6
+[173] Applies to: npm:@parcel/watcher@2.5.6, npm:@parcel/watcher-darwin-arm64@2.5.6, npm:@parcel/watcher-darwin-x64@2.5.6, npm:@parcel/watcher-linux-arm64-glibc@2.5.6, npm:@parcel/watcher-linux-x64-glibc@2.5.6, npm:@parcel/watcher-win32-arm64@2.5.6, npm:@parcel/watcher-win32-x64@2.5.6
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38605,7 +38674,7 @@ The above copyright notice and this permission notice shall be included in all c
 **THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.**
 
 ------------------------------------------------------------------------------
-[432] Applies to: npm:lightningcss@1.32.0, npm:lightningcss-darwin-arm64@1.32.0, npm:lightningcss-darwin-x64@1.32.0, npm:lightningcss-linux-arm64-gnu@1.32.0, npm:lightningcss-linux-arm64-musl@1.32.0, npm:lightningcss-linux-x64-gnu@1.32.0, npm:lightningcss-linux-x64-musl@1.32.0, npm:lightningcss-win32-arm64-msvc@1.32.0, npm:lightningcss-win32-x64-msvc@1.32.0
+[432] Applies to: npm:lightningcss@1.32.0, npm:lightningcss-darwin-arm64@1.32.0, npm:lightningcss-darwin-x64@1.32.0, npm:lightningcss-linux-arm64-gnu@1.32.0, npm:lightningcss-linux-x64-gnu@1.32.0, npm:lightningcss-win32-arm64-msvc@1.32.0, npm:lightningcss-win32-x64-msvc@1.32.0
 ------------------------------------------------------------------------------
 Mozilla Public License Version 2.0
 ==================================
@@ -45491,26 +45560,18 @@ Packages without a standalone license file (license per package.json):
 - npm:@img/sharp-libvips-linux-arm64@1.3.2 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-linux-x64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-linux-x64@1.3.2 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-linuxmusl-arm64@1.2.4 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-linuxmusl-arm64@1.3.2 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-linuxmusl-x64@1.2.4 (LGPL-3.0-or-later)
-- npm:@img/sharp-libvips-linuxmusl-x64@1.3.2 (LGPL-3.0-or-later)
 - npm:@lit-labs/ssr-dom-shim@1.6.0 (BSD-3-Clause)
 - npm:@napi-rs/canvas-darwin-arm64@0.1.100 (MIT)
 - npm:@napi-rs/canvas-darwin-x64@0.1.100 (MIT)
 - npm:@napi-rs/canvas-linux-arm64-gnu@0.1.100 (MIT)
-- npm:@napi-rs/canvas-linux-arm64-musl@0.1.100 (MIT)
 - npm:@napi-rs/canvas-linux-x64-gnu@0.1.100 (MIT)
-- npm:@napi-rs/canvas-linux-x64-musl@0.1.100 (MIT)
 - npm:@napi-rs/canvas-win32-arm64-msvc@0.1.100 (MIT)
 - npm:@napi-rs/canvas-win32-x64-msvc@0.1.100 (MIT)
 - npm:@napi-rs/woff-build@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-darwin-arm64@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-darwin-x64@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-linux-arm64-gnu@0.2.2 (MIT)
-- npm:@napi-rs/woff-build-linux-arm64-musl@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-linux-x64-gnu@0.2.2 (MIT)
-- npm:@napi-rs/woff-build-linux-x64-musl@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-win32-arm64-msvc@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-win32-x64-msvc@0.2.2 (MIT)
 - npm:@react-native/assets-registry@0.85.3 (MIT)

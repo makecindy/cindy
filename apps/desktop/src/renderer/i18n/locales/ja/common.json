@@ -3846,6 +3846,7 @@
         "cacheRead": "キャッシュ読み取り",
         "cacheCreate": "キャッシュ書き込み",
         "free": "期間限定無料",
+        "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
         "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
@@ -3876,7 +3877,8 @@
       "meta": {
         "context": "コンテキスト {{value}}",
         "price": "{{input}}/{{output}} / 100万",
-        "fastBadge": "高速"
+        "fastBadge": "高速",
+        "budgetDiscount": "特別割引"
       },
       "source": {
         "railLabel": "ソース",
@@ -7164,7 +7166,16 @@
         "priceInterval": "{{price}} / {{interval}}",
         "includedCredits": "毎{{interval}} {{amount}} クレジットを付与",
         "renewsAt": "次回更新日: {{date}}",
-        "endsAt": "{{date}} にプラン終了"
+        "endsAt": "{{date}} にプラン終了",
+        "cancelAction": "サブスクリプションを解約",
+        "cancelConfirmTitle": "現在のサブスクリプションを解約しますか？",
+        "cancelConfirmDescription": "この操作による返金やクレジットの即時変更はありません。現在のプランは {{date}} まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmDescriptionWithoutDate": "この操作による返金やクレジットの即時変更はありません。現在のプランは請求期間の終了まで利用でき、その後は更新されません。キャンセルはアプリ内では元に戻せません。また、この請求期間が終了するまで新しいプランは購入できません。",
+        "cancelConfirmAction": "解約を確定",
+        "cancelSuccess": "自動更新を停止しました。現在のプランは {{date}} まで利用できます。",
+        "cancelSuccessWithoutDate": "自動更新を停止しました。現在のプランはこの請求期間の終了後に終了します。",
+        "cancelNotSupported": "このサブスクリプションは現在解約できません。",
+        "cancelFailed": "サブスクリプションを解約できませんでした。しばらくしてからもう一度お試しください。"
       },
       "topupCard": {
         "action": "クレジットを購入"
@@ -7225,7 +7236,6 @@
       "retry": "再試行",
       "pay": "確認して支払う",
       "refresh": "状態を更新",
-      "cancelPayment": "支払いをキャンセル",
       "close": "閉じる"
     },
     "catalog": {
@@ -7233,6 +7243,7 @@
       "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
       "emptyTitle": "プランはまだありません",
       "emptyDescription": "サーバーで公開中のプランはまだありません。",
+      "currentPlan": "現在のプラン",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "近日提供",
         "NO_AVAILABLE_PAYMENT_CHANNEL": "利用可能な支払い方法なし"

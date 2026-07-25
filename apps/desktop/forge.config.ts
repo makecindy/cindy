@@ -38,10 +38,11 @@ process.env.VITE_CINDY_AUTH_REGION = CINDY_REGION;
 const CINDY_APP_ID = brandAppId(CINDY_REGION);
 const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION);
 /**
- * 可执行文件基名,按区域派生(cn 'Cindy' / global 'CindyGlobal'):同机双装时
- * exe / mac .app 包名 / NSIS 安装目录与快捷方式若同名,第二个安装会覆盖第一个,
- * 更新器按 exe 名杀进程也会误伤另一区域。运行时 userData 目录由 main 入口按
- * 同一区域切换(src/main/regionUserData.ts),两端从 brand-identity 同源派生。
+ * 可执行文件基名,按区域派生(cn/global 同值 'Cindy',dev 'CindyDev';
+ * 2026-07-26 显示名统一决策,cn/global 文件层双装隔离随之放弃,见
+ * brandIdentity.ts executableNameByRegion doc)。运行时 userData 目录由 main
+ * 入口按同一区域切换(src/main/regionUserData.ts),两端从 brand-identity
+ * 同源派生,cn/global 数据仍分库。
  */
 const CINDY_EXE = brandExecutableName(CINDY_REGION);
 /** 更新器二进制文件名(cindy-updater.exe)。 */
@@ -636,11 +637,11 @@ function signPackagedExes(buildPath: string): void {
  * ⚠️ 绝不能改 CFBundleName:Electron 启动时用主 app 的 CFBundleName 拼
  * `Frameworks/<CFBundleName> Helper.app` 查找 Helper(electron_main_delegate_mac.mm,
  * 唯一 fallback 是 'Electron Helper.app'),而 Helper 目录名跟随 packager name
- * (区域派生:cn 'Cindy' / global 'CindyGlobal' / dev 'CindyDev')。把
- * CFBundleName 改成 Cindy 会让 global/dev 包启动即 FATAL
- * "Unable to find helper app"(SIGTRAP;2026-07-21 dev region smoke 实踩)。
- * 代价:菜单栏粗体标题取自 CFBundleName 且运行时改不了,global/dev 构建上
- * 显示区域 exe 名而非 Cindy——cn(packager 已写 Cindy)不受影响,可接受。
+ * (区域派生:cn/global 'Cindy' / dev 'CindyDev')。把 CFBundleName 改成
+ * 与 Helper 目录不一致的值会让包启动即 FATAL "Unable to find helper app"
+ * (SIGTRAP;2026-07-21 dev region smoke 实踩)。
+ * 代价:菜单栏粗体标题取自 CFBundleName 且运行时改不了,dev 构建上显示
+ * CindyDev 而非 Cindy——cn/global(packager 已写 Cindy)不受影响,可接受。
  *
  * 为什么在 postPackage 改而不是 packagerConfig:electron-packager 在
  * updatePlistFiles 里先合并 extendInfo、后用 appName/executableName 覆写
@@ -650,11 +651,11 @@ function signPackagedExes(buildPath: string): void {
  * 历史沿革:本步骤诞生于身份翻转前(当时 .app/CFBundleExecutable/bundle id/
  * userData 均为 xdt-maker 系,这里是唯一的显示名来源)。2026-07-17 身份翻转后
  * cn 构建的 packager 本身就会把 CFBundleName/CFBundleDisplayName 写成 Cindy,
- * 对 cn 是冗余兜底;2026-07-18 双装支持后 global 构建的 packager name 是
- * 'CindyGlobal'(.app 目录名 / 标识符层),本步骤把 Dock 名、Cmd+Tab、
- * 系统通知的**显示层**统一拉回 Cindy(BRAND_NAME 各区共用)——对
- * global/dev 不再冗余,是显示名的唯一来源。正式签名/公证(外部发布流程)
- * 发生在 postPackage 之后,本改动会被签名一起封印,不存在破坏签名问题。
+ * 对 cn 是冗余兜底;2026-07-26 global exe 名与 cn 统一为 'Cindy' 后 global
+ * 同样只是冗余兜底;dev 构建的 packager name 仍是 'CindyDev',本步骤把
+ * Dock 名、Cmd+Tab、系统通知的**显示层**拉回 Cindy(BRAND_NAME 各区共用),
+ * 对 dev 是显示名的唯一来源。正式签名/公证(外部发布流程)发生在
+ * postPackage 之后,本改动会被签名一起封印,不存在破坏签名问题。
  */
 function applyMacPackagedDisplayName(buildPath: string, platform: string): void {
   if (platform !== 'darwin') return;
@@ -1003,7 +1004,7 @@ const makers: ForgeConfig['makers'] = [
       // 双 scheme:cindy 主 + xdt-maker 兼容(老分享链接不死)。
       mimeType: allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
       maintainer: 'Lizi <feedback@cindy.app>',
-      // deb 包名规范要求小写;跟随区域 exe 名(cn cindy / global cindyglobal)。
+      // deb 包名规范要求小写;跟随区域 exe 名(cn/global cindy / dev cindydev)。
       name: CINDY_EXE.toLowerCase(),
       bin: CINDY_EXE,
       productName: CINDY_EXE,
@@ -1043,9 +1044,10 @@ if (isWin) {
         // 才会接收 toast；否则原生 Notification 被静默丢弃。
         // 值按构建区域派生(shared/brandRegion 运行时同源),见文件头身份块。
         appId: CINDY_APP_ID,
-        // 安装目录名跟随区域(默认装到 …\Programs\<productName>):cn 'Cindy' /
-        // global 'CindyGlobal'。不设的话 app-builder 回落 package.json 的
-        // productName('Cindy'),两个区域会装进同一目录互相覆盖(双装红线)。
+        // 安装目录名跟随区域 exe 名(默认装到 …\Programs\<productName>):
+        // cn/global 'Cindy'(2026-07-26 显示名统一,双装同目录互抢已被 owner
+        // 接受)/ dev 'CindyDev'(仍与正式包隔离)。显式设值防 app-builder
+        // 回落 package.json productName 造成 dev 与正式包同目录。
         productName: CINDY_EXE,
         nsis: {
           oneClick: false,
@@ -1054,10 +1056,11 @@ if (isWin) {
           uninstallerIcon: 'resources/icon.ico',
           createDesktopShortcut: 'always',
           createStartMenuShortcut: true,
-          // 快捷方式显示名,跟随区域 exe 名(cn 'Cindy' / global 'CindyGlobal',
-          // 同名 .lnk 双装互抢)。installer.nsh 只清理/重建自家 .lnk——同机可能
-          // 并存老 XDMaker 安装,它的 xdt-maker.lnk / XDMaker.lnk 属于老 app,
-          // 绝不能删(共存红线,见 installer.nsh customInit 注释)。
+          // 快捷方式显示名,跟随区域 exe 名(cn/global 'Cindy'——同名 .lnk
+          // 双装互抢已被 owner 接受 / dev 'CindyDev')。installer.nsh 只清理/
+          // 重建自家 .lnk——同机可能并存老 XDMaker 安装,它的 xdt-maker.lnk /
+          // XDMaker.lnk 属于老 app,绝不能删(共存红线,见 installer.nsh
+          // customInit 注释)。
           shortcutName: CINDY_EXE,
           runAfterFinish: true,
           include: 'resources/installer.nsh',
@@ -1088,11 +1091,12 @@ const config: ForgeConfig = {
     // 所以这里显式覆盖 loudness / node-pty 整个目录。
     asar: { unpack: '**/{@img/{sharp-libvips-*,sharp-win32-*},loudness,native/sqlite-vec,node-pty}/**' },
     // 打包名(out 目录 / mac .app 包名 / Helper 目录名 / 主 plist CFBundleName)
-    // 按区域派生:不设的话 packager 回落 package.json productName('Cindy'),
-    // global 的 .app 会与 cn 撞名(双装时拖进 /Applications 直接覆盖)。mac 的
-    // Dock/Cmd+Tab/通知**显示名**由 postPackage 的 applyMacPackagedDisplayName
-    // 经 CFBundleDisplayName 统一拉回 Cindy(显示层共用 BRAND_NAME,标识符层
-    // 分区域;CFBundleName 不可动,Electron 靠它找 Helper,见该函数注释)。
+    // 按区域派生:cn/global 'Cindy'(2026-07-26 显示名统一,.app 撞名双装
+    // 互覆已被 owner 接受)/ dev 'CindyDev'(显式设值防 packager 回落
+    // package.json productName 让 dev 与正式包撞名)。mac 的 Dock/Cmd+Tab/
+    // 通知**显示名**由 postPackage 的 applyMacPackagedDisplayName 经
+    // CFBundleDisplayName 统一拉回 Cindy(对 dev 是唯一显示名来源;
+    // CFBundleName 不可动,Electron 靠它找 Helper,见该函数注释)。
     name: CINDY_EXE,
     executableName: CINDY_EXE,
     // mac bundle id(与 Windows AUMID 同值,按区域派生;cn/global 是两个可并存

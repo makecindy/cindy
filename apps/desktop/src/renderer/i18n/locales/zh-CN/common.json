@@ -3846,6 +3846,7 @@
         "cacheRead": "缓存读取",
         "cacheCreate": "缓存写入",
         "free": "限时免费",
+        "discount": "立省 {{percent}}%",
         "perMillion": "模型标准价格",
         "fixedFx": "按固定汇率 1 USD = 6.7 CNY 约算",
         "subscriptionEstimate": "价值估算，不代表实际账单"
@@ -3876,7 +3877,8 @@
       "meta": {
         "context": "{{value}} 上下文",
         "price": "{{input}}/{{output}} / 百万",
-        "fastBadge": "快速"
+        "fastBadge": "快速",
+        "budgetDiscount": "特别折扣"
       },
       "source": {
         "railLabel": "来源",
@@ -7164,7 +7166,16 @@
         "priceInterval": "{{price}} / {{interval}}",
         "includedCredits": "每{{interval}}包含 {{amount}} 点数",
         "renewsAt": "下次续费 {{date}}",
-        "endsAt": "套餐将于 {{date}} 结束"
+        "endsAt": "套餐将于 {{date}} 结束",
+        "cancelAction": "取消订阅",
+        "cancelConfirmTitle": "取消当前订阅？",
+        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整额度。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整额度。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmAction": "确认取消",
+        "cancelSuccess": "已取消自动续费，当前套餐可使用至 {{date}}。",
+        "cancelSuccessWithoutDate": "已取消自动续费，当前套餐将在本计费周期结束后到期。",
+        "cancelNotSupported": "当前订阅暂不支持取消。",
+        "cancelFailed": "取消订阅失败，请稍后重试。"
       },
       "topupCard": {
         "action": "购买点数"
@@ -7225,7 +7236,6 @@
       "retry": "重试",
       "pay": "确认并支付",
       "refresh": "刷新状态",
-      "cancelPayment": "取消支付",
       "close": "关闭"
     },
     "catalog": {
@@ -7233,6 +7243,7 @@
       "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
       "emptyTitle": "当前暂无套餐",
       "emptyDescription": "服务端尚未配置公开的套餐。",
+      "currentPlan": "当前套餐",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "敬请期待",
         "NO_AVAILABLE_PAYMENT_CHANNEL": "暂无可用支付方式"

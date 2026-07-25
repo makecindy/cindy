@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/c6d730736fdbb8b3426961aa22ea8dca12c912fc8c3cd8e0d5b2ca85d2177acb",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/a4ceee438b8b55f4ba8a27d4ec3b154cbe5badce74aeaeda93193b7a3499b1e7",
   "creationInfo": {
-    "created": "1970-01-01T00:00:00Z",
+    "created": "2026-07-25T09:00:18Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -63,8 +63,8 @@
     },
     {
       "name": "OpenAI Codex CLI (bundled binary)",
-      "SPDXID": "SPDXRef-Package-f6898d2a0f197785",
-      "versionInfo": "0.144.6",
+      "SPDXID": "SPDXRef-Package-2533cecb0b1ad2d4",
+      "versionInfo": "0.145.0",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -17797,7 +17797,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-f6898d2a0f197785"
+      "relatedSpdxElement": "SPDXRef-Package-2533cecb0b1ad2d4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

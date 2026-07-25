@@ -3847,6 +3847,7 @@
         "cacheRead": "Cache read",
         "cacheCreate": "Cache write",
         "free": "Limited-time free",
+        "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
         "subscriptionEstimate": "Value estimate, not an actual bill"
@@ -3877,7 +3878,8 @@
       "meta": {
         "context": "{{value}} context",
         "price": "{{input}}/{{output}} per 1M",
-        "fastBadge": "Fast"
+        "fastBadge": "Fast",
+        "budgetDiscount": "Special discount"
       },
       "source": {
         "railLabel": "Source",
@@ -7175,7 +7177,16 @@
         "priceInterval": "{{price}} / {{interval}}",
         "includedCredits": "Includes {{amount}} credits per {{interval}}",
         "renewsAt": "Renews {{date}}",
-        "endsAt": "Plan ends {{date}}"
+        "endsAt": "Plan ends {{date}}",
+        "cancelAction": "Cancel Subscription",
+        "cancelConfirmTitle": "Cancel Your Current Subscription?",
+        "cancelConfirmDescription": "This action does not issue a refund or immediately change your credits. Your current plan stays available through {{date}}, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmDescriptionWithoutDate": "This action does not issue a refund or immediately change your credits. Your current plan stays available through the end of this billing period, then it will not renew. Cancellation cannot be undone in the app, and you cannot purchase a new plan until this billing period ends.",
+        "cancelConfirmAction": "Confirm Cancellation",
+        "cancelSuccess": "Auto-renewal is canceled. Your current plan remains available through {{date}}.",
+        "cancelSuccessWithoutDate": "Auto-renewal is canceled. Your current plan will end after this billing period.",
+        "cancelNotSupported": "This subscription cannot be canceled yet.",
+        "cancelFailed": "Could not cancel the subscription. Try again later."
       },
       "topupCard": {
         "action": "Buy credits"
@@ -7236,7 +7247,6 @@
       "retry": "Retry",
       "pay": "Review and pay",
       "refresh": "Refresh status",
-      "cancelPayment": "Cancel payment",
       "close": "Close"
     },
     "catalog": {
@@ -7244,6 +7254,7 @@
       "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
       "emptyTitle": "No Plans Available",
       "emptyDescription": "The server has not published any plans yet.",
+      "currentPlan": "Current Plan",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "Coming Soon",
         "NO_AVAILABLE_PAYMENT_CHANNEL": "No Payment Method Available"

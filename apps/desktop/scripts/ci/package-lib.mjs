@@ -20,8 +20,34 @@ const VERSION_BUMP_KINDS = Object.freeze(['major', 'minor', 'patch']);
 export const PLATFORM_ARCHS = Object.freeze({
   win32: ['x64'],
   darwin: ['arm64', 'x64'],
-  linux: ['x64'],
+  // linux 两个架构都能打,但都只能在对应架构的机器上打:与 darwin 不同,缺省不
+  // 连打双架构,显式 --arch 也必须等于宿主 arch(两条都由 parsePackageArgs 强制)。
+  // 交叉打包不可行——原生模块(better-sqlite3 / node-pty)要按目标 arch 重编,
+  // sqlite-vec 的 vec0.so 也是预编译平台件。
+  linux: ['x64', 'arm64'],
 });
+
+/**
+ * node arch → Debian 包架构名(deb 文件名与 control 的 Architecture 字段用它)。
+ * 必须与 @electron-forge/maker-deb 的同名函数保持一致:归集产物时要按 maker
+ * 实际写出的文件名命名,错了会把 arm64 包标成 amd64,用户装上直接起不来。
+ * 当前实际打的只有 linux 的 x64/arm64,其余分支保持与 maker-deb 同构(将来扩
+ * 架构时不必回头改映射);未知 arch 原样返回。
+ */
+export function debianArch(nodeArch) {
+  switch (nodeArch) {
+    case 'x64':
+      return 'amd64';
+    case 'ia32':
+      return 'i386';
+    case 'armv7l':
+      return 'armhf';
+    case 'arm':
+      return 'armel';
+    default:
+      return nodeArch;
+  }
+}
 
 /** x.y.z 显式版本(不接受前缀 v / 预发布后缀——发布版本号是 CDN 比较键,保持纯净)。 */
 export function isExplicitVersion(value) {
@@ -32,6 +58,7 @@ export function isExplicitVersion(value) {
  * 解析 package-desktop.mjs 的命令行参数。非法输入直接 throw(编排层统一打印)。
  * 返回的 archs 是数组:显式 --arch 只打单架构;缺省时 darwin 双架构连打
  * (发布侧 canary/promote 对 mac 默认就是双架构,打包侧对齐),其它平台单 arch。
+ * linux 额外要求目标 arch 等于宿主 arch——见下方 archFlag 分支的理由。
  * @param {string[]} argv  process.argv.slice(2)
  * @param {{ platform?: string, arch?: string }} [defaults]  默认取当前机器
  */
@@ -75,9 +102,20 @@ export function parsePackageArgs(argv, defaults = {}) {
     throw new Error(`不支持的 platform: ${out.platform}(可选 ${SUPPORTED_PLATFORMS.join('/')})`);
   }
   const supportedArchs = PLATFORM_ARCHS[out.platform];
+  const hostArch = defaults.arch ?? process.arch;
   if (archFlag !== null) {
     if (!supportedArchs.includes(archFlag)) {
       throw new Error(`platform ${out.platform} 不支持 arch: ${archFlag}(可选 ${supportedArchs.join('/')})`);
+    }
+    // linux 跨架构必须在参数层就拒。放行只会把失败推迟到 forge 的原生模块
+    // rebuild:普通构建机没有交叉编译工具链,烧掉整个 package 阶段才吐一堆
+    // 编译错误;而带 --skip-smoke 时连启动校验都不剩,能静默产出一个跑不起来
+    // 的 deb。darwin 不受此限——Rosetta 2 让 Apple Silicon 主机能打并 smoke
+    // darwin-x64,那是经验证的支持路径。
+    if (out.platform === 'linux' && archFlag !== hostArch) {
+      throw new Error(
+        `linux 不支持交叉打包(当前 ${hostArch},目标 ${archFlag});请在目标架构的机器上执行。`,
+      );
     }
     out.archs = [archFlag];
   } else if (out.platform === 'darwin') {
@@ -85,11 +123,10 @@ export function parsePackageArgs(argv, defaults = {}) {
     // smoke test 同样可过(老一体式 release-macos.mjs 验证过的模式)。
     out.archs = [...PLATFORM_ARCHS.darwin];
   } else {
-    const fallbackArch = defaults.arch ?? process.arch;
-    if (!supportedArchs.includes(fallbackArch)) {
-      throw new Error(`platform ${out.platform} 不支持 arch: ${fallbackArch}(可选 ${supportedArchs.join('/')})`);
+    if (!supportedArchs.includes(hostArch)) {
+      throw new Error(`platform ${out.platform} 不支持 arch: ${hostArch}(可选 ${supportedArchs.join('/')})`);
     }
-    out.archs = [fallbackArch];
+    out.archs = [hostArch];
   }
   if (!SUPPORTED_REGIONS.includes(out.region)) {
     throw new Error(`不支持的 region: ${out.region}(可选 ${SUPPORTED_REGIONS.join('/')})`);

@@ -60,7 +60,7 @@ interface DayBar {
    * 纯 Codex 订阅日 costUsd 为 0, 仍按估算分段撑起柱子。
    */
   effectiveAmount: number;
-  /** 总额包含 Codex 订阅价值估算 → 总额前缀 ≈ 并展示 tooltip 解释。 */
+  /** 总额包含 Codex 订阅价值估算 → tooltip 展示估算解释。 */
   approximate: boolean;
 }
 

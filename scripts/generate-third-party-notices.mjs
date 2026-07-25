@@ -520,7 +520,15 @@ function readBundledLicense(relativePath) {
   );
 }
 
-function buildDesktopCommonEntries(apacheText, sharpPackageName) {
+/**
+ * 桌面三平台共有的随包分发组件声明。
+ *
+ * @param sharpPackageNames sharp 预编译包名,可传单个或数组。该包的 README 与
+ *   versions.json 是 per-arch 的(见下方 sharp 段),所以一个平台声明覆盖多个架构时
+ *   应把每个架构的包都传进来。desktop-linux 已按此传 x64 + arm64;desktop-macos
+ *   的 productName 同样是 x64/arm64 但目前只传 arm64,属既存缺口,记在 issue #452。
+ */
+function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   const entries = [];
 
   // ripgrep — 随包分发的搜索二进制
@@ -639,28 +647,33 @@ function buildDesktopCommonEntries(apacheText, sharpPackageName) {
   );
 
   // sharp 预编译包内含多种第三方动态库;保留包自带清单和精确版本表。
-  const sharpDir = resolvePkgDir(sharpPackageName, DESKTOP_DIR);
-  if (!sharpDir)
-    throw new Error(
-      `sharp platform package is not installed: ${sharpPackageName}`,
+  // 逐架构出条目:README 与 versions.json 都是 per-arch 的,一个平台声明覆盖两个
+  // 架构时只读其中一份,另一个架构的分发物就会带着错误的架构描述发出去
+  // (arm64 用户拿到的声明写着 "Linux (glibc) x64")。
+  for (const sharpPackageName of [sharpPackageNames].flat()) {
+    const sharpDir = resolvePkgDir(sharpPackageName, DESKTOP_DIR);
+    if (!sharpDir)
+      throw new Error(
+        `sharp platform package is not installed: ${sharpPackageName}`,
+      );
+    const sharpJson = readJson(path.join(sharpDir, "package.json"));
+    const versions = readJson(path.join(sharpDir, "versions.json"));
+    const licensingReadme = normalizeNoticeText(
+      fs.readFileSync(path.join(sharpDir, "README.md"), "utf8"),
     );
-  const sharpJson = readJson(path.join(sharpDir, "package.json"));
-  const versions = readJson(path.join(sharpDir, "versions.json"));
-  const licensingReadme = normalizeNoticeText(
-    fs.readFileSync(path.join(sharpDir, "README.md"), "utf8"),
-  );
-  entries.push(
-    bundledComponent({
-      name: `${sharpPackageName} embedded native libraries`,
-      version: sharpJson.version,
-      license: "LicenseRef-Sharp-Third-Party-Licenses",
-      url: `https://github.com/lovell/sharp-libvips/tree/v${sharpPackageName.includes("libvips") ? sharpJson.version : "1.2.4"}`,
-      licenseText:
-        `${licensingReadme}\n\nExact bundled library versions:\n${JSON.stringify(versions, null, 2)}\n\n` +
-        "Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. " +
-        `The bundled libvips version is ${versions.vips}.`,
-    }),
-  );
+    entries.push(
+      bundledComponent({
+        name: `${sharpPackageName} embedded native libraries`,
+        version: sharpJson.version,
+        license: "LicenseRef-Sharp-Third-Party-Licenses",
+        url: `https://github.com/lovell/sharp-libvips/tree/v${sharpPackageName.includes("libvips") ? sharpJson.version : "1.2.4"}`,
+        licenseText:
+          `${licensingReadme}\n\nExact bundled library versions:\n${JSON.stringify(versions, null, 2)}\n\n` +
+          "Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. " +
+          `The bundled libvips version is ${versions.vips}.`,
+      }),
+    );
+  }
 
   // SQLite — better-sqlite3 静态编译进 native addon
   entries.push(
@@ -1013,17 +1026,22 @@ function buildSpdxDocument(artifact, components) {
         : {}),
     };
   });
+  // licenseId -> (componentKey -> licenseText)。必须按组件分别留存,不能先到先得:
+  // SPDX 的 hasExtractedLicensingInfos 对一个 licenseId 只存一份 extractedText,
+  // 而同一个 LicenseRef 会被多个组件共用(desktop-linux 的 x64/arm64 两份 libvips
+  // 预编译包就是如此)。只留其中一份,另一个组件就会引用到不属于它的说明和版本表。
   const licenseRefs = new Map();
   for (const component of sorted) {
     for (const match of component.license.matchAll(
       /LicenseRef-[A-Za-z0-9.-]+/g,
     )) {
-      if (!licenseRefs.has(match[0])) {
-        licenseRefs.set(
-          match[0],
+      if (!licenseRefs.has(match[0])) licenseRefs.set(match[0], new Map());
+      licenseRefs
+        .get(match[0])
+        .set(
+          componentKey(component),
           component.licenseText || "No standalone license text available.",
         );
-      }
     }
   }
   return {
@@ -1045,9 +1063,17 @@ function buildSpdxDocument(artifact, components) {
     ...(licenseRefs.size
       ? {
           hasExtractedLicensingInfos: [...licenseRefs].map(
-            ([licenseId, extractedText]) => ({
+            ([licenseId, textsByComponent]) => ({
               licenseId,
-              extractedText,
+              // 独占该 licenseId 的组件保持原样输出(不给 win/macos 等单组件产物
+              // 引入无谓的格式变化);多组件共用时按组件加标题分段,让每个 package
+              // 条目都能在文本里找到属于自己的那段。
+              extractedText:
+                textsByComponent.size === 1
+                  ? [...textsByComponent.values()][0]
+                  : [...textsByComponent]
+                      .map(([key, text]) => `### ${key}\n\n${text}`)
+                      .join(`\n\n${"-".repeat(72)}\n\n`),
             }),
           ),
         }
@@ -1221,11 +1247,10 @@ const desktopMacNpm = mergeClosures(
   collectClosure([DESKTOP_DIR], { os: "darwin", cpu: "x64" }),
   collectClosure([DESKTOP_DIR], { os: "darwin", cpu: "arm64" }),
 );
-const desktopLinuxNpm = collectClosure([DESKTOP_DIR], {
-  os: "linux",
-  cpu: "x64",
-  libc: "glibc",
-});
+const desktopLinuxNpm = mergeClosures(
+  collectClosure([DESKTOP_DIR], { os: "linux", cpu: "x64", libc: "glibc" }),
+  collectClosure([DESKTOP_DIR], { os: "linux", cpu: "arm64", libc: "glibc" }),
+);
 const mobileNpm = collectClosure([MOBILE_DIR]);
 const cargoClosure = collectCargoClosure();
 
@@ -1266,13 +1291,15 @@ const artifactDefinitions = {
   },
   "desktop-linux": {
     closure: desktopLinuxNpm,
-    manual: buildDesktopCommonEntries(
-      apacheText,
+    manual: buildDesktopCommonEntries(apacheText, [
       "@img/sharp-libvips-linux-x64",
-    ),
-    productName: "Cindy desktop application — Linux x64 glibc",
-    description: ["Linux x64 glibc 桌面安装包的第三方开源组件声明。"],
-    notes: ["不包含运行时按需下载的 Android Platform-Tools。"],
+      "@img/sharp-libvips-linux-arm64",
+    ]),
+    productName: "Cindy desktop application — Linux x64/arm64 glibc",
+    description: ["Linux x64 与 arm64 glibc 桌面安装包的第三方开源组件声明。"],
+    notes: [
+      "合并 x64 与 arm64 原生可选包;不包含运行时按需下载的 Android Platform-Tools。",
+    ],
   },
   "mobile-ios": {
     closure: mobileNpm,

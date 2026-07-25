@@ -12,9 +12,10 @@
  *
  * ⚠️ 语义边界:
  *  - 这是**构建期单点,不是运行时开关**。区域(cn/global)是唯一的构建期维度,
- *    经打包命令的 CINDY_AUTH_REGION 选择,默认 cn。appId / exe 名 / userData
- *    目录名按区域派生(cn 与 global 是两个可同机并存的系统身份,appId 与
- *    mobile 的 com.xd.cindycn / com.xd.cindy 同一套)。
+ *    经打包命令的 CINDY_AUTH_REGION 选择,默认 cn。appId / userData 目录名
+ *    按区域派生(cn 与 global 是两个可并存的系统身份,appId 与 mobile 的
+ *    com.xd.cindycn / com.xd.cindy 同一套);exe 名 cn/global 同值 'Cindy'
+ *    (2026-07-26 显示名统一决策,文件层双装隔离随之放弃,dev 仍独立)。
  *  - 历史兼容锚点(旧 scheme 解析、旧 userData / DB 文件识别)由
  *    `legacySchemes` / `legacyUserDataDirNames` / `legacyDbFilePrefixes`
  *    承载,只增不减:老用户机器上的存量注册与文件可能永远带着旧值。
@@ -74,10 +75,14 @@ export interface BrandIdentity {
    */
   readonly executableName: string;
   /**
-   * 按区域派生的可执行文件基名(同机双装:cn 与 global 的安装目录 / exe /
-   * mac .app 包名 / NSIS 快捷方式必须互不相同,否则第二个安装会覆盖第一个,
-   * 更新器按 exe 名杀进程也会误伤另一区域)。区域名不含空格(部分系统对
-   * 带空格路径的兼容性差,owner 决策)。
+   * 按区域派生的可执行文件基名(exe / mac .app 包名 / 安装目录 / NSIS
+   * 快捷方式全部跟随)。2026-07-26 owner 决策:cn 与 global 同值 'Cindy',
+   * 让 global 包在 Dock / Finder / 菜单栏 / Windows 快捷方式等全部位置显示
+   * Cindy——代价是 cn/global 同机双装时安装目录 / .app / .lnk 同名互抢
+   * (第二个安装覆盖第一个的文件与快捷方式,更新器按 exe 名杀进程会波及另一
+   * 区域),该场景明确放弃支持;appId 与 userData 目录仍按区域分离,系统身份
+   * 与数据互不影响。dev 保持独立名(CindyDev,可与正式包并存)。区域名不含
+   * 空格(部分系统对带空格路径的兼容性差,owner 决策)。
    */
   readonly executableNameByRegion: Readonly<Record<CindyRegion, string>>;
   /**
@@ -121,18 +126,22 @@ export interface BrandIdentity {
  * 当前生效的身份档案(Cindy,2026-07-17 翻转)。
  * 旧 xdt-maker 值全部下沉 legacy 数组。
  *
- * 区域差异字段(2026-07-18 起支持 cn / global 同机双装):appId、
- * executableName、userDataDirName 三组按区域派生;深链 scheme、展示名
- * BRAND_NAME、cdnPrefix、dbFilePrefix、updaterName 两区共用(scheme 共用是
- * owner 决策:双装时后注册者赢,单装用户无感;cdnPrefix 共用因发布渠道靠
- * 不同 OSS bucket 区分;db 前缀因 userData 已分目录无需再区分)。
+ * 区域差异字段:appId、userDataDirName 按区域派生(cn/global 是两个可并存
+ * 的系统身份,数据分库);executableName 自 2026-07-26 起 cn/global 同值
+ * (显示统一为 Cindy,放弃文件层双装隔离,见 executableNameByRegion doc),
+ * 仅 dev 保持独立名;深链 scheme、展示名 BRAND_NAME、cdnPrefix、dbFilePrefix、
+ * updaterName 两区共用(scheme 共用是 owner 决策:双装时后注册者赢,单装用户
+ * 无感;cdnPrefix 共用因发布渠道靠不同 OSS bucket 区分;db 前缀因 userData
+ * 已分目录无需再区分)。
  */
 export const BRAND_IDENTITY: BrandIdentity = Object.freeze({
   displayName: BRAND_NAME,
   executableName: 'Cindy',
   executableNameByRegion: Object.freeze({
     cn: 'Cindy',
-    global: 'CindyGlobal',
+    // 2026-07-26 与 cn 同值(见字段 doc):global 包全部可见位置显示 Cindy,
+    // 放弃 cn/global 同机双装的文件层隔离;appId / userData 仍分区。
+    global: 'Cindy',
     dev: 'CindyDev',
   }),
   appIdByRegion: Object.freeze({

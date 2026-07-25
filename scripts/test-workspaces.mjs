@@ -442,6 +442,34 @@ export function buildPreflightArgs(root, workspace, preflight) {
 	throw new Error(`Unsupported preflight type: ${preflight.type}`);
 }
 
+export function createOutputForwarder(stream) {
+	let writable = Boolean(stream);
+	let unexpectedError = null;
+	const onError = (error) => {
+		writable = false;
+		if (error?.code !== "EPIPE") unexpectedError = error;
+	};
+	stream?.on?.("error", onError);
+	return {
+		write(chunk) {
+			if (!writable) return;
+			try {
+				stream.write(chunk);
+			} catch (error) {
+				onError(error);
+			}
+		},
+		finish() {
+			stream?.off?.("error", onError);
+			return unexpectedError;
+		},
+	};
+}
+
+export function resolveOutputStream(configured, fallback) {
+	return configured === undefined ? fallback : configured;
+}
+
 export function runCommand(command, args, options = {}) {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
@@ -451,27 +479,37 @@ export function runCommand(command, args, options = {}) {
 		});
 		let output = "";
 		let settled = false;
+		const stdout = createOutputForwarder(resolveOutputStream(options.stdout, process.stdout));
+		const stderr = createOutputForwarder(resolveOutputStream(options.stderr, process.stderr));
 		const finish = (result) => {
 			if (settled) return;
 			settled = true;
-			resolve(result);
+			const stdoutError = stdout.finish();
+			const stderrError = stderr.finish();
+			const forwardingError = stdoutError ?? stderrError;
+			if (forwardingError) {
+				output += `\nOutput forwarding failed: ${forwardingError.message ?? String(forwardingError)}`;
+				resolve({ exitCode: 1, output });
+				return;
+			}
+			resolve({ ...result, output });
 		};
 		child.stdout?.on("data", (chunk) => {
 			const text = chunk.toString();
 			output += text;
-			process.stdout.write(chunk);
+			stdout.write(chunk);
 		});
 		child.stderr?.on("data", (chunk) => {
 			const text = chunk.toString();
 			output += text;
-			process.stderr.write(chunk);
+			stderr.write(chunk);
 		});
 		child.on("error", (error) => {
 			output += error.message;
-			finish({ exitCode: 1, output });
+			finish({ exitCode: 1 });
 		});
 		child.on("close", (code) => {
-			finish({ exitCode: code ?? 1, output });
+			finish({ exitCode: code ?? 1 });
 		});
 	});
 }
@@ -650,6 +688,14 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	// A supervising terminal/tool may close its output pipe while the workspace
+	// child keeps running. Keep later summary writes from crashing on EPIPE;
+	// unexpected stream failures remain fatal.
+	for (const stream of [process.stdout, process.stderr]) {
+		stream.on("error", (error) => {
+			if (error?.code !== "EPIPE") throw error;
+		});
+	}
 	main().catch((error) => {
 		console.error(error);
 		process.exitCode = 1;

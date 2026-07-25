@@ -28,6 +28,7 @@ import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
   formatModelPricePair,
+  modelPriceDiscountLabelValues,
   modelPriceDetailRows,
   modelPricePresentation,
 } from '@/lib/modelPriceFormat';
@@ -914,8 +915,17 @@ function ModelSelectorContentView({
   const editingPricePresentation = editingModel
     ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
+  const editingDiscount =
+    editingPricePresentation?.kind === 'priced' ? editingPricePresentation.discount : undefined;
   const editingPromotionLabel =
-    editingPricePresentation?.kind === 'free' ? t('newChat.modelSelector.pricing.free') : null;
+    editingPricePresentation?.kind === 'free'
+      ? t('newChat.modelSelector.pricing.free')
+      : editingDiscount !== undefined
+        ? t(
+            'newChat.modelSelector.pricing.discount',
+            modelPriceDiscountLabelValues(editingDiscount),
+          )
+        : null;
 
   // 每个模型行的信息 / 配置内容由一个独立的 portaled Popover 承载,而不是拼进主菜单宽度。
   // 这样浮层会像 Hermes 的 Radix submenu 一样贴着当前行移动,切行不触发主菜单重排。
@@ -1017,16 +1027,23 @@ function ModelSelectorContentView({
             {editingPricePresentation.kind === 'priced' && (
               <>
                 <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-12 leading-[1.4]">
-                  {modelPriceDetailRows(editingPricePresentation.current).map((row) => (
+                  {modelPriceDetailRows(
+                    editingPricePresentation.current,
+                    editingPricePresentation.original,
+                  ).map((row) => (
                     <div key={row.kind} className="contents">
                       <span className="text-[var(--text-secondary)]">
                         {t(`newChat.modelSelector.pricing.${row.kind}`)}
                       </span>
                       <span className="flex items-center justify-end gap-1.5 tabular-nums">
                         <span className="text-[var(--model-item-text)]">
-                          {editingPricePresentation.current.approximate ? '≈' : ''}
                           {row.value}
                         </span>
+                        {row.originalValue && (
+                          <span className="text-[var(--text-tertiary)] line-through">
+                            {row.originalValue}
+                          </span>
+                        )}
                       </span>
                     </div>
                   ))}
@@ -1073,13 +1090,21 @@ function ModelSelectorContentView({
   const renderModelItem = (provider: ProviderView | null, model: RowModel) => {
     const providerId = provider?.id ?? null;
     const isSelected = isSelectedRow(providerId, model.id);
+    const isBudgetModel = model.id.startsWith('codex/');
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
     const disabled = modelDisabledOf(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
     const rowPrice = pricePresentationOf(providerId, model.id);
     const rowPromotionLabel =
-      rowPrice?.kind === 'free' ? t('newChat.modelSelector.pricing.free') : null;
+      rowPrice?.kind === 'free'
+        ? t('newChat.modelSelector.pricing.free')
+        : rowPrice?.kind === 'priced' && rowPrice.discount !== undefined
+          ? t(
+              'newChat.modelSelector.pricing.discount',
+              modelPriceDiscountLabelValues(rowPrice.discount),
+            )
+          : null;
     // 信息面板对所有可用模型开放;能否编辑 effort / Fast 在面板内部另行判定。
     // session-agent-switch 浏览目标引擎态同样开放:选模型前正需要看描述/上下文/价格/来源;
     // 面板内配置写的是**目标引擎**的 per-(来源,模型) 全局预设(currentAgentKind 已随浏览态
@@ -1191,11 +1216,16 @@ function ModelSelectorContentView({
                     />
                   )}
                 </span>
-                {(isSubscriptionModel || rowPromotionLabel) && (
+                {(isSubscriptionModel || isBudgetModel || rowPromotionLabel) && (
                   <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
                     {isSubscriptionModel && (
                       <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
                         {t('settings.providers.models.subscription')}
+                      </span>
+                    )}
+                    {isBudgetModel && (
+                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--model-budget-badge-bg)] px-2 py-[1px] text-[11px] font-medium text-[var(--model-budget-badge-text)]">
+                        {t('newChat.modelSelector.meta.budgetDiscount')}
                       </span>
                     )}
                     {rowPromotionLabel && (
@@ -1208,10 +1238,21 @@ function ModelSelectorContentView({
             {(rowPrice?.kind === 'priced' || isSelected) && (
               <span className="ml-2 flex shrink-0 items-center gap-1.5">
                 {rowPrice?.kind === 'priced' && (
-                  <span className="flex items-center tabular-nums text-11 font-normal leading-[1.25]">
+                  <span
+                    data-model-price-stack={rowPrice.original ? 'true' : undefined}
+                    className={cn(
+                      'flex tabular-nums text-11 font-normal leading-[1.25]',
+                      rowPrice.original ? 'flex-col items-end' : 'items-center',
+                    )}
+                  >
                     <span className="text-[var(--text-secondary)]">
                       {formatModelPricePair(rowPrice.current)}
                     </span>
+                    {rowPrice.original && (
+                      <span className="text-[var(--text-tertiary)] line-through">
+                        {formatModelPricePair(rowPrice.original)}
+                      </span>
+                    )}
                   </span>
                 )}
                 {isSelected && (
@@ -1575,7 +1616,15 @@ export function ModelSelector({
     );
   })();
   const triggerPromotionLabel =
-    triggerPricePresentation?.kind === 'free' ? t('newChat.modelSelector.pricing.free') : null;
+    triggerPricePresentation?.kind === 'free'
+      ? t('newChat.modelSelector.pricing.free')
+      : triggerPricePresentation?.kind === 'priced' &&
+          triggerPricePresentation.discount !== undefined
+        ? t(
+            'newChat.modelSelector.pricing.discount',
+            modelPriceDiscountLabelValues(triggerPricePresentation.discount),
+          )
+        : null;
   // 断开态同一规则,只是来源取「真实断开来源」(currentProviderId)。
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)

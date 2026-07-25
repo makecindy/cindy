@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import manifest from "../test-workspaces.config.mjs";
@@ -10,6 +11,7 @@ import {
 	checkIncludeCoverage,
 	checkTestFiles,
 	classifyFailure,
+	createOutputForwarder,
 	discoverTestFiles,
 	expandWorkspacePatterns,
 	filterRunsByWorkspace,
@@ -20,6 +22,7 @@ import {
 	planRuns,
 	printSummary,
 	resolvePnpmInvocation,
+	resolveOutputStream,
 	runCommand,
 	runPlannedTests,
 	selectFilesForTier,
@@ -673,6 +676,44 @@ test("runCommand resolves spawn errors as failed command results", async () => {
 	});
 	assert.equal(result.exitCode, 1);
 	assert.match(result.output, /ENOENT|not found|找不到|无法|spawn/i);
+});
+
+test("createOutputForwarder stops writing after EPIPE without treating it as a command failure", () => {
+	class FakeStream extends EventEmitter {
+		writes = [];
+		write(chunk) {
+			this.writes.push(chunk.toString());
+		}
+	}
+	const stream = new FakeStream();
+	const forwarder = createOutputForwarder(stream);
+	forwarder.write(Buffer.from("before"));
+	stream.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
+	assert.doesNotThrow(() => forwarder.write(Buffer.from("after")));
+	assert.deepEqual(stream.writes, ["before"]);
+	assert.equal(forwarder.finish(), null);
+});
+
+test("resolveOutputStream preserves explicit null while defaulting undefined", () => {
+	const fallback = new EventEmitter();
+	assert.equal(resolveOutputStream(undefined, fallback), fallback);
+	assert.equal(resolveOutputStream(null, fallback), null);
+});
+
+test("runCommand completes successfully when its output consumer closes with EPIPE", async () => {
+	class ClosedStream extends EventEmitter {
+		write() {}
+	}
+	const stream = new ClosedStream();
+	const pending = runCommand(
+		process.execPath,
+		["-e", "setTimeout(() => process.stdout.write('child-finished'), 20)"],
+		{ shell: false, stdout: stream, stderr: stream },
+	);
+	stream.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
+	const result = await pending;
+	assert.equal(result.exitCode, 0);
+	assert.match(result.output, /child-finished/);
 });
 
 test("runPlannedTests skips test command when preflight fails", async () => {

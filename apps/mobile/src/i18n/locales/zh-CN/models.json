@@ -8,6 +8,7 @@
     "emptyDefault": "暂无可用模型",
     "loadingDefault": "正在加载模型…",
     "subscriptionBadge": "订阅",
+    "discountBadge": "特别折扣",
     "backToModels": "返回模型列表",
     "agentSwitchHint": "选择模型后，下一条消息将切换到 {{agent}}",
     "crossAgentEmptyHint": "请先在被控电脑连接 {{agent}} 的模型来源",

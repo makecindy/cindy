@@ -109,6 +109,92 @@ Exact bundled library versions:
 Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3.
 
 ------------------------------------------------------------------------------
+@img/sharp-libvips-linux-arm64 embedded native libraries 1.3.2
+License: LicenseRef-Sharp-Third-Party-Licenses
+Source: https://github.com/lovell/sharp-libvips/tree/v1.3.2
+------------------------------------------------------------------------------
+# `@img/sharp-libvips-linux-arm64`
+
+Prebuilt libvips and dependencies for use with sharp on Linux (glibc) 64-bit ARM.
+
+## Licensing
+
+This software contains third-party libraries
+used under the terms of the following licenses:
+
+| Library       | Used under the terms of                                                                                   |
+|---------------|-----------------------------------------------------------------------------------------------------------|
+| aom           | BSD 2-Clause + [Alliance for Open Media Patent License 1.0](https://aomedia.org/license/patent-license/)  |
+| cairo         | Mozilla Public License 2.0                                                                                |
+| cgif          | MIT License                                                                                               |
+| expat         | MIT License                                                                                               |
+| fontconfig    | [fontconfig License](https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING) (BSD-like)   |
+| freetype      | [freetype License](https://git.savannah.gnu.org/cgit/freetype/freetype2.git/tree/docs/FTL.TXT) (BSD-like) |
+| fribidi       | LGPLv3                                                                                                    |
+| glib          | LGPLv3                                                                                                    |
+| harfbuzz      | MIT License                                                                                               |
+| highway       | BSD 3-Clause                                                                                              |
+| lcms          | MIT License                                                                                               |
+| libarchive    | BSD 2-Clause                                                                                              |
+| libexif       | LGPLv3                                                                                                    |
+| libffi        | MIT License                                                                                               |
+| libheif       | LGPLv3                                                                                                    |
+| libimagequant | [BSD 2-Clause](https://github.com/lovell/libimagequant/blob/main/COPYRIGHT)                               |
+| libnsgif      | MIT License                                                                                               |
+| libpng        | [libpng License](https://github.com/pnggroup/libpng/blob/master/LICENSE)                                  |
+| librsvg       | LGPLv3                                                                                                    |
+| libtiff       | [libtiff License](https://gitlab.com/libtiff/libtiff/blob/master/LICENSE.md) (BSD-like)                   |
+| libultrahdr   | MIT License                                                                                               |
+| libvips       | LGPLv3                                                                                                    |
+| libwebp       | New BSD License                                                                                           |
+| libxml2       | MIT License                                                                                               |
+| mozjpeg       | [zlib License, IJG License, BSD 3-Clause](https://github.com/mozilla/mozjpeg/blob/master/LICENSE.md)      |
+| pango         | LGPLv3                                                                                                    |
+| pixman        | MIT License                                                                                               |
+| proxy-libintl | LGPLv3                                                                                                    |
+| zlib-ng       | [zlib License](https://github.com/zlib-ng/zlib-ng/blob/develop/LICENSE.md)                                |
+
+Use of libraries under the terms of the LGPLv3 is via the
+"any later version" clause of the LGPLv2 or LGPLv2.1.
+
+Please report any errors or omissions via
+https://github.com/lovell/sharp-libvips/issues/new
+
+Exact bundled library versions:
+{
+  "aom": "3.14.1",
+  "archive": "3.8.8",
+  "cairo": "1.18.4",
+  "cgif": "0.5.3",
+  "exif": "0.6.26",
+  "expat": "2.8.2",
+  "ffi": "3.6.0",
+  "fontconfig": "2.18.1",
+  "freetype": "2.14.3",
+  "fribidi": "1.0.16",
+  "glib": "2.89.1",
+  "harfbuzz": "14.2.1",
+  "heif": "1.23.1",
+  "highway": "1.4.0",
+  "imagequant": "2.4.1",
+  "lcms": "2.19.1",
+  "mozjpeg": "0826579",
+  "pango": "1.58.0",
+  "pixman": "0.46.4",
+  "png": "1.6.58",
+  "proxy-libintl": "0.5",
+  "rsvg": "2.62.90",
+  "tiff": "d01a94b",
+  "uhdr": "1acdbed",
+  "vips": "8.18.3",
+  "webp": "1.6.0",
+  "xml2": "2.15.3",
+  "zlib-ng": "2.3.3"
+}
+
+Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. The bundled libvips version is 8.18.3.
+
+------------------------------------------------------------------------------
 @img/sharp-libvips-linux-x64 embedded native libraries 1.3.2
 License: LicenseRef-Sharp-Third-Party-Licenses
 Source: https://github.com/lovell/sharp-libvips/tree/v1.3.2
@@ -3233,7 +3319,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-OpenAI Codex CLI (bundled binary) 0.144.6
+OpenAI Codex CLI (bundled binary) 0.145.0
 License: Apache-2.0
 Source: https://github.com/openai/codex
 ------------------------------------------------------------------------------
@@ -3737,7 +3823,7 @@ Apache License
    limitations under the License.
 
 ==============================================================================
-SECTION 2: npm packages (793 packages)
+SECTION 2: npm packages (800 packages)
 ==============================================================================
 
 - @antfu/install-pkg@1.1.0 — MIT — https://github.com/antfu/install-pkg
@@ -3799,8 +3885,12 @@ SECTION 2: npm packages (793 packages)
 - @img/sharp-libvips-darwin-arm64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-darwin-x64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-darwin-x64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
+- @img/sharp-libvips-linux-arm64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
+- @img/sharp-libvips-linux-arm64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-linux-x64@1.2.4 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
 - @img/sharp-libvips-linux-x64@1.3.2 — LGPL-3.0-or-later — https://github.com/lovell/sharp-libvips
+- @img/sharp-linux-arm64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
+- @img/sharp-linux-arm64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-x64@0.34.5 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-linux-x64@0.35.3 — Apache-2.0 — https://github.com/lovell/sharp
 - @img/sharp-win32-x64@0.34.5 — Apache-2.0 AND LGPL-3.0-or-later — https://github.com/lovell/sharp
@@ -3833,11 +3923,13 @@ SECTION 2: npm packages (793 packages)
 - @napi-rs/canvas@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-darwin-arm64@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-darwin-x64@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-gnu@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-linux-x64-gnu@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-win32-x64-msvc@0.1.100 — MIT — https://github.com/Brooooooklyn/canvas
 - @napi-rs/woff-build@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-darwin-arm64@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-darwin-x64@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
+- @napi-rs/woff-build-linux-arm64-gnu@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-linux-x64-gnu@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @napi-rs/woff-build-win32-x64-msvc@0.2.2 — MIT — https://github.com/Brooooooklyn/woff-build
 - @noble/hashes@1.8.0 — MIT — https://github.com/paulmillr/noble-hashes
@@ -3845,6 +3937,7 @@ SECTION 2: npm packages (793 packages)
 - @parcel/watcher@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-darwin-arm64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-darwin-x64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
+- @parcel/watcher-linux-arm64-glibc@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-linux-x64-glibc@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @parcel/watcher-win32-x64@2.5.6 — MIT — https://github.com/parcel-bundler/watcher
 - @pkgjs/parseargs@0.11.0 — MIT — https://github.com/pkgjs/parseargs
@@ -27072,7 +27165,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[138] Applies to: npm:@img/sharp-darwin-arm64@0.34.5, npm:@img/sharp-darwin-arm64@0.35.3, npm:@img/sharp-darwin-x64@0.34.5, npm:@img/sharp-darwin-x64@0.35.3, npm:@img/sharp-linux-x64@0.34.5, npm:@img/sharp-linux-x64@0.35.3, npm:@img/sharp-win32-x64@0.34.5, npm:@img/sharp-win32-x64@0.35.3, npm:sharp@0.35.3
+[138] Applies to: npm:@img/sharp-darwin-arm64@0.34.5, npm:@img/sharp-darwin-arm64@0.35.3, npm:@img/sharp-darwin-x64@0.34.5, npm:@img/sharp-darwin-x64@0.35.3, npm:@img/sharp-linux-arm64@0.34.5, npm:@img/sharp-linux-arm64@0.35.3, npm:@img/sharp-linux-x64@0.34.5, npm:@img/sharp-linux-x64@0.35.3, npm:@img/sharp-win32-x64@0.34.5, npm:@img/sharp-win32-x64@0.35.3, npm:sharp@0.35.3
 ------------------------------------------------------------------------------
 Apache License
 Version 2.0, January 2004
@@ -27629,7 +27722,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[154] Applies to: npm:@parcel/watcher@2.5.6, npm:@parcel/watcher-darwin-arm64@2.5.6, npm:@parcel/watcher-darwin-x64@2.5.6, npm:@parcel/watcher-linux-x64-glibc@2.5.6, npm:@parcel/watcher-win32-x64@2.5.6
+[154] Applies to: npm:@parcel/watcher@2.5.6, npm:@parcel/watcher-darwin-arm64@2.5.6, npm:@parcel/watcher-darwin-x64@2.5.6, npm:@parcel/watcher-linux-arm64-glibc@2.5.6, npm:@parcel/watcher-linux-x64-glibc@2.5.6, npm:@parcel/watcher-win32-x64@2.5.6
 ------------------------------------------------------------------------------
 MIT License
 
@@ -38813,16 +38906,20 @@ Packages without a standalone license file (license per package.json):
 - npm:@img/sharp-libvips-darwin-arm64@1.3.2 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-darwin-x64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-darwin-x64@1.3.2 (LGPL-3.0-or-later)
+- npm:@img/sharp-libvips-linux-arm64@1.2.4 (LGPL-3.0-or-later)
+- npm:@img/sharp-libvips-linux-arm64@1.3.2 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-linux-x64@1.2.4 (LGPL-3.0-or-later)
 - npm:@img/sharp-libvips-linux-x64@1.3.2 (LGPL-3.0-or-later)
 - npm:@lit-labs/ssr-dom-shim@1.6.0 (BSD-3-Clause)
 - npm:@napi-rs/canvas-darwin-arm64@0.1.100 (MIT)
 - npm:@napi-rs/canvas-darwin-x64@0.1.100 (MIT)
+- npm:@napi-rs/canvas-linux-arm64-gnu@0.1.100 (MIT)
 - npm:@napi-rs/canvas-linux-x64-gnu@0.1.100 (MIT)
 - npm:@napi-rs/canvas-win32-x64-msvc@0.1.100 (MIT)
 - npm:@napi-rs/woff-build@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-darwin-arm64@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-darwin-x64@0.2.2 (MIT)
+- npm:@napi-rs/woff-build-linux-arm64-gnu@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-linux-x64-gnu@0.2.2 (MIT)
 - npm:@napi-rs/woff-build-win32-x64-msvc@0.2.2 (MIT)
 - npm:@sapphire/async-queue@1.5.5 (MIT)

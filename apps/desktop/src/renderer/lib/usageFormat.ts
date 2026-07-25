@@ -37,10 +37,10 @@ export function formatTurnCostUsd(n: number): string {
 }
 
 function moneyPrefix(money: RegionalMoney): string {
-  return `${money.approximate ? '≈' : ''}${money.currency === 'CNY' ? '¥' : '$'}`;
+  return money.currency === 'CNY' ? '¥' : '$';
 }
 
-/** 区域金额的紧凑展示；币种与约值语义来自金额本身。 */
+/** 区域金额的紧凑展示；币种来自金额本身。 */
 export function formatCompactMoney(money: RegionalMoney): string {
   const prefix = moneyPrefix(money);
   if (money.amount >= 1000) return `${prefix}${(money.amount / 1000).toFixed(1)}k`;
@@ -56,14 +56,13 @@ export function formatMoney(money: RegionalMoney): string {
 /** 每轮 / 每模型金额：固定两位；小于最小货币展示单位时显示下界。 */
 export function formatTurnCostMoney(money: RegionalMoney): string {
   const symbol = money.currency === 'CNY' ? '¥' : '$';
-  const approximate = money.approximate ? '≈' : '';
   if (money.amount === 0) {
-    return `${approximate}${symbol}0.00`;
+    return `${symbol}0.00`;
   }
   if (money.amount >= 0.01) {
-    return `${approximate}${symbol}${money.amount.toFixed(2)}`;
+    return `${symbol}${money.amount.toFixed(2)}`;
   }
-  return `${approximate}<${symbol}0.01`;
+  return `<${symbol}0.01`;
 }
 
 /**

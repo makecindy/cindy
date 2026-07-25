@@ -630,7 +630,6 @@ describe('billing response projection', () => {
         subscriptionId: 'subscription_1',
         status: 'ACTIVE',
         provider: 'future_provider',
-        managementAction: 'FUTURE_ACTION',
         currentPeriodStartAt: now,
         currentPeriodEndAt: '2026-08-23T12:00:00.000Z',
         entitlementValidUntil: null,
@@ -672,7 +671,6 @@ describe('billing response projection', () => {
     });
 
     expect(projected.subscription).not.toHaveProperty('provider');
-    expect(projected.subscription).not.toHaveProperty('managementAction');
     expect(projected.subscription?.paymentAction).toBeNull();
     expect(projected.subscription?.effectivePlan).toEqual({
       version: 1,

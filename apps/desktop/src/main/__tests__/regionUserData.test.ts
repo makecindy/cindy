@@ -36,7 +36,7 @@ describe('resolveRegionUserDataDirName', () => {
       resolveRegionUserDataDirName({
         isPackaged: true,
         region: 'global',
-        argv: ['CindyGlobal.exe', '--smoke-test', '--user-data-dir=C:\\tmp\\xdt-smoke-x'],
+        argv: ['Cindy.exe', '--smoke-test', '--user-data-dir=C:\\tmp\\xdt-smoke-x'],
       }),
     ).toBeNull();
     // 空格分隔形态同样尊重。
@@ -44,7 +44,7 @@ describe('resolveRegionUserDataDirName', () => {
       resolveRegionUserDataDirName({
         isPackaged: true,
         region: 'global',
-        argv: ['CindyGlobal.exe', '--user-data-dir', 'C:\\tmp\\xdt-smoke-x'],
+        argv: ['Cindy.exe', '--user-data-dir', 'C:\\tmp\\xdt-smoke-x'],
       }),
     ).toBeNull();
   });

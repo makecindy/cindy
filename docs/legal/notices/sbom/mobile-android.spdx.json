@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-android",
-  "documentNamespace": "https://cindy.app/spdx/mobile-android/7ac103f6275395caf935bdf5ef4a72c150d61eb9a326511113f40c55259bbaf4",
+  "documentNamespace": "https://cindy.app/spdx/mobile-android/9f845f2d234656d48bca8d491b1ea3a5bd15a79c4fa744be623e71f447ec805e",
   "creationInfo": {
-    "created": "1970-01-01T00:00:00Z",
+    "created": "2026-07-25T09:00:18Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -4758,23 +4758,6 @@
       ]
     },
     {
-      "name": "expo-app-metrics",
-      "SPDXID": "SPDXRef-Package-9fa8a6a38ae8d662",
-      "versionInfo": "56.0.22",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-app-metrics@56.0.22"
-        }
-      ]
-    },
-    {
       "name": "expo-apple-authentication",
       "SPDXID": "SPDXRef-Package-49bdb2df683d4c2b",
       "versionInfo": "56.0.4",
@@ -4873,6 +4856,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/expo-blur@56.0.4"
+        }
+      ]
+    },
+    {
+      "name": "expo-build-properties",
+      "SPDXID": "SPDXRef-Package-4509b3d6d2ad2247",
+      "versionInfo": "56.0.23",
+      "downloadLocation": "https://github.com/expo/expo",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/expo-build-properties@56.0.23"
         }
       ]
     },
@@ -5264,23 +5264,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/expo-notifications@56.0.22"
-        }
-      ]
-    },
-    {
-      "name": "expo-observe",
-      "SPDXID": "SPDXRef-Package-5c5692f1c657fb71",
-      "versionInfo": "56.0.25",
-      "downloadLocation": "https://github.com/expo/expo",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/expo-observe@56.0.25"
         }
       ]
     },
@@ -5999,6 +5982,23 @@
       ]
     },
     {
+      "name": "html-parse-stringify",
+      "SPDXID": "SPDXRef-Package-6ef78d9f0b7d9b3b",
+      "versionInfo": "3.0.1",
+      "downloadLocation": "https://github.com/henrikjoreteg/html-parse-stringify",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/html-parse-stringify@3.0.1"
+        }
+      ]
+    },
+    {
       "name": "http-errors",
       "SPDXID": "SPDXRef-Package-7d95141fe15e4246",
       "versionInfo": "2.0.1",
@@ -6046,6 +6046,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/hyphenate-style-name@1.1.0"
+        }
+      ]
+    },
+    {
+      "name": "i18next",
+      "SPDXID": "SPDXRef-Package-26a89b23ae1e8836",
+      "versionInfo": "26.3.6",
+      "downloadLocation": "https://github.com/i18next/i18next",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/i18next@26.3.6"
         }
       ]
     },
@@ -6594,23 +6611,6 @@
       ]
     },
     {
-      "name": "lightningcss-linux-arm64-musl",
-      "SPDXID": "SPDXRef-Package-ccff521b7cd0e8ec",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-linux-arm64-musl@1.32.0"
-        }
-      ]
-    },
-    {
       "name": "lightningcss-linux-x64-gnu",
       "SPDXID": "SPDXRef-Package-3514c4270c99770a",
       "versionInfo": "1.32.0",
@@ -6624,23 +6624,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/lightningcss-linux-x64-gnu@1.32.0"
-        }
-      ]
-    },
-    {
-      "name": "lightningcss-linux-x64-musl",
-      "SPDXID": "SPDXRef-Package-411a7a03161949c3",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-linux-x64-musl@1.32.0"
         }
       ]
     },
@@ -8188,6 +8171,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/react-freeze@1.0.4"
+        }
+      ]
+    },
+    {
+      "name": "react-i18next",
+      "SPDXID": "SPDXRef-Package-ce0aebab76b41ddf",
+      "versionInfo": "17.0.10",
+      "downloadLocation": "https://github.com/i18next/react-i18next",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/react-i18next@17.0.10"
         }
       ]
     },
@@ -9977,6 +9977,23 @@
       ]
     },
     {
+      "name": "void-elements",
+      "SPDXID": "SPDXRef-Package-6b90d60faa288494",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "https://github.com/pugjs/void-elements",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/void-elements@3.1.0"
+        }
+      ]
+    },
+    {
       "name": "walker",
       "SPDXID": "SPDXRef-Package-eb35f4e02118d441",
       "versionInfo": "1.0.8",
@@ -11738,11 +11755,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-9fa8a6a38ae8d662"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-49bdb2df683d4c2b"
     },
     {
@@ -11769,6 +11781,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-1f337586ebdeb8f6"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4509b3d6d2ad2247"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -11884,11 +11901,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4a45e7754a1432e1"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-5c5692f1c657fb71"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12103,6 +12115,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6ef78d9f0b7d9b3b"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-7d95141fe15e4246"
     },
     {
@@ -12114,6 +12131,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-aabe38b925a569f7"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-26a89b23ae1e8836"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12278,17 +12300,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-ccff521b7cd0e8ec"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3514c4270c99770a"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-411a7a03161949c3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -12744,6 +12756,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-755e2d6cd761c784"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ce0aebab76b41ddf"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13269,6 +13286,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-a2c0c9d73501504e"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6b90d60faa288494"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

@@ -31,6 +31,7 @@ import {
   resolveHooksDir,
   resolveHooksPathFrom,
 } from '../install-dco-hook.mjs';
+import { resolvePosixShell } from '../lib/posix-shell.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const CHECK_DCO = path.join(ROOT, 'scripts', 'check-dco.mjs');
@@ -360,7 +361,7 @@ test('legacy hooks-path fallback resolves against the caller cwd', () => {
   assert.equal(resolveHooksPathFrom(path.resolve('/abs/.git/hooks'), '/anywhere'), path.resolve('/abs/.git/hooks'));
 });
 
-test('the hook source is a POSIX sh script that pins its trailer behaviour', () => {
+test('the hook source pins its POSIX trailer behaviour', () => {
   const source = readHookSource();
   assert.match(source, /^#!\/bin\/sh\n/);
   assert.ok(source.includes(HOOK_MARKER), 'hook 必须带 marker，否则安装器无法认领它');
@@ -372,8 +373,77 @@ test('the hook source is a POSIX sh script that pins its trailer behaviour', () 
   // 配成 doNothing 时 hook 会在已有他人签名的提交上静默漏签，必须显式钉住。
   assert.match(source, /--if-exists addIfDifferent/);
   assert.match(source, /--if-missing add/);
-  // 语法必须是 POSIX sh：hook 由 git 用 /bin/sh 执行，bashism 在 dash 上会直接失败。
-  execFileSync('sh', ['-n', path.join(ROOT, HOOK_SOURCE_PATH)]);
+});
+
+const posixSh = resolvePosixShell('sh');
+test(
+  'the hook source passes POSIX sh syntax validation',
+  { skip: posixSh === null ? 'POSIX sh is unavailable on this host' : false },
+  () => {
+    // Git for Windows 自带 sh 但不保证其 bin 目录进入 PATH；macOS/Linux 仍走系统 sh。
+    execFileSync(posixSh, ['-n', path.join(ROOT, HOOK_SOURCE_PATH)]);
+  },
+);
+
+test('resolvePosixShell preserves Unix PATH lookup and locates Git for Windows shells', () => {
+  const mustNotProbe = () => {
+    throw new Error('non-Windows resolution must not probe the Windows filesystem');
+  };
+  assert.equal(
+    resolvePosixShell('sh', {
+      platform: 'linux',
+      spawnSyncImpl: mustNotProbe,
+      existsSync: mustNotProbe,
+    }),
+    'sh',
+  );
+  assert.equal(
+    resolvePosixShell('bash', {
+      platform: 'darwin',
+      spawnSyncImpl: mustNotProbe,
+      existsSync: mustNotProbe,
+    }),
+    'bash',
+  );
+
+  const expected = path.win32.join('D:\\Tools\\Git', 'bin', 'sh.exe');
+  assert.equal(
+    resolvePosixShell('sh', {
+      platform: 'win32',
+      env: {},
+      spawnSyncImpl: () => ({
+        status: 0,
+        stdout: 'D:\\Tools\\Git\\cmd\\git.exe\r\n',
+      }),
+      existsSync: (candidate) => candidate === expected,
+    }),
+    expected,
+  );
+});
+
+test('resolvePosixShell never probes relative candidates from blank or invalid Windows env paths', () => {
+  const candidates = [];
+  assert.equal(
+    resolvePosixShell('sh', {
+      platform: 'win32',
+      env: {
+        ProgramFiles: '',
+        'ProgramFiles(x86)': 'relative',
+        LOCALAPPDATA: ' ',
+      },
+      spawnSyncImpl: () => ({ status: 1, stdout: '' }),
+      existsSync: (candidate) => {
+        candidates.push(candidate);
+        return false;
+      },
+    }),
+    null,
+  );
+  assert.deepEqual(candidates, [
+    path.win32.join('C:\\Program Files', 'Git', 'bin', 'sh.exe'),
+    path.win32.join('C:\\Program Files (x86)', 'Git', 'bin', 'sh.exe'),
+  ]);
+  assert.ok(candidates.every((candidate) => path.win32.isAbsolute(candidate)));
 });
 
 // --- 端到端：真 git 仓库 ---

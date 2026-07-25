@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(
   resolve(__dirname, '..', 'components', 'settings', 'BuiltinToolsSection.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 describe('BuiltinToolsSection working directory scope', () => {
   it('groups managed worktrees locally without changing the shared active cwd', () => {

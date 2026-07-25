@@ -39,6 +39,37 @@ const USER_DATA_DIR_NAME = extractLiteral(
   /userDataDirName:\s*'([^']+)'/,
   'brandIdentity.ts userDataDirName',
 );
+/**
+ * 从源码里抽取形如 `<mapName>: Object.freeze({ cn: '...', ... })` 的区域映射。
+ * 锚定到 `Object.freeze({` 赋值处:字段名可能还出现在 interface 声明里。
+ */
+function extractRegionMap(source, mapName, label) {
+  const blockRe = new RegExp(`${mapName}\\s*[:=]\\s*Object\\.freeze\\(\\{([\\s\\S]*?)\\}\\)`);
+  const block = blockRe.exec(source);
+  assert.ok(block, `pattern not found: ${label} (${blockRe})`);
+  const map = {};
+  for (const [, key, value] of block[1].matchAll(/(cn|global|dev):\s*'([^']+)'/g)) {
+    map[key] = value;
+  }
+  assert.deepEqual(Object.keys(map).sort(), ['cn', 'dev', 'global'], `${label} 缺区域键`);
+  return map;
+}
+
+test('ci/lib.mjs PACKAGED_APP_NAME_BY_REGION mirrors brandIdentity.executableNameByRegion', () => {
+  const expected = extractRegionMap(
+    brandIdentitySource,
+    'executableNameByRegion',
+    'brandIdentity.ts executableNameByRegion',
+  );
+  const libSource = readSource('apps/desktop/scripts/ci/lib.mjs');
+  const actual = extractRegionMap(
+    libSource,
+    'PACKAGED_APP_NAME_BY_REGION',
+    'ci/lib.mjs PACKAGED_APP_NAME_BY_REGION',
+  );
+  assert.deepEqual(actual, expected);
+});
+
 test('smoke-packaged.mjs PACKAGED_APP_NAME mirrors brandIdentity.executableName', () => {
   const smokeSource = readSource('apps/desktop/scripts/smoke-packaged.mjs');
   const value = extractLiteral(
