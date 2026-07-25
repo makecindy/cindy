@@ -3,11 +3,11 @@
  * 由 ModelPickerSheet 装配)。
  *
  * 展现内容对齐桌面 ModelSelector 的 renderModelItem:每行 = 来源官方 mark + 模型名 +
- * `订阅`(订阅制来源)+ `85% off`(骨折版)+ 当前 effort 标签 + Fast 闪电(点亮时)+
- * 选中 Check + 行内「配置」入口。
+ * `订阅`(订阅制来源)+ 当前 effort 标签 + Fast 闪电(点亮时)+
+ * 选中 Check + 行内「配置」入口。折扣版不带行内徽标,靠分组标题区分。
  * 触屏适配:桌面 hover「Edit」→ 每行右侧常驻配置图标,点击经 `onOpenOptions` 通知浮窗
  * 打开二级「模型选项」SheetSurface(元信息 / 快速开关 / 推理强度,见 ModelOptionsSheetView),
- * 本组件不再承载行内展开。骨折版被控端无 gateway key → 整行置灰 + 行内提示。
+ * 本组件不再承载行内展开。折扣版被控端无 gateway key → 整行置灰 + 行内提示。
  *
  * 三态:① 供应商分段(providerRows 非空,选行 = 选「来源 + 模型」);② 扁平回退(flatOptions,
  * 旧被控端,无来源 mark、无记忆,仅选中行可配置);③ 空 → 加载中 / 暂无文案。
@@ -73,7 +73,7 @@ export interface MobileModelPickerListProps {
   selectedFastMode?: boolean;
   /** 非选中行 effort/fast 记忆读取器(草稿 = draftModelMemory / 会话 = sessionModelMirror)。 */
   modelMemory?: MobileModelMemoryAccessors;
-  /** 被控端网关 key presence('absent' 才置灰骨折版,缺省 'unknown' 不置灰)。 */
+  /** 被控端网关 key presence('absent' 才置灰折扣版,缺省 'unknown' 不置灰)。 */
   apiKeyStatus?: DeviceApiKeyStatus;
   /** 行内配置图标点击(打开二级「模型选项」浮窗);不传则不显示配置入口。 */
   onOpenOptions?(target: ModelOptionsOpenTarget): void;
@@ -193,7 +193,6 @@ export function MobileModelPickerList({
       <>
         {providerRows.map((row) => {
           const selected = row.model.id === activeModelId && row.provider.id === activeSourceId;
-          const isBudget = row.model.id.startsWith('codex/');
           // 对齐桌面 ModelSelector:订阅制来源(Claude.ai / ChatGPT 等)的模型带「订阅」徽标。
           const isSubscription = row.provider.access?.kind === 'subscription';
           const rowDisabled = budgetRowDisabled(row.model.id, apiKeyStatus);
@@ -272,11 +271,6 @@ export function MobileModelPickerList({
                   {isSubscription ? (
                     <View style={styles.budgetBadge}>
                       <Text style={styles.budgetBadgeText}>{t('models.picker.subscriptionBadge')}</Text>
-                    </View>
-                  ) : null}
-                  {isBudget ? (
-                    <View style={styles.budgetBadge}>
-                      <Text style={styles.budgetBadgeText}>85% off</Text>
                     </View>
                   ) : null}
                   {rowEffort ? (

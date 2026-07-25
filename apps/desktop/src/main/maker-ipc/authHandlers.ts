@@ -52,7 +52,7 @@ export function registerMakerAuthHandlers(
   });
 
   // presence-only:只回「有没有配 key」,绝不回密钥本体。device-link 控制端(手机 / 远程桌面)
-  // 用它决定骨折版(codex/)行是否置灰 —— key 与请求都在被控端,这里才是判定真相。
+  // 用它决定折扣版(codex/)行是否置灰 —— key 与请求都在被控端,这里才是判定真相。
   registry.handle(MAKER_INVOKE.API_KEY_PRESENT, async (): Promise<{ present: boolean }> => {
     return { present: !!readApiKey() };
   });

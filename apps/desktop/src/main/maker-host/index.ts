@@ -423,7 +423,7 @@ export function getMaker(): Maker {
       makerMemory: makerMemoryManager,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
-      // （gpt 原生 + codex/ 骨折网关路由）。「骨折GPT」codex/ 仍是「XD 网关来源」,渲染层按
+      // （gpt 原生 + codex/ 折扣网关路由）。「折扣GPT」codex/ 仍是「XD 网关来源」,渲染层按
       // 「XD 网关已连接」gate 可见性（ModelSelector onlyConnected / CreateWorkerPopover / ScheduleChips）。
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),

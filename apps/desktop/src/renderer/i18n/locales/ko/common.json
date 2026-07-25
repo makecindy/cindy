@@ -3846,7 +3846,6 @@
         "cacheRead": "캐시 읽기",
         "cacheCreate": "캐시 쓰기",
         "free": "기간 한정 무료",
-        "discount": "{{percent}}% 절약",
         "perMillion": "모델 표준 가격",
         "fixedFx": "고정 환율 1 USD = 6.7 CNY 기준 추정",
         "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다"
@@ -3859,7 +3858,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85% 할인",
+        "budget": "GPT 할인",
         "grok": "xAI",
         "google": "Google",
         "china": "국내",
@@ -3877,8 +3876,7 @@
       "meta": {
         "context": "컨텍스트 {{value}}",
         "price": "{{input}}/{{output}} / 100만",
-        "fastBadge": "고속",
-        "budgetDiscount": "85% 할인"
+        "fastBadge": "고속"
       },
       "source": {
         "railLabel": "소스",
@@ -5849,7 +5847,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT (85% 할인)",
+          "gpt-budget": "GPT 할인",
           "google": "Google",
           "china": "China"
         },

@@ -782,7 +782,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(oauthParams.modelProvider).toBe('cindy_openai');
     await oauthHandle.close();
 
-    // 骨折 codex/(gateway-key 家族)→ 保持默认 provider(本地压缩)。
+    // 折扣 codex/(gateway-key 家族)→ 保持默认 provider(本地压缩)。
     host.request.mock.calls.length = 0;
     const gatewayHandle = await agent.startSession({
       sessionId: 'session-gateway',

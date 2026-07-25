@@ -50,7 +50,7 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 
 describe('Claude Code translator empty-response guard', () => {
   it('surfaces an empty-response error when an API call returns no content and zero usage', async () => {
-    // 模拟骨折网关短路: message_start 发起一次 API call, 但整轮 0 文本 / 0 tool / usage 全 0。
+    // 模拟折扣网关短路: message_start 发起一次 API call, 但整轮 0 文本 / 0 tool / usage 全 0。
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx(tracker);

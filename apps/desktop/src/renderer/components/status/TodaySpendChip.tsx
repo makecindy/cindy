@@ -15,13 +15,13 @@
  * Codex 订阅形态主 chip 显示服务端下发的各限额窗口剩余 / 当前会话 USD 折算金额。
  * 窗口构成不做任何假设,完全以上游接口返回为准 —— OpenAI 会调整窗口策略
  * (典型:5h + 周双窗;2026-07 曾一度取消 5h 窗口,且可能随时恢复)。
- * 订阅模式下 USD 是 token 价值,API / codex/ 骨折 GPT 下是 gateway API 单价折算 cost。
+ * 订阅模式下 USD 是 token 价值,API / codex/ 折扣 GPT 下是 gateway API 单价折算 cost。
  * credits / token 明细只放 tooltip,不占主 chip。
  *
  * Codex tooltip 按当前会话实际 runtime route + 当前模型分两种:
  *   - oauth 模式 + 当前 app-server 以 OAuth bearer 启动 + 普通模型: 显示各限额窗口
  *     剩余额度、当前会话 token 累计、credits 明细。订阅没有单一 per-token 余额。
- *   - api 模式、app-server 以 gateway key 启动、或当前模型是 codex/ 骨折 GPT:
+ *   - api 模式、app-server 以 gateway key 启动、或当前模型是 codex/ 折扣 GPT:
  *     与 cc 同一把 XD key、同一套 LiteLLM 计费,直接复用 cc 的 daily/monthly/key
  *     cost 形态 (session 仍显示 USD 折算累计)。
  *
@@ -907,7 +907,7 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
 
 interface TodaySpendChipProps {
   vendorKey?: 'cc' | 'codex';
-  /** 当前会话模型;codex/ 骨折 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
+  /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
   modelId?: string | null;
   /**
    * 本会话显式选定的供应商('anthropic' / 'openai' / 'xd' / null=默认路由)。
@@ -1001,7 +1001,7 @@ export function TodaySpendChip({
   const isCodexXaiProvider =
     vendorKey === 'codex' && typeof modelId === 'string' && modelId.startsWith(XAI_MODEL_PREFIX);
   // codex 走订阅价值估算:ChatGPT 订阅需要 oauth-bearer 且未显式选 XD;xAI 由 proxy 注入
-  // SuperGrok OAuth,不依赖 Codex 子进程凭证。env-key fallback、codex/ 骨折、或显式选 XD
+  // SuperGrok OAuth,不依赖 Codex 子进程凭证。env-key fallback、codex/ 折扣、或显式选 XD
   // → 复用 cc 的 cost tooltip 形态。远端 Codex 的事实在远端 daemon 上,本机只记录 token
   // 价值估算,不写本地 gateway cost。
   const isCodexOauth = vendorKey === 'codex' && !isCodexXaiProvider && (

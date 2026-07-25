@@ -449,7 +449,7 @@ const stripGpt54Mini: ModelStripHandler = (body) => {
 const STRIP_HANDLERS: Readonly<Record<string, ModelStripHandler>> = {
   'gpt-5.4': stripGpt54,
   'gpt-5.4-mini': stripGpt54Mini,
-  // 「骨折GPT」低价路由 —— 与 gpt-5.4 打同一个 Azure 后端, 同样会因 output_config 报 400,
+  // 「折扣GPT」低价路由 —— 与 gpt-5.4 打同一个 Azure 后端, 同样会因 output_config 报 400,
   // 镜像 gpt-5.4 的 strip 行为 (复用同一 handler)。codex/gpt-5.5 暂不加, 与 gpt-5.5 一致。
   'codex/gpt-5.4': stripGpt54,
 };

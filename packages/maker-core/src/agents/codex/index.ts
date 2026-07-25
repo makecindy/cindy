@@ -1581,7 +1581,7 @@ export class CodexAgent extends BaseAgent {
       throw new Error(`Codex app-server host creation was superseded before ${stage}`);
     };
     // 方案 A(订阅超集 spawn):本地 gateway-key 诉求且 auth fallback 实际持有 OAuth 时,
-    // 升格为 oauth-bearer spawn。超集进程经 proxy 按会话换网关 key(XD/骨折计费不变),
+    // 升格为 oauth-bearer spawn。超集进程经 proxy 按会话换网关 key(XD/折扣计费不变),
     // 同时还能服务订阅会话 —— 订阅/API 会话真正并行,不再因来源切换重建 host 排队。
     let spawnCredentialMode = credentialMode;
     let requestedGatewayState: AuthState | null = null;
@@ -2310,7 +2310,7 @@ export class CodexAgent extends BaseAgent {
     // CodexExtraSpawnConfig.codexRemoteCompactionProviderId),② 本会话的凭证家族
     // 解析为 oauth-bearer(显式 openai 来源,或隐式来源 + host 归一化形态为订阅)
     // 时,才让 thread 选 OpenAI 身份 provider → codex 走 OpenAI 远端压缩。
-    // codex/ 骨折(gateway-key)、xai/、chatgpt/ 与显式第三方来源(provider-oauth)
+    // codex/ 折扣(gateway-key)、xai/、chatgpt/ 与显式第三方来源(provider-oauth)
     // 都被 resolveAgentCredentialMode 排除 —— 它们的上游不支持远端压缩,且 codex
     // 远端压缩失败无本地回退,错配会打断长会话。
     const threadModelProvider = (() => {

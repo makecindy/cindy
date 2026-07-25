@@ -257,7 +257,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // reset 使用 desktop 预签发、账号绑定的幂等 offer,手机不能自行指定 creditId。
   'maker:usage:codex-rate-limits',
   'maker:usage:codex-rate-limit-reset',
-  // 网关 API key presence-only 探测(只回 boolean;拉不到 → unknown,骨折版不置灰)。
+  // 网关 API key presence-only 探测(只回 boolean;拉不到 → unknown,折扣版不置灰)。
   'maker:api-key:present',
   'maker:list-agent-commands',
   'maker:list-agent-skills',

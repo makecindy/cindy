@@ -12,7 +12,7 @@
  * 因此去重取首个即可，不会丢信息。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
- * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 骨折追加序）。
+ * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 折扣追加序）。
  * 由 maker-host 的 catalogDerivedModels.test.ts 守。
  */
 

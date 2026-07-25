@@ -9,7 +9,7 @@
  * 与 providers 缓存的关键差异:**失败即降级值、不进缓存、不抛错**——
  *   - 单价表失败(典型:旧被控端 CHANNEL_NOT_ALLOWED)→ null,UI 隐藏价格(对齐桌面
  *     useModelPricing「无价不显示」口径);
- *   - key presence 失败 → 'unknown',骨折版不置灰(宁可放行到被控端请求期报错,也不误伤)。
+ *   - key presence 失败 → 'unknown',折扣版不置灰(宁可放行到被控端请求期报错,也不误伤)。
  */
 import type { MobileModelPricingMap } from './mobileMakerTransport';
 

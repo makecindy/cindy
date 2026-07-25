@@ -1,6 +1,6 @@
 /**
  * modelDefinitions 的 deviceId 透传单测(device-link「以被控端为准」)。
- * 模型 id 跨设备不唯一(fork 自定义 contextWindow / 骨折路由),远程会话必须读被控端 caps —— 不能用本地替代。
+ * 模型 id 跨设备不唯一(fork 自定义 contextWindow / 折扣路由),远程会话必须读被控端 caps —— 不能用本地替代。
  * 复用 useAgentCapabilities 的同一份模块级缓存(同一 module graph 下 import),vi.resetModules 保证干净。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';

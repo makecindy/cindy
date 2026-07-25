@@ -3847,7 +3847,6 @@
         "cacheRead": "Cache read",
         "cacheCreate": "Cache write",
         "free": "Limited-time free",
-        "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
         "subscriptionEstimate": "Value estimate, not an actual bill"
@@ -3860,7 +3859,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85% off",
+        "budget": "GPT Discount",
         "grok": "xAI",
         "google": "Google",
         "china": "Domestic",
@@ -3878,8 +3877,7 @@
       "meta": {
         "context": "{{value}} context",
         "price": "{{input}}/{{output}} per 1M",
-        "fastBadge": "Fast",
-        "budgetDiscount": "85% off"
+        "fastBadge": "Fast"
       },
       "source": {
         "railLabel": "Source",
@@ -5859,7 +5857,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT (85% off)",
+          "gpt-budget": "GPT Discount",
           "google": "Google",
           "china": "China"
         },

@@ -20,8 +20,6 @@ vi.mock('react-i18next', async (importOriginal) => ({
         model?: string;
         effort?: string;
         price?: string;
-        percent?: string;
-        rate?: string;
       },
     ) => {
       const translations: Record<string, string> = {
@@ -44,9 +42,6 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.trigger.ariaWithEffort') {
         return `Select model. Current: ${options?.model}, effort: ${options?.effort}`;
-      }
-      if (key === 'newChat.modelSelector.pricing.discount') {
-        return `立省 ${options?.percent}%`;
       }
       return translations[key] ?? options?.defaultValue ?? key;
     },
@@ -465,7 +460,7 @@ describe('ModelSelector trigger variants', () => {
     expect(pricingRef.renderCalls).toBe(1);
   });
 
-  it('shows Gateway discount and free promotions in the selected-model trigger', () => {
+  it('shows only the free promotion in the selected-model trigger', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -510,7 +505,7 @@ describe('ModelSelector trigger variants', () => {
     };
 
     try {
-      const discounted = render(
+      const belowStandardPrice = render(
         React.createElement(ModelSelector, {
           modelId: 'claude-opus-4-8',
           effort: 'high',
@@ -521,12 +516,10 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
         }),
       );
-      const discountTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
-      const discountBadge = within(discountTrigger).getByText('立省 50%');
-      expect(discountBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
-      expect(discountBadge.className).toContain('bg-[var(--accent-cta-bg)]');
-      expect(discountBadge.className).toContain('text-[var(--accent-pure-cta-fg)]');
-      discounted.unmount();
+      // 折价不再有徽标:实际价低于标准价的模型,trigger 上不挂任何促销徽标。
+      const belowStandardTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+      expect(belowStandardTrigger.querySelector('[data-model-promotion-badge]')).toBeNull();
+      belowStandardPrice.unmount();
 
       pricingRef.pricing = {};
       render(
@@ -620,7 +613,7 @@ describe('ModelSelector trigger variants', () => {
       const row = screen.getByRole('option', { name: /Opus 4\.8/ });
       expect(row.textContent).not.toContain('¥12 / ¥36');
       expect(row.textContent).not.toContain('¥6 / ¥18');
-      expect(within(row).queryByText('立省 50%')).toBeNull();
+      expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
 
       fireEvent.pointerEnter(row);
       expect(
@@ -798,7 +791,7 @@ describe('ModelSelector trigger variants', () => {
     vi.useRealTimers();
   });
 
-  it('keeps discounted Gateway prices aligned between the row and model details', () => {
+  it('shows the effective Gateway price without an original-price comparison', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -847,28 +840,19 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
 
+      // 行内只显示实际价:标准价不再以划线形式并排,也不再挂折价徽标。
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
       expect(row.textContent).toContain('¥6 / ¥18');
-      expect(row.textContent).toContain('¥12 / ¥36');
-      const rowBadge = within(row).getByText('立省 50%');
-      expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
-      expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
-      const priceStack = within(row).getByText('¥6 / ¥18').parentElement;
-      expect(priceStack?.getAttribute('data-model-price-stack')).toBe('true');
-      expect(priceStack).not.toBe(rowBadge.parentElement);
-      expect(rowBadge.compareDocumentPosition(priceStack as Node)).toBe(
-        Node.DOCUMENT_POSITION_FOLLOWING,
-      );
+      expect(row.textContent).not.toContain('¥12 / ¥36');
+      expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
 
       fireEvent.pointerEnter(row);
       const details = screen.getByRole('group', { name: /Qwen 3\.7/ });
       expect(within(details).getByText('¥6')).toBeTruthy();
       expect(within(details).getByText('¥18')).toBeTruthy();
-      expect(within(details).getByText('¥12').className).toContain('line-through');
-      expect(within(details).getByText('¥36').className).toContain('line-through');
-      const detailsBadge = within(details).getByText('立省 50%');
-      expect(detailsBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
-      expect(detailsBadge.parentElement?.className).toContain('ml-auto');
+      expect(within(details).queryByText('¥12')).toBeNull();
+      expect(within(details).queryByText('¥36')).toBeNull();
+      expect(details.querySelector('[data-model-promotion-badge]')).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       pricingRef.pricing = pricingRef.DEFAULT_PRICING;
@@ -933,7 +917,7 @@ describe('ModelSelector trigger variants', () => {
       const rowBadge = within(row).getByText('限时免费');
       expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
       expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
-      expect(row.textContent).not.toContain('立省 100%');
+      expect(row.querySelectorAll('[data-model-promotion-badge]')).toHaveLength(1);
 
       fireEvent.pointerEnter(row);
       const details = screen.getByRole('group', { name: /Free Gateway Model/ });

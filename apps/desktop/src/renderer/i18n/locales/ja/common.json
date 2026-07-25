@@ -3846,7 +3846,6 @@
         "cacheRead": "キャッシュ読み取り",
         "cacheCreate": "キャッシュ書き込み",
         "free": "期間限定無料",
-        "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
         "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
@@ -3859,7 +3858,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85%オフ",
+        "budget": "GPT 割引",
         "grok": "xAI",
         "google": "Google",
         "china": "国内",
@@ -3877,8 +3876,7 @@
       "meta": {
         "context": "コンテキスト {{value}}",
         "price": "{{input}}/{{output}} / 100万",
-        "fastBadge": "高速",
-        "budgetDiscount": "85%オフ"
+        "fastBadge": "高速"
       },
       "source": {
         "railLabel": "ソース",
@@ -5849,7 +5847,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT（85%オフ）",
+          "gpt-budget": "GPT 割引",
           "google": "Google",
           "china": "China"
         },

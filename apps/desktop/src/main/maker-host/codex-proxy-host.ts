@@ -117,7 +117,7 @@ export function getCodexProxyAuthInjection(): CodexProxyAuthInjection {
 }
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey), 避免 codex-proxy-host 直接 import
-// auth-adapters(重模块, 会拖累单测加载 / 埋循环依赖)。proxy 给骨折 / api 流量换 gateway key 时调它。
+// auth-adapters(重模块, 会拖累单测加载 / 埋循环依赖)。proxy 给折扣 / api 流量换 gateway key 时调它。
 let _readGatewayKey: () => string | null = () => null;
 export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
   _readGatewayKey = fn;
@@ -1193,7 +1193,7 @@ function createCodexResponseObserver(): ResponseObserver {
  * (会话显式选了供应商时由 resolveSessionRouteDecision 优先接管,不会走到这里。)
  *   - env-key spawn(codex 已带 gateway key): 全程 null(走默认上游 gateway, 不动 header)。
  *   - oauth-bearer spawn(codex 带 OAuth token):
- *       codex/ 骨折模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
+ *       codex/ 折扣模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
  *       普通模型        → override 上游到 ChatGPT, 透传 OAuth token(不动 header)= 订阅默认。
  * 退役了全局 api 开关:「普通模型也走网关」改由 per-session 显式选 XD 来源触发,不再是全局默认。
  */
@@ -1279,7 +1279,7 @@ export function createModelRoutingTransform(): RoutingTransform {
 
     // ② 未显式选供应商 → 回落默认路由(decideCodexRoute,与未升级行为字节级一致)。
     const decision = decideCodexRoute({ model, authInjection, gatewayKey });
-    // codex/ 骨折模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
+    // codex/ 折扣模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
     if (decision === null && authInjection === 'oauth-bearer' && model
       && model.startsWith('codex/') && !gatewayKey) {
       log.warn('codex routing → gateway but no api key configured; passthrough (可能 401)', { model });

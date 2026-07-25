@@ -1088,7 +1088,7 @@ export function ModelEffortChip({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const caps = useAgentCapabilities(agentKind);
-  // 触发器(trigger)展示用:仍按 codex/ 骨折模型的 XD 网关来源可见性过滤,算出当前
+  // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
   const { providers } = useProviders();

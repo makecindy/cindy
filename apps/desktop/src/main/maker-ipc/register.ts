@@ -2999,7 +2999,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           }).finally(() => rebroadcastCodexTodayUsage());
 
           // Codex SDK 不报 $, 用价格表折算。普通模型 + oauth(订阅)显示为 token 价值;api 模式和 codex/
-          // 骨折模型走 gateway API, 显示为 API cost。远端 Codex 由远端 daemon
+          // 折扣模型走 gateway API, 显示为 API cost。远端 Codex 由远端 daemon
           // 路由,本机不知道远端 OAuth/API 事实,因此只显示 token 价值,不写本地
           // gateway cost。只有真实本地 API cost 写入 sessions.total_cost_usd,
           // 避免 scheduler 的 Cost 汇总混入订阅价值或远端账号消耗。

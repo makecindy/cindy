@@ -1318,7 +1318,7 @@ function handleResult(
   // 窗口口径: catalog(host 按 agent 声明的 capabilities.availableModels[].contextWindow,
   // 经 ctx.getModelContextWindow 透传)是权威值, 但**只在以下两种情形**覆盖 SDK 上报值:
   //  (a) SDK 的窗口确实属于**当前模型**(modelUsage 里有 key 去 [1m] 后与当前模型完全相等
-  //      且带正窗口)—— 这是骨折模型被 [1m] 误报 1M 的主场景, 用 catalog 锁回真实窗口
+  //      且带正窗口)—— 这是折扣模型被 [1m] 误报 1M 的主场景, 用 catalog 锁回真实窗口
   //      (如 codex/gpt-5.5 cc=272k), 让 auto-compact / memory-flush 按真实窗口触发。
   //  (b) SDK 没给窗口或只给了 unknown-model 默认小窗口(≤200K)—— 升级到 catalog。
   // **不覆盖** SDK 给了某个**别的模型**的非默认窗口(>200K)的情形: 典型是 turn 运行中途切了
@@ -1381,7 +1381,7 @@ function handleResult(
   }
 
   // 空响应判定(提前到 endTurn 之前算): 本轮发起过 API call 但 0 产出(无 UI 文本 /
-  // 无 result 兜底文本 / 无 tool 调用)且本轮 usage 增量全 0 —— 典型是模型网关(尤其骨折
+  // 无 result 兜底文本 / 无 tool 调用)且本轮 usage 增量全 0 —— 典型是模型网关(尤其折扣
   // 网关)在大上下文 / 高负载下短路返回 HTTP 200 + 空 SSE 流(input_tokens=0)。提前算的原因:
   //  (a) 让下面的 endTurn 在空响应轮**不要** replaceLastApi(守卫加 !isEmptyResponseTurn),
   //      否则会用本轮 0 增量覆盖 tracker.lastApi、把 contextTokens 清成 0 —— auto-compact /

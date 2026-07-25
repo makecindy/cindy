@@ -11,8 +11,8 @@
  * imDefaultSettingsGet('slack')(桌面新会话默认)+ 本机 capabilities; 权限默认恒
  * bypassPermissions(完全访问)。
  *
- * 模型显示名带分组区分: 骨折版(group='gpt-budget')与官方版 displayName
- * 故意同名, 下拉里给骨折版加「(骨折GPT)」后缀(复用桌面模型选择器的分组
+ * 模型显示名带分组区分: 折扣版(group='gpt-budget')与官方版 displayName
+ * 故意同名, 下拉里给折扣版加「(GPT 折扣)」后缀(复用桌面模型选择器的分组
  * 文案), 否则出现两个一模一样的 GPT-5.5(线上实撞)。
  *
  * 数据正本在 IM hook server 的 provider prefs 表：Slack 与 Telegram 按
@@ -455,7 +455,7 @@ export function WorkspacePrefsEditor({
         null)
       : null;
 
-  /** 模型显示名(骨折版加分组后缀区分同名官方版); 不在清单显示裸 id。 */
+  /** 模型显示名(折扣版加分组后缀区分同名官方版); 不在清单显示裸 id。 */
   const modelLabel = useCallback(
     (id: string | null): string => {
       if (id === null) return t('settings.tina.prefs.none');

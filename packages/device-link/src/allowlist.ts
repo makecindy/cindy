@@ -299,7 +299,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:usage:model-pricing',
   // 网关 API key **presence-only** 探测:只回 { present: boolean },不回、也永不扩展为读取
   // 密钥材料 —— 这是「账号与密钥永不放行」大类下的窄口径例外(同 DL_VOICE_CREDENTIAL_SYNC
-  // 的例外定位,禁止泛化)。用途:控制端模型选择器判断骨折版(codex/)是否该置灰,判定依据
+  // 的例外定位,禁止泛化)。用途:控制端模型选择器判断折扣版(codex/)是否该置灰,判定依据
   // 在被控端(key 存被控端 safeStorage、请求也从被控端发)。老被控端无此 channel →
   // CHANNEL_NOT_ALLOWED → 控制端按 unknown 处理(不置灰)。
   'maker:api-key:present',

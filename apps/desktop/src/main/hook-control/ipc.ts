@@ -374,7 +374,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
               displayName: m.name,
               efforts: m.efforts,
               defaultEffort: m.defaultEffort,
-              // 分组随行: 骨折版(gpt-budget)与官方版 displayName 故意同名,
+              // 分组随行: 折扣版(gpt-budget)与官方版 displayName 故意同名,
               // Slack 卡与 Tina 下拉都靠 group 加区分后缀
               ...(m.group !== undefined ? { group: m.group } : {}),
             })),

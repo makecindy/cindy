@@ -71,8 +71,8 @@ export function gatewayModelPriceQuote(
   ) {
     return undefined;
   }
-  // quote 保留未折扣的标准价:UI 通过对比 quote(原价) vs CatalogModel.cost(折后价)
-  // 推断折扣 badge;costDiscount 仅在 effectiveGatewayModelCost 侧应用到 cost。
+  // quote 是用量估算用的标准价;costDiscount 只在 effectiveGatewayModelCost 侧应用到
+  // cost,UI 展示价一致时取 cost(见 modelPriceFormat),不再并排展示标准价。
   return applyCodexBudgetDiscount({
     providerId: 'xd',
     modelId,
