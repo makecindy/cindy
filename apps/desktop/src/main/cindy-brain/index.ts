@@ -1699,7 +1699,7 @@ export async function executeGhostSetupAction(args: {
     return {
       ok: false,
       errorCode: 'TARGET_UNAVAILABLE',
-      message: t('newChat.pluginSetup.pluginUninstalledDuringOauth'),
+      message: t('newChat.pluginSetup.pluginUnavailable'),
     };
   }
   if (args.action.kind === 'oauth_connect') {
