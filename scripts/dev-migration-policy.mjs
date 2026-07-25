@@ -84,6 +84,6 @@ export function assertSharedDevMigrationPolicy(_repoRoot, argv, env = process.en
   if (usesIsolatedUserData(argv, env) || usesPassiveUserData(argv, env)) return;
   throw new Error(
     'Primary desktop dev cannot migrate shared Cindy userData because it may upgrade the release database and prevent an older release from opening it.\n' +
-      'Use pnpm restart:desktop:remote -- --isolated=<name> for dev migrations, or --passive for a shared read-only preview.',
+      'Restart with --isolated=<name> for writable dev data, or use --passive / --preserve-running for a shared read-only preview.',
   );
 }
