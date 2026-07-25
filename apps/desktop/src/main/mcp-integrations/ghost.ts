@@ -896,6 +896,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }
       }
+      // Final availability check after the session-context await
+      if (!getGhostManager().list().some((g) => g.manifest.id === ghostId && g.enabled)) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
+      }
       // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
       // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行
       // 中可 card-update)→ finalize(问"这单供过卡吗",开晚到宽限窗)→
