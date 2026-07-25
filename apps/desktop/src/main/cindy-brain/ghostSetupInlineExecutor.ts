@@ -5,6 +5,7 @@ import type {
 } from '../../shared/ghost.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost.js';
 import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
+import { t } from '../i18n.js';
 
 export interface GhostSetupInlineExecutorDeps {
   getAssessment: (ghostId: string) => GhostSetupAssessment;
@@ -31,7 +32,7 @@ export function executeGhostSetupInlineSubmission(
 ): GhostSetupActionResult {
   const trimmed = args.value.trim();
   if (trimmed.length === 0 || trimmed.length > GHOST_SECRET_VALUE_MAX_CHARS) {
-    return { ok: false, errorCode: 'INLINE_INVALID', message: '凭证内容无效' };
+    return { ok: false, errorCode: 'INLINE_INVALID', message: t('newChat.pluginSetup.inlineSecretInvalid') };
   }
 
   const manifest = deps.getManifest(args.ghostId);
@@ -39,7 +40,7 @@ export function executeGhostSetupInlineSubmission(
     return {
       ok: false,
       errorCode: 'TARGET_UNAVAILABLE',
-      message: '目标插件已卸载或不可用',
+      message: t('newChat.pluginSetup.pluginUnavailable'),
     };
   }
 
@@ -64,7 +65,7 @@ export function executeGhostSetupInlineSubmission(
     return {
       ok: false,
       errorCode: 'ACTION_STALE',
-      message: '配置动作已失效，请重新尝试',
+      message: t('newChat.pluginSetup.inlineActionExpired'),
     };
   }
 
@@ -81,11 +82,11 @@ export function executeGhostSetupInlineSubmission(
     return {
       ok: false,
       errorCode: 'ACTION_STALE',
-      message: '凭证声明已变更，请重新尝试',
+      message: t('newChat.pluginSetup.inlineSecretDeclChanged'),
     };
   }
   if (!deps.storeSecret(args.ghostId, secretKey, trimmed)) {
-    return { ok: false, errorCode: 'SAVE_FAILED', message: '凭证保存失败' };
+    return { ok: false, errorCode: 'SAVE_FAILED', message: t('newChat.pluginSetup.inlineSecretStoreFailed') };
   }
   deps.emitChange(args.ghostId, secretKey);
   try {

@@ -156,6 +156,7 @@ import {
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
 import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { desktopClaudeAuthAdapter, desktopCodexAuthAdapter, readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
@@ -1158,7 +1159,7 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
       getAgentIslandService()?.handlePluginSetupInteraction(
         value.sessionId,
         value.request.requestId,
-        activeStep?.title ?? `${value.request.ghost.name} 设置`,
+        activeStep?.title ?? t('newChat.pluginSetup.title').replace('{{name}}', value.request.ghost.name),
       );
       return;
     }
@@ -1187,28 +1188,28 @@ initGhostSetupCoordinator({
       return {
         ok: false,
         errorCode: 'GHOST_NOT_FOUND',
-        message: '目标插件已卸载或当前不可用',
+        message: t('newChat.pluginSetup.targetNotFound'),
       };
     }
     if (!ghost.enabled) {
       return {
         ok: false,
         errorCode: 'GHOST_ASLEEP',
-        message: '目标插件已被停用',
+        message: t('newChat.pluginSetup.targetDisabled'),
       };
     }
     if (isGhostDisabledForWorkdir(ghostId, workingDir)) {
       return {
         ok: false,
         errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-        message: '用户已在当前工作目录停用该插件;不要重试。',
+        message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
       };
     }
     if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
-        message: `目标插件不再提供工具 ${tool}`,
+        message: t('newChat.pluginSetup.targetToolNotFound'),
       };
     }
     return { ok: true };
@@ -1232,6 +1233,7 @@ initGhostSetupCoordinator({
     }),
   executeInlineAction: ({ sessionId, ghostId, action, value }) =>
     executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
+  timeoutMessage: () => t('newChat.pluginSetup.timeout'),
   logger: log,
 });
 

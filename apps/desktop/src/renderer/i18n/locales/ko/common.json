@@ -3719,7 +3719,20 @@
         "satisfied": "완료",
         "failed": "실패",
         "cancelled": "취소됨"
-      }
+      },
+      "timeout": "설정 시간이 초과되었습니다",
+      "oauthCancelled": "인증이 취소되었습니다",
+      "oauthFailed": "인증 실패: {{detail}}",
+      "pluginUninstalledDuringOauth": "대상 플러그인이 제거되었거나 사용할 수 없습니다",
+      "inlineSecretInvalid": "자격 증명 값이 유효하지 않습니다",
+      "pluginUnavailable": "대상 플러그인이 제거되었거나 사용할 수 없습니다",
+      "inlineActionExpired": "설정 작업이 만료되었습니다. 다시 시도해 주세요",
+      "inlineSecretDeclChanged": "자격 증명 선언이 변경되었습니다. 다시 시도해 주세요",
+      "inlineSecretStoreFailed": "자격 증명 저장에 실패했습니다",
+      "targetNotFound": "대상 플러그인이 제거되었거나 현재 사용할 수 없습니다",
+      "targetDisabled": "대상 플러그인이 비활성화되었습니다",
+      "targetDisabledInWorkdir": "사용자가 현재 작업 디렉토리에서 이 플러그인을 비활성화했습니다. 재시도하지 마세요.",
+      "targetToolNotFound": "대상 플러그인이 더 이상 이 도구를 제공하지 않습니다"
     },
     "createAgent": {
       "quickStart": "빠른 시작",

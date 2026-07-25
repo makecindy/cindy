@@ -1,9 +1,12 @@
 import type { LiziMcpSessionContext } from '@cindy/mcps';
 
+// Scheduler is intentionally excluded: it uses the headless turn marker
+// (beginHeadlessGhostSetupTurn) acquired in onAccepted instead of a static
+// source-based blocklist, so it can participate in interactive setup when
+// triggered from a Desktop session.
 const NON_DESKTOP_SETUP_SOURCES = new Set([
   'feishu',
   'discord',
-  'scheduler',
   'slack-hook',
   'telegram',
 ]);

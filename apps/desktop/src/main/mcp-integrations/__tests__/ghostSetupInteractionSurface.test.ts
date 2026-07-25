@@ -17,7 +17,7 @@ describe('ghostSetupInteractionSessionId', () => {
     ).toBe('desktop-session');
   });
 
-  it.each(['feishu', 'discord', 'scheduler', 'slack-hook', 'telegram'])(
+  it.each(['feishu', 'discord', 'slack-hook', 'telegram'])(
     'treats %s turns as non-interactive even when they have a business session id',
     (source) => {
       expect(
@@ -30,6 +30,17 @@ describe('ghostSetupInteractionSessionId', () => {
       ).toBeNull();
     },
   );
+
+  it('treats scheduler turns as interactive (headless marker is turn-scoped)', () => {
+    expect(
+      ghostSetupInteractionSessionId({
+        agentKind: 'codex',
+        workingDir: '/repo',
+        sessionId: 'scheduler-session',
+        vendorOptions: { source: 'scheduler' },
+      }),
+    ).toBe('scheduler-session');
+  });
 
   it('treats a missing session context as non-interactive', () => {
     expect(ghostSetupInteractionSessionId(undefined)).toBeNull();

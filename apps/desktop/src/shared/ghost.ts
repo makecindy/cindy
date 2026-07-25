@@ -865,11 +865,13 @@ export const GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS: readonly string[] = [
 
 /** setup.requires 需求组条数上限。 */
 export const GHOST_SETUP_MAX_GROUPS = 8;
+/** Host-owned requirement groups (e.g. model-provider capability). */
+export const GHOST_SETUP_MAX_HOST_GROUPS = 2;
 /** 每个需求组内 anyOf 条目上限。 */
 export const GHOST_SETUP_MAX_ITEMS_PER_GROUP = 8;
 /** 一张 setup 卡最多需要覆盖 manifest 合法声明的全部可操作条目。 */
 export const GHOST_SETUP_MAX_STEPS =
-  GHOST_SETUP_MAX_GROUPS * GHOST_SETUP_MAX_ITEMS_PER_GROUP;
+  (GHOST_SETUP_MAX_GROUPS + GHOST_SETUP_MAX_HOST_GROUPS) * GHOST_SETUP_MAX_ITEMS_PER_GROUP;
 /**
  * Host-owned setup providers may append requirements that do not exist in the
  * plugin manifest (for example, a shared client capability). Reserve a bounded

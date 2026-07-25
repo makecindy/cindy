@@ -67,6 +67,7 @@ import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
+import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
@@ -694,7 +695,12 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       ) {
         return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `目标插件不再提供工具 ${tool}` };
       }
-      const finalAssessment = getGhostSetupAssessment(ghostId);
+      let finalAssessment;
+      try {
+        finalAssessment = getGhostSetupAssessment(ghostId);
+      } catch {
+        return { ok: false, errorCode: 'INTERNAL', message: 'Failed to read plugin setup state after setup completed.' };
+      }
       if (finalAssessment.state !== 'ready') {
         return {
           ok: false,
@@ -706,6 +712,16 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // 批量预授权(grant_only):只过户不派发。它与普通调用共用上面的
       // Host-authoritative setup gate，确保任何授权副作用之前插件已经 ready。
       if (grantOnly) {
+        // Setup gate: confirm target is still available before creating grants.
+        const grantTarget = getGhostManager()
+          .list()
+          .find((g) => g.manifest.id === ghostId);
+        if (!grantTarget || !isGhostAvailableForActiveSession(ghostId)) {
+          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+        }
+        if (!grantTarget.enabled) {
+          return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+        }
         const grant = await grantAttachmentUrls({
           ghostId,
           urls: attachments!,
@@ -715,6 +731,16 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         });
         if (!grant.ok) {
           return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
+        }
+        // Post-grant revalidation: the grant process may have taken time.
+        const postGrant = getGhostManager()
+          .list()
+          .find((g) => g.manifest.id === ghostId);
+        if (!postGrant || !isGhostAvailableForActiveSession(ghostId)) {
+          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+        }
+        if (!postGrant.enabled) {
+          return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
         }
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {
@@ -799,10 +825,30 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         const { session_context: _dropped, ...rest } = mergedArgs;
         mergedArgs = rest;
       }
-      const targetManifest = getGhostManager()
+      // Pre-dispatch revalidation: attachment grants and dir tickets may have
+      // taken time; confirm the target is still available before committing the
+      // callId and dispatching to the sandbox.
+      const preDispatch = getGhostManager()
         .list()
-        .find((g) => g.manifest.id === ghostId)?.manifest;
-      if (targetManifest?.slots?.includes('session-context')) {
+        .find((g) => g.manifest.id === ghostId);
+      if (!preDispatch || !isGhostAvailableForActiveSession(ghostId)) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+      }
+      if (!preDispatch.enabled) {
+        return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+      }
+      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+        return {
+          ok: false,
+          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
+        };
+      }
+      if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: t('newChat.pluginSetup.targetToolNotFound') };
+      }
+      // Session-context slot: use the revalidated manifest to decide injection
+      if (preDispatch.manifest.slots?.includes('session-context')) {
         mergedArgs = {
           ...mergedArgs,
           session_context: await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir),

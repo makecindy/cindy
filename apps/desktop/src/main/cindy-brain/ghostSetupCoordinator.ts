@@ -91,6 +91,7 @@ export interface GhostSetupCoordinatorDeps {
   }) => Promise<GhostSetupActionResult>;
   timeoutMs?: number;
   terminalGraceMs?: number;
+  timeoutMessage?: () => string;
   createRequestId?: () => string;
   logger?: {
     warn: (message: string, context?: Record<string, unknown>) => void;
@@ -450,7 +451,7 @@ export class GhostSetupCoordinator {
           {
             ok: false,
             errorCode: 'TIMEOUT',
-            message: '插件设置等待超时，本次调用未执行。',
+            message: this.deps.timeoutMessage?.() ?? 'Setup timed out',
           },
           'timeout',
         );

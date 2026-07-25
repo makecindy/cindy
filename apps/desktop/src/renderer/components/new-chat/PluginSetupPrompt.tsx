@@ -37,7 +37,7 @@ function isTerminalPhase(phase: GhostSetupStepPhase): boolean {
 }
 
 function normalizedCopy(value: string | undefined): string {
-  return (value ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 export function PluginSetupPrompt({ pending, ...props }: PluginSetupPromptProps) {
@@ -89,7 +89,7 @@ function PluginSetupPromptStateful({
   const cancelledTerminal =
     pending.steps.some((step) => step.phase === 'cancelled') &&
     pending.steps.every((step) => isTerminalPhase(step.phase));
-  const terminal = allSatisfied || cancelledTerminal;
+  const terminal = pending.terminal === true || allSatisfied || cancelledTerminal;
   const busy = !!commandInFlight || (!!currentStep && RUNNING_PHASES.has(currentStep.phase));
   const title = t('newChat.pluginSetup.title', { name: pending.ghost.name });
   const inlineFormAction = currentStep?.action?.kind === 'inline_form' ? currentStep.action : null;

@@ -3719,7 +3719,20 @@
         "satisfied": "完了",
         "failed": "失敗",
         "cancelled": "キャンセル済み"
-      }
+      },
+      "timeout": "設定がタイムアウトしました",
+      "oauthCancelled": "認証がキャンセルされました",
+      "oauthFailed": "認証に失敗しました：{{detail}}",
+      "pluginUninstalledDuringOauth": "対象プラグインがアンインストールされたか利用不可です",
+      "inlineSecretInvalid": "認証情報の値が無効です",
+      "pluginUnavailable": "対象プラグインがアンインストールされたか利用不可です",
+      "inlineActionExpired": "設定アクションの有効期限が切れました。もう一度お試しください",
+      "inlineSecretDeclChanged": "認証情報の宣言が変更されました。もう一度お試しください",
+      "inlineSecretStoreFailed": "認証情報の保存に失敗しました",
+      "targetNotFound": "対象プラグインがアンインストールされたか現在利用不可です",
+      "targetDisabled": "対象プラグインが無効化されています",
+      "targetDisabledInWorkdir": "ユーザーが現在のワーキングディレクトリでこのプラグインを無効にしています。リトライしないでください。",
+      "targetToolNotFound": "対象プラグインはこのツールを提供していません"
     },
     "createAgent": {
       "quickStart": "クイックスタート",

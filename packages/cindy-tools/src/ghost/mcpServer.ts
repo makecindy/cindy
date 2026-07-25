@@ -84,10 +84,10 @@ const ROSTER_MAX_ITEMS = 16;
 
 /**
  * Agent setup plan 的 MCP 边界上限。须覆盖 Desktop manifest 的
- * max groups × max any-of items (8 × 8) 和 Host-owned reserve (8)；
+ * (max groups + host groups) × max any-of items ((8+2) × 8 = 80)；
  * 本包刻意不依赖 Desktop。
  */
-const SETUP_PLAN_MAX_STEPS = 72;
+const SETUP_PLAN_MAX_STEPS = 80;
 const SETUP_PLAN_MAX_REFS_PER_STEP = 8;
 const SETUP_PLAN_MAX_ID_LENGTH = 128;
 const SETUP_PLAN_MAX_INTRO_LENGTH = 500;

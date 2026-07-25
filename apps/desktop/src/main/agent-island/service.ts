@@ -908,6 +908,17 @@ export class AgentIslandService {
   ): void {
     const hydrated = this.hydrateMeta({ sessionId });
     setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    // If the requestId is already pending (revision update from the coordinator),
+    // only update the detail string without resetting the dismissal state.
+    const existing = this.state.sessions.get(hydrated.sessionId);
+    if (existing?.pendingInteractionIds.has(requestId)) {
+      existing.pendingInteractionDetails.set(requestId, detail);
+      if (existing.detail !== detail && existing.phase === 'needs-interaction') {
+        existing.detail = detail;
+      }
+      this.publish();
+      return;
+    }
     applyAgentIslandInteractionRequest(
       this.state,
       hydrated,

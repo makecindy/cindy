@@ -1699,7 +1699,7 @@ export async function executeGhostSetupAction(args: {
     return {
       ok: false,
       errorCode: 'TARGET_UNAVAILABLE',
-      message: '目标插件已卸载或不可用',
+      message: t('newChat.pluginSetup.pluginUninstalledDuringOauth'),
     };
   }
   if (args.action.kind === 'oauth_connect') {
@@ -1731,8 +1731,8 @@ export async function executeGhostSetupAction(args: {
           errorCode: connected.error === 'CANCELLED' ? 'AUTH_CANCELLED' : 'AUTH_FAILED',
           message:
             connected.error === 'CANCELLED'
-              ? '授权已取消'
-              : connected.detail ?? `授权失败：${connected.error}`,
+              ? t('newChat.pluginSetup.oauthCancelled')
+              : connected.detail ?? t('newChat.pluginSetup.oauthFailed').replace('{{detail}}', connected.error),
         };
   }
 
