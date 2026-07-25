@@ -4115,7 +4115,7 @@
     "paths": {
       "backChevron": {
         "provenance": {
-          "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+          "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
           "locator": "LoginBackButton chevron path.d",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
         },
@@ -4123,7 +4123,7 @@
       },
       "consentCheck": {
         "provenance": {
-          "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+          "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
           "locator": "function ConsentCheckGlyph path[0].d",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
         },
@@ -4132,7 +4132,7 @@
       "enterprise": [
         {
           "provenance": {
-            "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
             "locator": "function EnterpriseIcon path[0].d",
             "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
           },
@@ -4140,7 +4140,7 @@
         },
         {
           "provenance": {
-            "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
             "locator": "function EnterpriseIcon path[1].d",
             "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
           },
@@ -4150,7 +4150,7 @@
       "person": [
         {
           "provenance": {
-            "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
             "locator": "function PersonIcon path[0].d",
             "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
           },
@@ -4160,7 +4160,7 @@
       "share": [
         {
           "provenance": {
-            "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
             "locator": "function ShareIcon path[0].d",
             "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
           },
@@ -4168,7 +4168,7 @@
         },
         {
           "provenance": {
-            "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
             "locator": "function ShareIcon path[1].d",
             "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
           },
@@ -4176,7 +4176,7 @@
         },
         {
           "provenance": {
-            "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+            "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
             "locator": "function ShareIcon path[2].d",
             "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
           },
@@ -4185,7 +4185,7 @@
       ],
       "spinnerArc": {
         "provenance": {
-          "hash": "sha256:270a79f03630e48ec1ddb1ea6ca74540d3e7fb2bc4a0080f61f12505ca5ed93c",
+          "hash": "sha256:e91743b46a10eadce6b02826e2c0a8e947ba74d3ff00b034ff35bb52eac21535",
           "locator": "function LoginSpinnerGlyph path[0].d",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginControls.tsx"
         },

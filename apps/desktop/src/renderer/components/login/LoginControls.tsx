@@ -62,7 +62,9 @@ export function LoginPanel({ children, testId }: { children: ReactNode; testId?:
 /**
  * 标题块(figma §5.1:标题 y=31 h=38 32 Bold;副标题 @(70,75) 540 宽 ≤2 行顶对齐
  * 20 Regular——2026-07-24 拍板,原 figma 单行 599@41 作废,见 DESIGN.md §16.2)。
- * global 变体:标题文字 span @(185,w236) + Global pill @(425,4)(§4.10,demo titleBlock)。
+ * global 变体(v2 inline 组,用户裁定 2026-07-25):标题 shrink-to-fit 单行 + Global pill
+ * 紧随其后 gap 2 设计px,组整体相对面板水平居中;原 v1 固定几何(span @185 w236 +
+ * pill @425,4)作废,见 DESIGN.md §16.2 与 figma-component-spec §4.10 的 v2 批注。
  */
 export function LoginTitleBlock({
   title,
@@ -79,19 +81,19 @@ export function LoginTitleBlock({
   return (
     <>
       <div
-        className="absolute left-0 overflow-hidden whitespace-nowrap text-center font-bold"
+        className="absolute left-0 whitespace-nowrap text-center font-bold"
         style={{
           top: TITLE.y,
           width: PANEL.width,
           height: TITLE.height,
-          // 行框 = 设计 h(38 @32):缺省行高继承 body 1.5(≈48px)>容器 38 且
-          // 顶对齐,overflow-hidden 会裁掉行框底部的拉丁 descender(实拍「欢迎使用
-          // Cindy」y 尾被切,MT-7)——显式 lineHeight=行框高,字形完整不裁(与回调页
-          // h1 line-height:38px、移动端 LoginTitleBlock 同款)。
+          // 行框 = 设计 h(38 @32):缺省行高继承 body 1.5(≈48px)>容器 38,显式
+          // lineHeight=行框高保几何忠实、拉丁 descender 完整(MT-7;与回调页 h1
+          // line-height:38px、移动端 LoginTitleBlock 同款)。不设 overflow-hidden /
+          // ellipsis:登录链路裁切与省略号不可作为可见结果(DESIGN.md §16.2,
+          // 2026-07-24 拍板)——超宽属文案预算 bug,修文案不裁布局。
           lineHeight: `${TITLE.height}px`,
           fontSize: TITLE.fontSize,
           color: LOGIN_COLORS.titleText,
-          textOverflow: 'ellipsis',
         }}
       >
         {globalPill ? (

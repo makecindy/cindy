@@ -842,7 +842,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
   | 槽 | 宽×字号 | ≈汉字上限 | ≈拉丁字符上限 |
   |---|---|---:|---:|
-  | 标题 | 680 @32 Bold（Global 变体标题 span 仅 236px，按 236 算） | 20（Global 变体 7） | 40（Global 变体 14） |
+  | 标题 | 680 @32 Bold（Global 变体为 inline 组：标题 shrink-to-fit + 2px 间隔 + 70px 徽标，可用宽 680−72=608，按 608 算；v2 2026-07-25，原「标题 span 固定 236」几何作废） | 20（Global 变体 18） | 40（Global 变体 36） |
   | 副标题（≤2 行，2026-07-24 拍板） | 540 @20 × 2 行 | 50 | 102 |
   | Text_link / hint / 倒计时 | 540 @20 | 25 | 51 |
   | 主按钮 CTA | 448 @24 Bold（540 − 双侧 46 padding） | 17 | 35 |
