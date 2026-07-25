@@ -177,7 +177,7 @@ input/text
   text        --text-primary      #262626 / #d4d4d4
   border      --border-default    #d7d7d4 / #3c3c3a
   radius      9999px (pill — single-line inputs)
-  focus       --focus-ring        #417CDD @50%
+  focus       --focus-ring-soft   rgba(65,124,221,0.5)   (50% of #417CDD; opaque border variant = --focus-ring)
   placeholder --text-placeholder  #c4c4c4 / #525252
 ```
 
@@ -194,13 +194,13 @@ input/text
 
 ### Dialog & Modal
 
-Reference implementation: `components/ui/confirm-dialog.tsx` (the shared confirm dialog); new dialogs reuse its structure — do not invent a parallel one.
+Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialog.tsx` (the shared confirm dialog); new dialogs reuse its structure — do not invent a parallel one.
 
-- **Overlay**: the full-screen scrim uses the `--overlay-modal` token (ConfirmDialog\'s current `neutral-900/40` hardcoded pair is legacy — **new dialogs always use the token**; do not copy the legacy pair).
+- **Overlay**: the full-screen scrim uses the `--overlay-modal` token (ConfirmDialog's current `neutral-900/40` hardcoded pair is legacy — **new dialogs always use the token**; do not copy the legacy pair).
 - **Container**: a container — 12px radius (`rounded-xl`), `--confirm-bg`, `--confirm-shadow`, 16px padding (`p-4`), centered. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`).
 - **Title / description**: `--confirm-title` / `--confirm-desc`, medium weight.
 - **Buttons**: pill (9999px); primary = solid CTA (`--confirm-btn-primary-*`), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
-- **Focus on open**: lands on the dialog\'s **primary input or primary button**, never defaults to Cancel (see §14.2 + ConfirmDialog\'s `autoFocusConfirm` / `onOpenAutoFocus`).
+- **Focus on open**: lands on the dialog's **primary input or primary button**, never defaults to Cancel (see §14.2 + ConfirmDialog's `autoFocusConfirm` / `onOpenAutoFocus`).
 
 ### Tabs
 
@@ -239,7 +239,7 @@ Three tiers — **these three only**:
 - **Container (12px)**: box radius — code blocks, cards, panels, dialogs. Implemented as Tailwind `rounded-xl` (12px).
 - **Pill (9999px)**: every interactive element that can wear the pill — buttons, tabs, single-line inputs, tags, badges.
 
-*No 4px / 6px / 10px, and no arbitrary radii. Most elements still pick between the 12px container and the pill; 8px is a narrow exception for controls that don\'t fit the pill. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated.*
+*No 4px / 6px / 10px, and no arbitrary radii. Most elements still pick between the 12px container and the pill; 8px is a narrow exception for controls that don't fit the pill. Mind nesting: an 8px row highlight inside a 12px panel must stay smaller than its container to nest cleanly (hence 8, not 12) — a pill there becomes a lozenge, 12px looks bloated.*
 
 ## 6. Depth & Elevation
 
@@ -409,7 +409,7 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--plan-action-approve-icon-bg` | `#EA6B17` | `#EA6B17` | Plan approve — same thinking semantics (follows warning-accent, finalized 2026-07-17) |
 | `--perm-bypass-selected-text` | `#EA6B17` | `#EA6B17` | Heart Orange, permission semantics (auto-follows `var(--warning-accent)`, finalized 2026-07-17) |
 | `--settings-integration-warning` | `#EA6B17` | `#EA6B17` | Warning semantics (auto-follows `var(--warning-accent)`, finalized 2026-07-17) |
-| `--warning-bg-soft` | rgba(255,102,0,0.12) | rgba(255,102,0,0.18) | Warning alpha surface |
+| `--warning-bg-soft` | rgba(234,107,23,0.12) | rgba(234,107,23,0.18) | Warning alpha surface (alpha recomputed against `#EA6B17`, 2026-07-17) |
 | `--focus-ring` / `--focus-ring-soft` | `#417CDD` / @50% | same | A11y focus ring, finalized 2026-07-17 (replaces #3b82f6), theme-invariant |
 | `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow` | rgba | rgba (deeper) | Shadows, theme-invariant |
 | `--overlay-modal` / `--overlay-lightbox` | rgba | rgba (deeper) | Modal / lightbox backdrop |
@@ -559,6 +559,8 @@ Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`;
 | Running | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7) | `session-breathing` |
 | Hover / state colors | `transition-colors`, ≤ fast (150ms) | App-wide status quo |
 | Container transform (chip grows into panel) | 220ms — see the dedicated category below (explicit exception) | Composer permission/model selectors |
+
+*Reference-implementation paths in this table are relative to `apps/desktop/src/renderer/`.*
 
 #### Red lines (performance & restraint)
 
