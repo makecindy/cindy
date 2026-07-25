@@ -146,35 +146,66 @@ describe('handler 链', () => {
 });
 
 describe('IO 接线与启动面包屑', () => {
-  it('写会话头 + 置 boot=starting', () => {
+  it('干净启动:置 boot=starting,但不写 session 头(crash.log 保持空,hasCrashLog=false)', () => {
     stubErrorUtils();
     installCrashCapture();
-    expect(readCrashLog()).toContain('=== session');
     expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('starting');
+    // 惰性头:没有任何崩溃时不写内容,否则 export/clear/「无崩溃」态失效。
+    expect(readCrashLog()).toBe('');
+    expect(hasCrashLog()).toBe(false);
   });
 
-  it('上次卡在非终态:标记异常并补记一条', () => {
+  it('首条崩溃时惰性补写 session 头', () => {
+    stubErrorUtils();
+    installCrashCapture();
+    expect(readCrashLog()).toBe('');
+    recordReactError(new Error('boom'));
+    const log = readCrashLog();
+    expect(log).toContain('=== session');
+    expect(log).toContain('boom');
+    expect(hasCrashLog()).toBe(true);
+  });
+
+  it('上次卡在非终态:标记异常并补记一条(含 session 头)', () => {
     seedBootMarker('endpoints');
     stubErrorUtils();
     installCrashCapture();
     expect(hasPreviousAbnormalExit()).toBe(true);
-    expect(readCrashLog()).toContain("previous launch did not reach 'ready'");
+    const log = readCrashLog();
+    expect(log).toContain('=== session');
+    expect(log).toContain("previous launch did not reach 'ready'");
   });
 
-  it("上次是 reloading(预期内主动重载):视为正常,不补记", () => {
+  it("上次是 crashed:判为异常并给出崩溃文案", () => {
+    seedBootMarker('crashed');
+    stubErrorUtils();
+    installCrashCapture();
+    expect(hasPreviousAbnormalExit()).toBe(true);
+    expect(readCrashLog()).toContain('previous launch crashed');
+  });
+
+  it("上次是 reloading(预期内主动重载):视为正常,不补记、不写头", () => {
     seedBootMarker('reloading');
     stubErrorUtils();
     installCrashCapture();
     expect(hasPreviousAbnormalExit()).toBe(false);
-    expect(readCrashLog()).not.toContain('previous launch did not reach');
+    expect(readCrashLog()).toBe('');
   });
 
-  it('recordReactError 落盘;clearCrashLog 后 hasCrashLog=false', () => {
+  it('致命未捕获异常把 boot 标记为 crashed', () => {
+    const state = stubErrorUtils();
+    installCrashCapture();
+    state.current?.(new Error('fatal-boom'), true);
+    expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('crashed');
+  });
+
+  it('recordReactError 落盘并把 boot 标记为 crashed;clearCrashLog 后 hasCrashLog=false', () => {
     stubErrorUtils();
     installCrashCapture();
     recordReactError(new Error('render-oops'), '\n  in Foo');
     expect(hasCrashLog()).toBe(true);
     expect(readCrashLog()).toContain('render-oops');
+    expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('crashed');
     expect(getCrashLogFile().uri).toContain('crash.log');
     clearCrashLog();
     expect(hasCrashLog()).toBe(false);
@@ -205,5 +236,15 @@ describe('reloadWithMarker(OTA 重载顺序)', () => {
     await expect(reloadWithMarker(reloadAsync)).rejects.toThrow('reload unavailable');
     // phase 必须被恢复成 'ready',而不是残留 'reloading'。
     expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('ready');
+  });
+
+  it('reload 失败且原 phase 是未知/损坏值:仍照原样恢复,不残留 reloading', async () => {
+    stubErrorUtils();
+    installCrashCapture();
+    // 前向兼容 / 损坏的 marker:不在已知枚举内。
+    store.set('boot.json', JSON.stringify({ phase: 'future-phase-x', at: 1 }));
+    const reloadAsync = vi.fn(() => Promise.reject(new Error('nope')));
+    await expect(reloadWithMarker(reloadAsync)).rejects.toThrow('nope');
+    expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('future-phase-x');
   });
 });

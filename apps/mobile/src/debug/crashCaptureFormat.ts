@@ -13,10 +13,19 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 /**
  * 启动阶段。前 5 个随启动闸门顺序推进('ready' 为走到首屏的正常终态);
- * 'reloading' 是一个额外的正常终态——预期内的主动重载(如冷启动 OTA 换包)在调用
- * reloadAsync 前写入,避免把"进程被主动换掉、没走到 ready"误判成崩溃。
+ * 'reloading' 是额外的正常终态——预期内主动重载(如冷启动 OTA 换包)在调用 reloadAsync
+ * 前写入,避免把"进程被主动换掉、没走到 ready"误判成崩溃。
+ * 'crashed' 是显式的异常终态——JS 致命异常 / React 渲染崩溃发生时写入,使「上次退出异常」
+ * 能反映**运行期崩溃**,而不仅是「启动没走到 ready」(否则 ready 之后崩溃会被误报为正常)。
  */
-export type BootPhase = 'starting' | 'endpoints' | 'ota' | 'auth' | 'ready' | 'reloading';
+export type BootPhase =
+  | 'starting'
+  | 'endpoints'
+  | 'ota'
+  | 'auth'
+  | 'ready'
+  | 'reloading'
+  | 'crashed';
 
 /** 启动闸门的顺序阶段(不含 'reloading' 这种旁路终态)。 */
 export const BOOT_PHASE_ORDER: readonly BootPhase[] = [

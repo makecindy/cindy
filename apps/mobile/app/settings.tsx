@@ -15,7 +15,6 @@ import {
   Switch,
   View,
 } from 'react-native';
-import * as Sharing from 'expo-sharing';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Check, ChevronDown, ChevronRight, X } from 'lucide-react-native';
@@ -478,6 +477,9 @@ export default function SettingsScreen() {
       return;
     }
     try {
+      // 动态 import:expo-sharing 顶层 requireNativeModule('ExpoSharing'),旧 dev client
+      // 缺原生模块时顶层 import 会炸整个 bundle(同 MessageRenderer/lightbox 先例)。
+      const Sharing = await import('expo-sharing');
       if (!(await Sharing.isAvailableAsync())) {
         Alert.alert(t('settings.debug.shareUnavailableTitle'), t('settings.debug.shareUnavailableBody'));
         return;

@@ -43,6 +43,10 @@ const BOOT_MARKER_NAME = 'boot.json';
 
 let installed = false;
 let previousAbnormalExit = false;
+// 会话运行环境头惰性写入:首条真正的崩溃记录前才补一次。避免每次启动都写头,
+// 否则 crash.log 恒非空 → 设置页 export/clear 永远可见、「无崩溃」态永不可达。
+let sessionHeaderPending = true;
+let sessionStartAt = 0;
 
 function crashDir(): Directory {
   return new Directory(Paths.document, CRASH_DIR_NAME);
@@ -83,6 +87,18 @@ function appendEntry(entry: string): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * 记录一条崩溃(唯一的崩溃写入入口):首条崩溃前惰性补一次本会话运行环境头,
+ * 之后仅追加记录本身。保证无崩溃的正常会话不写任何 crash.log 内容。
+ */
+function recordCrash(entry: string): void {
+  if (sessionHeaderPending) {
+    appendEntry(buildSessionHeader(sessionStartAt || Date.now()));
+    sessionHeaderPending = false;
+  }
+  appendEntry(entry);
 }
 
 /** 一次性运行环境头:App 版本 / OTA 运行信息 / 系统 / 机型 / 区域。 */
@@ -139,7 +155,10 @@ function installGlobalHandler(): void {
   if (!errorUtils?.setGlobalHandler) return;
   const previous = errorUtils.getGlobalHandler?.();
   errorUtils.setGlobalHandler((error, isFatal) => {
-    appendEntry(formatCrashEntry({ source: 'uncaught', error, isFatal, at: Date.now() }));
+    recordCrash(formatCrashEntry({ source: 'uncaught', error, isFatal, at: Date.now() }));
+    // 致命异常:把 boot 终态标记为 'crashed',让下次启动的「上次退出异常」反映真实的
+    // 运行期崩溃(含 ready 之后崩溃),而非仅「启动没走到 ready」。同步写在默认 handler 前。
+    if (isFatal) writeBootMarker('crashed', Date.now());
     // 保留默认行为(dev red box / 生产默认崩溃流程)。
     previous?.(error, isFatal);
   });
@@ -172,7 +191,9 @@ function installPromiseRejectionTracking(): void {
   const options: RejectionTrackerOptions = {
     allRejections: true,
     onUnhandled: (_id, error) => {
-      appendEntry(formatCrashEntry({ source: 'unhandledRejection', error, at: Date.now() }));
+      // 未处理 rejection 不一定终止进程,只记录、不改 boot 终态(避免把可恢复的 rejection
+      // 误标成 crashed)。
+      recordCrash(formatCrashEntry({ source: 'unhandledRejection', error, at: Date.now() }));
     },
     onHandled: () => {},
   };
@@ -194,25 +215,26 @@ function installPromiseRejectionTracking(): void {
 
 /**
  * 安装崩溃捕获(幂等)。应在 index.js 里尽可能早地调用(先于业务树模块初始化)。
- * 顺序:处理上次启动面包屑 → 写本次会话头 → 置本次 phase=starting → 装 handler。
+ * 顺序:判定上次是否异常退出(异常才惰性写头 + 补记一条)→ 置本次 phase=starting → 装 handler。
+ * 正常(上次干净退出、本次也没崩)的会话不写任何 crash.log 内容。
  */
 export function installCrashCapture(): void {
   if (installed) return;
   installed = true;
   const now = Date.now();
+  sessionStartAt = now;
 
   const previous = readBootMarker();
   previousAbnormalExit = isAbnormalPreviousBoot(previous);
 
-  appendEntry(buildSessionHeader(now));
   if (previousAbnormalExit) {
-    appendEntry(
-      formatCrashEntry({
-        source: 'uncaught',
-        error: `previous launch did not reach 'ready' (last phase=${previous?.phase ?? 'unknown'})`,
-        at: now,
-      }),
-    );
+    const priorPhase = previous?.phase ?? 'unknown';
+    // 区分「运行期崩溃」与「启动没走到 ready」,给出更贴切的补记文案。
+    const reason =
+      priorPhase === 'crashed'
+        ? 'previous launch crashed (last phase=crashed)'
+        : `previous launch did not reach 'ready' (last phase=${priorPhase})`;
+    recordCrash(formatCrashEntry({ source: 'uncaught', error: reason, at: now }));
   }
 
   writeBootMarker('starting', now);
@@ -237,15 +259,11 @@ export async function reloadWithMarker(reloadAsync: () => Promise<void>): Promis
   try {
     await reloadAsync();
   } catch (err) {
-    if (
-      previousPhase === 'starting' ||
-      previousPhase === 'endpoints' ||
-      previousPhase === 'ota' ||
-      previousPhase === 'auth' ||
-      previousPhase === 'ready' ||
-      previousPhase === 'reloading'
-    ) {
-      writeBootMarker(previousPhase, previous?.at ?? Date.now());
+    // reload 失败:恢复调用前的 phase 原值(不限于已知枚举——损坏/前向兼容的未知 phase
+    // 也照原样写回,而不是把它留在 'reloading' 掩盖后续异常;未知 phase 经
+    // isAbnormalPreviousBoot 会被保守判为异常,符合预期)。
+    if (typeof previousPhase === 'string' && previousPhase.length > 0) {
+      writeBootMarker(previousPhase as BootPhase, previous?.at ?? Date.now());
     }
     throw err;
   }
@@ -253,9 +271,11 @@ export async function reloadWithMarker(reloadAsync: () => Promise<void>): Promis
 
 /** 记录 React 渲染期错误(由 CrashBoundary.componentDidCatch 调用)。 */
 export function recordReactError(error: unknown, componentStack?: string): void {
-  appendEntry(
+  recordCrash(
     formatCrashEntry({ source: 'react-render', error, at: Date.now(), extra: componentStack }),
   );
+  // 渲染崩溃即已崩溃:标 'crashed',下次启动如实报「上次异常退出」(即使崩在 ready 之后)。
+  writeBootMarker('crashed', Date.now());
 }
 
 /** 上次启动是否异常退出(安装时判定并缓存;供设置页展示)。 */
@@ -297,4 +317,6 @@ export function hasCrashLog(): boolean {
 export function __resetCrashCaptureForTest(): void {
   installed = false;
   previousAbnormalExit = false;
+  sessionHeaderPending = true;
+  sessionStartAt = 0;
 }

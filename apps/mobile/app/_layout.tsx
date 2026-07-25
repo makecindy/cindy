@@ -249,25 +249,21 @@ function RootLayout() {
   }
   return (
     <GestureHandlerRootView style={styles.gestureRoot}>
-      {/* 崩溃兜底提到所有 Provider + splash 之上:才能抓到 Provider/闸门层自身的渲染
-          错误,且兜底屏不会被常驻 splash 覆盖(fallback 自包含,不依赖任何 Provider)。 */}
-      <CrashBoundary>
-        <SafeAreaProvider>
-          <ThemeProvider>
-            {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
-            <LocaleProvider>
-              {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
-              <MobileLoginHandoffProvider>
-                <EndpointHandoffBridge status={endpointGate.status} />
-                {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
-                <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
-                  {body}
-                </StartupSplashOverlay>
-              </MobileLoginHandoffProvider>
-            </LocaleProvider>
-          </ThemeProvider>
-        </SafeAreaProvider>
-      </CrashBoundary>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
+          <LocaleProvider>
+            {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
+            <MobileLoginHandoffProvider>
+              <EndpointHandoffBridge status={endpointGate.status} />
+              {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
+              <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
+                {body}
+              </StartupSplashOverlay>
+            </MobileLoginHandoffProvider>
+          </LocaleProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
@@ -352,4 +348,17 @@ const styles = StyleSheet.create({
   },
 });
 
-export default RootLayout;
+/**
+ * 崩溃兜底必须作为 RootLayout 的**祖先**,而不是它 return 出来的子节点——React 的
+ * ErrorBoundary 只能捕获后代的渲染错误,捕不到「返回该 boundary 的组件本身」。启动闸门
+ * hook(useStartupEndpointGate 等)与 Provider 构造都在 RootLayout 内执行,若把 boundary
+ * 放进 RootLayout 的 return 里,这类「一开即崩」的启动错误反而抓不到、仍是白屏。故在此
+ * 最外层包裹。fallback 自包含(不依赖任何 Provider),boundary 触发时整棵树被替换,兜底屏必然可见。
+ */
+export default function Root(): ReactElement {
+  return (
+    <CrashBoundary>
+      <RootLayout />
+    </CrashBoundary>
+  );
+}

@@ -1,7 +1,8 @@
 import { Component, type ReactNode } from 'react';
 import { Alert, Appearance, Pressable, StyleSheet, View } from 'react-native';
-import * as Sharing from 'expo-sharing';
 import * as Updates from 'expo-updates';
+
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import { Text } from '@/components/AppText';
 import { darkColors, fontWeight, lightColors, radius, spacing, typeScale, type ThemeColors } from '@/theme/tokens';
@@ -57,6 +58,10 @@ async function exportLog(): Promise<void> {
     return;
   }
   try {
+    // 动态 import:expo-sharing 顶层 requireNativeModule('ExpoSharing'),旧 dev client
+    // 缺原生模块时顶层 import 会炸整个 bundle。本组件挂在根部,静态 import 会让崩溃兜底
+    // 自身变成全局崩溃源,尤其要走动态 import。
+    const Sharing = await import('expo-sharing');
     if (!(await Sharing.isAvailableAsync())) {
       Alert.alert(i18n.t('shared.crashScreen.shareUnavailableTitle'), i18n.t('shared.crashScreen.shareUnavailableBody'));
       return;
@@ -89,7 +94,7 @@ function CrashFallback({ error, onReset }: { error: Error; onReset: () => void }
       <Text style={styles.title}>{i18n.t('shared.crashScreen.title')}</Text>
       <Text style={styles.body}>{i18n.t('shared.crashScreen.body')}</Text>
       <Text style={styles.detail} numberOfLines={3}>
-        {error.message}
+        {redactSensitiveText(error.message)}
       </Text>
       <Pressable
         accessibilityRole="button"
