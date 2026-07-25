@@ -45,7 +45,7 @@ export interface GhostSettingsSnapshotContext {
 const STORAGE_PREFIX = 'ghostSettings.snapshot.';
 
 /** 宿主设置 guest 的布局契约版本;布局注入改变时递增以主动淘汰旧快照。 */
-export const GHOST_SETTINGS_LAYOUT_REVISION = 2;
+export const GHOST_SETTINGS_LAYOUT_REVISION = 3;
 
 /**
  * 单条持久化体积上限(字符数,localStorage 按 UTF-16 计):设置区是纯色底 +

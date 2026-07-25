@@ -82,6 +82,12 @@ describe('GhostSettingsWebview layout ownership', () => {
         ),
       ).toBe(true),
     );
+    const responsiveScript = executeJavaScript.mock.calls
+      .map(([script]) => String(script))
+      .find((script) => script.includes('__xdt_settings_w'));
+    expect(responsiveScript).toContain('box-sizing:border-box!important');
+    expect(responsiveScript).toContain('min-width:0!important');
+    expect(responsiveScript).toContain('max-width:100%!important');
     expect(host.classList.contains('overflow-hidden')).toBe(true);
   });
 });

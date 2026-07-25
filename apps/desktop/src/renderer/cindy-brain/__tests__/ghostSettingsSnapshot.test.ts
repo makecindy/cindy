@@ -164,7 +164,7 @@ describe('匹配判定', () => {
   it('插件版本 / 宿主布局版本 / 主题 / DPR 全等才命中', () => {
     expect(snapshotMatchesContext(makeSnapshot(), ctx)).toBe(true);
     expect(snapshotMatchesContext(makeSnapshot({ version: '1.1.2' }), ctx)).toBe(false);
-    expect(snapshotMatchesContext(makeSnapshot({ layoutRevision: 1 }), ctx)).toBe(false);
+    expect(snapshotMatchesContext(makeSnapshot({ layoutRevision: 2 }), ctx)).toBe(false);
     expect(
       snapshotMatchesContext(makeSnapshot({ themeCss: ':root { --surface: #eee; }' }), ctx),
     ).toBe(false);

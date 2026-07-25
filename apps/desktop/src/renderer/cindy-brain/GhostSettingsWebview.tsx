@@ -62,7 +62,7 @@ const AUTO_HEIGHT_MAX = 800;
  * 固定高度模式不注入这些规则,遵守 settingsHeight 的作者布局契约。
  */
 const RESPONSIVE_GUEST_CSS =
-  'html,body{width:100%!important;max-width:100%!important;overflow-x:hidden!important;}*,*::before,*::after{box-sizing:border-box;min-width:0;max-width:100%;}';
+  'html,body{width:100%!important;max-width:100%!important;overflow-x:hidden!important;}*,*::before,*::after{box-sizing:border-box!important;min-width:0!important;max-width:100%!important;}';
 const RESPONSIVE_STYLE_SCRIPT = `(function(){if(document.getElementById('__xdt_settings_w'))return;var s=document.createElement('style');s.id='__xdt_settings_w';s.textContent=${JSON.stringify(RESPONSIVE_GUEST_CSS)};(document.head||document.documentElement).appendChild(s)})()`;
 const AUTO_HEIGHT_GUEST_CSS = 'html,body{height:auto !important;min-height:0 !important;}';
 const AUTO_HEIGHT_STYLE_SCRIPT = `(function(){if(document.getElementById('__xdt_auto_h'))return;var s=document.createElement('style');s.id='__xdt_auto_h';s.textContent=${JSON.stringify(AUTO_HEIGHT_GUEST_CSS)};(document.head||document.documentElement).appendChild(s)})()`;
