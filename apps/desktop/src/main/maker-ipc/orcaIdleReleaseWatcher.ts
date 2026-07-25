@@ -18,6 +18,9 @@ export interface OrcaIdleReleaseSession {
   isTurnRunning(): boolean;
 }
 
+/** Result of re-checking and closing a runtime after local ownership was confirmed. */
+export type OrcaIdleRuntimeCloseResult = 'closed' | 'busy' | 'already-missing';
+
 /** Timer handle abstraction keeps the watcher deterministic under fake timers. */
 export interface OrcaIdleReleaseTimer {
   setInterval(callback: () => void, intervalMs: number): ReturnType<typeof setInterval>;
@@ -33,8 +36,8 @@ export interface OrcaIdleReleaseWatcherDeps {
   hasPendingInput(sessionId: string): Promise<boolean>;
   markReleased(candidate: OrcaIdleReleaseCandidate, releasedAt: number): Promise<boolean>;
   touchWorker(workerId: string, updatedAt: number): Promise<void>;
-  /** Atomically reserve and close an idle runtime; false means a send won the race. */
-  closeSessionIfIdle(sessionId: string): Promise<boolean>;
+  /** Atomically re-check and close an idle runtime after local ownership is confirmed. */
+  closeSessionIfIdle(sessionId: string): Promise<OrcaIdleRuntimeCloseResult>;
   broadcastWorkerChanged(leadSessionId: string): void;
   now(): number;
   timer: OrcaIdleReleaseTimer;
@@ -101,12 +104,14 @@ export function createOrcaIdleReleaseWatcher(
               return;
             }
 
-            const closed = await deps.closeSessionIfIdle(candidate.sessionId);
-            if (!closed) {
+            const closeResult = await deps.closeSessionIfIdle(candidate.sessionId);
+            if (closeResult === 'busy') {
               await deps.touchWorker(candidate.id, deps.now());
               return;
             }
 
+            // If the locally owned session disappeared after the first check, its
+            // runtime is already gone and the persisted release marker must converge.
             const releasedAt = deps.now();
             const marked = await deps.markReleased(candidate, releasedAt);
             if (!marked) return;

@@ -33,7 +33,7 @@ function createDeps(overrides: Partial<OrcaIdleReleaseWatcherDeps> = {}) {
     hasPendingInput: vi.fn(async () => false),
     markReleased: vi.fn(async () => true),
     touchWorker: vi.fn(async () => undefined),
-    closeSessionIfIdle: vi.fn(async () => true),
+    closeSessionIfIdle: vi.fn(async () => 'closed' as const),
     broadcastWorkerChanged: vi.fn(),
     now: vi.fn(() => 120_000),
     timer: { setInterval, clearInterval },
@@ -180,7 +180,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
   it('delays a worker when closeIfIdle loses a send race', async () => {
     const { deps, watcher } = createDeps({
-      closeSessionIfIdle: vi.fn(async () => false),
+      closeSessionIfIdle: vi.fn(async () => 'busy' as const),
     });
 
     await watcher.scanNow();
@@ -188,6 +188,18 @@ describe('createOrcaIdleReleaseWatcher', () => {
     expect(deps.touchWorker).toHaveBeenCalledWith('worker-1', 120_000);
     expect(deps.markReleased).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
+  });
+
+  it('marks a locally owned runtime released when it disappears before closeIfIdle', async () => {
+    const { deps, watcher } = createDeps({
+      closeSessionIfIdle: vi.fn(async () => 'already-missing' as const),
+    });
+
+    await watcher.scanNow();
+
+    expect(deps.touchWorker).not.toHaveBeenCalled();
+    expect(deps.markReleased).toHaveBeenCalledWith(expect.objectContaining({ id: 'worker-1' }), 120_000);
+    expect(deps.broadcastWorkerChanged).toHaveBeenCalledOnce();
   });
 
   it('uses the injected interval and stops future scans', async () => {

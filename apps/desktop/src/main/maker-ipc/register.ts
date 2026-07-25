@@ -5708,7 +5708,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         .set({ updatedAt })
         .where(eq(orcaWorkers.id, workerId));
     },
-    closeSessionIfIdle: (sessionId) => maker.getSession(sessionId)?.closeIfIdle() ?? Promise.resolve(false),
+    closeSessionIfIdle: async (sessionId) => {
+      const session = maker.getSession(sessionId);
+      if (!session) return 'already-missing';
+      return (await session.closeIfIdle()) ? 'closed' : 'busy';
+    },
     broadcastWorkerChanged: (leadSessionId) => {
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
     },
