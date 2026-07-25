@@ -3602,6 +3602,7 @@
       "preparing": "QR 코드 준비 중…",
       "error": "QR 코드를 만들 수 없습니다. 잠시 후 다시 시도해 주세요.",
       "openPage": "다운로드 페이지 열기",
+      "openFailed": "다운로드 페이지를 열 수 없습니다. 시스템 브라우저 설정을 확인해 주세요",
       "scanToOpen": "스캔하여 Cindy 앱을 열고 같은 계정으로 로그인",
       "scanAnother": "다른 기기 스캔",
       "scanAnotherHint": "다른 휴대폰에서 Cindy 열기",

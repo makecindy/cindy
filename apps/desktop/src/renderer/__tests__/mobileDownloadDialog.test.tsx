@@ -17,6 +17,11 @@ const { toDataURL } = vi.hoisted(() => ({
 }));
 vi.mock('qrcode', () => ({ toDataURL }));
 
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+vi.mock('@/lib/toast', () => ({
+  toast: { error: toastError, success: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}));
+
 import {
   MobileDownloadDialog,
   resolveMobileRemotePresentation,
@@ -80,6 +85,7 @@ const detachedTriggerRef = { current: null as HTMLButtonElement | null };
 
 beforeEach(() => {
   toDataURL.mockClear();
+  toastError.mockClear();
   openExternal.mockClear();
   getState.mockClear();
   listDevices.mockClear();
@@ -233,6 +239,29 @@ describe('resolveMobileRemotePresentation', () => {
     });
   });
 
+  it('orders the preview mobile-first and then by name, without relying on sort stability', () => {
+    const other = (deviceId: string, name: string, platform: string) => ({
+      ...selfDevice,
+      deviceId,
+      name,
+      platform,
+      isSelf: false,
+    });
+
+    expect(
+      resolveMobileRemotePresentation({
+        enabled: true,
+        devices: [
+          selfDevice,
+          other('d-1', 'Zeta desktop', 'win32'),
+          other('m-1', 'Zeta phone', 'ios'),
+          other('d-2', 'Alpha desktop', 'linux'),
+          other('m-2', 'Alpha phone', 'android'),
+        ],
+      }).previewDevices.map((device) => device.deviceId),
+    ).toEqual(['m-2', 'm-1', 'd-2']);
+  });
+
   it('keeps an unavailable device list distinct from a confirmed empty list', () => {
     expect(
       resolveMobileRemotePresentation({
@@ -283,6 +312,53 @@ describe('MobileDownloadDialog', () => {
     await waitFor(() => expect(document.activeElement).toBe(openButton));
     fireEvent.click(openButton);
     expect(openExternal).toHaveBeenCalledWith('https://cindy.cn/download/#all-versions');
+  });
+
+  it('reports a failed handoff to the system browser', async () => {
+    openExternal.mockResolvedValueOnce({ success: false });
+    render(
+      <MobileDownloadDialog
+        open
+        onOpenChange={vi.fn()}
+        remoteAvailable
+        onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
+        triggerRef={detachedTriggerRef}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.mobileDownload.openPage' }));
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith('sidebar.mobileDownload.openFailed'),
+    );
+
+    toastError.mockClear();
+    openExternal.mockRejectedValueOnce(new Error('ipc down'));
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.mobileDownload.openPage' }));
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith('sidebar.mobileDownload.openFailed'),
+    );
+  });
+
+  it('re-reads the remote state every time the dialog reopens', async () => {
+    // 设置页改权限、重命名/删除设备都不经过 presence/status/connection-issue 推送,
+    // 重新打开必须自己重读一次。
+    const props = {
+      onOpenChange: vi.fn(),
+      remoteAvailable: true,
+      onOpenRemoteSettings: vi.fn(),
+      onOpenDevices: vi.fn(),
+      triggerRef: detachedTriggerRef,
+    };
+    const view = render(<MobileDownloadDialog open={false} {...props} />);
+    await waitFor(() => expect(getState).toHaveBeenCalledTimes(1));
+
+    view.rerender(<MobileDownloadDialog open {...props} />);
+    await waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
+
+    view.rerender(<MobileDownloadDialog open={false} {...props} />);
+    view.rerender(<MobileDownloadDialog open {...props} />);
+    await waitFor(() => expect(getState).toHaveBeenCalledTimes(3));
   });
 
   it('shows the compact QR, device preview, and separate settings actions when mobile is linked', async () => {

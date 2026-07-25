@@ -142,7 +142,11 @@ export function RemoteControlSection() {
   const deviceLinkAvailable = mode === 'cloud';
   const s = useDeviceLinkSettings(deviceLinkAvailable);
 
-  const [devicesOpen, setDevicesOpen] = useState(false);
+  // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
+  // 再把下方内容顶开一格。
+  const [devicesOpen, setDevicesOpen] = useState(
+    () => new URLSearchParams(location.search).get('section') === 'devices',
+  );
   const [sshOpen, setSshOpen] = useState(false);
 
   // SSH 主机轻量快照 —— 只为收起态摘要服务。RemoteSection 内部自管自己的一份;

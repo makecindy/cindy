@@ -3603,6 +3603,7 @@
       "preparing": "Preparing QR code…",
       "error": "Couldn’t create the QR code. Try again later.",
       "openPage": "Open Download Page",
+      "openFailed": "Couldn’t open the download page. Check your system browser settings.",
       "scanToOpen": "Scan to open the Cindy app and sign in with the same account",
       "scanAnother": "Scan Another Device",
       "scanAnotherHint": "Open Cindy on another phone",

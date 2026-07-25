@@ -7,6 +7,7 @@ import * as QRCode from 'qrcode';
 import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
+import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 interface MobileDownloadDialogProps {
@@ -65,8 +66,13 @@ export function resolveMobileRemotePresentation(
     .filter((device) => !device.isSelf)
     .sort(compareDevicesByName);
   const linkedMobileDevices = otherDevices.filter(isMobileDevice);
+  // 手机优先,同组内继续按名字排;显式写出并列条件,不依赖 sort 的稳定性。
   const previewDevices = [...otherDevices]
-    .sort((left, right) => Number(isMobileDevice(right)) - Number(isMobileDevice(left)))
+    .sort(
+      (left, right) =>
+        Number(isMobileDevice(right)) - Number(isMobileDevice(left)) ||
+        compareDevicesByName(left, right),
+    )
     .slice(0, 3);
 
   return {
@@ -158,6 +164,8 @@ export function MobileDownloadDialog({
   const primaryActionRef = useRef<HTMLButtonElement>(null);
   const remoteActionRef = useRef<HTMLButtonElement>(null);
   const closeActionRef = useRef<HTMLButtonElement>(null);
+  const refreshRemoteRef = useRef<(() => void) | null>(null);
+  const skipNextOpenRefreshRef = useRef(false);
   const downloadUrl = useMemo(
     () => resolveMobileDownloadUrl(window.electronAPI.clientEndpoints.websiteUrl),
     [],
@@ -237,7 +245,15 @@ export function MobileDownloadDialog({
       }
     };
 
+    // 设置页改权限、重命名/删除设备都不会经过下面这三个事件(离线时 presence
+    // 更是发不出去),所以每次打开弹窗都要主动重读一次,而不是只靠推送。
+    refreshRemoteRef.current = () => {
+      void refreshRemoteSnapshot();
+    };
+
     void refreshRemoteSnapshot();
+    // 这一轮预热已经覆盖了「挂载时就是打开状态」的情况,下面的重开刷新不要重复打一次。
+    skipNextOpenRefreshRef.current = true;
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged(() => {
       void refreshRemoteSnapshot();
     });
@@ -253,8 +269,31 @@ export function MobileDownloadDialog({
       offPresence();
       offStatus();
       offConnectionIssue();
+      refreshRemoteRef.current = null;
     };
   }, [remoteAvailable]);
+
+  useEffect(() => {
+    if (!open) {
+      skipNextOpenRefreshRef.current = false;
+      return;
+    }
+    if (skipNextOpenRefreshRef.current) {
+      skipNextOpenRefreshRef.current = false;
+      return;
+    }
+    refreshRemoteRef.current?.();
+  }, [open, remoteAvailable]);
+
+  const openDownloadPage = async () => {
+    if (!downloadUrl) return;
+    try {
+      const result = await window.electronAPI.openExternal(downloadUrl);
+      if (!result.success) toast.error(t('sidebar.mobileDownload.openFailed'));
+    } catch {
+      toast.error(t('sidebar.mobileDownload.openFailed'));
+    }
+  };
 
   const remotePresentation = remoteSnapshot
     ? resolveMobileRemotePresentation(remoteSnapshot)
@@ -364,7 +403,7 @@ export function MobileDownloadDialog({
                   'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
                 onClick={() => {
-                  if (downloadUrl) void window.electronAPI.openExternal(downloadUrl);
+                  void openDownloadPage();
                 }}
               >
                 <span
