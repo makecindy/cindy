@@ -3,9 +3,18 @@ import type { ModelPriceQuote, MoneyCurrency } from '../../shared/regionalMoney'
 interface EffectiveModelCost {
   input?: number;
   output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
-// input / output 缩放比例小于这个阈值时视为浮点噪声,按标准价展示。
+interface CompleteEffectiveModelCost {
+  input: number;
+  output: number;
+  cacheRead: number | undefined;
+  cacheWrite: number | undefined;
+}
+
+// 各价格维度的缩放比例小于这个阈值时视为浮点噪声,按标准价展示。
 const MIN_EFFECTIVE_PRICE_GAP = 0.0005;
 
 export type ModelPricePresentation =
@@ -37,23 +46,25 @@ function isNonNegativeFinite(value: unknown): value is number {
 }
 
 /**
- * effectiveCost 能否直接当展示价:要求 input / output 相对标准价是同一个缩放比例。
- * effectiveCost 不带缓存维度,若 quote 有非零缓存价就不敢覆盖 —— 否则明细里的
- * input / output 来自实际价、缓存行来自标准价,两套价表混在一张表上。
+ * effectiveCost 能否直接当展示价:要求已展示的 input / output / 缓存价格
+ * 相对标准价都是同一个缩放比例。标准价中的非零缓存维度必须有实际价对应,
+ * 避免在同一张明细表中混用实际价与标准价。
  */
 function effectiveCostIsConsistent(
   quote: ModelPriceQuote,
-  cost: Required<EffectiveModelCost>,
+  cost: CompleteEffectiveModelCost,
 ): boolean {
-  if ((quote.cacheReadPerMtok && quote.cacheReadPerMtok > 0) ||
-      (quote.cacheCreatePerMtok && quote.cacheCreatePerMtok > 0)) {
-    return false;
-  }
   const gaps: number[] = [];
   for (const [standard, effective] of [
     [quote.inputPerMtok, cost.input],
     [quote.outputPerMtok, cost.output],
+    [quote.cacheReadPerMtok, cost.cacheRead],
+    [quote.cacheCreatePerMtok, cost.cacheWrite],
   ] as const) {
+    if (standard === undefined) continue;
+    if (!isNonNegativeFinite(standard)) return false;
+    if (effective === undefined && standard === 0) continue;
+    if (!isNonNegativeFinite(effective)) return false;
     if (standard === 0) {
       if (effective !== 0) return false;
       continue;
@@ -84,19 +95,20 @@ export function modelPricePresentation(
     hasEffectiveCost &&
     input === 0 &&
     output === 0 &&
-    (quote === null || (
-      quote.inputPerMtok === 0 &&
-      quote.outputPerMtok === 0 &&
-      (!quote.cacheReadPerMtok || quote.cacheReadPerMtok === 0) &&
-      (!quote.cacheCreatePerMtok || quote.cacheCreatePerMtok === 0)
-    ))
+    (quote === null ||
+      (quote.inputPerMtok === 0 &&
+        quote.outputPerMtok === 0 &&
+        (!quote.cacheReadPerMtok || quote.cacheReadPerMtok === 0) &&
+        (!quote.cacheCreatePerMtok || quote.cacheCreatePerMtok === 0)))
   ) {
     return { kind: 'free' };
   }
   if (quote === null) return null;
   if (!hasEffectiveCost) return { kind: 'priced', current: quote };
 
-  if (!effectiveCostIsConsistent(quote, { input, output })) {
+  const cacheRead = effectiveCost?.cacheRead;
+  const cacheWrite = effectiveCost?.cacheWrite;
+  if (!effectiveCostIsConsistent(quote, { input, output, cacheRead, cacheWrite })) {
     return { kind: 'priced', current: quote };
   }
   return {
@@ -105,13 +117,17 @@ export function modelPricePresentation(
       ...quote,
       inputPerMtok: input,
       outputPerMtok: output,
+      ...(quote.cacheReadPerMtok !== undefined
+        ? { cacheReadPerMtok: cacheRead ?? quote.cacheReadPerMtok }
+        : {}),
+      ...(quote.cacheCreatePerMtok !== undefined
+        ? { cacheCreatePerMtok: cacheWrite ?? quote.cacheCreatePerMtok }
+        : {}),
     },
   };
 }
 
-export function modelPriceDetailRows(
-  quote: ModelPriceQuote,
-): Array<{
+export function modelPriceDetailRows(quote: ModelPriceQuote): Array<{
   kind: 'input' | 'output' | 'cacheRead' | 'cacheCreate';
   value: string;
 }> {

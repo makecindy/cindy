@@ -476,7 +476,7 @@ describe('ModelSelector trigger variants', () => {
               contextWindow: 200000,
               efforts: ['high'],
               defaultEffort: 'high',
-              cost: { input: 6, output: 18 },
+              cost: { input: 6, output: 18, cacheRead: 1.2, cacheWrite: 7.5 },
             },
             {
               id: 'claude-sonnet-4-6',
@@ -500,6 +500,8 @@ describe('ModelSelector trigger variants', () => {
           approximate: false,
           inputPerMtok: 12,
           outputPerMtok: 36,
+          cacheReadPerMtok: 2.4,
+          cacheCreatePerMtok: 15,
         },
       },
     };
@@ -807,7 +809,7 @@ describe('ModelSelector trigger variants', () => {
               contextWindow: 200000,
               efforts: ['high'],
               defaultEffort: 'high',
-              cost: { input: 6, output: 18 },
+              cost: { input: 6, output: 18, cacheRead: 1.2, cacheWrite: 7.5 },
             },
           ],
         },
@@ -823,6 +825,8 @@ describe('ModelSelector trigger variants', () => {
           approximate: false,
           inputPerMtok: 12,
           outputPerMtok: 36,
+          cacheReadPerMtok: 2.4,
+          cacheCreatePerMtok: 15,
         },
       },
     };
@@ -852,6 +856,10 @@ describe('ModelSelector trigger variants', () => {
       expect(within(details).getByText('¥18')).toBeTruthy();
       expect(within(details).queryByText('¥12')).toBeNull();
       expect(within(details).queryByText('¥36')).toBeNull();
+      expect(within(details).getByText('¥1.2')).toBeTruthy();
+      expect(within(details).queryByText('¥2.4')).toBeNull();
+      expect(within(details).getByText('¥7.5')).toBeTruthy();
+      expect(within(details).queryByText('¥15')).toBeNull();
       expect(details.querySelector('[data-model-promotion-badge]')).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
