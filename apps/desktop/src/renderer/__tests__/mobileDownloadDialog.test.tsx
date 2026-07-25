@@ -161,6 +161,17 @@ describe('resolveMobileDownloadUrl', () => {
     }
   });
 
+  it('accepts the loopback http endpoint used by the dev manifest', () => {
+    // config/endpoint.dev.json.example 的 websiteUrl 是 http://localhost:3000,
+    // 开发机不该看到一个禁用的二维码。
+    expect(resolveMobileDownloadUrl('http://localhost:3000')).toBe(
+      'http://localhost:3000/download/#all-versions',
+    );
+    expect(resolveMobileDownloadUrl('http://127.0.0.1:5173')).toBe(
+      'http://127.0.0.1:5173/download/#all-versions',
+    );
+  });
+
   it.each(['', 'not-a-url', 'http://cindy.cn', 'https://user:pass@cindy.cn'])(
     'rejects an unsafe regional website endpoint: %s',
     (websiteUrl) => {
@@ -340,6 +351,28 @@ describe('MobileDownloadDialog', () => {
     );
   });
 
+  it('retries QR generation when the dialog is reopened after a failure', async () => {
+    // 用独立站点绕开模块级二维码缓存(缓存按 URL 命中,复用 cindy.cn 会直接拿到
+    // 前面用例生成好的结果,失败路径根本走不到)。
+    window.electronAPI.clientEndpoints.websiteUrl = 'https://qr-retry.example.com';
+    toDataURL.mockRejectedValueOnce(new Error('canvas busy'));
+    const props = {
+      onOpenChange: vi.fn(),
+      remoteAvailable: false,
+      onOpenRemoteSettings: vi.fn(),
+      onOpenDevices: vi.fn(),
+      triggerRef: detachedTriggerRef,
+    };
+    const view = render(<MobileDownloadDialog open {...props} />);
+
+    expect(await screen.findByText('sidebar.mobileDownload.error')).toBeTruthy();
+
+    view.rerender(<MobileDownloadDialog open={false} {...props} />);
+    view.rerender(<MobileDownloadDialog open {...props} />);
+
+    expect(await screen.findByAltText('sidebar.mobileDownload.qrAlt')).toBeTruthy();
+  });
+
   it('re-reads the remote state every time the dialog reopens', async () => {
     // 设置页改权限、重命名/删除设备都不经过 presence/status/connection-issue 推送,
     // 重新打开必须自己重读一次。
@@ -509,8 +542,9 @@ describe('MobileDownloadDialog', () => {
     expect(readyDot()).toBeNull();
   });
 
-  it('uses the official Cindy artwork and the shared dialog tokens', () => {
-    expect(source).toContain('@/../../resources/icon.png?url');
+  it('carries no brand artwork and reuses the shared dialog tokens', () => {
+    // §7:品牌图形只出现在 login / splash / new-session,弹窗用中性 chip + 线性图标。
+    expect(source).not.toContain('resources/icon.png');
     expect(source).toContain("t('sidebar.mobileDownload.title')");
     expect(source).toContain('<Smartphone');
     expect(source).toContain('<Monitor');

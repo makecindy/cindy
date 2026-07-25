@@ -160,9 +160,13 @@ export function RemoteControlSection() {
   }, [location.search]);
 
   const toggleDevices = useCallback(() => {
-    const nextOpen = !devicesOpen;
-    setDevicesOpen(nextOpen);
-    if (nextOpen) return;
+    setDevicesOpen((previous) => !previous);
+  }, []);
+
+  // 收起后把 ?section=devices 摘掉,否则刷新/返回还会再展开一次。放在 effect 里而
+  // 不是 toggle 回调里,是为了让 toggle 保持函数式更新、连点不读到过期状态。
+  useEffect(() => {
+    if (devicesOpen) return;
 
     const next = new URLSearchParams(location.search);
     if (next.get('section') !== 'devices') return;

@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, Monitor, QrCode, Settings2, Smartphone, X } from 'lucide-react';
 import * as QRCode from 'qrcode';
 
-import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { toast } from '@/lib/toast';
@@ -86,17 +85,26 @@ export function resolveMobileRemotePresentation(
   };
 }
 
-function parseHttpsUrl(value: string): URL | null {
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * https 之外只放行本机回环 —— `config/endpoint.dev.json.example` 的
+ * `websiteUrl` 是 `http://localhost:3000`,开发机不该看到一个禁用的二维码;
+ * 但公网 http 仍然拒绝,免得区域配置被改成明文站点。
+ */
+function parseWebsiteUrl(value: string): URL | null {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password ? url : null;
+    if (url.username || url.password) return null;
+    if (url.protocol === 'https:') return url;
+    return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname) ? url : null;
   } catch {
     return null;
   }
 }
 
 export function resolveMobileDownloadUrl(websiteUrl: string): string | null {
-  const website = parseHttpsUrl(websiteUrl);
+  const website = parseWebsiteUrl(websiteUrl);
   return website ? new URL('/download/#all-versions', website).toString() : null;
 }
 
@@ -159,6 +167,7 @@ export function MobileDownloadDialog({
   const { t } = useTranslation();
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrError, setQrError] = useState(false);
+  const [qrAttempt, setQrAttempt] = useState(0);
   const [remoteSnapshot, setRemoteSnapshot] = useState<MobileRemoteSnapshot | null>(null);
   const [remoteStatusError, setRemoteStatusError] = useState(false);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
@@ -166,6 +175,7 @@ export function MobileDownloadDialog({
   const closeActionRef = useRef<HTMLButtonElement>(null);
   const refreshRemoteRef = useRef<(() => void) | null>(null);
   const skipNextOpenRefreshRef = useRef(false);
+  const openHandledRef = useRef(false);
   const downloadUrl = useMemo(
     () => resolveMobileDownloadUrl(window.electronAPI.clientEndpoints.websiteUrl),
     [],
@@ -173,6 +183,9 @@ export function MobileDownloadDialog({
 
   // Prepare the QR before the first click so opening the dialog never waits on
   // canvas encoding. The module-level cache keeps this a once-per-endpoint cost.
+  // qrAttempt only moves when a reopen retries a previous failure — the sidebar
+  // keeps this component mounted, so without it one transient encoding error
+  // would strand the card in its error state until the app restarts.
   useEffect(() => {
     let active = true;
     setQrError(false);
@@ -201,7 +214,7 @@ export function MobileDownloadDialog({
     return () => {
       active = false;
     };
-  }, [downloadUrl]);
+  }, [downloadUrl, qrAttempt]);
 
   // Device state is also warmed while the dialog is closed. This makes its
   // first rendered layout stable instead of showing a large QR and then
@@ -276,14 +289,22 @@ export function MobileDownloadDialog({
   useEffect(() => {
     if (!open) {
       skipNextOpenRefreshRef.current = false;
+      openHandledRef.current = false;
       return;
     }
+    // 每次打开只处理一次:后续 qrError / remoteAvailable 的变化不该再触发重试,
+    // 否则一次持续失败会变成打开期间的无限重试。
+    if (openHandledRef.current) return;
+    openHandledRef.current = true;
+
+    if (qrError && downloadUrl) setQrAttempt((attempt) => attempt + 1);
+
     if (skipNextOpenRefreshRef.current) {
       skipNextOpenRefreshRef.current = false;
       return;
     }
     refreshRemoteRef.current?.();
-  }, [open, remoteAvailable]);
+  }, [open, remoteAvailable, qrError, downloadUrl]);
 
   const openDownloadPage = async () => {
     if (!downloadUrl) return;
@@ -359,13 +380,16 @@ export function MobileDownloadDialog({
           </Dialog.Close>
 
           <div className="flex flex-col items-center text-center">
-            <img
-              src={cindyIconUrl}
-              alt=""
+            {/* §7:工作界面不放品牌图形,这里用设计系统的中性 chip + 线性图标。 */}
+            <span
               aria-hidden="true"
-              className="h-16 w-16 select-none object-contain"
-              draggable={false}
-            />
+              className={cn(
+                'flex h-12 w-12 items-center justify-center rounded-xl',
+                'bg-[var(--surface-chip)] text-[var(--confirm-title)]',
+              )}
+            >
+              <Smartphone className="h-6 w-6" strokeWidth={1.6} />
+            </span>
 
             <Dialog.Title className="mt-3 text-lg font-medium text-[var(--confirm-title)]">
               {t('sidebar.mobileDownload.title')}
