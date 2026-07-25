@@ -35,8 +35,13 @@ const CJK_CHAR = '\\u4e00-\\u9fff\\u3040-\\u30ff\\uac00-\\ud7af';
  *  - 连续三个点:一律截断。`Open https://x.test...` / `联系 a@x.com...然后重试` 里的
  *    `...` 是正文省略号,被 token 吃掉后省略号门禁就查不到了。URL 里不会出现连续三个点
  *    (路径分隔与单个点不受影响)。
+ *  - CJK 字符本身:一律截断。中英混排常把正文直接贴在地址后面且**连标点都没有**
+ *    (`访问 https://x.test返回worker操作`、`联系 a@x.com然后worker操作`),此时上面按
+ *    标点截断的两条都用不上,\S 会把整句正文吞掉,里面小写的 worker 违规随之消失。
+ *    URL / 邮箱里不会出现裸 CJK——国际化域名与路径在文案里都以 punycode 或
+ *    percent-encoding 形式书写,实测 desktop 与 mobile 语料里 0 例外。
  */
-const TOKEN_TAIL = `(?:(?![${CJK_PUNCT}])(?!\\.\\.\\.)(?![,;:!?](?=\\s*[${CJK_CHAR}]))\\S)+`;
+const TOKEN_TAIL = `(?:(?![${CJK_PUNCT}${CJK_CHAR}])(?!\\.\\.\\.)(?![,;:!?](?=\\s*[${CJK_CHAR}]))\\S)+`;
 
 const URL_TOKEN = new RegExp(`\\b[a-z][\\w-]*://${TOKEN_TAIL}`, 'gi');
 
@@ -101,6 +106,66 @@ export function occursIn(text, term) {
 }
 
 /**
+ * 英文源里「是否提到某个概念」的判定,供 forbidden 的条件禁用(whenEn)使用。
+ *
+ * 词边界复用 WORD_BOUNDARY,口径必须与 occursIn / findCaseMismatch 一致,否则边界规则
+ * 演进时两处会悄悄漂移,出现「术语命中了但条件禁用没生效」这种最难查的不一致。
+ *
+ * 复数**不能**只认「加 s」:Proxy 的复数是 proxies,`Proxy` + `s?` 认不出来,于是英文源写
+ * `system proxies` 时 Proxy 条目那条「代理」的条件禁用整个跳过,门禁放行了本该拦下的
+ * 误译。这里按英语规则展开真实复数形态:
+ *  - 辅音 + y → ies(proxy → proxies);
+ *  - s / x / z / ch / sh 结尾 → es(process → processes);
+ *  - 其余 → 可选 s。
+ * 大小写不敏感——英文源里同一个概念可能出现在句首或句中。
+ *
+ * 抽成共享函数还有一层用途:guard 与三份影子 catalog 单测原先各自抄了一份同样的正则,
+ * 抄本之间早晚会失配。
+ */
+export function makeSourceTermMatcher(word) {
+  if (!word) return null;
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let forms;
+  if (/[^aeiou]y$/i.test(word)) {
+    forms = `(?:${escaped}|${escaped.replace(/y$/i, '')}ies)`;
+  } else if (/(?:s|x|z|ch|sh)$/i.test(word)) {
+    forms = `(?:${escaped}(?:es)?)`;
+  } else {
+    forms = `(?:${escaped}s?)`;
+  }
+  return new RegExp(`(?<![${WORD_BOUNDARY}])${forms}(?![${WORD_BOUNDARY}])`, 'i');
+}
+
+/** 英文源是否提到 whenEn 指代的概念(含真实复数形态)。 */
+export function sourceMentions(source, word) {
+  const re = makeSourceTermMatcher(word);
+  return re ? re.test(source) : false;
+}
+
+/**
+ * 某语言下该术语要不要做大小写检查,要的话返回标准形态,否则返回 null。
+ *
+ * 两条触发路径:
+ *  - translations[locale] 就是英文原词(Agent 的 zh-CN 写 "Agent");
+ *  - **alsoAllowed[locale] 里允许了英文原词**。这条原先漏了:Skill 的 zh-CN 首选译法是
+ *    「技能」,但 alsoAllowed 允许技术语境保留英文 `Skill`——于是 translations 值不等于
+ *    term.en,大小写检查被整条跳过,skillhub 里 10 处小写 `skill` 一路放行。既然允许
+ *    保留英文,保留的就该是规范形态,与 Agent / Worker 同一口径。
+ *    只认**恰好等于 term.en** 的条目:thread 的 `thread`、credits 的 `credits` 是故意
+ *    小写的外部系统叫法,大小写不受本产品约束,靠这个相等条件天然排除。
+ *
+ * checkCase === false 一律不检查:Issue / Session 这类词同时是常用英语单词。
+ * 源语言(en)不检查:glossary 把英文存在 term.en 而非 translations.en,天然返回 null
+ * ——英文句子里 agent / worker 作普通名词小写本就是正确英语,实测开启会产生 84 处假阳性。
+ */
+export function caseStandardFor(term, locale) {
+  if (term.checkCase === false) return null;
+  if (term.translations?.[locale] === term.en) return term.en;
+  const also = term.alsoAllowed?.[locale] ?? [];
+  return also.some((e) => e?.text === term.en) ? term.en : null;
+}
+
+/**
  * 术语在文案里出现的次数。
  *
  * fingerprint 需要它:光靠「locale + key + 规则 + 词」无法区分同一个 key 里命中 1 次还是
@@ -137,9 +202,19 @@ export function countOccurrences(text, term, { caseInsensitive = false } = {}) {
   }
 }
 
-/** 半角标点在文案里出现的次数(同 countOccurrences,供标点规则的 fingerprint 用)。 */
+/**
+ * 半角标点在文案里出现的次数(同 countOccurrences,供标点规则的 fingerprint 用)。
+ * 两组形态都要数:只数其中一组的话,另一组新增一处违规不会改变指纹,已冻结的 baseline
+ * 就把它一起掩盖了,违反 baseline「只减不增」的契约。
+ */
 export function countHalfWidthPunct(text) {
-  return [...text.matchAll(new RegExp(HALF_WIDTH_AFTER_HAN.source, 'g'))].length;
+  let n = [...text.matchAll(new RegExp(HALF_WIDTH_AFTER_HAN.source, 'g'))].length;
+  if (HAS_CJK.test(text)) {
+    // 刻意不加 m 标志:`$` 必须只表示整串末尾,与 findHalfWidthPunct 同口径。加了 m
+    // 会把多行文案的每个换行处都算成句末,两个函数对同一条文案给出不同答案。
+    n += [...text.matchAll(new RegExp(HALF_WIDTH_IN_CJK_PROSE.source, 'g'))].length;
+  }
+  return n;
 }
 
 /**
@@ -245,6 +320,31 @@ export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'ja', 'ko']);
 const HALF_WIDTH_AFTER_HAN = new RegExp(
   `[一-鿿）)」』】》〉”’][,:;!?]|["'\`][,:;!?](?=\\s*[${CJK_CHAR}])|[A-Za-z0-9_-][,:;!?](?=\\s*[${CJK_CHAR}])`,
 );
+
+/** 文案里是否有 CJK 字符——下面两条规则只在中文正文里成立。 */
+const HAS_CJK = new RegExp(`[${CJK_CHAR}]`);
+
+/**
+ * 句末的 `?` / `!` 紧跟拉丁 token,且整条文案是中文正文。
+ *
+ * 上面第 2 形态要求「半角标点右边是 CJK」,句末标点右边什么都没有,于是整类漏检:
+ * 中文疑问句以英文产品名收尾时就长这样——`断开 Cindy AI?`,它显然该用「？」。
+ *
+ * 只认句末的 `?` `!`。三点边界都是刻意的:
+ *  - 句末的 `,` `:` `;` 不算:结构化文本里的标签与前缀(`Note:`、列表项收尾)本就用半角。
+ *  - **句中**「拉丁 + 半角逗号 + 拉丁」不算,哪怕整条是中文正文。中文句子里夹的英文短语
+ *    两侧都是拉丁时确实可能漏掉真违规(Slack 安装确认里的 `Cindy App, bot` 就是一例,
+ *    已手工改掉),但这个形态与「代码 / 语法示例」外形完全相同——`格式为 key=value,
+ *    key2=value2 的形式`、`GPT-4, Claude 两者` 里的半角逗号有的对有的错,取决于那段
+ *    到底是正文还是样例,静态扫描判不了。上一轮 review 已按此定过口径(见本文件末尾
+ *    对应单测),不再反复。同理字体预览的排印样张 `… a,b · 0123456789 !?@&` 也不该被拦。
+ *  - 要求整条含 CJK:纯英文文案里的 `Continue?` 是正确英语。
+ *
+ * 与 HALF_WIDTH_AFTER_HAN 刻意**互斥**,不能有字符同时被两组形态匹配:
+ * countHalfWidthPunct 把两组命中数相加,重叠会让既有违规计数翻倍,已冻结的 baseline
+ * 指纹随之全部失配。所以左边界只取拉丁 / 数字 / `_` / `-`——右括号与汉字是第 1 形态的地盘。
+ */
+const HALF_WIDTH_IN_CJK_PROSE = new RegExp(`[A-Za-z0-9_-][!?]\\s*$`);
 const ASCII_ELLIPSIS = /\.\.\./;
 
 /**
@@ -316,7 +416,10 @@ export function normalizeForPunctuation(text) {
 /** 汉字后紧跟半角标点时返回该标点,否则 null。 */
 export function findHalfWidthPunct(text) {
   const m = text.match(HALF_WIDTH_AFTER_HAN);
-  return m ? m[0].slice(-1) : null;
+  if (m) return m[0].slice(-1);
+  if (!HAS_CJK.test(text)) return null;
+  const m2 = text.match(HALF_WIDTH_IN_CJK_PROSE);
+  return m2 ? m2[0].trimEnd().slice(-1) : null;
 }
 
 /** 是否含半角三点省略号。 */

@@ -24,6 +24,9 @@ import {
   countOccurrences,
   countHalfWidthPunct,
   countCaseMismatches,
+  caseStandardFor,
+  sourceMentions,
+  makeSourceTermMatcher,
 } from '../shared/glossary-rules.mjs';
 import { validateAgainstSchema } from '../shared/json-schema-lite.mjs';
 import { renderGlossaryDoc } from '../shared/glossary-doc.mjs';
@@ -778,4 +781,91 @@ test('findHalfWidthPunct: 连字符 / 下划线结尾的 code token 后也算左
   // 仍要求右侧是 CJK,纯 ASCII 片段不受影响
   assert.equal(findHalfWidthPunct('a=1, b=2 的形式'), null);
   assert.equal(findHalfWidthPunct('GPT-4, Claude 两者'), null);
+});
+
+test('TOKEN_TAIL: 正文直接贴在 URL / 邮箱后面(连标点都没有)时也要截断', () => {
+  // 中英混排常把中文正文紧贴在地址后面。\S+ 会把整句正文一起吞掉,里面的术语违规随之消失。
+  assert.ok(stripNonProse('访问 https://x.test返回worker操作').includes('worker'));
+  assert.ok(stripNonProse('联系 a@x.com然后worker操作').includes('worker'));
+  // 地址本身仍然被完整剥掉,不会把 host 里的词当正文
+  assert.ok(!stripNonProse('访问 https://worker.test返回操作').includes('worker.test'));
+  // 端口号、query string 这类合法 URL 结构不能被切坏(切坏了会把里面的半角标点当正文标点)
+  assert.equal(findHalfWidthPunct(normalizeForPunctuation('见 https://a.test:8080/x?ids=1,2 页面')), null);
+});
+
+test('findHalfWidthPunct: 句末的 ?/! 紧跟拉丁词也算(中文正文)', () => {
+  // 中文疑问句以英文产品名收尾:右边没有任何字符,「右侧须是 CJK」那条永远匹配不上
+  assert.equal(findHalfWidthPunct('断开 Cindy AI?'), '?');
+  assert.equal(findHalfWidthPunct('要重启 Cindy!'), '!');
+  assert.equal(findHalfWidthPunct('确认删除 config?  '), '?');
+  // 纯英文文案不受影响——`Continue?` 是正确英语
+  assert.equal(findHalfWidthPunct('Disconnect Cindy AI?'), null);
+  // 句末的 , : ; 仍不算:结构化前缀与列表收尾本就用半角
+  assert.equal(findHalfWidthPunct('中文说明 note:'), null);
+  // 句中「拉丁 + 半角逗号 + 拉丁」仍不算(与代码/语法示例外形相同,静态判不了),
+  // 这两条是上一轮 review 定下的口径,新分支不得推翻
+  assert.equal(findHalfWidthPunct('a=1, b=2 的形式'), null);
+  assert.equal(findHalfWidthPunct('GPT-4, Claude 两者'), null);
+});
+
+test('countHalfWidthPunct: 两组形态互斥,同一个标点不会被数两次', () => {
+  // 汉字后的半角标点只属于第 1 形态
+  assert.equal(countHalfWidthPunct('重启 Keychain,然后继续'), 1);
+  // 句末 ? 只属于新分支
+  assert.equal(countHalfWidthPunct('断开 Cindy AI?'), 1);
+  // 右括号 + 句末问号:左边界只取拉丁/数字,不含右括号,所以仍只算一次(第 1 形态)
+  assert.equal(countHalfWidthPunct('确认删除（含历史）?'), 1);
+  // 两处不同形态各算一次
+  assert.equal(countHalfWidthPunct('重启 Keychain,然后断开 Cindy AI?'), 2);
+});
+
+test('makeSourceTermMatcher: 复数按英语真实形态展开', () => {
+  // Proxy → proxies。只认「加 s」时英文源写 proxies 会让条件禁用整个跳过
+  assert.ok(sourceMentions('Configure system proxies here', 'Proxy'));
+  assert.ok(sourceMentions('Use a Proxy', 'Proxy'));
+  assert.ok(!sourceMentions('proxying requests', 'Proxy'));
+  // s / x / ch / sh 结尾 → es
+  assert.ok(sourceMentions('Two processes exited', 'Process'));
+  // 常规词 → 可选 s
+  assert.ok(sourceMentions('no credits left', 'Credit'));
+  assert.ok(sourceMentions('one credit left', 'Credit'));
+  // 词边界仍要成立:连字符与下划线算边界
+  assert.ok(!sourceMentions('ssh-agent forwarding', 'Agent'));
+  assert.ok(!sourceMentions('agent_id missing', 'Agent'));
+  // 空词返回 null,不能退化成「恒命中」
+  assert.equal(makeSourceTermMatcher(''), null);
+  assert.equal(sourceMentions('anything', ''), false);
+});
+
+test('caseStandardFor: alsoAllowed 允许英文原词时同样要查大小写', () => {
+  const skill = {
+    en: 'Skill',
+    translations: { 'zh-CN': '技能' },
+    alsoAllowed: { 'zh-CN': [{ text: 'Skill', when: '技术语境' }] },
+  };
+  // 首选译法是中文,但既然允许保留英文,保留的就该是规范形态
+  assert.equal(caseStandardFor(skill, 'zh-CN'), 'Skill');
+  // 没有 alsoAllowed 的语言不查
+  assert.equal(caseStandardFor(skill, 'ja'), null);
+  // 故意小写的外部系统叫法(thread / credits)靠「恰好等于 term.en」天然排除
+  const thread = {
+    en: 'Thread',
+    translations: { 'zh-CN': '对话' },
+    alsoAllowed: { 'zh-CN': [{ text: 'thread', when: 'Codex 概念' }] },
+  };
+  assert.equal(caseStandardFor(thread, 'zh-CN'), null);
+  // checkCase=false 一律不查
+  assert.equal(caseStandardFor({ ...skill, checkCase: false }, 'zh-CN'), null);
+  // translations 值就是英文原词时照旧
+  assert.equal(caseStandardFor({ en: 'Agent', translations: { 'zh-CN': 'Agent' } }, 'zh-CN'), 'Agent');
+  // 源语言 en 不在 translations 里,天然返回 null(开启会有 84 处假阳性)
+  assert.equal(caseStandardFor({ en: 'Agent', translations: { 'zh-CN': 'Agent' } }, 'en'), null);
+});
+
+test('GLOSSARY.md 不得把 --update-baseline 说成能登记新违规', () => {
+  const doc = fs.readFileSync(path.join(ROOT, 'i18n', 'GLOSSARY.md'), 'utf8');
+  // proposed → decided 会把既有告警变成阻断违规,而 --update-baseline 只删不加,
+  // 照着「再跑 --update-baseline 冻结存量」做只会失败
+  assert.ok(!/改为\s*`?decided`?[^\n]*再跑\s*`?--update-baseline`?[^\n]*冻结存量/.test(doc), doc.slice(0, 200));
+  assert.ok(doc.includes('只删不加'), '文档要说清 --update-baseline 的方向性');
 });

@@ -71,7 +71,7 @@
           }
         ]
       },
-      "note": "网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。"
+      "note": "网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。whenEn 的匹配走 makeSourceTermMatcher,复数按英语真实形态展开:Proxy 的复数是 proxies,原先只认「加 s」,英文源写 system proxies 时这条条件禁用会整个跳过。"
     },
     {
       "id": "plugin",
@@ -135,7 +135,7 @@
           "会话"
         ]
       },
-      "note": "面向用户一律叫「对话」——「会话」太生硬难懂（2026-07 裁决）。代码与内部标识仍用 Session，本条只约束 UI 文案。Chat 合并到同一个词，见 chat 条目。落地时把 440 处「会话」+ 22 处「聊天」统一改为「对话」。ja / ko 沿用既有音译，不受本条约束。豁免的 6 处是同形异义的技术 session（登录态、WebSocket 语音连接），与产品对话无关——同类的还有 Linux Computer Use 提示里的「桌面会话」——那是 OS 桌面会话（窗口读取与输入自动化的授权范围）。注意 login.errors 的「绑定会话」指账号绑定态，scheduler 的「绑定对话」才是产品对话，两者同名不同义，靠 key 精确区分。还豁免 archiveWorkerConfirmDesc:归档 Worker 时 orcaTeamService.archiveWorker() 先关掉它的 SDK 运行时 session,再归档存下来的产品对话——一句话里是两个生命周期,统称「对话」会让用户以为聊天记录也被停掉了。还豁免 stopBashTitle:它停后台任务但显式保留底层 session 进程,「对话进程」是个不存在的东西,还会模糊它与相邻的「关闭后台进程」的区别。另豁免 4 个 toggleHint 与 forkErrors.unsupportedHistory:英文原文明确区分 agent session(Agent 运行实例)与 conversation(产品对话),两者合并成「对话」会把语义说错——开关其实对「同一对话内重启的 Agent 会话」也生效,写成「只对新建对话生效」等于告诉用户要新开对话。unsupportedHistory 失效的是历史引擎 session,产品对话仍在。内置工具的两条 toast 同理豁免:英文是 takes effect on next session,指下一个 Agent 会话;写成「下次对话生效」会与紧邻的 toggleHint(说重启 Agent 会话即可)自相矛盾,让用户以为必须新开一个对话。personalization 说明也豁免:那三处英文全是 runtime session——设置在 Agent 会话创建时被快照,而终端直跑 / 其他 IDE 里的 Claude Code 根本不是 Cindy 的产品对话,受 SessionStart hook 管。称它们「对话」等于凭空造出 Cindy 之外的产品对话。「Claude Code 会话」四处同样豁免:英文是 Claude Code sessions,指 CC 子进程 / SDK 运行实例(调试日志由 XDT_CC_DEBUG_NET 在下一个 CC 会话启动时生效),不是存下来的产品对话。称它「对话」会让用户以为要新开一个对话才生效。subagentModels.hint 同样豁免:英文是 apply to new sessions,指 Agent 运行实例——runtime-configs 用 live getter 暴露该设置、buildClaudeEnv() 在 Agent 会话启动时快照,所以在同一个对话里重启 runtime 就能生效。写成「从新建对话开始生效」会让用户以为必须新开对话。切换 Agent 引擎的确认文案与 Codex 延迟生效提示同样豁免:英文分别是 the original engine’s session 与 new Codex sessions,指引擎的运行实例——切回原引擎时续接的是它的 runtime session,存下来的产品对话从没变过;Codex 那条重启后对下一个 Codex 运行实例生效,同一对话里重启也算。统称「对话」会让用户以为每个引擎各有一个对话、或必须新开对话。",
+      "note": "面向用户一律叫「对话」——「会话」太生硬难懂（2026-07 裁决）。代码与内部标识仍用 Session，本条只约束 UI 文案。Chat 合并到同一个词，见 chat 条目。落地时把 440 处「会话」+ 22 处「聊天」统一改为「对话」。ja / ko 沿用既有音译，不受本条约束。豁免的 6 处是同形异义的技术 session（登录态、WebSocket 语音连接），与产品对话无关——同类的还有 Linux Computer Use 提示里的「桌面会话」——那是 OS 桌面会话（窗口读取与输入自动化的授权范围）。注意 login.errors 的「绑定会话」指账号绑定态，scheduler 的「绑定对话」才是产品对话，两者同名不同义，靠 key 精确区分。还豁免 archiveWorkerConfirmDesc:归档 Worker 时 orcaTeamService.archiveWorker() 先关掉它的 SDK 运行时 session,再归档存下来的产品对话——一句话里是两个生命周期,统称「对话」会让用户以为聊天记录也被停掉了。还豁免 stopBashTitle:它停后台任务但显式保留底层 session 进程,「对话进程」是个不存在的东西,还会模糊它与相邻的「关闭后台进程」的区别。另豁免 4 个 toggleHint 与 forkErrors.unsupportedHistory:英文原文明确区分 agent session(Agent 运行实例)与 conversation(产品对话),两者合并成「对话」会把语义说错——开关其实对「同一对话内重启的 Agent 会话」也生效,写成「只对新建对话生效」等于告诉用户要新开对话。unsupportedHistory 失效的是历史引擎 session,产品对话仍在。内置工具的两条 toast 同理豁免:英文是 takes effect on next session,指下一个 Agent 会话;写成「下次对话生效」会与紧邻的 toggleHint(说重启 Agent 会话即可)自相矛盾,让用户以为必须新开一个对话。personalization 说明也豁免:那三处英文全是 runtime session——设置在 Agent 会话创建时被快照,而终端直跑 / 其他 IDE 里的 Claude Code 根本不是 Cindy 的产品对话,受 SessionStart hook 管。称它们「对话」等于凭空造出 Cindy 之外的产品对话。「Claude Code 会话」四处同样豁免:英文是 Claude Code sessions,指 CC 子进程 / SDK 运行实例(调试日志由 XDT_CC_DEBUG_NET 在下一个 CC 会话启动时生效),不是存下来的产品对话。称它「对话」会让用户以为要新开一个对话才生效。subagentModels.hint 同样豁免:英文是 apply to new sessions,指 Agent 运行实例——runtime-configs 用 live getter 暴露该设置、buildClaudeEnv() 在 Agent 会话启动时快照,所以在同一个对话里重启 runtime 就能生效。写成「从新建对话开始生效」会让用户以为必须新开对话。切换 Agent 引擎的确认文案与 Codex 延迟生效提示同样豁免:英文分别是 the original engine’s session 与 new Codex sessions,指引擎的运行实例——切回原引擎时续接的是它的 runtime session,存下来的产品对话从没变过;Codex 那条重启后对下一个 Codex 运行实例生效,同一对话里重启也算。统称「对话」会让用户以为每个引擎各有一个对话、或必须新开对话。stopConfirmDesc 与 lspMode 的两条 toast 同样豁免:英文源分别是 The Worker session will be destroyed 与 takes effect in new sessions,指的都是 Agent 运行实例——结束协同时 disableOrcaInternal() 关掉 Worker 的 SDK 运行时后会把它存下来的对话标为 archived、聊天记录仍在,LSP 开关则在下一个 Agent 会话启动时才被读到。称它们「对话」会让用户以为聊天记录被销毁、或必须新开一个对话,与紧邻的归档确认文案自相矛盾。",
       "exempt": [
         "desktop:chat.backgroundActivity.stopBashTitle",
         "desktop:chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED",
@@ -146,6 +146,7 @@
         "desktop:login.errors.INVALID_LOGIN_TICKET",
         "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
+        "desktop:newChat.collaboration.stopConfirmDesc",
         "desktop:settings.about.debugLogDescription",
         "desktop:settings.builtinTools.toast.disabled",
         "desktop:settings.builtinTools.toast.enabled",
@@ -155,6 +156,8 @@
         "desktop:settings.computerUse.codexRefreshDeferred",
         "desktop:settings.computerUse.directControl.permissions.linuxHint",
         "desktop:settings.computerUse.directControl.toggleHint",
+        "desktop:settings.lspMode.toast.disabled",
+        "desktop:settings.lspMode.toast.enabled",
         "desktop:settings.personalization.placeholder",
         "desktop:settings.subagentModels.hint",
         "mobile/composer:voice.invalidSession",
@@ -235,7 +238,7 @@
           "기술"
         ]
       },
-      "note": "中文用「技能」（现状 32:26 领先），偶尔保留英文 Skill 也允许，故 zh-CN 不设 forbidden——硬性禁用会逼出别扭的中文。ja / ko 则禁用 技能 / 기술：那是与 スキル / 스킬 并存的同义漂移，且只出现在 skillhub 内部（3 / 3 处）。ko 的 기술 是多义词（技术 / 记述 / 技能），两处非 Skill 义已按 key 豁免。SkillHub 作为产品名单独登记在 skillhub 条目。",
+      "note": "中文用「技能」（现状 32:26 领先），偶尔保留英文 Skill 也允许，故 zh-CN 不设 forbidden——硬性禁用会逼出别扭的中文。ja / ko 则禁用 技能 / 기술：那是与 スキル / 스킬 并存的同义漂移，且只出现在 skillhub 内部（3 / 3 处）。ko 的 기술 是多义词（技术 / 记述 / 技能），两处非 Skill 义已按 key 豁免。SkillHub 作为产品名单独登记在 skillhub 条目。(2026-07 补充:alsoAllowed 允许保留英文,那就必须是规范形态 Skill——caseStandardFor 会把这类条目一并纳入大小写检查,skillhub 里原有 10 处小写 skill 已统一。)",
       "exempt": [
         "desktop:localDbFatal.details",
         "desktop:issueTracker.create.descriptionPlaceholder"

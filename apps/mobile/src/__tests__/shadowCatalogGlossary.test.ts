@@ -26,7 +26,8 @@ import {
   occursIn,
   normalizeForPunctuation,
   stripNonProse,
-  WORD_BOUNDARY,
+  caseStandardFor,
+  sourceMentions,
 } from '../../../../scripts/shared/glossary-rules.mjs';
 
 const REPO_ROOT = resolve(__dirname, '../../../..');
@@ -131,12 +132,10 @@ describe('影子 catalog 术语一致性', () => {
           const whenEn = typeof entry === 'string' ? null : entry.whenEn;
           if (!occursIn(stripNonProse(value), bad)) continue;
           if (whenEn) {
+            // 复用共享匹配器:词边界与真实复数形态(Proxy → proxies)都由它统一处理。
+            // 这里原先抄了一份正则,与根门禁各自演进早晚失配。
             const source = sourceByKey.get(key);
-            const re = new RegExp(
-              `(?<![${WORD_BOUNDARY}])${whenEn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?(?![${WORD_BOUNDARY}])`,
-              'i',
-            );
-            if (!source || !re.test(stripNonProse(source))) continue;
+            if (!source || !sourceMentions(stripNonProse(source), whenEn)) continue;
           }
           // 与根门禁一致:只报事实与英文源,不给替换目标。术语表是参考不是替换表——
           // 该换成什么取决于英文源与这个 key 的用途,得读了语境再定。
@@ -160,12 +159,13 @@ describe('影子 catalog 术语一致性', () => {
     const violations: string[] = [];
     const notes: string[] = [];
     for (const term of glossary.terms) {
-      if (term.checkCase === false) continue;
       const isExempt = makeExemptChecker(term.exempt);
       for (const { locale, key, value } of entries) {
         if (isExempt(key)) continue;
-        const standard = term.translations?.[locale];
-        if (!standard || standard !== term.en) continue;
+        // 触发条件统一由 caseStandardFor 判定(含 alsoAllowed 允许英文原词的情形),
+        // 与根门禁同一份逻辑。
+        const standard = caseStandardFor(term, locale);
+        if (!standard) continue;
         const hit = findCaseMismatch(stripNonProse(value), standard);
         // 大小写的正确目标与语境无关、唯一确定,这里给目标是帮忙不是误导(同根门禁)。
         if (!hit) continue;

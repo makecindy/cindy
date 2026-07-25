@@ -132,8 +132,15 @@ export function renderGlossaryDoc(glossary) {
   } else {
     lines.push(
       '这些术语现状不一致但**尚未拍板**，guard 只告警不阻断。' +
-        '裁决后把 `i18n/glossary.json` 里对应条目的 `status` 改为 `decided`、补上 `translations`，' +
-        '再跑 `--update-baseline` 冻结存量。',
+        '裁决后把 `i18n/glossary.json` 里对应条目的 `status` 改为 `decided`、补上 `translations`。',
+    );
+    lines.push('');
+    lines.push(
+      '**注意别指望 `--update-baseline` 帮你收尾。** `proposed` 存在的理由正是「已知有存量不一致」，' +
+        '改成 `decided` 的那一刻这些告警会变成阻断违规；而 `--update-baseline` 只删不加，' +
+        '遇到 baseline 里没有的指纹会直接拒绝。所以裁决时只有两条路：' +
+        '要么把命中逐条读语境改掉，要么先人工把已 review 过的指纹写进 ' +
+        '`i18n/glossary-baseline.json` 冻结存量，之后再用 `--update-baseline` 做修剪。',
     );
     lines.push('');
     for (const term of proposed) {
@@ -158,8 +165,12 @@ export function renderGlossaryDoc(glossary) {
   lines.push('2. 拿不准时先设 `status: "proposed"`，让 guard 把现状规模统计出来再讨论。');
   lines.push('3. 跑 `pnpm i18n:glossary-doc` 重新生成本文件。');
   lines.push('4. 跑 `pnpm check:i18n-glossary` 看新规则命中多少存量，逐条核对后清理干净。');
-  lines.push('   `--update-baseline` **只能删不能加**——它会拒绝登记新违规；确需冻结一批存量时');
+  lines.push('   `--update-baseline` **只删不加**——它会拒绝登记新违规；确需冻结一批存量时');
   lines.push('   手动编辑 `i18n/glossary-baseline.json`，让新增条目出现在 diff 里被 review 看到。');
+  lines.push('5. 把 `proposed` 提升为 `decided` 时也是这一条：`proposed` 存在的理由正是「已知有存量');
+  lines.push('   不一致」，改成 `decided` 的那一刻这些告警全部变成阻断违规。因为 `--update-baseline`');
+  lines.push('   **只删不加**，此时只有两条路——逐条读语境改掉，或先人工把已 review 过的指纹写进');
+  lines.push('   baseline，之后再用 `--update-baseline` 做修剪。');
   lines.push('');
   lines.push('## 清理存量：不要用脚本批量替换');
   lines.push('');

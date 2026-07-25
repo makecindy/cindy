@@ -49,12 +49,13 @@ import {
   countHalfWidthPunct,
   countOccurrences,
   HALFWIDTH_PUNCT_LOCALES,
-  WORD_BOUNDARY,
+  caseStandardFor,
   findCaseMismatch,
   findHalfWidthPunct,
   hasAsciiEllipsis,
   normalizeForPunctuation,
   makeExemptChecker,
+  makeSourceTermMatcher,
   occursIn,
   stripNonProse,
 } from './shared/glossary-rules.mjs';
@@ -238,15 +239,10 @@ for (const term of glossary.terms) {
     for (const entry of term.forbidden?.[locale] ?? []) {
       const bad = typeof entry === 'string' ? entry : entry.text;
       const whenEn = typeof entry === 'string' ? null : entry.whenEn;
-      // 词边界必须复用 WORD_BOUNDARY:whenEn 的匹配口径要和 occursIn / findCaseMismatch
-      // 完全一致,否则边界规则演进时(例如再往里加一类字符)两处会悄悄漂移,
-      // 出现「术语命中了但条件禁用没生效」这种最难查的不一致。
-      const sourceRe = whenEn
-        ? new RegExp(
-            `(?<![${WORD_BOUNDARY}])${whenEn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?(?![${WORD_BOUNDARY}])`,
-            'i',
-          )
-        : null;
+      // 匹配口径统一由 makeSourceTermMatcher 提供(词边界复用 WORD_BOUNDARY、复数按英语
+      // 真实形态展开)。影子 catalog 的三份单测原先各抄了一份同样的正则,抄本之间早晚
+      // 失配,现已一并改用这个函数。
+      const sourceRe = whenEn ? makeSourceTermMatcher(whenEn) : null;
 
       for (const [key, value] of entries) {
         if (isExempt(key)) continue;
@@ -289,19 +285,11 @@ for (const term of glossary.terms) {
     }
 
     // 规则 2:保留英文的术语必须统一大小写形态。
-    // 两个前提缺一不可:
-    //  - translations 值与 en 相同(译成中文/日文/韩文的术语没有大小写问题);
-    //  - checkCase 未显式关闭。Issue / Session 这类词同时是常用英语单词,英文句子里
-    //    的 "fix the issue" 是正常用法,强行要求大写会在 prompt 模板里制造大批假阳性。
-    //
-    // **源语言(en)刻意不做大小写检查**:glossary 把英文存在 term.en 而非
-    // translations.en,所以下面的 standard 取值天然为 undefined、直接跳过。这不是疏漏
-    // ——英文原文里 agent / worker 作普通名词小写本就是正确英语("ask the agent to
-    // explain"、"after agent edits"),实测开启会产生 84 处假阳性。中英混排的约束只在
-    // 译文侧成立:中文句子里出现的 Agent 一定指产品概念,英文句子里则不一定。
-    if (term.checkCase === false) continue;
-    const standard = term.translations?.[locale];
-    if (!standard || standard !== term.en) continue;
+    // 触发条件与理由都收在 caseStandardFor 里(translations 值等于 en,或 alsoAllowed
+    // 允许了英文原词;checkCase=false 与源语言 en 一律跳过),guard 与三份影子 catalog
+    // 单测共用同一份判定,避免各处对「该不该查大小写」有不同解读。
+    const standard = caseStandardFor(term, locale);
+    if (!standard) continue;
     for (const [key, value] of entries) {
       if (isExempt(key)) continue;
       const prose = stripNonProse(value);

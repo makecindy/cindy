@@ -1112,7 +1112,7 @@
         "modelLabel": "全部模型",
         "billingLabel": "按 token 计费",
         "disconnectConfirm": {
-          "title": "断开 Cindy AI?",
+          "title": "断开 Cindy AI？",
           "description": "断开后将清除本地保存的 Cindy AI Key，需要重新连接才能继续使用 Cindy AI 提供的模型。"
         },
         "sync": {
@@ -1341,8 +1341,8 @@
       },
       "toggleAria": "LSP 代码智能开关",
       "toast": {
-        "enabled": "LSP 已开启，新建 session 后生效",
-        "disabled": "LSP 已关闭，新建 session 后生效",
+        "enabled": "LSP 已开启，新建 Agent 会话后生效",
+        "disabled": "LSP 已关闭，新建 Agent 会话后生效",
         "toggleFailed": "切换 LSP 开关失败"
       }
     },
@@ -1970,7 +1970,7 @@
           "hint": "需要先把 Cindy App 安装到工作区，bot 才能收发消息、派发任务；安装完成后重新打开开关即可完成绑定。",
           "status": "待安装 App",
           "confirmTitle": "安装 Cindy App 到 Slack 工作区",
-          "confirmDescription": "你授权的 Slack 工作区还没有安装 Cindy App, bot 需要安装后才能收发消息、派发任务。现在安装吗？安装完成后会自动完成绑定。",
+          "confirmDescription": "你授权的 Slack 工作区还没有安装 Cindy App，bot 需要安装后才能收发消息、派发任务。现在安装吗？安装完成后会自动完成绑定。",
           "confirmInstall": "安装",
           "confirmCancel": "取消",
           "waitingHint": "等待安装完成…装好后会自动完成绑定，无需再次授权。"
@@ -4046,7 +4046,7 @@
       "toggleOnAria": "协同模式已开启，点击停止",
       "toggleOffAria": "协同模式，点击召集 Worker",
       "stopConfirmTitle": "结束协同？",
-      "stopConfirmDesc": "Worker 对话将被销毁，如果正在执行任务则会立即停止，本次执行结果会丢失。确认要结束吗？",
+      "stopConfirmDesc": "Worker 会话将被销毁，如果正在执行任务则会立即停止，本次执行结果会丢失。确认要结束吗？",
       "stopConfirmConfirm": "结束协同",
       "stopConfirmCancel": "取消",
       "archiveWorkerConfirmTitle": "归档 Worker {{role}} #{{label}}？",
@@ -4058,9 +4058,9 @@
         "INVALID_PARAMS": "所选模型或协同配置已不可用，请重新选择后重试。",
         "INVALID_PARAMS_CONTINUE": "所选模型或协同配置已不可用；协同未开启，已改为单对话继续。请重新选择后重试。",
         "INVALID_PARAMS_REMOTE": "被控设备不支持所选模型或协同配置。请改选该设备支持的模型后重试。",
-        "NO_PROVIDER_FOR_AGENT": "当前设备没有为该 Agent 连接可用的模型 Provider。请先在设置中完成连接。",
-        "NO_PROVIDER_FOR_AGENT_CONTINUE": "当前设备没有为该 Agent 连接可用的模型 Provider；协同未开启，已改为单对话继续。请先在设置中完成连接。",
-        "NO_PROVIDER_FOR_AGENT_REMOTE": "被控设备没有为该 Agent 连接可用的模型 Provider。请在被控设备上完成连接后重试。",
+        "NO_PROVIDER_FOR_AGENT": "当前设备没有为该 Agent 连接可用的模型供应商。请先在设置中完成连接。",
+        "NO_PROVIDER_FOR_AGENT_CONTINUE": "当前设备没有为该 Agent 连接可用的模型供应商；协同未开启，已改为单对话继续。请先在设置中完成连接。",
+        "NO_PROVIDER_FOR_AGENT_REMOTE": "被控设备没有为该 Agent 连接可用的模型供应商。请在被控设备上完成连接后重试。",
         "PROVIDER_ROUTE_UNAVAILABLE": "所选模型与供应商的精确路由当前不可用，请改选可用的模型或供应商后重试。",
         "PROVIDER_ROUTE_UNAVAILABLE_CONTINUE": "所选模型与供应商的精确路由当前不可用；协同未开启，已改为单对话继续。请改选可用的模型或供应商后重试。",
         "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "被控设备上的所选模型与供应商精确路由当前不可用，请改选该设备可用的路由后重试。",
@@ -6273,8 +6273,8 @@
       "close": "关闭"
     },
     "welcome": {
-      "scanning": "正在扫描本地 skill…",
-      "emptyTitle": "本机暂无 skill / command / Agent",
+      "scanning": "正在扫描本地 Skill…",
+      "emptyTitle": "本机暂无 Skill / command / Agent",
       "emptyHint": "在 <code>~/.claude/{{dirs}}/</code> 下创建相应文件即可在此处看到",
       "selectPrompt": "从左侧选一个开始浏览",
       "totalCount_one": "共 {{count}} 项",
@@ -6357,7 +6357,7 @@
       "showMore": "展开",
       "showLess": "收起",
       "notFound": "未找到该项",
-      "scanning": "正在扫描本地 skill…",
+      "scanning": "正在扫描本地 Skill…",
       "backToSkillhub": "返回 SkillHub",
       "openDirAria": "打开目录",
       "showInFolderAria": "在文件管理器中显示",
@@ -6398,7 +6398,7 @@
       "updateToVersion": "更新到 v{{version}}",
       "updateDirtyDialog": {
         "title": "丢弃本地改动并更新？",
-        "description": "将用市场 v{{version}} 替换当前本地文件夹。本地未发布改动会保留在 {{appName}} 备份目录中，但当前 skill 会切到远端版本。",
+        "description": "将用市场 v{{version}} 替换当前本地文件夹。本地未发布改动会保留在 {{appName}} 备份目录中，但当前 Skill 会切到远端版本。",
         "confirm": "更新并保留备份",
         "cancel": "取消"
       },
@@ -6426,7 +6426,7 @@
       "diffPanelTitleZh": "本地变更"
     },
     "market": {
-      "searchPlaceholder": "搜索 skill / 作者 / 描述",
+      "searchPlaceholder": "搜索 Skill / 作者 / 描述",
       "sortTrending": "趋势",
       "sortDownloads": "下载量",
       "sortLatest": "最近更新",
@@ -6501,7 +6501,7 @@
       "installSuccess": "{{name}} 已安装{{suffix}}",
       "installFailed": "安装失败",
       "conflictDialog": {
-        "title": "目标目录已存在同名 skill",
+        "title": "目标目录已存在同名 Skill",
         "description": "会覆盖 {{path}}/{{name}} 下已有内容，旧版本会移到 {{appName}} 备份目录，原文件不会丢失。\n\n是否继续？",
         "confirm": "覆盖安装",
         "cancel": "取消"
@@ -6533,7 +6533,7 @@
       "displayNamePlaceholder": "My Skill",
       "displayNameLimit": "最多 64 字符",
       "descriptionLabel": "描述",
-      "descriptionPlaceholder": "简要描述该 skill 的用途",
+      "descriptionPlaceholder": "简要描述该 Skill 的用途",
       "visibilityLabel": "可见性",
       "visibilityPublicTitle": "公开",
       "visibilityPublicDesc": "全公司可见 · 默认",
@@ -6646,11 +6646,11 @@
       },
       "NOT_AUTHOR": {
         "title": "无权限",
-        "message": "你不是该 skill 的作者，无法发布新版本"
+        "message": "你不是该 Skill 的作者，无法发布新版本"
       },
       "PACK_FAILED": {
         "title": "打包失败",
-        "message": "未能完成 skill 打包，请重试"
+        "message": "未能完成 Skill 打包，请重试"
       },
       "OSS_OBJECT_NOT_FOUND": {
         "title": "上传文件丢失",
@@ -6706,7 +6706,7 @@
       "filesCount_other": "{{count}} 个文件 · ",
       "loading": "正在比对…",
       "noSnapshotTitle": "本地没有上次发布的快照",
-      "noSnapshotHint": "本功能上线前发布的 skill，或者你换了机器，都会缺这份本地快照。下次发布成功后即可看到 diff。",
+      "noSnapshotHint": "本功能上线前发布的 Skill，或者你换了机器，都会缺这份本地快照。下次发布成功后即可看到 diff。",
       "errorTitle": "比对失败",
       "cleanTitle": "没有发现差异",
       "cleanHint": "本地文件跟上次发布完全一致。如果状态仍显示 dirty，可能是行尾差异导致的 hash 偏移。",
@@ -7049,7 +7049,7 @@
       "review": "查看提案",
       "fromConversation": "从当前对话蒸馏",
       "openSession": "打开学习对话",
-      "continueHint": "在本对话继续对话即可修改提案，满意后点「查看提案」应用"
+      "continueHint": "在本对话中继续发消息即可修改提案，满意后点「查看提案」应用"
     },
     "review": {
       "ariaLabel": "技能提案审查面板",

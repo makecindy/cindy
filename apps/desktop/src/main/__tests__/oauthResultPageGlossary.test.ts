@@ -28,7 +28,8 @@ import {
   makeExemptChecker,
   normalizeForPunctuation,
   stripNonProse,
-  WORD_BOUNDARY,
+  caseStandardFor,
+  sourceMentions,
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore -- 共享规则是 .mjs,没有类型声明;这里只用它做断言
 } from '../../../../../scripts/shared/glossary-rules.mjs';
@@ -133,12 +134,10 @@ describe('OAuth 结果页文案符合术语表', () => {
           const whenEn = typeof entry === 'string' ? null : entry.whenEn;
           if (countOccurrences(stripNonProse(value), bad) === 0) continue;
           if (whenEn) {
+            // 复用共享匹配器:词边界与真实复数形态(Proxy → proxies)都由它统一处理。
+            // 这里原先抄了一份正则,与根门禁各自演进早晚失配。
             const source = sourceByKey.get(key);
-            const re = new RegExp(
-              `(?<![${WORD_BOUNDARY}])${whenEn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?(?![${WORD_BOUNDARY}])`,
-              'i',
-            );
-            if (!source || !re.test(stripNonProse(source))) continue;
+            if (!source || !sourceMentions(stripNonProse(source), whenEn)) continue;
           }
           // 与根门禁一致:只报事实与英文源,不给替换目标
           const source = sourceByKey.get(key);
@@ -159,12 +158,13 @@ describe('OAuth 结果页文案符合术语表', () => {
     const violations: string[] = [];
     const notes: string[] = [];
     for (const term of glossary.terms) {
-      if (term.checkCase === false) continue;
       const isExempt = makeExemptChecker(term.exempt);
       for (const { locale, key, value } of entries) {
         if (isExempt(key)) continue;
-        const standard = term.translations?.[locale];
-        if (!standard || standard !== term.en) continue;
+        // 触发条件统一由 caseStandardFor 判定(含 alsoAllowed 允许英文原词的情形),
+        // 与根门禁同一份逻辑。
+        const standard = caseStandardFor(term, locale);
+        if (!standard) continue;
         const hit = findCaseMismatch(stripNonProse(value), standard);
         if (!hit) continue;
         const line = `${locale} ${key}: 「${hit}」应为「${standard}」`;
