@@ -18,6 +18,22 @@ async function tempRoot(): Promise<string> {
   return root;
 }
 
+/**
+ * Chromium uses a relative file symlink for SingletonLock on macOS/Linux.
+ * Windows local test hosts may not have file-symlink privileges, so use a
+ * directory junction whose readlink target preserves the same trailing PID.
+ */
+async function writeSingletonLock(root: string, pid: number): Promise<void> {
+  const lockTarget = `myhost-${pid}`;
+  if (process.platform === 'win32') {
+    const junctionTarget = path.join(root, 'singleton-lock-targets', lockTarget);
+    await fs.mkdir(junctionTarget, { recursive: true });
+    await fs.symlink(junctionTarget, path.join(root, 'SingletonLock'), 'junction');
+    return;
+  }
+  await fs.symlink(lockTarget, path.join(root, 'SingletonLock'));
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -197,7 +213,7 @@ describe('claimLegacyOwnerNamespace', () => {
     const root = await tempRoot();
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
     // 历史 packaged build 不写 .dev-instances,但持有 Chromium 单例锁 symlink。
-    await fs.symlink('myhost-4242', path.join(root, 'SingletonLock'));
+    await writeSingletonLock(root, 4242);
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
@@ -216,7 +232,7 @@ describe('claimLegacyOwnerNamespace', () => {
   it('ignores a stale SingletonLock whose pid is dead and migrates normally', async () => {
     const root = await tempRoot();
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
-    await fs.symlink('myhost-4242', path.join(root, 'SingletonLock'));
+    await writeSingletonLock(root, 4242);
 
     const result = await claimLegacyOwnerNamespace(
       { mode: 'cloud', dataOwnerId: 'cloud-a', user: { id: 'cloud-a' } },
@@ -461,7 +477,7 @@ describe('hasLegacyOwnerNamespaceClaim', () => {
       path.join(root, __testing.CLAIM_MARKER),
       JSON.stringify({ version: 1, ownerKey: dataOwnerStorageKey('cloud-a'), complete: true }),
     );
-    await fs.symlink('myhost-4242', path.join(root, 'SingletonLock'));
+    await writeSingletonLock(root, 4242);
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root, (pid) => pid === 4242)).toBe(false);
     expect(hasLegacyOwnerNamespaceClaim('cloud-a', root, () => false)).toBe(true);
   });
