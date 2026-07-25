@@ -4,8 +4,8 @@
   "demo": "cindy-login-flow-hifi",
   "inputHashes": {
     "spec.json": "ac040c8096d49b76a8cd4505d5880bec818add2f84da50a6b50bc69eccb956eb",
-    "truth.json": "5a174ce8a3d6d19a79a5508890b83ac6fe7a964c9945f76cc550f807f8c2de88",
-    "index.html": "3a72eece787dcbb6588516af90ae9ac519664e93e6ee80be0855dd7f794d93eb",
+    "truth.json": "216de6c1babd34c25e78e4917f7b1a0574f675f91b79673d3ce6b86d54cf4c67",
+    "index.html": "b2c388a1af879a8cb919b3c9c62aeec478c804ad78bcba8ea89579cc7580d4ef",
     "baselines": {
       "declared": [],
       "files": []
@@ -252,5 +252,5 @@
     "failures": [],
     "cases": []
   },
-  "generatedAt": "2026-07-25T08:45:12.441Z"
+  "generatedAt": "2026-07-25T08:56:23.810Z"
 }
