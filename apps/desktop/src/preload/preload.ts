@@ -3605,6 +3605,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: (): Promise<{ providers: import('@cindy/model-providers').ProviderView[] }> =>
       ipcRenderer.invoke('maker:provider:list'),
+    /** Refresh one built-in provider through its existing main-process discovery source. */
+    refreshBuiltinProviderModels: (
+      providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
+    ): Promise<import('../shared/providerModelRefresh').ProviderModelRefreshResult> =>
+      ipcRenderer.invoke('maker:provider:models-refresh', providerId),
 
     // 自定义供应商配置 CRUD（密钥另走通用 safeStorage IPC，不经这里）。
     createCustomProvider: (

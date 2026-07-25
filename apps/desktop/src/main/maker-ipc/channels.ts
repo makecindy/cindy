@@ -380,6 +380,12 @@ export const MAKER_INVOKE = {
    */
   PROVIDER_LIST: 'maker:provider:list',
   /**
+   * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
+   * Main 按各家既有真源分派，不接收 URL、凭证或任意执行参数。
+   * 属被控端全局账号/目录操作，不进 device-link allowlist。
+   */
+  PROVIDER_MODELS_REFRESH: 'maker:provider:models-refresh',
+  /**
    * 自定义模型供应商 CRUD（配置入 localDb，密钥另走通用 safe-storage IPC）。
    * create/update 入参 = CustomProviderConfig；delete 入参 = providerId。
    * 成功后 main 重算 active-catalog 并广播 PROVIDER_CHANGED（见 MAKER_PUSH）。

@@ -23,6 +23,7 @@ import { ChevronDown, RefreshCw, Search } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
+import { Spinner } from '@/components/ui/spinner';
 import {
   groupModelsForDisplay,
   CATEGORY_LABEL_KEY,
@@ -163,11 +164,17 @@ export function UnifiedModelList({
   provider,
   onRefresh,
   refreshing,
+  refreshDisabled,
+  emptyMessage,
 }: {
   provider: ProviderView;
-  /** 「刷新模型」(仅自定义供应商传入;增量发现,additions-only)。 */
+  /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
+  refreshDisabled?: boolean;
+  /** 模型真源当前为空时的说明；搜索无结果仍使用 noResults。 */
+  emptyMessage?: string;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
@@ -292,26 +299,24 @@ export function UnifiedModelList({
           <button
             type="button"
             onClick={onRefresh}
-            disabled={refreshing}
-            aria-label={t('settings.providers.models.refreshAria')}
+            disabled={refreshing || refreshDisabled}
+            aria-busy={refreshing}
+            aria-label={t(
+              refreshing
+                ? 'settings.providers.models.refreshingAria'
+                : 'settings.providers.models.refreshAria',
+            )}
             title={t('settings.providers.models.refreshAria')}
             className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]',
-              refreshing && 'cursor-not-allowed opacity-60',
+              'flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+              (refreshing || refreshDisabled) && 'cursor-not-allowed opacity-60',
             )}
             style={{ color: 'var(--text-secondary)' }}
           >
-            {/* 常驻动画只在 refreshing(有状态含义)时挂载,且挂在 wrapper 上(规则 7)。 */}
-            {refreshing ? (
-              <span className="inline-flex animate-spin motion-reduce:animate-none">
-                <RefreshCw size={14} />
-              </span>
-            ) : (
-              <RefreshCw size={14} />
-            )}
+            <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
           </button>
         )}
-        {multiAgent && (
+        {unionRows.length > 0 && multiAgent && (
           <button
             type="button"
             onClick={() => setSplitMode((v) => !v)}
@@ -321,14 +326,16 @@ export function UnifiedModelList({
             {t(splitMode ? 'settings.providers.models.splitDone' : 'settings.providers.models.splitAdjust')}
           </button>
         )}
-        <button
-          type="button"
-          onClick={handleBulk}
-          className="shrink-0 text-12 font-medium transition-opacity hover:opacity-80"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          {t(allOn ? 'settings.providers.models.disableAll' : 'settings.providers.models.enableAll')}
-        </button>
+        {unionRows.length > 0 && (
+          <button
+            type="button"
+            onClick={handleBulk}
+            className="shrink-0 text-12 font-medium transition-opacity hover:opacity-80"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {t(allOn ? 'settings.providers.models.disableAll' : 'settings.providers.models.enableAll')}
+          </button>
+        )}
       </div>
 
       {/* 分别模式列头(与行内双列同宽对齐)。 */}
@@ -352,7 +359,9 @@ export function UnifiedModelList({
       <div className="flex flex-col gap-4 px-5 pb-4 pt-0.5">
         {groups.length === 0 ? (
           <div className="py-4 text-center text-13" style={{ color: 'var(--text-tertiary)' }}>
-            {t('settings.providers.models.noResults')}
+            {query.trim()
+              ? t('settings.providers.models.noResults')
+              : (emptyMessage ?? t('settings.providers.models.noResults'))}
           </div>
         ) : (
           groups.map((g) => {

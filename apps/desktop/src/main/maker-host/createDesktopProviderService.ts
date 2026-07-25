@@ -173,6 +173,7 @@ async function cleanupLegacyCatalogCache(): Promise<void> {
 
 let activeLoaded = false;
 let activeInflight: Promise<Catalog> | null = null;
+let catalogRefreshInflight: Promise<Catalog> | null = null;
 
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
@@ -235,6 +236,25 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       });
   }
   return activeInflight;
+}
+
+/**
+ * 手动重载远端/本地目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
+ * 源选择与 bundled fallback；active-catalog 的动态模型、自定义供应商状态保持不变。
+ */
+export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
+  await ensureActiveCatalogLoaded();
+  if (catalogRefreshInflight) return catalogRefreshInflight;
+  const flight = loadCatalog(buildSource(), io)
+    .then((catalog) => {
+      setActiveCatalog(catalog);
+      return catalog;
+    })
+    .finally(() => {
+      if (catalogRefreshInflight === flight) catalogRefreshInflight = null;
+    });
+  catalogRefreshInflight = flight;
+  return flight;
 }
 
 /**

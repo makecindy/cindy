@@ -53,6 +53,7 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
 import type { LocalCliDetection } from '../../../shared/localCliDetect';
+import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
@@ -1121,7 +1122,7 @@ export function ProvidersSection() {
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
-  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
 
   // 本机 CLI 扫描:挂载时一次(失败静默空数组;检测建议是增强,不是依赖)。
   useEffect(() => {
@@ -1257,7 +1258,8 @@ export function ProvidersSection() {
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
-      setRefreshingModels(true);
+      if (refreshingProviderId !== null) return;
+      setRefreshingProviderId(p.id);
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
@@ -1293,10 +1295,28 @@ export function ProvidersSection() {
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
-        setRefreshingModels(false);
+        setRefreshingProviderId(null);
       }
     },
-    [refetch, t],
+    [refetch, refreshingProviderId, t],
+  );
+
+  /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
+  const handleRefreshBuiltinModels = useCallback(
+    async (p: ProviderView) => {
+      if (!isBuiltinRefreshableProviderId(p.id) || refreshingProviderId !== null) return;
+      setRefreshingProviderId(p.id);
+      try {
+        await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
+        toast.success(t('settings.providers.models.refreshDone'));
+        refetch();
+      } catch {
+        toast.error(t('settings.providers.models.refreshFailed'));
+      } finally {
+        setRefreshingProviderId(null);
+      }
+    },
+    [refetch, refreshingProviderId, t],
   );
 
   // 详情头部按供应商类型分派(鉴权逻辑与重构前一致)。
@@ -1442,7 +1462,8 @@ export function ProvidersSection() {
             ) : effectiveSelected ? (
               <>
                 {renderDetailHeader(effectiveSelected)}
-                {providerHasModels(effectiveSelected) && (
+                {(providerHasModels(effectiveSelected) ||
+                  isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
                   <>
                     <div
                       className="border-t"
@@ -1450,30 +1471,43 @@ export function ProvidersSection() {
                     />
                     <UnifiedModelList
                       provider={effectiveSelected}
-                      {...(effectiveSelected.source === 'user' &&
-                      effectiveSelected.auth.method !== 'oauth'
+                      emptyMessage={t(
+                        effectiveSelected.connected
+                          ? 'settings.providers.detail.emptyModelsConnected'
+                          : 'settings.providers.detail.emptyModels',
+                      )}
+                      {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                         ? {
-                            onRefresh: () => void handleRefreshModels(effectiveSelected),
-                            refreshing: refreshingModels,
+                            onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
+                            refreshing: refreshingProviderId === effectiveSelected.id,
+                            refreshDisabled: refreshingProviderId !== null,
                           }
-                        : {})}
+                        : effectiveSelected.source === 'user' &&
+                            effectiveSelected.auth.method !== 'oauth'
+                          ? {
+                              onRefresh: () => void handleRefreshModels(effectiveSelected),
+                              refreshing: refreshingProviderId === effectiveSelected.id,
+                              refreshDisabled: refreshingProviderId !== null,
+                            }
+                          : {})}
                     />
                   </>
                 )}
-                {!providerHasModels(effectiveSelected) && (
-                  <div
-                    className="flex flex-1 items-center justify-center px-8 text-center text-13"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
-                    {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
+                {!providerHasModels(effectiveSelected) &&
+                  !isBuiltinRefreshableProviderId(effectiveSelected.id) && (
+                    <div
+                      className="flex flex-1 items-center justify-center px-8 text-center text-13"
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
+                      {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
                         不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。 */}
-                    {t(
-                      effectiveSelected.connected
-                        ? 'settings.providers.detail.emptyModelsConnected'
-                        : 'settings.providers.detail.emptyModels',
-                    )}
-                  </div>
-                )}
+                      {t(
+                        effectiveSelected.connected
+                          ? 'settings.providers.detail.emptyModelsConnected'
+                          : 'settings.providers.detail.emptyModels',
+                      )}
+                    </div>
+                  )}
               </>
             ) : (
               <div

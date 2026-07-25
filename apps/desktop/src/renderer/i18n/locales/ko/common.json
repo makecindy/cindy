@@ -1306,10 +1306,12 @@
         "splitDone": "완료",
         "capabilityNote": "{{agent}}에서는 사용 불가",
         "divergedChip": "{{agent}}에서 숨김",
-        "refreshAria": "모델 목록 새로고침(추가만)",
+        "refreshAria": "모델 목록 새로고침",
+        "refreshingAria": "모델 목록 새로고침 중…",
+        "refreshDone": "모델 목록을 새로고침했습니다",
         "refreshAdded": "새 모델 {{count}}개를 발견했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
-        "refreshFailed": "모델 목록 새로고침에 실패했습니다. 잠시 후 다시 시도해 주세요"
+        "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요"
       },
       "genericOAuth": {
         "subtitle": "구독 인증 로그인 (OAuth)",

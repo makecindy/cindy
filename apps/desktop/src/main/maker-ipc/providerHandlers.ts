@@ -23,8 +23,14 @@ import {
 } from '@cindy/model-providers';
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
+import {
+  isBuiltinRefreshableProviderId,
+  type BuiltinRefreshableProviderId,
+  type ProviderModelRefreshResult,
+} from '../../shared/providerModelRefresh.js';
 
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { createLogger } from '../logger.js';
 import {
   createCustomProvider,
   customProviderExists,
@@ -41,6 +47,7 @@ import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const VALID_AGENTS: readonly string[] = ['claude-code', 'codex'];
+const log = createLogger('maker-ipc:providerHandlers');
 
 export interface ProviderHandlerDeps {
   /** 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。 */
@@ -61,6 +68,10 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
+  refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  /** 新增的特权刷新入口只接受 Cindy 自有顶层 Renderer。 */
+  assertTrustedSender(event: unknown): void;
   /**
    * 通用 OAuth 登录 / 登出 / 取消（生产接 generic-oauth Runner + 目录描述符解析；
    * login 成功后由生产 deps 负责模型发现与 PROVIDER_CHANGED 广播）。
@@ -172,6 +183,26 @@ export function registerProviderHandlers(
     }> => {
       const providers = await deps.listProviders();
       return { providers, modelVisibilityOverrides: deps.getModelVisibilityOverrides() };
+    },
+  );
+
+  registry.handle(
+    MAKER_INVOKE.PROVIDER_MODELS_REFRESH,
+    async (event, providerId: unknown): Promise<ProviderModelRefreshResult> => {
+      deps.assertTrustedSender(event);
+      if (!isBuiltinRefreshableProviderId(providerId)) {
+        throwIpcError('INVALID_PARAMS', 'providerId must be xd|anthropic|openai|xai');
+      }
+      try {
+        await deps.refreshBuiltinModels(providerId);
+      } catch (err) {
+        log.warn('built-in provider model refresh failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throwIpcError('INTERNAL', `model list refresh failed for '${providerId}'`);
+      }
+      return { ok: true, providerId };
     },
   );
 

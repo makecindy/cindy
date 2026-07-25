@@ -3466,6 +3466,10 @@ interface ElectronAPI {
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: () => Promise<{ providers: import('@cindy/model-providers').ProviderView[] }>;
+    /** 复用各内置供应商既有真源刷新模型清单。 */
+    refreshBuiltinProviderModels: (
+      providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
+    ) => Promise<import('../shared/providerModelRefresh').ProviderModelRefreshResult>;
 
     // 自定义供应商配置 CRUD（密钥另走通用 safeStorage IPC，不经这里）。
     createCustomProvider: (

@@ -64,6 +64,8 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
+    refreshBuiltinModels: vi.fn(async () => {}),
+    assertTrustedSender: vi.fn(() => {}),
     oauthLogin: vi.fn(async () => ({ ok: true })),
     oauthLogout: vi.fn(async () => {}),
     oauthCancel: vi.fn(() => {}),
@@ -107,6 +109,70 @@ describe('provider:list IPC handler', () => {
       }),
     );
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_LIST)).rejects.toThrow('boom');
+  });
+});
+
+describe('provider:models-refresh handler', () => {
+  it('guards the sender, validates the built-in id, and forwards the refresh', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn();
+    const refreshBuiltinModels = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({ assertTrustedSender, refreshBuiltinModels }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'anthropic'),
+    ).resolves.toEqual({ ok: true, providerId: 'anthropic' });
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(refreshBuiltinModels).toHaveBeenCalledWith('anthropic');
+  });
+
+  it('rejects unsupported ids before refreshing', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'custom-provider'),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
+  });
+
+  it('does not run the refresh when the sender guard rejects', async () => {
+    const harness = new IpcHarness();
+    const refreshBuiltinModels = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender: () => {
+          throw new Error('[PERMISSION_DENIED] untrusted sender');
+        },
+        refreshBuiltinModels,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'openai'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(refreshBuiltinModels).not.toHaveBeenCalled();
+  });
+
+  it('maps source refresh failures to a generic IPC error', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throw new Error('/secret/path should stay in main logs');
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xai'),
+    ).rejects.toThrow("[INTERNAL] model list refresh failed for 'xai'");
   });
 });
 

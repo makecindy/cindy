@@ -1306,10 +1306,12 @@
         "splitDone": "完了",
         "capabilityNote": "{{agent}} では利用不可",
         "divergedChip": "{{agent}} で非表示",
-        "refreshAria": "モデル一覧を更新(追加のみ)",
+        "refreshAria": "モデル一覧を更新",
+        "refreshingAria": "モデル一覧を更新中…",
+        "refreshDone": "モデル一覧を再読み込みしました",
         "refreshAdded": "新しいモデルを {{count}} 件検出しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
-        "refreshFailed": "モデル一覧の更新に失敗しました。しばらくしてからもう一度お試しください"
+        "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください"
       },
       "genericOAuth": {
         "subtitle": "サブスクリプション認証（OAuth）",

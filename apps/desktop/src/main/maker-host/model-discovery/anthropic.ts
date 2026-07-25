@@ -76,7 +76,7 @@ const explicitFastModeModelIds = new Set<string>();
 const explicitWindows = new Map<string, number>();
 /** 授权边界(登出 / 换号)自增:在途发现若世代已变,结果作废不写回。 */
 let authGeneration = 0;
-let httpRefreshInflight: Promise<void> | null = null;
+let httpRefreshInflight: Promise<boolean> | null = null;
 /** 在途拉取所属的世代;世代已变时新调用不复用旧 promise(换号补拉不被吞)。 */
 let httpRefreshInflightGen = -1;
 /** 缓存写入 / 删除严格串行,保证授权边界后的删除一定排在旧世代写入之后。 */
@@ -438,8 +438,8 @@ async function applyModels(
   generation = authGeneration,
   nextExplicitEffortIds: ReadonlySet<string> = explicitEffortModelIds,
   nextExplicitFastModeIds: ReadonlySet<string> = explicitFastModeModelIds,
-): Promise<void> {
-  if (!generationCanApply(generation, models)) return;
+): Promise<boolean> {
+  if (!generationCanApply(generation, models)) return false;
   const modelIds = new Set(models.map((model) => model.id));
   const normalizedExplicitEffortIds = new Set(
     [...nextExplicitEffortIds].filter((id) => modelIds.has(id)),
@@ -453,7 +453,7 @@ async function applyModels(
     [...normalizedExplicitEffortIds].some((id) => !explicitEffortModelIds.has(id)) ||
     normalizedExplicitFastModeIds.size !== explicitFastModeModelIds.size ||
     [...normalizedExplicitFastModeIds].some((id) => !explicitFastModeModelIds.has(id));
-  if (!modelsChanged && !capabilityProvenanceChanged) return;
+  if (!modelsChanged && !capabilityProvenanceChanged) return true;
   lastApplied = models;
   explicitEffortModelIds.clear();
   for (const id of normalizedExplicitEffortIds) explicitEffortModelIds.add(id);
@@ -496,6 +496,7 @@ async function applyModels(
       }
     });
   }
+  return generationCanApply(generation, models);
 }
 
 /**
@@ -669,15 +670,15 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
  * HTTP `/v1/models` 拉取(登录成功 / 启动时)。single-flight;失败只记日志、
  * 保留现值(缓存是上次成功的真数据);成功按合并纪律生效并持久化。
  */
-export function refreshAnthropicModelsFromHttp(): Promise<void> {
+export function refreshAnthropicModelsFromHttp(): Promise<boolean> {
   // 只复用**同世代**的在途拉取:登出后世代已变,旧 promise 的结果注定作废,
   // 复用会吞掉换号后新账号的补拉。
   if (httpRefreshInflight && httpRefreshInflightGen === authGeneration) return httpRefreshInflight;
   const gen = authGeneration;
   const flight = (async () => {
     const oauth = await getValidClaudeAiOAuth();
-    if (!oauth?.accessToken) return;
-    if (gen !== authGeneration || !hasClaudeAiOAuth()) return;
+    if (!oauth?.accessToken) return false;
+    if (gen !== authGeneration || !hasClaudeAiOAuth()) return false;
     const provider = getActiveCatalog().providers.find((p) => p.id === 'anthropic');
     const upstream = provider?.routing['claude-code']?.upstream ?? 'https://api.anthropic.com';
     const entries: unknown[] = [];
@@ -703,17 +704,17 @@ export function refreshAnthropicModelsFromHttp(): Promise<void> {
     } catch (err) {
       // 失败不清列表:现值(含磁盘缓存)是上次成功的真数据;SDK 通道随后仍会精化。
       log.warn('anthropic /v1/models fetch failed; keeping current list', { error: String(err) });
-      return;
+      return false;
     }
     // 在途期间登出 / 换号:结果作废,不写回、不重建缓存(review P1 竞态豁口)。
     if (gen !== authGeneration || !hasClaudeAiOAuth()) {
       log.info('anthropic /v1/models result discarded: auth changed mid-flight');
-      return;
+      return false;
     }
     const mapped = mapAnthropicHttpModels(entries);
     if (mapped.length === 0) {
       log.warn('anthropic /v1/models returned no usable models; keeping current list');
-      return;
+      return false;
     }
     // 退化判定必须先于任何状态写入:被拒快照连 explicitWindows 也不许污染,
     // 否则后续 SDK 捕获会把退化响应带来的窗口值用作精确记账(review P2)。
@@ -722,7 +723,7 @@ export function refreshAnthropicModelsFromHttp(): Promise<void> {
       log.warn(
         `anthropic /v1/models response looks degenerate (${lastApplied.length} -> ${mapped.length}); keeping current list (streak ${httpShrinkStreak}/${CONFIRMED_SHRINK_STREAK})`,
       );
-      return;
+      return false;
     }
     for (const { model, explicitContextWindow } of mapped) {
       if (explicitContextWindow != null) explicitWindows.set(model.id, explicitContextWindow);
@@ -731,7 +732,7 @@ export function refreshAnthropicModelsFromHttp(): Promise<void> {
     const { models, explicitEffortIds, explicitFastModeIds } =
       mergeCapabilitiesWithPrevious(mapped);
     log.info(`anthropic models refreshed via HTTP: ${models.length}`);
-    await applyModels(models, true, gen, explicitEffortIds, explicitFastModeIds);
+    return applyModels(models, true, gen, explicitEffortIds, explicitFastModeIds);
   })().finally(() => {
     // 只清自己的登记:世代变化后可能已有新 flight 顶替,不能误清。
     if (httpRefreshInflight === flight) httpRefreshInflight = null;

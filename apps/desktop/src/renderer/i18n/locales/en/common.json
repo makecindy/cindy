@@ -1307,10 +1307,12 @@
         "splitDone": "Done",
         "capabilityNote": "Not available in {{agent}}",
         "divergedChip": "Hidden in {{agent}}",
-        "refreshAria": "Refresh model list (additions only)",
+        "refreshAria": "Refresh Model List",
+        "refreshingAria": "Refreshing model list…",
+        "refreshDone": "Model list refreshed",
         "refreshAdded": "Found {{count}} new models",
         "refreshNoNew": "Model list is up to date — nothing new",
-        "refreshFailed": "Failed to refresh the model list. Please try again later"
+        "refreshFailed": "Model list couldn’t be refreshed — try again later"
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",
