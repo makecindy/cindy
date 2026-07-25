@@ -642,3 +642,34 @@ describe('resolveModelInvocation — codex review 四轮:无点名路径与 prov
     expect(r.providerId).toBeNull();
   });
 });
+
+describe('resolveModelInvocation — codex review 五轮:native 兜底行级可见性 + 场景权限档校验', () => {
+  it('native 源上首模型被隐藏 → 跳到该源下一个可见模型,不经他源路由漂移', () => {
+    // xd(native)目录 [opus, sonnet]:opus 在 xd 被隐藏(anthropic 可见)。兜底必须选
+    // xd 的 sonnet —— 选 opus 会被 provider 步骤路由去 anthropic,换掉订阅/计费路由。
+    const r = resolveModelInvocation(
+      { model: 'gone' },
+      { ...SCENARIO, modelFor: () => 'also-gone' },
+      ctx({ isVisible: (pid, m) => !(pid === 'xd' && m.id === 'claude-opus-5') }),
+    );
+    expect(r.model).toBe('claude-sonnet-4-6');
+    expect(r.fallbacksApplied).toContain('model:first-available');
+  });
+
+  it('无显式权限档时,场景默认档不被最终 agent 支持 → 回落该 agent 最严档', () => {
+    const r = resolveModelInvocation(
+      { agentKind: 'codex' },
+      { ...SCENARIO, agentKind: 'codex', permissionMode: 'acceptEdits' },
+      ctx(),
+    );
+    // codex 不支持 acceptEdits(PERM_MODES) → 最严档 ask,不裸透传
+    expect(r.permissionMode).toBe('ask');
+    expect(r.fallbacksApplied).toContain('permission:scenario-strictest-fallback');
+  });
+
+  it('场景默认档被支持 → 原样(既有语义不变)', () => {
+    const r = resolveModelInvocation({}, SCENARIO, ctx());
+    expect(r.permissionMode).toBe('bypassPermissions');
+    expect(r.fallbacksApplied).not.toContain('permission:scenario-strictest-fallback');
+  });
+});

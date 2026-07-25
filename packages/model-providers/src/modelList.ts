@@ -121,7 +121,9 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
     keepSelected,
   } = opts;
 
-  const seen = new Set<string>();
+  // first-wins 的占坑表直接记「id → 首见行在 out 里的下标」,选中行替换时 O(1) 定位
+  // (findIndex 线性扫在大目录下会让派生退化 O(n²),Greptile review)。
+  const seenIndex = new Map<string, number>();
   const out: ModelListEntry[] = [];
   for (const provider of resolveRail(providers, agent, providerScope)) {
     if (excludeProvider?.(provider)) continue;
@@ -138,21 +140,21 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
         if (provider.access !== undefined) entry.sourceAccess = provider.access;
         return entry;
       };
-      if (dedupe === 'first-wins' && seen.has(m.id)) {
+      if (dedupe === 'first-wins' && seenIndex.has(m.id)) {
         // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
         // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
         // 用选中行**原位替换**首见行(位置守首见槽,输出顺序契约不变;选中行豁免
         // isVisible,与 push 路径同规则)。普通重复行直接丢弃。
         if (selected) {
-          const i = out.findIndex((e) => e.id === m.id);
-          if (i !== -1 && !matchesSelected(keepSelected, out[i].sourceProviderId, out[i].id)) {
+          const i = seenIndex.get(m.id)!;
+          if (!matchesSelected(keepSelected, out[i].sourceProviderId, out[i].id)) {
             out[i] = makeEntry();
           }
         }
         continue;
       }
       if (!selected && isVisible && !isVisible(provider.id, m)) continue;
-      if (dedupe === 'first-wins') seen.add(m.id);
+      if (dedupe === 'first-wins') seenIndex.set(m.id, out.length);
       out.push(makeEntry());
     }
   }

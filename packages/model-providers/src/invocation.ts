@@ -216,11 +216,15 @@ export function resolveModelInvocation(
       if (ctx.providers !== null) {
         const rail = connectedProvidersForAgent([...ctx.providers], agentKind);
         const nativeId = nativeDefaultSourceId(rail, agentKind);
+        const native = rail.find((p) => p.id === nativeId);
         const availableIds = new Set(available.map((m) => m.id));
+        // 可见性按 **native 源上的那一行**判,不能只看联合清单:某 id 在 native 源被隐藏、
+        // 他源可见时,选它会让 provider 步骤路由去他源 —— 跳过了 native 源后面还有的
+        // 可见模型,订阅/计费路由被悄悄换掉(codex review 五轮)。
         fromNative =
-          rail
-            .find((p) => p.id === nativeId)
-            ?.models[agentKind]?.find((m) => availableIds.has(m.id))?.id ?? null;
+          native?.models[agentKind]?.find(
+            (m) => availableIds.has(m.id) && (!ctx.isVisible || ctx.isVisible(native.id, m)),
+          )?.id ?? null;
       }
       model = fromNative ?? available[0].id;
       fallbacks.push('model:first-available');
@@ -334,6 +338,17 @@ export function resolveModelInvocation(
     }
   } else {
     permissionMode = scenario.permissionMode;
+    // 场景默认档同样要对**最终 agent** 校验:Claude 场景默认 acceptEdits + 显式 Codex
+    // agent 会合成 Codex 不支持的档,无人值守派发直接被运行时拒绝或误解 —— 不支持时
+    // 与显式分支同方向回落该 agent 最严档(codex review);空表/未注入 = 数据缺失,原样。
+    if (
+      supportedModes !== undefined &&
+      supportedModes.length > 0 &&
+      !supportedModes.includes(permissionMode)
+    ) {
+      permissionMode = supportedModes[0];
+      fallbacks.push('permission:scenario-strictest-fallback');
+    }
   }
 
   // 6. fastMode: 请求值直传(per-provider 的 supportsFastMode 门控需要来源上下文,
