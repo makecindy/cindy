@@ -112,6 +112,10 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         });
         return;
       }
+      if (req.method === 'thread/unsubscribe') {
+        this.emitLine({ id: req.id, result: { status: 'unsubscribed' } });
+        return;
+      }
       if (req.method === 'skills/list') {
         const params = req.params as { cwds?: string[] } | undefined;
         const cwds = params?.cwds ?? ['/repo'];
@@ -2848,6 +2852,30 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledTimes(1);
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
+  });
+
+  it('unsubscribes the app-server thread when closing a local session without stopping the shared host', async () => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-codex-mcp-runtime-release',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    const transport = createdTransports[0];
+    expect(transport).toBeDefined();
+
+    await handle.close();
+
+    const unsubscribe = transport!.lines
+      .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
+      .find((request) => request.method === Method.ThreadUnsubscribe);
+    expect(unsubscribe).toMatchObject({
+      method: Method.ThreadUnsubscribe,
+      params: { threadId: 'thread-1' },
+    });
+    expect(transport!.closed).toBe(false);
   });
 
   it('skips Codex MCP thread context registration for remote sessions', async () => {

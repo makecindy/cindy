@@ -53,6 +53,7 @@ import {
   type JsonRpcId,
   type ThreadStartedNotification,
   type ThreadTokenUsageUpdatedNotification,
+  type ThreadUnsubscribeResponse,
   type TurnPlanUpdatedNotification,
   type TurnCompletedNotification,
   type TurnStartedNotification,
@@ -184,8 +185,8 @@ export interface ServerRequestMeta {
 }
 
 export interface ThreadSubscription {
-  /** 幂等; 调用后不再收到 notification + 触发 refcount 递减 (可能触发 idle 关停)。 */
-  release(): void;
+  /** 幂等地解除本地路由，并释放 app-server 内对应 thread 的 live runtime。 */
+  release(): Promise<void>;
 }
 
 export interface AppServerHostOptions {
@@ -518,14 +519,13 @@ export class AppServerHost {
   // ── 订阅 / 路由 ───────────────────────────────────────────────────────────
 
   /**
-   * 为 thread_id 注册一组 handler, release() 仅取消订阅 (不影响 server 生命周期)。
+ * 为 thread_id 注册一组 handler。release() 先移除本地路由，再通知 app-server
+ * 解除这个 thread 的 live subscription；rollout/history 不会被 archive 或 delete。
    * 如果 thread/started (或更早的 notification) 在 subscribe 之前就到了, drain
    * buffered 队列里匹配的项, 按到达顺序 dispatch — 保证不丢事件。
    *
-   * **不**做 refcount → shutdown — server 只跟 host.shutdown() 绑定。session.close
-   * 仅清掉路由表, server 自己会 GC 闲置 ThreadState。Phase 2 可考虑发
-   * `thread/unsubscribe` 给 server 显式释放 listener (当前 server-side 内存
-   * 占用极小, 跳过)。
+ * 不做 refcount → shutdown：共享 server 仍只跟 host.shutdown() 绑定。这里仅释放
+ * 已关闭 session 对应的 thread state，避免它继续持有 MCP/app-server 子进程资源。
    */
   subscribeThread(threadId: string, handlers: ThreadEventHandlers): ThreadSubscription {
     if (this.retired) {
@@ -559,13 +559,17 @@ export class AppServerHost {
 
     let released = false;
     return {
-      release: () => {
+      release: async () => {
         if (released) return;
         released = true;
         const cur = this.subscribers.get(threadId);
-        if (cur === handlers) {
-          this.subscribers.delete(threadId);
-        }
+        // A later subscription for the same thread owns the live server state now.
+        if (cur !== handlers) return;
+        this.subscribers.delete(threadId);
+        this.buffered.delete(threadId);
+        const client = this.client;
+        if (!client) return;
+        await client.request<ThreadUnsubscribeResponse>(Method.ThreadUnsubscribe, { threadId });
       },
     };
   }

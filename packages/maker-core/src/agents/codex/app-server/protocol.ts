@@ -427,6 +427,17 @@ export interface ThreadRollbackResponse {
   [k: string]: unknown;
 }
 
+/** Release the app-server's live state for a thread without archiving its history. */
+export interface ThreadUnsubscribeParams {
+  threadId: string;
+}
+
+export type ThreadUnsubscribeStatus = 'notLoaded' | 'notSubscribed' | 'unsubscribed';
+
+export interface ThreadUnsubscribeResponse {
+  status: ThreadUnsubscribeStatus;
+}
+
 // ── ThreadSettingsUpdate (v2.rs ThreadSettingsUpdateParams) ──────────────────
 // 会话中途单独推 model / serviceTier / effort 等设置, server 写入后续 turn 的
 // sticky context (不必等下一个 turn/start 携带)。需要 experimentalApi capability
@@ -960,6 +971,7 @@ export const Method = {
   ThreadResume: 'thread/resume',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadUnsubscribe: 'thread/unsubscribe',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

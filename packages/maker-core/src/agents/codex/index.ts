@@ -1842,7 +1842,7 @@ export class CodexAgent extends BaseAgent {
       // 网络/host 启动等未分类失败统一归 'network' (跟 claude 端 mapAnthropicError 一致)
       throw new OneShotError('network', err instanceof Error ? err.message : String(err));
     } finally {
-      try { subscription?.release(); } catch { /* no-op */ }
+      try { await subscription?.release(); } catch { /* no-op */ }
     }
   }
 
@@ -4099,7 +4099,7 @@ export class CodexAgent extends BaseAgent {
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
         try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
         try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
-        try { subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
+        try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
         try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       },
 
@@ -4236,7 +4236,7 @@ export class CodexAgent extends BaseAgent {
         const nextThreadId = rollbackResp.thread.id || previousThreadId;
         if (nextThreadId !== previousThreadId) {
           try {
-            subscription?.release();
+            await subscription?.release();
           } catch {
             // no-op: stale subscription cleanup should not fail a successful rollback.
           }
