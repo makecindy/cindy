@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/27779725b0f4b72f2318f3fb1e9a0575e25df4d082eb55cc01696fe567a7d423",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/53c321f26e490c80c5c7c0f32bf41f398c0c2c97288e72b591517996922e5718",
   "creationInfo": {
-    "created": "1970-01-01T00:00:00Z",
+    "created": "2026-07-25T09:00:18Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -53,8 +53,8 @@
     },
     {
       "name": "OpenAI Codex CLI (bundled binary)",
-      "SPDXID": "SPDXRef-Package-f6898d2a0f197785",
-      "versionInfo": "0.144.6",
+      "SPDXID": "SPDXRef-Package-2533cecb0b1ad2d4",
+      "versionInfo": "0.145.0",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -979,6 +979,40 @@
       ]
     },
     {
+      "name": "@img/sharp-libvips-linux-arm64",
+      "SPDXID": "SPDXRef-Package-78d89dd164537fe9",
+      "versionInfo": "1.2.4",
+      "downloadLocation": "https://github.com/lovell/sharp-libvips",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LGPL-3.0-or-later",
+      "licenseDeclared": "LGPL-3.0-or-later",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40img/sharp-libvips-linux-arm64@1.2.4"
+        }
+      ]
+    },
+    {
+      "name": "@img/sharp-libvips-linux-arm64",
+      "SPDXID": "SPDXRef-Package-94cdc16d4156fd9d",
+      "versionInfo": "1.3.2",
+      "downloadLocation": "https://github.com/lovell/sharp-libvips",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LGPL-3.0-or-later",
+      "licenseDeclared": "LGPL-3.0-or-later",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40img/sharp-libvips-linux-arm64@1.3.2"
+        }
+      ]
+    },
+    {
       "name": "@img/sharp-libvips-linux-x64",
       "SPDXID": "SPDXRef-Package-9250e7e9ecb9bae8",
       "versionInfo": "1.2.4",
@@ -1009,6 +1043,40 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40img/sharp-libvips-linux-x64@1.3.2"
+        }
+      ]
+    },
+    {
+      "name": "@img/sharp-linux-arm64",
+      "SPDXID": "SPDXRef-Package-075a180b34acf949",
+      "versionInfo": "0.34.5",
+      "downloadLocation": "https://github.com/lovell/sharp",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40img/sharp-linux-arm64@0.34.5"
+        }
+      ]
+    },
+    {
+      "name": "@img/sharp-linux-arm64",
+      "SPDXID": "SPDXRef-Package-d28f9a777b4809bd",
+      "versionInfo": "0.35.3",
+      "downloadLocation": "https://github.com/lovell/sharp",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40img/sharp-linux-arm64@0.35.3"
         }
       ]
     },
@@ -1489,6 +1557,23 @@
       ]
     },
     {
+      "name": "@napi-rs/canvas-linux-arm64-gnu",
+      "SPDXID": "SPDXRef-Package-7b18f20184d8bf8a",
+      "versionInfo": "0.1.100",
+      "downloadLocation": "https://github.com/Brooooooklyn/canvas",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40napi-rs/canvas-linux-arm64-gnu@0.1.100"
+        }
+      ]
+    },
+    {
       "name": "@napi-rs/canvas-linux-x64-gnu",
       "SPDXID": "SPDXRef-Package-0b82bb0fba6b6b67",
       "versionInfo": "0.1.100",
@@ -1519,6 +1604,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40napi-rs/woff-build@0.2.2"
+        }
+      ]
+    },
+    {
+      "name": "@napi-rs/woff-build-linux-arm64-gnu",
+      "SPDXID": "SPDXRef-Package-51806946da510b95",
+      "versionInfo": "0.2.2",
+      "downloadLocation": "https://github.com/Brooooooklyn/woff-build",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40napi-rs/woff-build-linux-arm64-gnu@0.2.2"
         }
       ]
     },
@@ -1587,6 +1689,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40parcel/watcher@2.5.6"
+        }
+      ]
+    },
+    {
+      "name": "@parcel/watcher-linux-arm64-glibc",
+      "SPDXID": "SPDXRef-Package-ab1992ce9a3c0187",
+      "versionInfo": "2.5.6",
+      "downloadLocation": "https://github.com/parcel-bundler/watcher",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40parcel/watcher-linux-arm64-glibc@2.5.6"
         }
       ]
     },
@@ -13294,7 +13413,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-f6898d2a0f197785"
+      "relatedSpdxElement": "SPDXRef-Package-2533cecb0b1ad2d4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13579,12 +13698,32 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-78d89dd164537fe9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-94cdc16d4156fd9d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-9250e7e9ecb9bae8"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-6301676d55240649"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-075a180b34acf949"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d28f9a777b4809bd"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13729,12 +13868,22 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-7b18f20184d8bf8a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0b82bb0fba6b6b67"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-9550c77a23da5d6a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-51806946da510b95"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13755,6 +13904,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3e8c0932feabc9a1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ab1992ce9a3c0187"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

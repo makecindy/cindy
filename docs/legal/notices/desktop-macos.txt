@@ -50,7 +50,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-OpenAI Codex CLI (bundled binary) 0.144.6
+OpenAI Codex CLI (bundled binary) 0.145.0
 License: Apache-2.0
 Source: https://github.com/openai/codex
 ------------------------------------------------------------------------------

@@ -1221,11 +1221,10 @@ const desktopMacNpm = mergeClosures(
   collectClosure([DESKTOP_DIR], { os: "darwin", cpu: "x64" }),
   collectClosure([DESKTOP_DIR], { os: "darwin", cpu: "arm64" }),
 );
-const desktopLinuxNpm = collectClosure([DESKTOP_DIR], {
-  os: "linux",
-  cpu: "x64",
-  libc: "glibc",
-});
+const desktopLinuxNpm = mergeClosures(
+  collectClosure([DESKTOP_DIR], { os: "linux", cpu: "x64", libc: "glibc" }),
+  collectClosure([DESKTOP_DIR], { os: "linux", cpu: "arm64", libc: "glibc" }),
+);
 const mobileNpm = collectClosure([MOBILE_DIR]);
 const cargoClosure = collectCargoClosure();
 
@@ -1270,9 +1269,11 @@ const artifactDefinitions = {
       apacheText,
       "@img/sharp-libvips-linux-x64",
     ),
-    productName: "Cindy desktop application — Linux x64 glibc",
-    description: ["Linux x64 glibc 桌面安装包的第三方开源组件声明。"],
-    notes: ["不包含运行时按需下载的 Android Platform-Tools。"],
+    productName: "Cindy desktop application — Linux x64/arm64 glibc",
+    description: ["Linux x64 与 arm64 glibc 桌面安装包的第三方开源组件声明。"],
+    notes: [
+      "合并 x64 与 arm64 原生可选包;不包含运行时按需下载的 Android Platform-Tools。",
+    ],
   },
   "mobile-ios": {
     closure: mobileNpm,
