@@ -471,12 +471,20 @@ export async function updateWorkerStatus(
     .where(eq(orcaWorkers.id, workerId));
 }
 
-/** Clear the persisted runtime-release marker immediately after a Worker runtime is restored. */
+/**
+ * Persist that a Worker runtime was restored before thread/resume. A released
+ * error Worker becomes idle so a transient resume failure remains eligible for
+ * lazy recreation; other task statuses retain their existing semantics.
+ */
 export async function clearWorkerIdleReleaseMarker(sessionId: string): Promise<boolean> {
   const db = getDbClient().drizzle;
   const result = await db
     .update(orcaWorkers)
-    .set({ idleSince: null, updatedAt: Date.now() })
+    .set({
+      idleSince: null,
+      status: sql`CASE WHEN ${orcaWorkers.status} = 'error' THEN 'idle' ELSE ${orcaWorkers.status} END`,
+      updatedAt: Date.now(),
+    })
     .where(and(eq(orcaWorkers.sessionId, sessionId), isNotNull(orcaWorkers.idleSince)))
     .run();
   return result.changes > 0;

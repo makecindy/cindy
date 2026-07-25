@@ -215,4 +215,47 @@ describe('Orca worker control IPC handlers', () => {
       err: 'provider failed',
     });
   });
+
+  it('logs returned INTERNAL failures without exposing their raw details', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    deps.idleWorker.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'idle database path failed',
+    });
+    deps.archiveWorker.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'archive provider token failed',
+    });
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_IDLE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('idle database path failed'),
+    });
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_ARCHIVE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('archive provider token failed'),
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('idleWorker service failed', {
+      workerId: 'worker-1',
+      err: 'idle database path failed',
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('archiveWorker service failed', {
+      workerId: 'worker-1',
+      err: 'archive provider token failed',
+    });
+  });
 });

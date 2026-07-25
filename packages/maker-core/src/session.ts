@@ -393,8 +393,16 @@ export class Session {
    * and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(options?: AgentSessionCloseOptions): Promise<boolean> {
-    if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
+    if (this.status !== 'active' || this.isTurnRunning()) {
       return Promise.resolve(false);
+    }
+    if (this.closePromise) {
+      if (options?.releaseRuntime !== true) return Promise.resolve(false);
+      // An idle-runtime scan may race a resumable generic close. The scan has
+      // already established that no turn is running, so preserve its stronger
+      // release intent and await the shared close instead of reporting busy.
+      this.closeReleaseRuntimeRequested = true;
+      return this.closePromise.then(() => true);
     }
     return this.startClose(options).then(() => true);
   }

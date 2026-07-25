@@ -135,7 +135,7 @@ describe('orcaTeamStore', () => {
     ]);
   });
 
-  it('clears a restored runtime marker without changing the worker task status', async () => {
+  it('clears a restored runtime marker and keeps failures eligible for lazy resume', async () => {
     const { clearWorkerIdleReleaseMarker } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
@@ -145,15 +145,22 @@ describe('orcaTeamStore', () => {
       'UPDATE orca_workers SET status = ?, idle_since = ? WHERE id = ?',
       ['done', 123_000, 'worker-1'],
     );
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = ? WHERE id = ?',
+      ['error', 124_000, 'worker-2'],
+    );
 
     await expect(clearWorkerIdleReleaseMarker('worker-session-1')).resolves.toBe(true);
     await expect(clearWorkerIdleReleaseMarker('worker-session-1')).resolves.toBe(false);
+    await expect(clearWorkerIdleReleaseMarker('worker-session-2')).resolves.toBe(true);
     await expect(
-      client.queryOne<{ status: string; idle_since: number | null }>(
-        'SELECT status, idle_since FROM orca_workers WHERE id = ?',
-        ['worker-1'],
+      client.query<{ id: string; status: string; idle_since: number | null }>(
+        'SELECT id, status, idle_since FROM orca_workers ORDER BY id',
       ),
-    ).resolves.toEqual({ status: 'done', idle_since: null });
+    ).resolves.toEqual([
+      { id: 'worker-1', status: 'done', idle_since: null },
+      { id: 'worker-2', status: 'idle', idle_since: null },
+    ]);
   });
 
   it('persists a runtime release after a terminal status update races the close', async () => {

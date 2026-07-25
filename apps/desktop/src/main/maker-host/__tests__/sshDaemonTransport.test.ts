@@ -33,6 +33,7 @@ import path from 'node:path';
 import {
   WS_GUID,
   computeWsAccept,
+  isManagedCodexDaemonVersion,
   shellQuote,
 } from '../codex-remote-transport';
 
@@ -60,6 +61,18 @@ describe('computeWsAccept', () => {
     expect(computeWsAccept('AAAAAAAAAAAAAAAAAAAAAA==')).not.toBe(
       computeWsAccept('BBBBBBBBBBBBBBBBBBBBBA=='),
     );
+  });
+});
+
+describe('isManagedCodexDaemonVersion', () => {
+  it('accepts the managed daemon version from camel- or snake-case output', () => {
+    expect(isManagedCodexDaemonVersion({ cliVersion: 'codex-cli 0.145.0' })).toBe(true);
+    expect(isManagedCodexDaemonVersion({ app_server_version: '0.145.0' })).toBe(true);
+  });
+
+  it('rejects stale or unversioned daemon output', () => {
+    expect(isManagedCodexDaemonVersion({ cli_version: 'codex-cli 0.144.0' })).toBe(false);
+    expect(isManagedCodexDaemonVersion({ socketPath: '/tmp/codex.sock' })).toBe(false);
   });
 });
 

@@ -23,6 +23,7 @@ export {
   checkRemoteCodexAuth,
   pushRemoteCodexAuth,
   REMOTE_SERVER_SCHEMA_VERSION,
+  PINNED_CODEX_RELEASE_VERSION,
 } from './bootstrap/installer.js';
 export type {
   RemoteAgentKind,

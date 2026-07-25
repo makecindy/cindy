@@ -2,6 +2,8 @@ import type { OrcaWorkerStatus } from './orcaTeamService.js';
 
 export interface OrcaRuntimeReleaseWorker {
   id: string;
+  teamId: string;
+  leadSessionId: string;
   sessionId: string;
   status: OrcaWorkerStatus;
   idleSince: string | null;
@@ -10,10 +12,12 @@ export interface OrcaRuntimeReleaseWorker {
 interface OrcaRuntimeReleaseSession {
   isTurnRunning?(): boolean;
   abort(): Promise<void>;
+  close(options?: { releaseRuntime?: boolean }): Promise<void>;
 }
 
 export interface OrcaRuntimeReleaseDeps {
   getSession(sessionId: string): OrcaRuntimeReleaseSession | null;
+  resumeSession(worker: OrcaRuntimeReleaseWorker): Promise<void>;
   markRelease(workerId: string, sessionId: string, releasedAt: number): Promise<boolean>;
   restoreRelease(
     workerId: string,
@@ -22,7 +26,6 @@ export interface OrcaRuntimeReleaseDeps {
     previousStatus: OrcaWorkerStatus,
     restoredAt: number,
   ): Promise<boolean>;
-  closeSession(sessionId: string): Promise<void>;
   now(): number;
   log: {
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -38,6 +41,18 @@ export interface OrcaRuntimeReleaseDeps {
  */
 export function createOrcaRuntimeRelease(deps: OrcaRuntimeReleaseDeps) {
   return async (worker: OrcaRuntimeReleaseWorker): Promise<void> => {
+    let session = deps.getSession(worker.sessionId);
+    if (!session && worker.idleSince === null) {
+      // A resumable generic close only removes local ownership; it does not
+      // acknowledge provider runtime release. Recreate that ownership before
+      // persisting a marker so explicit archive/end-team cannot leak a runtime.
+      await deps.resumeSession(worker);
+      session = deps.getSession(worker.sessionId);
+      if (!session) {
+        throw new Error(`worker ${worker.id} session could not be resumed for runtime release`);
+      }
+    }
+
     let releasedAt: number | null = null;
     if (worker.idleSince === null) {
       releasedAt = deps.now();
@@ -47,7 +62,8 @@ export function createOrcaRuntimeRelease(deps: OrcaRuntimeReleaseDeps) {
       }
     }
 
-    const session = deps.getSession(worker.sessionId);
+    // An existing marker is durable evidence that an earlier close completed
+    // or remains retryable. No local Session is required in that case.
     if (!session) return;
 
     if (session.isTurnRunning?.()) {
@@ -62,7 +78,7 @@ export function createOrcaRuntimeRelease(deps: OrcaRuntimeReleaseDeps) {
     }
 
     try {
-      await deps.closeSession(worker.sessionId);
+      await session.close({ releaseRuntime: true });
     } catch (error) {
       if (releasedAt !== null) {
         try {

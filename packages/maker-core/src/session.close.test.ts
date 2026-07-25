@@ -118,4 +118,40 @@ describe('Session close lifecycle', () => {
     expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
     expect(session.getStatus()).toBe('closed');
   });
+
+  it('lets an idle runtime release upgrade an in-flight generic close', async () => {
+    const genericClose = createDeferred();
+    const close = vi.fn()
+      .mockImplementationOnce(() => genericClose.promise)
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    const firstClose = session.close();
+    const releaseClose = session.closeIfIdle({ releaseRuntime: true });
+
+    expect(close).toHaveBeenCalledOnce();
+
+    genericClose.resolve();
+    await expect(releaseClose).resolves.toBe(true);
+    await firstClose;
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, undefined);
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
+    expect(session.getStatus()).toBe('closed');
+  });
 });

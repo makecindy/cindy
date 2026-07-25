@@ -38,7 +38,16 @@ export function registerOrcaWorkerControlHandlers(
       });
       throwIpcError('INTERNAL', t('newChat.collaboration.idleWorkerFailed'));
     }
-    if (!result.ok) throwOrcaServiceFailure(result);
+    if (!result.ok) {
+      if (result.errorCode === 'INTERNAL') {
+        deps.logWarn('idleWorker service failed', {
+          workerId: b.workerId,
+          err: result.message,
+        });
+        throwIpcError('INTERNAL', t('newChat.collaboration.idleWorkerFailed'));
+      }
+      throwOrcaServiceFailure(result);
+    }
     deps.logInfo('idleWorker done', { workerId: b.workerId });
     return result;
   };
@@ -65,7 +74,16 @@ export function registerOrcaWorkerControlHandlers(
       });
       throwIpcError('INTERNAL', t('newChat.collaboration.archiveWorkerFailed'));
     }
-    if (!result.ok) throwOrcaServiceFailure(result);
+    if (!result.ok) {
+      if (result.errorCode === 'INTERNAL') {
+        deps.logWarn('archiveWorker service failed', {
+          workerId: b.workerId,
+          err: result.message,
+        });
+        throwIpcError('INTERNAL', t('newChat.collaboration.archiveWorkerFailed'));
+      }
+      throwOrcaServiceFailure(result);
+    }
     deps.logInfo('archiveWorker done', { workerId: b.workerId });
     return result;
   });

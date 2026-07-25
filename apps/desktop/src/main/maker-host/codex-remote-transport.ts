@@ -32,7 +32,11 @@ import { randomBytes, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
+import {
+  PINNED_CODEX_RELEASE_VERSION,
+  type RemoteHost,
+  type ExecStreamHandle,
+} from '@cindy/maker-remote-ssh';
 
 // ws lib doesn't export Receiver / Sender from its main entry — they live as
 // internal classes under ws/lib/. The package's `exports` field also
@@ -153,11 +157,26 @@ export function computeWsAccept(key: string): string {
 interface DaemonVersionOutput {
   socketPath?: string;
   socket_path?: string;
-  /** Other fields (cliVersion, appServerVersion, backend) we ignore for now. */
+  cliVersion?: string;
+  cli_version?: string;
+  appServerVersion?: string;
+  app_server_version?: string;
+  /** Other fields (backend, build metadata) are ignored. */
   [k: string]: unknown;
 }
 
 type State = 'connecting' | 'open' | 'closed';
+
+/** The remote daemon must match the managed CLI that provides archive/unarchive. */
+export function isManagedCodexDaemonVersion(output: DaemonVersionOutput): boolean {
+  const reported = output.cliVersion
+    ?? output.cli_version
+    ?? output.appServerVersion
+    ?? output.app_server_version;
+  if (typeof reported !== 'string') return false;
+  const version = /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(reported)?.[0];
+  return version === PINNED_CODEX_RELEASE_VERSION;
+}
 
 /**
  * Build a transport synchronously; the heavy lifting (daemon probe, ssh exec,
@@ -363,14 +382,36 @@ exec "$CODEX" "$@"
     let socketPath = opts.socketPath ?? '';
     if (!socketPath) {
       try {
-        socketPath = await discoverSocketPath();
+        let discovery = await discoverDaemon();
+        if (!isManagedCodexDaemonVersion(discovery.version)) {
+          logger.info('daemon version is stale; restarting with managed Codex', {
+            managedVersion: PINNED_CODEX_RELEASE_VERSION,
+            cliVersion: discovery.version.cliVersion ?? discovery.version.cli_version ?? null,
+            appServerVersion:
+              discovery.version.appServerVersion ?? discovery.version.app_server_version ?? null,
+          });
+          await startDaemon();
+          discovery = await discoverDaemon();
+          if (!isManagedCodexDaemonVersion(discovery.version)) {
+            throw new Error(
+              `daemon did not converge to managed Codex ${PINNED_CODEX_RELEASE_VERSION}`,
+            );
+          }
+        }
+        socketPath = discovery.socketPath;
       } catch (err) {
         if (!autoStartDaemon) {
           throw new Error(`daemon not running and autoStartDaemon=false: ${(err as Error).message}`);
         }
         logger.info('daemon version probe failed; attempting start', { reason: (err as Error).message });
         await startDaemon();
-        socketPath = await discoverSocketPath();
+        const discovery = await discoverDaemon();
+        if (!isManagedCodexDaemonVersion(discovery.version)) {
+          throw new Error(
+            `daemon did not report managed Codex ${PINNED_CODEX_RELEASE_VERSION} after bootstrap`,
+          );
+        }
+        socketPath = discovery.socketPath;
       }
     }
     logger.info('daemon socket discovered', { socketPath });
@@ -459,8 +500,11 @@ exec "$CODEX" "$@"
     handshakeTimer.unref?.();
   };
 
-  /** Run `codex app-server daemon version` on the remote, parse socket path. */
-  const discoverSocketPath = async (): Promise<string> => {
+  /** Run `codex app-server daemon version` and retain version evidence. */
+  const discoverDaemon = async (): Promise<{
+    socketPath: string;
+    version: DaemonVersionOutput;
+  }> => {
     const cmd = codexCmd(['app-server', 'daemon', 'version']);
     const result = await opts.remoteHost.exec(cmd, { timeoutMs: 10_000, label: 'codex-daemon-version' });
     if (result.exitCode !== 0) {
@@ -477,7 +521,7 @@ exec "$CODEX" "$@"
     if (typeof sock !== 'string' || !sock) {
       throw new Error(`daemon version JSON missing socketPath: keys=${Object.keys(parsed).join(',')}`);
     }
-    return sock;
+    return { socketPath: sock, version: parsed };
   };
 
   /**

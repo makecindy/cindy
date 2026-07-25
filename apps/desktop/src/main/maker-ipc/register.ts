@@ -5211,9 +5211,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
 
   const releaseOrcaWorkerRuntime = createOrcaRuntimeRelease({
     getSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    resumeSession: async (worker) => {
+      await resumeOrcaWorkerSessionIfMissing(worker);
+    },
     markRelease: markWorkerRuntimeReleaseIntent,
     restoreRelease: restoreWorkerRuntimeRelease,
-    closeSession: (sessionId) => maker.closeSession(sessionId, { releaseRuntime: true }),
     now: Date.now,
     log,
   });
