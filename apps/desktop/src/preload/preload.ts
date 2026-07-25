@@ -803,9 +803,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       id: string,
     ): {
       overrides: Record<string, string>;
-      /** 每类目一份下拉数据(能力键按类目取对应清单)。 */
-      image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } };
-      video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } };
+      /**
+       * 每类目一份下拉数据(能力键按类目取对应清单)。
+       * options 空 + defaultModel null = 目录没给该类目模型,能力暂不可用。
+       */
+      image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
+      video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
     } => ipcRenderer.sendSync('ghosts:cindy-prefs', id),
     setCindyPref: (id: string, capability: string, model: string | null): Promise<{ overrides: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:cindy-prefs:set', id, capability, model),

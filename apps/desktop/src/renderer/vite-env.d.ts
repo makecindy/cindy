@@ -1033,11 +1033,13 @@ interface ElectronAPI {
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
      * 等能力键;image/video 各一份下拉数据,defaultModel = 目录默认
      * 选型的展示信息("默认(GPT Image 2)")。
+     * options 空 + defaultModel null = 目录没给该类目模型(能力暂不可用),
+     * 渲染层显示灰字而非下拉。
      */
     cindyPrefsSync: (id: string) => {
       overrides: Record<string, string>;
-      image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } };
-      video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } };
+      image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
+      video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
     };
     /** 写/清一项覆盖(model=null 即恢复跟随默认);返回该意识最新覆盖表。 */
     setCindyPref: (

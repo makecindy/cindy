@@ -9,7 +9,8 @@
  *     → 频控(默认不限并发;用户可按意识配置在途上限,经 deps.getInflightLimit
  *       注入——配了才闸,防失控刷付费接口;配额治理随分发渠道重启)
  *     → 模型白名单校验(意识只能从主机菜单里挑,挑不了菜单外的任何路由;
- *       图像/视频各一份白名单与默认,同来自 providers.json 目录)
+ *       图像/视频各一份白名单与默认,同来自 providers.json 目录;该类目清单
+ *       为空 = 能力暂不可用,直接拒单)
  *     → 吃源图的代办(改图/图生视频):指纹逐张查账验归属(只能用自己名下的媒体)
  *     → 主机走统一媒体通道干活(字节从头到尾在主机手里;视频为分钟级长任务)
  *     → 落 blob(SHA-256 主机算)+ 账本记账(出生=该意识)
@@ -36,10 +37,14 @@ import {
 } from '../../shared/ghost.js';
 import { probeImageSize } from './imageProbe.js';
 
-/** 媒体能力配置(图像/视频同构):白名单 + 默认/档位选型,真身在 providers.json 目录。 */
+/**
+ * 媒体能力配置(图像/视频同构):白名单 + 默认/档位选型,真身在 providers.json 目录。
+ * models 空 / defaults null = 目录没有该类目的任何模型 = 该能力暂不可用(见
+ * cindyMediaCatalog.ts 的空清单语义),本模块据此早拒,不拿不在册的型号下单。
+ */
 export interface CindyMediaConfig {
   models: ReadonlyArray<{ id: string; label: string }>;
-  defaults: { standard: string; draft: string; best: string };
+  defaults: { standard: string; draft: string; best: string } | null;
 }
 
 export interface CindySlotDeps {
@@ -83,7 +88,8 @@ export interface CindySlotDeps {
   /**
    * 当前图像能力配置——真身是 providers.json 运行时目录(与会话模型列表
    * 同一获取来源),每单现读跟随热更。models = 白名单与显示名;defaults =
-   * 默认/档位选型(同样来自目录,代码零模型字面量)。
+   * 默认/档位选型(同样来自目录,代码零模型字面量);清单空 / defaults null
+   * = 目录没给,能力暂不可用。
    */
   getImageConfig(): CindyMediaConfig;
   /** 当前视频能力配置(同 getImageConfig 语义;白名单 id = 视频 provider 层 alias)。 */
@@ -199,7 +205,8 @@ const CATEGORY_LABEL: Record<CindyKindInfo['category'], string> = { image: '图�
 
 // 可选清单与默认/档位选型都不再是本模块常量:经 deps.getImageConfig 注入,
 // 真身来自 providers.json 运行时目录(与会话模型列表同一获取来源,OSS 热更
-// 同机制),见 index.ts 的 getCatalogImageConfig。本文件零模型字面量。
+// 同机制),见 index.ts 的 getCatalogImageConfig 与 cindyMediaCatalog.ts 的派生
+// 规则。本文件零模型字面量;目录没给清单时不猜、不顶,直接拒单。
 
 /** 指纹形状(与 blobStore 同一规则;这里先粗筛,细校验在归属解析)。 */
 const HASH_RE = /^[0-9a-f]{64}$/;
@@ -285,13 +292,28 @@ export class GhostCindySlot {
     // 意识报了白名单外的名字 = 拒,不静默降级。配置按类目取(图像/视频
     // 各一份白名单与默认,同来自 providers.json 目录)。
     const cfg = info.category === 'image' ? this.deps.getImageConfig() : this.deps.getVideoConfig();
+    // 目录没给该类目任何模型 = 能力暂不可用:早拒并说清原因,不落回任何写死型号
+    // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
+    // 话术三件事:①这是主机侧临时状态,不是插件缺这项功能(工具仍在花名册里,
+    // 摘掉工具会让 AI 误报"插件没这能力");②明确劝退重试(裸"请稍后重试"会
+    // 引来连环空转);③指一条用户能自己走的路。
+    if (cfg.models.length === 0 || cfg.defaults === null) {
+      const category = CATEGORY_LABEL[info.category];
+      return {
+        ok: false,
+        message:
+          `主机当前没有可用的${category}模型(模型目录暂时取不到,不是本插件缺${category}能力)。` +
+          '这是主机侧临时状态,不要重试;请如实告知用户,可稍后再试或重启应用重新加载模型目录。',
+      };
+    }
+    const defaults = cfg.defaults;
     const whitelist = new Set(cfg.models.map((m) => m.id));
-    let model = cfg.defaults.standard;
+    let model = defaults.standard;
     if (p.tier !== undefined) {
       if (typeof p.tier !== 'string' || !(GHOST_MODEL_TIERS as readonly string[]).includes(p.tier)) {
         return { ok: false, message: `未知档位(可用:${GHOST_MODEL_TIERS.join(' / ')})` };
       }
-      model = cfg.defaults[p.tier as GhostModelTier];
+      model = defaults[p.tier as GhostModelTier];
     }
     const capability = `${info.category}.${info.action}`;
     const override = this.deps.getOverride(ghostId, capability);

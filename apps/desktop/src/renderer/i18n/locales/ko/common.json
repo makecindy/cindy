@@ -2491,7 +2491,8 @@
             "video.generate": "영상 생성",
             "video.edit": "이미지로 영상"
           },
-          "defaultOption": "{{model}} (기본값)"
+          "defaultOption": "{{model}} (기본값)",
+          "noModels": "사용 가능한 모델 없음"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "권한",

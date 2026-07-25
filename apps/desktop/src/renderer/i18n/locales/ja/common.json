@@ -2491,7 +2491,8 @@
             "video.generate": "動画生成",
             "video.edit": "画像から動画"
           },
-          "defaultOption": "{{model}}(既定)"
+          "defaultOption": "{{model}}(既定)",
+          "noModels": "利用可能なモデルなし"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "権限",

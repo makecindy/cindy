@@ -203,6 +203,53 @@ describe('载荷校验', () => {
   });
 });
 
+describe('目录空清单 = 能力暂不可用', () => {
+  const EMPTY_CONFIG = { models: [], defaults: null };
+
+  it('视频清单空 → gen_video 拒单且不触发生成;同意识的图像代办不受影响', async () => {
+    const { slot, generateVideo, generateImage } = makeSlot({
+      getVideoConfig: vi.fn(() => EMPTY_CONFIG) as unknown as CindySlotDeps['getVideoConfig'],
+    });
+    const bad = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: '一只猫奔跑',
+    });
+    expect(bad).toMatchObject({ ok: false });
+    expect((bad as { message: string }).message).toContain('视频');
+    expect(generateVideo).not.toHaveBeenCalled();
+
+    // 图像清单还在 → 照常干活(降级只影响空的那个类目)。
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({ ok: true });
+    expect(generateImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('图像清单空 → gen_image / edit_image 都拒单,显式点名与档位也不能绕过', async () => {
+    const { slot, generateImage, editImage } = makeSlot({
+      getImageConfig: vi.fn(() => EMPTY_CONFIG) as unknown as CindySlotDeps['getImageConfig'],
+    });
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({ ok: false });
+    expect(await slot.handleModelRequest('art', { ...REQ, model: 'gpt-image-2' })).toMatchObject({
+      ok: false,
+    });
+    expect(await slot.handleModelRequest('art', { ...REQ, tier: 'best' })).toMatchObject({
+      ok: false,
+    });
+    expect(await slot.handleModelRequest('art', EDIT_REQ)).toMatchObject({ ok: false });
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(editImage).not.toHaveBeenCalled();
+  });
+
+  it('清单空时用户钉的旧覆盖也不生效(不拿不在册型号下单)', async () => {
+    const { slot, generateImage } = makeSlot({
+      getImageConfig: vi.fn(() => EMPTY_CONFIG) as unknown as CindySlotDeps['getImageConfig'],
+      getOverride: vi.fn(() => 'gpt-image-2') as unknown as CindySlotDeps['getOverride'],
+    });
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({ ok: false });
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+});
+
 describe('意识专属后端覆盖(解析表第②层)', () => {
   it('覆盖压过档位;调用显式点名仍压过覆盖;下架型号的覆盖静默落回', async () => {
     const pinned = makeSlot({

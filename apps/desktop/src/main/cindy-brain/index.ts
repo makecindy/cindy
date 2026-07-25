@@ -126,9 +126,9 @@ import { sanitizeGhostCardHtml } from './cardSanitizer.js';
 import { getGhostCard, listGhostCardsBySession, reassignGhostCards, updateGhostCardHeight, upsertGhostCard } from './cardStoreDb.js';
 import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
-import { GATEWAY_IMAGE_MODELS, GATEWAY_VIDEO_MODELS } from '../cindy-proxy-media/types.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
+import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
 import { GhostCindySlot } from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
@@ -1402,50 +1402,24 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
  * 当前媒体能力配置(图像/视频同一套推导)——与会话模型列表**同一获取
  * 来源**:providers.json 运行时目录(getActiveCatalog,OSS 热更 + 内置兜底),
  * 汇总各供应商的 imageModels/imageDefaults 或 videoModels/videoDefaults
- * (今天只有 xd 网关一家有)。默认/档位选型全部来自目录,主机代码零模型
- * 字面量;目录尚无对应区(极端:远端老目录缓存)时落回 @cindy/mcps 打包
- * 常量、默认取清单首项,保证能力永不瘫痪。
+ * (今天只有 xd 网关一家有)。清单与默认/档位选型全部来自目录,主机代码零
+ * 模型字面量;派生规则见 cindyMediaCatalog.ts。
+ *
+ * 目录里没有该类目的任何模型(极端:远端目录带了 xd 段却不带媒体清单)→
+ * `{ models: [], defaults: null }` = 该能力**暂不可用**,不拿打包常量冒充
+ * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
+ * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
  */
-function getCatalogMediaConfig(kind: 'image' | 'video'): {
-  models: Array<{ id: string; label: string }>;
-  defaults: { standard: string; draft: string; best: string };
-} {
-  const models: Array<{ id: string; label: string }> = [];
-  const seen = new Set<string>();
-  let rawDefaults: { standard: string; draft?: string; best?: string } | undefined;
+function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig {
   try {
-    for (const p of getActiveCatalog().providers) {
-      const list = kind === 'image' ? p.imageModels : p.videoModels;
-      for (const m of list ?? []) {
-        if (seen.has(m.id)) continue;
-        seen.add(m.id);
-        models.push({ id: m.id, label: m.name });
-      }
-      // 多供应商时首个声明默认的生效(今天只有 xd 一家)。
-      const d = kind === 'image' ? p.imageDefaults : p.videoDefaults;
-      if (!rawDefaults && d) rawDefaults = d;
-    }
+    return deriveCindyMediaConfig(getActiveCatalog().providers, kind);
   } catch (err) {
-    log.warn(`read catalog ${kind} config failed, falling back to bundled`, {
+    // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
+    log.warn(`read catalog ${kind} config failed, treating capability as unavailable`, {
       error: err instanceof Error ? err.message : String(err),
     });
+    return { models: [], defaults: null };
   }
-  if (models.length === 0) {
-    const bundled = kind === 'image' ? GATEWAY_IMAGE_MODELS : GATEWAY_VIDEO_MODELS;
-    for (const m of bundled) models.push({ id: m.id, label: m.label });
-    rawDefaults = undefined; // 打包常量兜底时默认取首项,不引用任何字面量
-  }
-  const valid = (id: string | undefined): string | null =>
-    id !== undefined && models.some((m) => m.id === id) ? id : null;
-  const standard = valid(rawDefaults?.standard) ?? models[0].id;
-  return {
-    models,
-    defaults: {
-      standard,
-      draft: valid(rawDefaults?.draft) ?? standard,
-      best: valid(rawDefaults?.best) ?? standard,
-    },
-  };
 }
 
 const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image');
@@ -3042,11 +3016,16 @@ export function registerGhostIpc(): void {
     const overrides = typeof ghostId === 'string' ? readGhostCindyOverrides(ghostId) : {};
     // 每类目一份 options + defaultModel(当前包含 image/video 两类;下拉按
     // 能力键的类目取对应清单)。defaultModel:目录默认选型的展示信息
-    // ("默认(GPT Image 2)"),让用户看得见"跟随"当下跟的是谁。
-    const byKind = (cfg: ReturnType<typeof getCatalogImageConfig>) => ({
-      options: cfg.models,
-      defaultModel: cfg.models.find((m) => m.id === cfg.defaults.standard) ?? cfg.models[0],
-    });
+    // ("默认(GPT Image 2)"),让用户看得见"跟随"当下跟的是谁;
+    // null = 目录没有该类目的模型(能力暂不可用),渲染层据此显示灰字而非下拉。
+    const byKind = (cfg: CindyMediaCatalogConfig) => {
+      const standard = cfg.defaults?.standard;
+      return {
+        options: cfg.models,
+        defaultModel:
+          standard === undefined ? null : (cfg.models.find((m) => m.id === standard) ?? null),
+      };
+    };
     event.returnValue = {
       overrides,
       image: byKind(getCatalogImageConfig()),

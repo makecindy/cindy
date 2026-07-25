@@ -2491,7 +2491,8 @@
             "video.generate": "生成视频",
             "video.edit": "图生视频"
           },
-          "defaultOption": "{{model}}(默认)"
+          "defaultOption": "{{model}}(默认)",
+          "noModels": "暂无可用模型"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "权限",

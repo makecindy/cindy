@@ -2492,7 +2492,8 @@
             "video.generate": "Video generation",
             "video.edit": "Image-to-video"
           },
-          "defaultOption": "{{model}} (default)"
+          "defaultOption": "{{model}} (default)",
+          "noModels": "No models available"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "Permissions",

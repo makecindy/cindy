@@ -45,6 +45,7 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.expandInfoValue': `Show full ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.panelNotDocked': 'Not docked',
+        'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
       };
       return labels[key] ?? key;
     },
@@ -250,6 +251,45 @@ describe('Ghost plugin detail sections', () => {
     const select = screen.getByRole('combobox');
     expect(select.className).toContain('cindy-capability-select');
     expect(select.className).toContain('max-w-[60%]');
+  });
+
+  it('replaces the select with tertiary copy for ability categories the catalog has no models for', () => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: { 'video.generate': 'retired-video-model' },
+            image: {
+              options: [{ id: 'image-default', label: 'Image Default' }],
+              defaultModel: { id: 'image-default', label: 'Image Default' },
+            },
+            // 目录没给视频清单 = 能力暂不可用。
+            video: { options: [], defaultModel: null },
+          }),
+          setCindyPref: vi.fn(),
+        },
+      },
+    });
+
+    const { container } = render(
+      <CindyCapabilityPrefs
+        ghostId="builtin.example"
+        capabilities={['image.generate', 'video.generate', 'video.edit']}
+        appearance="plugin"
+      />,
+    );
+
+    // 三行都在(插件确实申请了这三项能力),但只有图像那行给下拉。
+    expect(container.querySelectorAll('.cindy-capability-row')).toHaveLength(3);
+    expect(screen.getAllByRole('combobox')).toHaveLength(1);
+
+    const empties = container.querySelectorAll('.cindy-capability-empty');
+    expect(empties).toHaveLength(2);
+    empties.forEach((node) => {
+      expect(node.textContent).toBe('No models available');
+      expect(node.className).toContain('text-[var(--text-tertiary)]');
+    });
   });
 
   it('shows only the Tool description after an explicit click', async () => {
