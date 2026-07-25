@@ -266,7 +266,11 @@ verify_binary() {
 
   if [ -n "$V" ]; then
     if [ "$AGENT_KIND" = "codex" ]; then
-      DETECTED_RELEASE="${'$'}{V##* }"
+      if [[ "$V" =~ ([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]; then
+        DETECTED_RELEASE="${'$'}{BASH_REMATCH[1]}"
+      else
+        DETECTED_RELEASE=""
+      fi
       MANAGED_RELEASE="$CODEX_RELEASE"
     else
       DETECTED_RELEASE="${'$'}{V%% *}"

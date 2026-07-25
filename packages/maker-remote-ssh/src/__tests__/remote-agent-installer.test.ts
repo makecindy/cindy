@@ -39,7 +39,8 @@ describe('remote agent installer', () => {
   it('runs install.sh with --release when a Codex release arg is present', () => {
     expect(BOOTSTRAP_SH).toContain('INSTALLER_URL="https://github.com/openai/codex/releases/download/rust-v$CODEX_RELEASE/install.sh"');
     expect(BOOTSTRAP_SH).toContain('sh "$INSTALLER_TMP" --release "$CODEX_RELEASE"');
-    expect(BOOTSTRAP_SH).toContain('DETECTED_RELEASE="${V##* }"');
+    expect(BOOTSTRAP_SH).toContain('[[ "$V" =~ ([0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]');
+    expect(BOOTSTRAP_SH).toContain('DETECTED_RELEASE="${BASH_REMATCH[1]}"');
     expect(BOOTSTRAP_SH).toContain('MANAGED_RELEASE="$CODEX_RELEASE"');
   });
 
@@ -96,7 +97,8 @@ describe('remote agent installer', () => {
 
     expect(probe.installed).toBe(false);
     expect(calls[0].command).toContain(`'${PINNED_CODEX_RELEASE_VERSION}'`);
-    expect(calls[0].input).toContain('DETECTED_RELEASE="${V##* }"');
+    expect(calls[0].input).toContain('[[ "$V" =~ ([0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?) ]]');
+    expect(calls[0].input).toContain('DETECTED_RELEASE="${BASH_REMATCH[1]}"');
     expect(calls[0].input).toContain('MANAGED_RELEASE="$CODEX_RELEASE"');
   });
 });

@@ -5704,11 +5704,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     readIdleReleaseMinutes: () => readCollaborationSettings().workerIdleReleaseMinutes,
     listCandidates: async (updatedBefore) => {
       const db = getDbClient().drizzle;
-      return db
+      const rows = await db
         .select({
           id: orcaWorkers.id,
+          teamId: orcaWorkers.teamId,
           sessionId: orcaWorkers.sessionId,
           leadSessionId: orcaTeams.leadSessionId,
+          agentKind: sessions.agentKind,
           status: orcaWorkers.status,
           idleSince: orcaWorkers.idleSince,
           updatedAt: orcaWorkers.updatedAt,
@@ -5717,12 +5719,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         .innerJoin(orcaTeams, eq(orcaTeams.id, orcaWorkers.teamId))
         .innerJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
         .where(and(
-          isNull(orcaWorkers.idleSince),
           inArray(orcaWorkers.status, ORCA_IDLE_RELEASE_STATUSES),
           sql`${orcaWorkers.updatedAt} < ${updatedBefore}`,
           eq(orcaTeams.status, 'active'),
           eq(sessions.status, 'active'),
         ));
+      return rows.map((row) => ({
+        ...row,
+        agentKind: row.agentKind === 'codex' ? 'codex' as const : 'claude-code' as const,
+      }));
     },
     getSession: (sessionId) => maker.getSession(sessionId) ?? null,
     withSessionLock: withSendToSessionLock,
@@ -5752,9 +5757,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         .set({ updatedAt })
         .where(eq(orcaWorkers.id, workerId));
     },
-    closeSessionIfIdle: async (sessionId) => {
-      const session = maker.getSession(sessionId);
-      if (!session) return 'already-missing';
+    closeSessionIfIdle: async (candidate, releasedAt) => {
+      const session = maker.getSession(candidate.sessionId);
+      if (!session) {
+        await releaseOrcaWorkerRuntime({
+          ...candidate,
+          idleSince: new Date(releasedAt).toISOString(),
+          session: { agentKind: candidate.agentKind },
+        });
+        return 'closed';
+      }
       return (await session.closeIfIdle({ releaseRuntime: true })) ? 'closed' : 'busy';
     },
     broadcastWorkerChanged: (leadSessionId) => {

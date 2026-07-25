@@ -7,6 +7,9 @@ export interface OrcaRuntimeReleaseWorker {
   sessionId: string;
   status: OrcaWorkerStatus;
   idleSince: string | null;
+  session: {
+    agentKind: 'claude-code' | 'codex';
+  };
 }
 
 interface OrcaRuntimeReleaseSession {
@@ -44,6 +47,10 @@ export function createOrcaRuntimeRelease(deps: OrcaRuntimeReleaseDeps) {
     let session = deps.getSession(worker.sessionId);
     let recreatedOwnership = false;
     if (!session) {
+      // Claude's runtime is the Session-owned CLI process, so missing local
+      // ownership already means there is no persistent provider runtime left.
+      if (worker.session.agentKind !== 'codex') return;
+
       // A resumable generic close only removes local ownership; it does not
       // acknowledge provider runtime release. An existing marker is only a
       // pre-close intent, so interrupted releases must also recreate ownership.
@@ -80,7 +87,10 @@ export function createOrcaRuntimeRelease(deps: OrcaRuntimeReleaseDeps) {
     try {
       await session.close({ releaseRuntime: true });
     } catch (error) {
-      if (releasedAt !== null) {
+      // A failed archive may have completed provider/local teardown before its
+      // acknowledgement timed out. Keep the marker when Session ownership has
+      // disappeared so retry bootstrap can reconcile an already-archived thread.
+      if (releasedAt !== null && deps.getSession(worker.sessionId) !== null) {
         try {
           await deps.restoreRelease(
             worker.id,

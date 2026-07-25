@@ -48,6 +48,9 @@ const worker = {
   sessionId: 'session-1',
   status: 'running' as const,
   idleSince: null,
+  session: {
+    agentKind: 'codex' as const,
+  },
 };
 
 describe('createOrcaRuntimeRelease', () => {
@@ -121,6 +124,23 @@ describe('createOrcaRuntimeRelease', () => {
     );
   });
 
+  it('keeps a fresh marker when a failed close also removes Session ownership', async () => {
+    const closeError = new Error('archive acknowledgement timed out');
+    const harness = createHarness();
+    let currentSession: typeof harness.session | null = harness.session;
+    harness.deps.getSession = vi.fn(() => currentSession);
+    harness.session.isTurnRunning.mockReturnValue(false);
+    harness.session.close.mockImplementationOnce(async () => {
+      currentSession = null;
+      throw closeError;
+    });
+
+    await expect(harness.release(worker)).rejects.toBe(closeError);
+
+    expect(harness.deps.markRelease).toHaveBeenCalledOnce();
+    expect(harness.deps.restoreRelease).not.toHaveBeenCalled();
+  });
+
   it('reuses an existing marker without rolling it back on a retry failure', async () => {
     const closeError = new Error('archive failed');
     const { deps, release } = createHarness({
@@ -181,6 +201,20 @@ describe('createOrcaRuntimeRelease', () => {
     );
 
     expect(deps.resumeSession).toHaveBeenCalledOnce();
+    expect(deps.markRelease).not.toHaveBeenCalled();
+  });
+
+  it('treats a missing Claude Session as an already released process runtime', async () => {
+    const { deps, release } = createHarness({
+      getSession: vi.fn(() => null),
+    });
+
+    await expect(release({
+      ...worker,
+      session: { agentKind: 'claude-code' },
+    })).resolves.toBeUndefined();
+
+    expect(deps.resumeSession).not.toHaveBeenCalled();
     expect(deps.markRelease).not.toHaveBeenCalled();
   });
 });

@@ -194,6 +194,12 @@ export function decideCodexDaemonVersionAction(
   return autoStartDaemon ? 'restart' : 'reject';
 }
 
+/** Preserve the probe cause while accurately describing every fail-fast case. */
+export function createCodexDaemonAutoStartDisabledError(reason: unknown): Error {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  return new Error(`daemon unavailable or incompatible and autoStartDaemon=false: ${detail}`);
+}
+
 /**
  * Build a transport synchronously; the heavy lifting (daemon probe, ssh exec,
  * ws handshake) runs in the background and either flips state to 'open' or
@@ -426,7 +432,7 @@ exec "$CODEX" "$@"
         socketPath = discovery.socketPath;
       } catch (err) {
         if (!autoStartDaemon) {
-          throw new Error(`daemon not running and autoStartDaemon=false: ${(err as Error).message}`);
+          throw createCodexDaemonAutoStartDisabledError(err);
         }
         logger.info('daemon version probe failed; attempting start', { reason: (err as Error).message });
         await startDaemon();

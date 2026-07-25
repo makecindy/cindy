@@ -83,6 +83,35 @@ describe('Session close lifecycle', () => {
     expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
   });
 
+  it('does not leak a failed runtime-release intent into a later generic close', async () => {
+    const close = vi.fn()
+      .mockRejectedValueOnce(new Error('archive failed'))
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      isClosed: () => false,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    await expect(session.close({ releaseRuntime: true })).rejects.toThrow('archive failed');
+    await session.close();
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, { releaseRuntime: true });
+    expect(close).toHaveBeenNthCalledWith(2, undefined);
+  });
+
   it('upgrades an in-flight generic close when a runtime release is requested', async () => {
     const genericClose = createDeferred();
     const close = vi.fn()

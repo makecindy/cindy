@@ -6,8 +6,10 @@ export type OrcaIdleReleaseStatus = (typeof ORCA_IDLE_RELEASE_STATUSES)[number];
 /** Minimal persisted worker state needed by the idle-release policy. */
 export interface OrcaIdleReleaseCandidate {
   id: string;
+  teamId: string;
   sessionId: string;
   leadSessionId: string;
+  agentKind: 'claude-code' | 'codex';
   status: OrcaIdleReleaseStatus;
   idleSince: number | null;
   updatedAt: number;
@@ -42,7 +44,10 @@ export interface OrcaIdleReleaseWatcherDeps {
   ): Promise<boolean>;
   touchWorker(workerId: string, updatedAt: number): Promise<void>;
   /** Atomically re-check and close an idle runtime after local ownership is confirmed. */
-  closeSessionIfIdle(sessionId: string): Promise<OrcaIdleRuntimeCloseResult>;
+  closeSessionIfIdle(
+    candidate: OrcaIdleReleaseCandidate,
+    releasedAt: number,
+  ): Promise<OrcaIdleRuntimeCloseResult>;
   broadcastWorkerChanged(leadSessionId: string): void;
   now(): number;
   timer: OrcaIdleReleaseTimer;
@@ -88,7 +93,7 @@ export function createOrcaIdleReleaseWatcher(
       const threshold = deps.now() - idleReleaseMinutes * 60_000;
       const candidates = await deps.listCandidates(threshold);
       for (const candidate of candidates) {
-        if (candidate.idleSince !== null || !isReleaseStatus(candidate.status)) continue;
+        if (!isReleaseStatus(candidate.status)) continue;
 
         try {
           await deps.withSessionLock(candidate.sessionId, async () => {
@@ -115,11 +120,16 @@ export function createOrcaIdleReleaseWatcher(
             // If the process exits after this point, resume can safely attempt
             // unarchive; the compatibility path also handles a marker whose close
             // never reached thread/archive.
-            const releasedAt = deps.now();
-            const marked = await deps.markReleased(candidate, releasedAt);
-            if (!marked) return;
+            const releasedAt = candidate.idleSince ?? deps.now();
+            if (candidate.idleSince === null) {
+              const marked = await deps.markReleased(candidate, releasedAt);
+              if (!marked) return;
+            }
 
-            const rollbackReleaseMarker = async (reason: 'busy' | 'close-failed', closeError?: unknown) => {
+            const rollbackReleaseMarker = async (
+              reason: 'busy' | 'close-failed' | 'session-missing',
+              closeError?: unknown,
+            ) => {
               try {
                 await deps.restoreRelease(candidate, releasedAt, deps.now());
               } catch (restoreError) {
@@ -136,14 +146,16 @@ export function createOrcaIdleReleaseWatcher(
 
             let closeResult: OrcaIdleRuntimeCloseResult;
             try {
-              closeResult = await deps.closeSessionIfIdle(candidate.sessionId);
+              closeResult = await deps.closeSessionIfIdle(candidate, releasedAt);
             } catch (closeError) {
               await rollbackReleaseMarker('close-failed', closeError);
               throw closeError;
             }
 
-            if (closeResult === 'busy') {
-              await rollbackReleaseMarker('busy');
+            if (closeResult === 'busy' || closeResult === 'already-missing') {
+              await rollbackReleaseMarker(
+                closeResult === 'busy' ? 'busy' : 'session-missing',
+              );
               return;
             }
 

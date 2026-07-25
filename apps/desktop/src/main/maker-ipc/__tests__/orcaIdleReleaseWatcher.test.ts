@@ -12,8 +12,10 @@ function createCandidate(
 ): OrcaIdleReleaseCandidate {
   return {
     id: 'worker-1',
+    teamId: 'team-1',
     sessionId: 'worker-session-1',
     leadSessionId: 'lead-1',
+    agentKind: 'codex',
     status: 'done',
     idleSince: null,
     updatedAt: 1,
@@ -74,7 +76,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
       await watcher.scanNow();
 
       expect(deps.listCandidates).toHaveBeenCalledWith(60_000);
-      expect(deps.closeSessionIfIdle).toHaveBeenCalledWith(candidate.sessionId);
+      expect(deps.closeSessionIfIdle).toHaveBeenCalledWith(candidate, 120_000);
       expect(deps.markReleased).toHaveBeenCalledWith(candidate, 120_000);
       expect(vi.mocked(deps.markReleased).mock.invocationCallOrder[0]!)
         .toBeLessThan(vi.mocked(deps.closeSessionIfIdle).mock.invocationCallOrder[0]!);
@@ -142,16 +144,17 @@ describe('createOrcaIdleReleaseWatcher', () => {
     expect(deps.markReleased).not.toHaveBeenCalled();
   });
 
-  it('skips workers that already have a release marker', async () => {
+  it('retries workers that already have a release marker without writing another marker', async () => {
+    const candidate = createCandidate({ idleSince: 90_000 });
     const { deps, watcher } = createDeps({
-      listCandidates: vi.fn(async () => [createCandidate({ idleSince: 90_000 })]),
+      listCandidates: vi.fn(async () => [candidate]),
     });
 
     await watcher.scanNow();
 
     expect(deps.markReleased).not.toHaveBeenCalled();
-    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
-    expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
+    expect(deps.closeSessionIfIdle).toHaveBeenCalledWith(candidate, 90_000);
+    expect(deps.broadcastWorkerChanged).toHaveBeenCalledOnce();
   });
 
   it('does not broadcast when worker state changes before the release marker is written', async () => {
@@ -236,7 +239,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
-  it('marks a locally owned runtime released when it disappears before closeIfIdle', async () => {
+  it('rolls back the marker when a locally owned runtime disappears before reconciliation', async () => {
     const { deps, watcher } = createDeps({
       closeSessionIfIdle: vi.fn(async () => 'already-missing' as const),
     });
@@ -245,7 +248,12 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
     expect(deps.touchWorker).not.toHaveBeenCalled();
     expect(deps.markReleased).toHaveBeenCalledWith(expect.objectContaining({ id: 'worker-1' }), 120_000);
-    expect(deps.broadcastWorkerChanged).toHaveBeenCalledOnce();
+    expect(deps.restoreRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'worker-1' }),
+      120_000,
+      120_000,
+    );
+    expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
   it('uses the injected interval and stops future scans', async () => {

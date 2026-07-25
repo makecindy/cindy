@@ -33,6 +33,7 @@ import path from 'node:path';
 import {
   WS_GUID,
   computeWsAccept,
+  createCodexDaemonAutoStartDisabledError,
   decideCodexDaemonVersionAction,
   isManagedCodexDaemonVersion,
   shellQuote,
@@ -97,6 +98,16 @@ describe('decideCodexDaemonVersionAction', () => {
 
     expect(decideCodexDaemonVersionAction(stale, true)).toBe('restart');
     expect(decideCodexDaemonVersionAction(stale, false)).toBe('reject');
+  });
+});
+
+describe('createCodexDaemonAutoStartDisabledError', () => {
+  it('reports unavailable and incompatible daemon probe failures without hiding the cause', () => {
+    expect(createCodexDaemonAutoStartDisabledError(
+      new Error('daemon version is stale'),
+    ).message).toBe(
+      'daemon unavailable or incompatible and autoStartDaemon=false: daemon version is stale',
+    );
   });
 });
 

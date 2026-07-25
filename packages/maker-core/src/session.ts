@@ -452,6 +452,7 @@ export class Session {
       } else {
         // A still-live handle remains reachable for a direct close retry.
         this.sendReservation = null;
+        this.closeReleaseRuntimeRequested = false;
       }
       throw error;
     }
