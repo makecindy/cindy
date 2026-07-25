@@ -17,6 +17,7 @@
 import type { AgentKind, CustomProviderConfig, ProviderPreset, ProviderView } from '@cindy/model-providers';
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import {
   isBuiltinRefreshableProviderId,
   type BuiltinRefreshableProviderId,
@@ -188,6 +189,7 @@ export function registerProviderHandlers(
       try {
         await deps.refreshBuiltinModels(providerId);
       } catch (err) {
+        if (isIpcError(err)) throw err;
         log.warn('built-in provider model refresh failed', {
           providerId,
           error: err instanceof Error ? err.message : String(err),
