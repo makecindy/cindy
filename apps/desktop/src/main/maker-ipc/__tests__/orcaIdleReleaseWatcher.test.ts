@@ -218,6 +218,24 @@ describe('createOrcaIdleReleaseWatcher', () => {
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
+  it('logs a failed release-marker rollback when closeIfIdle loses a send race', async () => {
+    const { deps, watcher } = createDeps({
+      closeSessionIfIdle: vi.fn(async () => 'busy' as const),
+      restoreRelease: vi.fn(async () => {
+        throw new Error('database temporarily unavailable');
+      }),
+    });
+
+    await watcher.scanNow();
+
+    expect(deps.log.warn).toHaveBeenCalledWith('idleWatcher: release marker rollback failed', {
+      workerId: 'worker-1',
+      reason: 'busy',
+      restoreError: 'database temporarily unavailable',
+    });
+    expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
+  });
+
   it('marks a locally owned runtime released when it disappears before closeIfIdle', async () => {
     const { deps, watcher } = createDeps({
       closeSessionIfIdle: vi.fn(async () => 'already-missing' as const),

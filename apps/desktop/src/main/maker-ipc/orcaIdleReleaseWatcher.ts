@@ -119,24 +119,31 @@ export function createOrcaIdleReleaseWatcher(
             const marked = await deps.markReleased(candidate, releasedAt);
             if (!marked) return;
 
-            let closeResult: OrcaIdleRuntimeCloseResult;
-            try {
-              closeResult = await deps.closeSessionIfIdle(candidate.sessionId);
-            } catch (closeError) {
+            const rollbackReleaseMarker = async (reason: 'busy' | 'close-failed', closeError?: unknown) => {
               try {
                 await deps.restoreRelease(candidate, releasedAt, deps.now());
               } catch (restoreError) {
                 deps.log.warn('idleWatcher: release marker rollback failed', {
                   workerId: candidate.id,
-                  closeError: closeError instanceof Error ? closeError.message : String(closeError),
+                  reason,
+                  ...(closeError === undefined
+                    ? {}
+                    : { closeError: closeError instanceof Error ? closeError.message : String(closeError) }),
                   restoreError: restoreError instanceof Error ? restoreError.message : String(restoreError),
                 });
               }
+            };
+
+            let closeResult: OrcaIdleRuntimeCloseResult;
+            try {
+              closeResult = await deps.closeSessionIfIdle(candidate.sessionId);
+            } catch (closeError) {
+              await rollbackReleaseMarker('close-failed', closeError);
               throw closeError;
             }
 
             if (closeResult === 'busy') {
-              await deps.restoreRelease(candidate, releasedAt, deps.now());
+              await rollbackReleaseMarker('busy');
               return;
             }
 
