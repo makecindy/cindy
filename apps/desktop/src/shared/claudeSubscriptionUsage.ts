@@ -353,3 +353,53 @@ export function matchScopedWindowForModel(
   if (!family) return null;
   return scoped.find((w) => w.modelDisplayName.trim().toLowerCase() === family) ?? null;
 }
+
+// ── 告警判定(chip 变红 / tooltip 高亮的唯一口径) ────────────────────────────
+
+/** 单个窗口告警:已打满,或服务端 severity 明确非 normal。 */
+export function isClaudeUsageWindowAlerting(
+  window: ClaudeUsageWindow | null | undefined,
+): boolean {
+  if (!window) return false;
+  if (typeof window.utilization === 'number' && clampPercent(window.utilization) >= 99.95) {
+    return true;
+  }
+  const severity = window.severity?.trim().toLowerCase();
+  return Boolean(severity && severity !== 'normal');
+}
+
+/**
+ * 影响当前会话的窗口是否告警:只看 5h / 总周限 / **当前模型**的 scoped 周限 ——
+ * 其它模型的 scoped 窗口打满不限流当前会话(跑 Opus 时 Fable 周限见底与本会话无关),
+ * 只在 tooltip 的全量窗口列表里可见,不参与判定。
+ */
+export function hasAlertingClaudeSessionWindow(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (!snapshot) return false;
+  return (
+    isClaudeUsageWindowAlerting(snapshot.fiveHour)
+    || isClaudeUsageWindowAlerting(snapshot.sevenDay)
+    || isClaudeUsageWindowAlerting(matchScopedWindowForModel(snapshot.scoped, modelId))
+  );
+}
+
+/**
+ * chip 警示态(变红):只在当前会话**真的**受限时亮 —— 请求已被拒(headers 整体
+ * status = rejected),或影响当前会话的窗口告警(见上)。
+ *
+ * headers 的 `allowed_warning` **不**单独染红:它是服务端综合全部窗口(含其它模型的
+ * 分模型周限)给出的模糊信号,而 chip 只显示 5h + 周限两段 —— 拿 Fable 周限 87% 把跑
+ * Opus 的会话染红,用户看到的是「剩余 91% / 56% 却是红的」,颜色与数字自相矛盾且无处
+ * 解释(chip 上没有那个窗口)。真限流时 rejected 会立刻到,不需要它兜底;「接近限额」
+ * 提示仍留在 tooltip —— 那里紧邻全量窗口列表,有上下文。
+ */
+export function isClaudeSubscriptionAlerting(
+  snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId: string | null | undefined,
+): boolean {
+  if (!snapshot) return false;
+  if (snapshot.rateLimitStatus?.trim().toLowerCase() === 'rejected') return true;
+  return hasAlertingClaudeSessionWindow(snapshot, modelId);
+}
