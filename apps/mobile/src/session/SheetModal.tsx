@@ -18,6 +18,7 @@ import {
   Animated,
   KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -127,7 +128,12 @@ export function SheetModal({
           testID={backdropTestID}
         />
       </Animated.View>
-      {keyboardAvoiding ? (
+      {/* Android:windowSoftInputMode=adjustResize 已在原生层处理键盘避让,若再套
+          KeyboardAvoidingView(behavior='height')会与之对同一键盘反复调整高度,在 Modal 里
+          触发每帧 relayout 的布局回环 → 整窗持续重绘闪烁(用户 2026-07 报「+」/模型选择弹层
+          键盘开着时一直闪;logcat 实测键盘不开合、但 MainActivity 每帧重绘)。故 Android 直接
+          用 content、不套 KAV;iOS(adjustResize 不适用)仍需 KAV 走 padding 避让。 */}
+      {keyboardAvoiding && Platform.OS !== 'android' ? (
         <KeyboardAvoidingView
           behavior={keyboardAvoidingBehavior}
           keyboardVerticalOffset={0}
