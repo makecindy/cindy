@@ -103,6 +103,31 @@ export interface OrcaLifecycleService {
   enableTeam(params: OrcaEnableTeamParams): Promise<OrcaEnableTeamResult>;
 }
 
+export interface CreatedWorkerRollbackCloseDeps {
+  hasSession(sessionId: string): boolean;
+  closeSession(sessionId: string): Promise<void>;
+  logWarn(message: string, fields: Record<string, unknown>): void;
+}
+
+export async function closeCreatedWorkerForRollback(
+  deps: CreatedWorkerRollbackCloseDeps,
+  params: { workerId: string; workerSessionId: string },
+): Promise<void> {
+  if (!deps.hasSession(params.workerSessionId)) return;
+  try {
+    // Creation can fail before the first rollout exists. A generic close tears
+    // down the local Session without requiring provider runtime archival.
+    await deps.closeSession(params.workerSessionId);
+  } catch (error) {
+    deps.logWarn('rollbackCreatedWorker close failed; preserving Worker', {
+      workerId: params.workerId,
+      workerSessionId: params.workerSessionId,
+      err: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 function internalFailure(err: unknown): OrcaInternalFailure {
   return {
     ok: false,

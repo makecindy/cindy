@@ -336,7 +336,11 @@ import {
   shouldNotifyAgentIslandForSession as shouldNotifyAgentIslandForSessionByPolicy,
 } from '../agent-island/notificationPolicy.js';
 import { getAgentIslandService } from '../agent-island/service.js';
-import { createOrcaLifecycleService, ORCA_WORKER_READY_MESSAGE } from './orcaLifecycleService.js';
+import {
+  closeCreatedWorkerForRollback,
+  createOrcaLifecycleService,
+  ORCA_WORKER_READY_MESSAGE,
+} from './orcaLifecycleService.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
 import { createOrcaTeamService, findFocusTargetWorker, type ListWorkerQueuedMessagesResult, type OrcaTeamService, type OrcaWorkerEffort, type WorkerQueuedMessageControlResult } from './orcaTeamService.js';
 import { createOrcaWorkerCreationService, normalizeOrcaWorkerLabel } from './orcaWorkerCreationService.js';
@@ -5653,10 +5657,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       });
     },
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
-      const workerSession = maker.getSession(workerSessionId);
-      if (workerSession) {
-        await maker.closeSession(workerSessionId, { releaseRuntime: true }).catch(() => undefined);
-      }
+      await closeCreatedWorkerForRollback({
+        hasSession: (sessionId) => Boolean(maker.getSession(sessionId)),
+        closeSession: (sessionId) => maker.closeSession(sessionId),
+        logWarn: (message, fields) => log.warn(message, fields),
+      }, { workerId, workerSessionId });
       forgetKnownOrcaWorkerSession(workerSessionId);
       await archiveSingleWorkerSession(workerSessionId).catch(() => undefined);
       await removeWorker(workerId);

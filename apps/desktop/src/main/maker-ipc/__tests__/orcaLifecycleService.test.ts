@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  closeCreatedWorkerForRollback,
   createOrcaLifecycleService,
   ORCA_WORKER_READY_MESSAGE,
   type OrcaLifecycleDeps,
@@ -103,6 +104,63 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
     service: createOrcaLifecycleService(deps),
   };
 }
+
+describe('closeCreatedWorkerForRollback', () => {
+  it('uses a generic close before allowing Worker cleanup', async () => {
+    const deps = {
+      hasSession: vi.fn(() => true),
+      closeSession: vi.fn(async () => undefined),
+      logWarn: vi.fn(),
+    };
+
+    await expect(closeCreatedWorkerForRollback(deps, {
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+    })).resolves.toBeUndefined();
+
+    expect(deps.closeSession).toHaveBeenCalledWith('worker-session-1');
+    expect(deps.logWarn).not.toHaveBeenCalled();
+  });
+
+  it('logs and rejects close failures so the caller does not remove the Worker', async () => {
+    const deps = {
+      hasSession: vi.fn(() => true),
+      closeSession: vi.fn(async () => {
+        throw new Error('local close failed');
+      }),
+      logWarn: vi.fn(),
+    };
+
+    await expect(closeCreatedWorkerForRollback(deps, {
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+    })).rejects.toThrow('local close failed');
+
+    expect(deps.logWarn).toHaveBeenCalledWith(
+      'rollbackCreatedWorker close failed; preserving Worker',
+      {
+        workerId: 'worker-1',
+        workerSessionId: 'worker-session-1',
+        err: 'local close failed',
+      },
+    );
+  });
+
+  it('skips close when the local Session is already gone', async () => {
+    const deps = {
+      hasSession: vi.fn(() => false),
+      closeSession: vi.fn(async () => undefined),
+      logWarn: vi.fn(),
+    };
+
+    await expect(closeCreatedWorkerForRollback(deps, {
+      workerId: 'worker-1',
+      workerSessionId: 'worker-session-1',
+    })).resolves.toBeUndefined();
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+  });
+});
 
 describe('OrcaLifecycleService', () => {
   it('starts a team without creating a worker and refreshes lead state', async () => {
