@@ -139,6 +139,21 @@ describe('resolveMobileDownloadUrl', () => {
     );
   });
 
+  it('keeps the shipped endpoint hosts intact', () => {
+    // 打包配置里的真实取值:CN 是 config/endpoint.json 的 cindy.com.cn(官网 302 到
+    // cindy.cn/download/),Global 是 cindy.app。这里不做域名改写,区域来源只有
+    // clientEndpoints 一处。
+    for (const configPath of [
+      '../../../../../config/endpoint.json',
+      '../../../../../config/endpoint.global.json',
+    ]) {
+      const websiteUrl = JSON.parse(
+        readFileSync(resolve(__dirname, configPath), 'utf8'),
+      ).websiteUrl;
+      expect(resolveMobileDownloadUrl(websiteUrl)).toBe(`${websiteUrl}/download/#all-versions`);
+    }
+  });
+
   it.each(['', 'not-a-url', 'http://cindy.cn', 'https://user:pass@cindy.cn'])(
     'rejects an unsafe regional website endpoint: %s',
     (websiteUrl) => {
