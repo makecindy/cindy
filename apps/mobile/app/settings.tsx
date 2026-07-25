@@ -468,6 +468,9 @@ export default function SettingsScreen() {
   const toggleDebug = useCallback(() => {
     configureCollapseAnimation();
     setDebugExpanded((value) => !value);
+    // 刷新崩溃日志可用性:运行期崩溃(如未处理 promise rejection)可能在本页挂载后才落盘,
+    // 而 crashLogAvailable 只会被置 false;每次展开/收起调试区时重新读取,恢复导出/清空入口。
+    setCrashLogAvailable(hasCrashLog());
   }, []);
 
   const exportCrashLog = useCallback(async () => {
