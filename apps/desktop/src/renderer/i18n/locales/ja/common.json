@@ -2044,7 +2044,6 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "モデル",
-        "effortLabel": "推論強度",
         "permissionLabel": "権限モード",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",

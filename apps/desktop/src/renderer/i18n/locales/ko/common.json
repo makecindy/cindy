@@ -2044,7 +2044,6 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "모델",
-        "effortLabel": "추론 강도",
         "permissionLabel": "권한 모드",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
