@@ -330,16 +330,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     void loadBillingState();
   }, [loadBillingState]);
 
-  useEffect(() => {
-    if (
-      checkout.state.subscription &&
-      SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(checkout.state.subscription.status)
-    ) {
-      setCurrentSubscription(checkout.state.subscription);
-      setSubscriptionError(false);
-    }
-  }, [checkout.state.subscription]);
-
   const closeCheckout = useCallback(() => {
     const abandonedIncomplete = checkout.state.subscription?.status === 'INCOMPLETE';
     checkout.close();
@@ -354,8 +344,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     previousCheckoutPhaseRef.current = checkout.state.phase;
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
+      if (checkout.state.kind === 'SUBSCRIPTION') void loadSubscription();
     }
-  }, [checkout.state.phase, loadBalance]);
+  }, [checkout.state.kind, checkout.state.phase, loadBalance, loadSubscription]);
 
   const handlePlanChangeSettled = useCallback(
     (kind: PlanChangeSettledKind) => {
@@ -489,6 +480,17 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     SUPPORTED_BILLING_PROVIDERS.has(currentSubscription.provider as SupportedBillingProvider)
       ? (currentSubscription.provider as SupportedBillingProvider)
       : null;
+  const currentPlanCandidate = useMemo<PlanChangeCandidate | null>(() => {
+    if (!currentPlan) return null;
+    const entry = subscriptionOffers.find(({ offer }) => offer.code === currentPlan.offer.code);
+    if (!entry) return null;
+    return {
+      product: entry.product,
+      offer: entry.offer,
+      providers: currentProvider ? [currentProvider] : [],
+      direction: null,
+    };
+  }, [currentPlan, currentProvider, subscriptionOffers]);
   const showPlanChangeEntry =
     currentPlan !== null &&
     currentSubscription !== null &&
@@ -832,6 +834,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
       <PlanChangeTargetDialog
         open={planChangeTargetOpen}
+        currentPlan={currentPlanCandidate}
         candidates={planChangeCandidates}
         onClose={() => setPlanChangeTargetOpen(false)}
         onSelect={selectPlanChangeTarget}

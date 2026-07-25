@@ -1256,7 +1256,11 @@ describe('BillingPage plan change', () => {
       observedAt: '2026-07-23T12:00:00.000Z',
     })),
     getCatalog: vi.fn(async () => subscriptionCatalog),
-    getCurrentSubscription: vi.fn(async () => ({ subscription: activeSubscription() })),
+    getCurrentSubscription: vi.fn(
+      async (): Promise<{ subscription: BillingSubscription | null }> => ({
+        subscription: activeSubscription(),
+      }),
+    ),
     cancelCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
     confirmPlanChange: vi.fn(),
@@ -1334,6 +1338,34 @@ describe('BillingPage plan change', () => {
       expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
     },
   );
+
+  it('reloads the canonical subscription after checkout instead of keeping a provider-less response', async () => {
+    const billing = billingMocks();
+    const canonical = { ...activeSubscription(), provider: 'alipay' };
+    billing.getCurrentSubscription
+      .mockResolvedValueOnce({ subscription: null })
+      .mockResolvedValueOnce({ subscription: canonical });
+    install(billing);
+    const checkoutSubscription: BillingSubscription = { ...canonical };
+    delete checkoutSubscription.provider;
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: checkoutSubscription,
+    });
+
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, { phase: 'COMPLETED' });
+    view.rerender(<BillingPage />);
+
+    await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    expect(await screen.findByText('Alipay-only Max')).toBeTruthy();
+    expect(screen.queryByText('Max plan')).toBeNull();
+  });
 
   it('locks cancellation before confirmation resolves', async () => {
     const billing = install(billingMocks());
@@ -1462,6 +1494,8 @@ describe('BillingPage plan change', () => {
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
 
     await screen.findByText('billing.planChange.targetTitle');
+    const dialog = screen.getByRole('dialog');
+    const currentPlanButton = within(dialog).getByText('Plus plan').closest('button')!;
     const maxButton = screen.getByText('Max plan').closest('button')!;
     const sameLevelButton = screen.getByText('Same-level plan').closest('button')!;
     const starterButton = screen.getByText('Starter plan').closest('button')!;
@@ -1472,6 +1506,9 @@ describe('BillingPage plan change', () => {
       sameLevelButton.compareDocumentPosition(starterButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(within(maxButton).getByText('billing.planChange.upgradeBadge')).toBeTruthy();
+    expect(currentPlanButton.hasAttribute('disabled')).toBe(true);
+    expect(currentPlanButton.getAttribute('aria-current')).toBe('true');
+    expect(within(currentPlanButton).getByText('billing.catalog.currentPlan')).toBeTruthy();
     expect(within(maxButton).getByText('stripe')).toBeTruthy();
     expect(within(sameLevelButton).getByText('billing.planChange.sameLevelBadge')).toBeTruthy();
     expect(within(starterButton).getByText('billing.planChange.downgradeBadge')).toBeTruthy();

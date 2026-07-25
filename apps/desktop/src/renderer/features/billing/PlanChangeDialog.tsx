@@ -54,17 +54,23 @@ function formatEffectiveDate(iso: string, locale: string): string {
 
 export function PlanChangeTargetDialog({
   open,
+  currentPlan,
   candidates,
   onClose,
   onSelect,
 }: {
   open: boolean;
+  currentPlan: PlanChangeCandidate | null;
   candidates: PlanChangeCandidate[];
   onClose: () => void;
   onSelect: (candidate: PlanChangeCandidate) => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const displayedPlans = [
+    ...(currentPlan ? [{ candidate: currentPlan, current: true }] : []),
+    ...candidates.map((candidate) => ({ candidate, current: false })),
+  ];
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
@@ -94,19 +100,9 @@ export function PlanChangeTargetDialog({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-[var(--border-default)] px-6 py-4 [scrollbar-gutter:stable]">
-            {candidates.length === 0 ? (
-              <div className="flex min-h-[184px] flex-col items-center justify-center rounded-xl border border-[var(--border-default)] px-6 text-center">
-                <div className="grid size-11 place-items-center rounded-full bg-[var(--surface-chip)]">
-                  <PackageOpen size={22} />
-                </div>
-                <p className="mt-4 text-sm font-medium">{t('billing.planChange.emptyTitle')}</p>
-                <p className="mt-1 text-12 text-[var(--text-secondary)]">
-                  {t('billing.planChange.emptyDescription')}
-                </p>
-              </div>
-            ) : (
+            {displayedPlans.length > 0 && (
               <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-                {candidates.map((candidate) => {
+                {displayedPlans.map(({ candidate, current }) => {
                   const DirectionIcon =
                     candidate.direction === 'UPGRADE'
                       ? ArrowUpRight
@@ -114,13 +110,15 @@ export function PlanChangeTargetDialog({
                         ? ArrowDownRight
                         : null;
                   const directionLabel =
-                    candidate.direction === 'UPGRADE'
-                      ? t('billing.planChange.upgradeBadge')
-                      : candidate.direction === 'DOWNGRADE'
-                        ? t('billing.planChange.downgradeBadge')
-                        : candidate.direction === 'SAME_LEVEL'
-                          ? t('billing.planChange.sameLevelBadge')
-                          : null;
+                    current
+                      ? t('billing.catalog.currentPlan')
+                      : candidate.direction === 'UPGRADE'
+                        ? t('billing.planChange.upgradeBadge')
+                        : candidate.direction === 'DOWNGRADE'
+                          ? t('billing.planChange.downgradeBadge')
+                          : candidate.direction === 'SAME_LEVEL'
+                            ? t('billing.planChange.sameLevelBadge')
+                            : null;
                   const providerLabel = candidate.providers
                     .map((provider) => t(`billing.providers.${provider}`))
                     .join(', ');
@@ -128,10 +126,14 @@ export function PlanChangeTargetDialog({
                     <button
                       key={candidate.offer.code}
                       type="button"
-                      onClick={() => onSelect(candidate)}
+                      disabled={current}
+                      aria-current={current ? 'true' : undefined}
+                      onClick={() => {
+                        if (!current) onSelect(candidate);
+                      }}
                       className={cn(
                         'flex w-full items-center justify-between gap-4 px-4 py-3 text-left',
-                        'transition-colors hover:bg-[var(--surface-hover-soft)]',
+                        !current && 'transition-colors hover:bg-[var(--surface-hover-soft)]',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
                         'focus-visible:ring-[var(--text-primary)]',
                       )}
@@ -173,6 +175,23 @@ export function PlanChangeTargetDialog({
                     </button>
                   );
                 })}
+              </div>
+            )}
+            {candidates.length === 0 && (
+              <div
+                className={cn(
+                  'flex min-h-[184px] flex-col items-center justify-center rounded-xl border',
+                  'border-[var(--border-default)] px-6 text-center',
+                  displayedPlans.length > 0 && 'mt-4',
+                )}
+              >
+                <div className="grid size-11 place-items-center rounded-full bg-[var(--surface-chip)]">
+                  <PackageOpen size={22} />
+                </div>
+                <p className="mt-4 text-sm font-medium">{t('billing.planChange.emptyTitle')}</p>
+                <p className="mt-1 text-12 text-[var(--text-secondary)]">
+                  {t('billing.planChange.emptyDescription')}
+                </p>
               </div>
             )}
           </div>
