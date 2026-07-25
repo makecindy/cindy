@@ -58,7 +58,7 @@ export interface XdGatewayAgentOverride {
   defaultEnabled?: boolean;
 }
 
-/** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 同形)。 */
+/** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。 */
 export interface XdGatewayModelInfo {
   id: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */

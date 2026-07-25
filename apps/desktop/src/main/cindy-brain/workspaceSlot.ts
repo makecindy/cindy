@@ -246,7 +246,7 @@ export class GhostWorkspaceSlot {
     }
 
     // ── 判重 → 创建(ensure 语义,授权后统一走这段;全局串行防双建)──────
-    const name = path.basename(dirAbs);
+    const name = path.basename(dirAbs) || dirAbs;
     const ensure = async (): Promise<GhostPipeWorkspaceResult> => {
       try {
         const existing = await service.findActiveSessionByWorkdir(dirAbs);

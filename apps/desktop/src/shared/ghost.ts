@@ -2267,7 +2267,7 @@ export function resolveGhostManifestLocale(
               ? {
                   secrets: manifest.network.secrets.map((secret) => ({
                     ...secret,
-                    ...resource.network!.secrets![secret.key],
+                    ...(resource.network!.secrets![secret.key] ?? {}),
                   })),
                 }
               : {}),
@@ -2288,7 +2288,7 @@ export function resolveGhostManifestLocale(
             ...manifest.node,
             secretBindings: manifest.node.secretBindings?.map((binding) => ({
               ...binding,
-              ...resource.node!.secretBindings![binding.key],
+              ...(resource.node!.secretBindings![binding.key] ?? {}),
             })),
           },
         }

@@ -61,9 +61,16 @@ export function gatewayModelPriceQuote(
   if (!modelId || inputPerMtok === undefined || outputPerMtok === undefined) {
     return undefined;
   }
-  if (inputPerMtok === 0 && outputPerMtok === 0) return undefined;
   const cacheReadPerMtok = perMtok(model.cacheReadInputTokenCost);
   const cacheCreatePerMtok = perMtok(model.cacheCreationInputTokenCost);
+  if (
+    inputPerMtok === 0 &&
+    outputPerMtok === 0 &&
+    (cacheReadPerMtok === undefined || cacheReadPerMtok === 0) &&
+    (cacheCreatePerMtok === undefined || cacheCreatePerMtok === 0)
+  ) {
+    return undefined;
+  }
   return applyCodexBudgetDiscount({
     providerId: 'xd',
     modelId,
