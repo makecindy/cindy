@@ -78,18 +78,15 @@ const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capab
   'PROVIDER_MANAGED_SUBSCRIPTION',
 ]);
 
-// 新服务端的“当前订阅”只包含真实生命周期状态，未完成首购不再下发也不阻断重选；
-// INCOMPLETE 仅作为旧服务端兼容防御保留（旧服务端仍会拒绝重复首购）。
+// 未完成首购只属于当前 checkout 会话，不能展示为当前套餐或阻断重新购买。
 const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] = [
-  'INCOMPLETE',
   'TRIALING',
   'ACTIVE',
   'PAST_DUE',
   'UNPAID',
   'PAUSED',
 ];
-const SUBSCRIPTION_CANCELLABLE_STATUSES: BillingSubscription['status'][] =
-  SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.filter((status) => status !== 'INCOMPLETE');
+const SUBSCRIPTION_CANCELLABLE_STATUSES = SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES;
 
 const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
 
@@ -299,7 +296,12 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setLoadingSubscription(true);
     setSubscriptionError(false);
     try {
-      setCurrentSubscription((await billingApi.getCurrentSubscription()).subscription);
+      const subscription = (await billingApi.getCurrentSubscription()).subscription;
+      setCurrentSubscription(
+        subscription && SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(subscription.status)
+          ? subscription
+          : null,
+      );
     } catch {
       setCurrentSubscription(null);
       setSubscriptionError(true);
@@ -329,7 +331,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   }, [loadBillingState]);
 
   useEffect(() => {
-    if (checkout.state.subscription) {
+    if (
+      checkout.state.subscription &&
+      SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(checkout.state.subscription.status)
+    ) {
       setCurrentSubscription(checkout.state.subscription);
       setSubscriptionError(false);
     }

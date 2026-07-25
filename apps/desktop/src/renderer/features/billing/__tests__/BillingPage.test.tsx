@@ -838,8 +838,8 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
-  it.each(['CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
-    'routes a %s terminal subscription to repurchase',
+  it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
+    'does not treat a %s response as the current subscription',
     async (status) => {
       window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
         subscription: {
@@ -856,6 +856,10 @@ describe('BillingPage remote catalog rendering', () => {
       }));
 
       render(<BillingPage />);
+      expect(
+        await screen.findByText('billing.settings.subscriptionCard.emptyTitle'),
+      ).toBeTruthy();
+      expect(screen.queryByText(`billing.subscriptionStatus.${status}`)).toBeNull();
       fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
 
       fireEvent.click((await screen.findByText('Configured subscription')).closest('button')!);
@@ -1314,7 +1318,7 @@ describe('BillingPage plan change', () => {
   });
 
   it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
-    'does not offer renewal cancellation for a %s subscription',
+    'ignores a non-current %s subscription response',
     async (status) => {
       const billing = billingMocks();
       billing.getCurrentSubscription = vi.fn(async () => ({
@@ -1324,7 +1328,8 @@ describe('BillingPage plan change', () => {
 
       render(<BillingPage />);
 
-      await screen.findByText(`billing.subscriptionStatus.${status}`);
+      await screen.findByText('billing.settings.subscriptionCard.emptyTitle');
+      expect(screen.queryByText(`billing.subscriptionStatus.${status}`)).toBeNull();
       expect(screen.queryByText('billing.settings.subscriptionCard.cancelAction')).toBeNull();
       expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
     },
@@ -1608,6 +1613,10 @@ describe('BillingPage plan change', () => {
     });
 
     render(<BillingPage />);
+    await waitFor(() => {
+      expect(screen.getByText('billing.settings.subscriptionCard.emptyTitle')).toBeTruthy();
+      expect(screen.queryByText('billing.subscriptionStatus.INCOMPLETE')).toBeNull();
+    });
     fireEvent.click(await screen.findByLabelText('billing.actions.close'));
 
     expect(checkout.close).toHaveBeenCalled();
