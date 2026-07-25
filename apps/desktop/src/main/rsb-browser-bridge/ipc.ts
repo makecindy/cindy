@@ -288,14 +288,15 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
   });
 
   // 资源事件必须送到"实际托管该 guest 的 renderer":经 registry 反查 guest 再
-  // 取其 hostWebContents,竞态兜底逻辑见 pickResourceEventTarget(review P1:
-  // 送错 renderer 时 evict 是空操作、cpu-alert 无人消费)。
+  // 取其 hostWebContents;宿主不可用时放弃本轮投递,不回退到别的窗口(见
+  // pickResourceEventTarget 注释;review P1:送错 renderer 时 evict 是空操作、
+  // cpu-alert 无人消费,还会掩盖问题)。
   const sendResourceEvent = (event: RsbBrowserBridgeResourceEvent) => {
     const guest = registry.getWebContentsByTabId(event.tabId);
     const owner = guest
       ? (guest as unknown as { hostWebContents?: WebContents }).hostWebContents
       : null;
-    const wc = pickResourceEventTarget(owner, getHostWebContents());
+    const wc = pickResourceEventTarget(owner);
     if (!wc) return;
     wc.send(RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL, event);
   };

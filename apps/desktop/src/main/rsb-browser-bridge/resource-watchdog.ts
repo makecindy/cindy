@@ -144,6 +144,7 @@ export class BrowserGuestResourceWatchdog {
     const resolved: ResolvedTab[] = [];
     const pidPinned = new Set<number>();
     const pidForeground = new Set<number>();
+    const pidTabs = new Map<number, string[]>();
     const liveTabIds = new Set<string>();
     for (const tab of tabs) {
       liveTabIds.add(tab.tabId);
@@ -163,6 +164,12 @@ export class BrowserGuestResourceWatchdog {
       if (!metric) continue;
       if (this.deps.isPinned(tab.tabId)) pidPinned.add(pid);
       if (this.deps.isForeground(tab.tabId)) pidForeground.add(pid);
+      const siblings = pidTabs.get(pid);
+      if (siblings) {
+        siblings.push(tab.tabId);
+      } else {
+        pidTabs.set(pid, [tab.tabId]);
+      }
       resolved.push({ tabId: tab.tabId, wc, pid, metric });
     }
 
@@ -203,7 +210,12 @@ export class BrowserGuestResourceWatchdog {
           );
           // 先 notice 后 kill:renderer 记下原因,随后的 render-process-gone
           // banner 才能显示"内存过高被终止"而不是笼统的"页面崩溃"。
-          this.deps.notifyKillNotice(tab.tabId);
+          // notice 发给该进程的**所有** tab —— 杀进程会让同进程兄弟一起崩,
+          // 每个 tab 的 banner 都该显示真实原因,而不是只有恰好先被遍历到的
+          // 那个(遍历顺序可能先命中后台兄弟,导致可见 tab 拿不到原因)。
+          for (const sibling of pidTabs.get(tab.pid) ?? [tab.tabId]) {
+            this.deps.notifyKillNotice(sibling);
+          }
           try {
             wc.forcefullyCrashRenderer();
           } catch (err) {
@@ -272,17 +284,17 @@ export class BrowserGuestResourceWatchdog {
 }
 
 /**
- * 资源事件的目标 renderer 选择(纯函数,ipc.ts 消费):guest 的实际宿主
- * (hostWebContents)优先 —— 主窗内嵌 RSB / detached 子窗口 / 副窗口各自是
- * 独立 renderer,pool 与订阅只在宿主侧存在,送错 renderer 事件会被静默丢弃。
- * 宿主已销毁 / guest 已死的竞态下回退到全局 host,双方都不可用返回 null。
+ * 资源事件的目标 renderer 选择(纯函数,ipc.ts 消费):只认 guest 的实际宿主
+ * (hostWebContents)—— 主窗内嵌 RSB / detached 子窗口 / 副窗口各自是独立
+ * renderer,pool 与订阅只在宿主侧存在,送给别的 renderer 是空操作还会掩盖
+ * 问题。宿主已销毁 / guest 已死的竞态下返回 null 放弃本轮投递:webview guest
+ * 与宿主 renderer 同生共死,这种瞬态里 tab 要么正随宿主消亡,要么马上会被新
+ * 宿主 re-report,下个采样周期自然重试,不做"回退到另一个窗口"的错投。
  */
 export function pickResourceEventTarget<T extends { isDestroyed(): boolean }>(
   owner: T | null | undefined,
-  fallback: T | null,
 ): T | null {
-  const wc = owner && !owner.isDestroyed() ? owner : fallback;
-  return wc && !wc.isDestroyed() ? wc : null;
+  return owner && !owner.isDestroyed() ? owner : null;
 }
 
 /**

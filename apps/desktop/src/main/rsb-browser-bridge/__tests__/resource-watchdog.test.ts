@@ -329,13 +329,16 @@ describe('BrowserGuestResourceWatchdog — shared renderer process (PID) groupin
     expect(h2.notifyEvict).toHaveBeenCalledWith('tb');
   });
 
-  it('kills a shared process at most once per tick', () => {
+  it('kills a shared process at most once per tick, noticing every sibling tab', () => {
     const h = makePairHarness({ samePid: true });
+    // 只有 ta 前台;tb 是同进程后台兄弟 —— 遍历顺序无论先命中谁,kill-notice
+    // 都要覆盖进程内全部 tab(它们的 guest 会一起崩,各自 banner 都要显示原因)。
     h.flags.foreground.add('ta');
-    h.flags.foreground.add('tb');
     h.metricA.memory.workingSetSize = FG_MEMORY_KILL_KB;
     h.watchdog.tick();
-    expect(h.notifyKillNotice).toHaveBeenCalledTimes(1);
+    expect(h.notifyKillNotice).toHaveBeenCalledTimes(2);
+    expect(h.notifyKillNotice).toHaveBeenCalledWith('ta');
+    expect(h.notifyKillNotice).toHaveBeenCalledWith('tb');
     // 同一进程:两个 guest fake 各自记 crashed,但只允许对进程杀一次。
     expect(Number(h.guestA.crashed) + Number(h.guestB.crashed)).toBe(1);
   });
@@ -345,22 +348,15 @@ describe('pickResourceEventTarget', () => {
   const live = () => ({ isDestroyed: () => false });
   const dead = () => ({ isDestroyed: () => true });
 
-  it('prefers the guest owner renderer over the global host', () => {
+  it('delivers only to the live guest owner renderer', () => {
     const owner = live();
-    const fallback = live();
-    expect(pickResourceEventTarget(owner, fallback)).toBe(owner);
+    expect(pickResourceEventTarget(owner)).toBe(owner);
   });
 
-  it('falls back to the global host when the owner is missing or destroyed', () => {
-    const fallback = live();
-    expect(pickResourceEventTarget(null, fallback)).toBe(fallback);
-    expect(pickResourceEventTarget(undefined, fallback)).toBe(fallback);
-    expect(pickResourceEventTarget(dead(), fallback)).toBe(fallback);
-  });
-
-  it('returns null when both are unavailable', () => {
-    expect(pickResourceEventTarget(dead(), null)).toBeNull();
-    expect(pickResourceEventTarget(null, dead())).toBeNull();
+  it('drops delivery (no cross-window fallback) when the owner is missing or destroyed', () => {
+    expect(pickResourceEventTarget(null)).toBeNull();
+    expect(pickResourceEventTarget(undefined)).toBeNull();
+    expect(pickResourceEventTarget(dead())).toBeNull();
   });
 });
 
