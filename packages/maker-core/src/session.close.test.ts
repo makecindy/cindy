@@ -119,6 +119,33 @@ describe('Session close lifecycle', () => {
     expect(session.getStatus()).toBe('closed');
   });
 
+  it('applies a runtime release after a generic close has already completed', async () => {
+    const close = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    await session.close();
+    await session.close({ releaseRuntime: true });
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, undefined);
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
+    expect(session.getStatus()).toBe('closed');
+  });
+
   it('lets an idle runtime release upgrade an in-flight generic close', async () => {
     const genericClose = createDeferred();
     const close = vi.fn()
@@ -189,6 +216,48 @@ describe('Session close lifecycle', () => {
     await expect(releaseClose).rejects.toThrow('archive failed after local teardown');
 
     expect(close).toHaveBeenCalledTimes(2);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('closes an idle session after its event loop enters the error state', async () => {
+    const close = vi.fn(async () => undefined);
+    const crashingEvents: AsyncIterable<never> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            throw new Error('events crashed');
+          },
+        };
+      },
+    };
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      events: () => crashingEvents,
+      isTurnRunning: () => false,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+    const enteredError = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'error') resolve();
+      });
+    });
+
+    session.onEvent(() => undefined);
+    await enteredError;
+
+    await expect(session.closeIfIdle({ releaseRuntime: true })).resolves.toBe(true);
+    expect(close).toHaveBeenCalledWith({ releaseRuntime: true });
     expect(session.getStatus()).toBe('closed');
   });
 });

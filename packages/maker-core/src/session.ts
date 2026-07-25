@@ -378,11 +378,13 @@ export class Session {
   }
 
   close(options?: AgentSessionCloseOptions): Promise<void> {
-    if (this.status === 'closed') return Promise.resolve();
     if (options?.releaseRuntime === true) {
       this.closeReleaseRuntimeRequested = true;
     }
     if (this.closePromise) return this.closePromise;
+    if (this.status === 'closed' && options?.releaseRuntime !== true) {
+      return Promise.resolve();
+    }
 
     return this.startClose(options);
   }
@@ -393,7 +395,10 @@ export class Session {
    * and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(options?: AgentSessionCloseOptions): Promise<boolean> {
-    if (this.status !== 'active' || this.isTurnRunning()) {
+    if (
+      (this.status !== 'active' && this.status !== 'error') ||
+      this.isTurnRunning()
+    ) {
       return Promise.resolve(false);
     }
     if (this.closePromise) {
@@ -455,6 +460,7 @@ export class Session {
 
   private finalizeClose(): void {
     this.sendReservation = null;
+    this.closePromise = null;
     this.closeReleaseRuntimeRequested = false;
     this.currentTurnOrigin = null;
     this.setStatus('closed');
