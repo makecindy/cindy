@@ -191,6 +191,8 @@ export interface OrcaTeamServiceDeps {
     status: Exclude<OrcaWorkerStatus, 'idle'>,
   ): Promise<boolean>;
   closeWorkerSession(sessionId: string): Promise<void>;
+  /** Persist release intent before closing so archive/end-team failures remain resumable. */
+  releaseWorkerRuntime(worker: OrcaWorkerRecordSnapshot): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
   closeWorkerSessionIfIdle(sessionId: string): Promise<boolean>;
   /** pending / dispatch-boundary / recovery 输入任一存在时返回 true。 */
@@ -560,21 +562,24 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
     }
 
-    const workers = await deps.listWorkersByLead(link.leadSessionId);
-    const target = workers.find((worker) => worker.sessionId === params.targetSessionId);
-    if (!target) {
-      return {
-        dispatched: false,
-        dispatchOutcome: {
-          ...createHostSendFailure('SESSION_NOT_FOUND', `worker session ${params.targetSessionId} not found`),
-          source: params.dispatchMeta.source,
-          context: params.dispatchMeta.context,
-        },
-      };
-    }
-
-    await reserveWorkerDispatch(target.id);
+    // Reserve before reading the Worker snapshot. Lifecycle transitions either
+    // see this active reservation or finish first; a dispatch that waited for
+    // them then reads their final status/release marker instead of stale state.
+    await reserveWorkerDispatch(link.workerId);
     try {
+      const workers = await deps.listWorkersByLead(link.leadSessionId);
+      const target = workers.find((worker) => worker.sessionId === params.targetSessionId);
+      if (!target) {
+        return {
+          dispatched: false,
+          dispatchOutcome: {
+            ...createHostSendFailure('SESSION_NOT_FOUND', `worker session ${params.targetSessionId} not found`),
+            source: params.dispatchMeta.source,
+            context: params.dispatchMeta.context,
+          },
+        };
+      }
+
       let acceptedSnapshot: {
         previousStatus: OrcaWorkerStatus;
         previousPending: AutoBridgeState | undefined;
@@ -594,7 +599,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       let result: DispatchWorkerMessageResult;
       const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;
       try {
-        if ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch) {
+        if (
+          (target.status === 'idle' || target.status === 'done' || target.idleSince !== null) &&
+          !wasLiveBeforeDispatch
+        ) {
           await deps.resumeWorkerSession(target, link);
         }
         result = await deps.dispatchWorkerMessage({
@@ -658,7 +666,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         targetLastUserSendAt: result.targetLastUserSendAt,
       };
     } finally {
-      await releaseWorkerDispatch(target.id);
+      await releaseWorkerDispatch(link.workerId);
     }
   }
 
@@ -811,8 +819,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       return { ok: true, workerId: worker.id };
     };
 
-    if (!params.expectedStatus) return performIdle(found);
-
     return withWorkerTransition(found.worker.id, async () => {
       if ((activeWorkerDispatches.get(found.worker.id) ?? 0) > 0) {
         return {
@@ -830,19 +836,44 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {
     const found = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
-    const { link, worker } = found;
 
-    try {
-      await deps.closeWorkerSession(worker.sessionId);
-    } catch (error) {
-      return workerRuntimeCloseFailure('archiveWorker', worker.sessionId, error);
-    }
-    clearRuntimeState(worker.sessionId);
-    deps.forgetWorkerSession?.(worker.sessionId);
-    await deps.archiveWorkerSession(worker.sessionId);
-    await deps.updateWorkerStatus(worker.id, 'done');
-    deps.broadcastOrcaWorkerChanged(link.leadSessionId);
-    return { ok: true, workerId: worker.id };
+    return withWorkerTransition(found.worker.id, async () => {
+      if ((activeWorkerDispatches.get(found.worker.id) ?? 0) > 0) {
+        return {
+          ok: false,
+          errorCode: 'WORKER_STATE_CHANGED',
+          message: `worker ${params.workerId} has a dispatch in progress`,
+        };
+      }
+      const current = await resolveWorkerRef(params.callerLeadSessionId, params.workerId);
+      if (!current.ok) return workerRefFailureForControl(params.workerId, current);
+      const { link, worker } = current;
+
+      try {
+        await deps.releaseWorkerRuntime(worker);
+      } catch (error) {
+        return workerRuntimeCloseFailure('archiveWorker', worker.sessionId, error);
+      }
+      clearRuntimeState(worker.sessionId);
+      deps.forgetWorkerSession?.(worker.sessionId);
+      try {
+        await deps.archiveWorkerSession(worker.sessionId);
+        await deps.updateWorkerStatus(worker.id, 'done');
+      } catch (error) {
+        deps.log.warn('archiveWorker: failed to persist worker archive', {
+          workerId: worker.id,
+          sessionId: worker.sessionId,
+          err: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: 'archiveWorker: failed to persist worker archive',
+        };
+      }
+      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      return { ok: true, workerId: worker.id };
+    });
   }
 
   /** 排队消息 source 判定:worker 队列里 orca 条目只可能来自其 lead(通信拓扑为 Lead↔Worker)。 */

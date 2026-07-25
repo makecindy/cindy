@@ -581,7 +581,7 @@ describe('sendToSession ordering', () => {
     const acknowledgedIdleBlock = extractBetween(
       serviceIdleBlock,
       'const didIdle = await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus);',
-      'if (!params.expectedStatus) return performIdle(found);',
+      'return withWorkerTransition(found.worker.id, async () => {',
     );
 
     expect(source).toContain('registerOrcaWorkerControlHandlers(createElectronIpcHandlerRegistry(), {');
@@ -613,18 +613,18 @@ describe('sendToSession ordering', () => {
     const serviceArchiveBlock = extractBetween(
       orcaTeamServiceSource,
       'async function archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaOkResult> {',
-      'return {',
+      '/** 排队消息 source 判定',
     );
 
     expect(disableBlock).toContain('orcaTeamService.clearAutoBridgeState(w.sessionId);');
     expect(disableBlock).not.toContain('clearWorkerAutoBridgeState(w.sessionId);');
-    expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await sess.abort();');
+    expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await releaseOrcaWorkerRuntime(w);');
     expect(source).toContain('archiveWorker: (params) => orcaTeamService.archiveWorker(params),');
     expect(serviceArchiveBlock).toContain('clearRuntimeState(worker.sessionId);');
-    expect(serviceArchiveBlock).toContain('await deps.closeWorkerSession(worker.sessionId)');
+    expect(serviceArchiveBlock).toContain('await deps.releaseWorkerRuntime(worker)');
     expect(serviceArchiveBlock).toContain('await deps.archiveWorkerSession(worker.sessionId);');
     expect(serviceArchiveBlock).toContain("await deps.updateWorkerStatus(worker.id, 'done');");
-    expectOrder(serviceArchiveBlock, 'await deps.closeWorkerSession(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
+    expectOrder(serviceArchiveBlock, 'await deps.releaseWorkerRuntime(worker)', 'clearRuntimeState(worker.sessionId);');
     expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', 'await deps.archiveWorkerSession(worker.sessionId);');
     expectOrder(serviceArchiveBlock, 'await deps.archiveWorkerSession(worker.sessionId);', "await deps.updateWorkerStatus(worker.id, 'done');");
   });
@@ -701,7 +701,14 @@ describe('sendToSession ordering', () => {
     );
 
     expect(serviceDispatchBlock).toContain('const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;');
-    expectOrder(serviceDispatchBlock, 'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;', "if ((target.status === 'idle' || target.status === 'done') && !wasLiveBeforeDispatch) {");
+    expectOrder(
+      serviceDispatchBlock,
+      'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;',
+      'target.idleSince !== null',
+    );
+    expect(serviceDispatchBlock).toContain(
+      "(target.status === 'idle' || target.status === 'done' || target.idleSince !== null)",
+    );
     expect(returnBlock).toContain('wakeKind: dispatchResult.wakeKind,');
     expect(returnBlock).toContain('targetTitle: dispatchResult.targetTitle,');
     expect(returnBlock).toContain('targetLastUserSendAt: dispatchResult.targetLastUserSendAt,');

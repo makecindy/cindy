@@ -222,6 +222,18 @@ function isImageGenerationPayloadWithoutId(payload: unknown): boolean {
   return typeof id !== 'string' || id.trim().length === 0;
 }
 
+function isAlreadyArchivedThreadError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? error.code : undefined;
+  if (code !== JSONRPC_ERROR_CODE.INVALID_REQUEST) return false;
+  const message = error instanceof Error
+    ? error.message
+    : 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : '';
+  return /\b(?:already|is)\s+archived\b/i.test(message);
+}
+
 function hasUnsafeForkRolloutPayload(line: string): boolean {
   try {
     const parsed: unknown = JSON.parse(line);
@@ -1965,6 +1977,7 @@ export class CodexAgent extends BaseAgent {
     let lastTurnTokenUsage: TokenUsageBreakdown | null = null;
     let lastModelContextWindow: number | null = null;
     let closed = false;
+    let runtimeReleased = false;
     let subscriptionInvalidatedByTransport = false;
     let subscription: ThreadSubscription | null = null;
     let interactionResolver: InteractionResolver | null = null;
@@ -4401,28 +4414,54 @@ export class CodexAgent extends BaseAgent {
       },
 
       async close(options) {
-        if (closed) return;
         // Only an explicit dormant runtime release archives a Worker thread.
         // Generic resumable closes (/clear, auth retry, rehydrate) must keep the
         // thread directly resumable and therefore use subscription release only.
-        if (
+        const shouldReleaseRuntime =
           vo.orcaRole === 'worker' &&
           options?.releaseRuntime === true &&
-          !skipIfStaleHost('thread/archive')
-        ) {
-          try {
-            await host.archiveThread(threadId);
-            assertCurrentHost('thread/archive');
-          } catch (error) {
-            // Host retirement already reclaimed the Worker runtime. Complete
-            // local teardown so stale handles do not remain registered.
-            if (isCurrentHost()) throw error;
-            log.warn('thread/archive interrupted by app-server replacement; continuing local close', {
-              threadId,
-              error: error instanceof Error ? error.message : String(error),
-            });
+          !runtimeReleased;
+        if (closed && !shouldReleaseRuntime) return;
+        if (shouldReleaseRuntime) {
+          if (skipIfStaleHost('thread/archive')) {
+            // Host retirement already reclaimed the provider runtime.
+            runtimeReleased = true;
+          } else if (!host.hasActiveClient()) {
+            // A transport failure already reclaimed the provider runtime. Do
+            // not restart app-server just to archive a process that is gone.
+            log.warn('thread/archive skipped because app-server client is unavailable', { threadId });
+            runtimeReleased = true;
+          } else {
+            try {
+              await host.archiveThread(threadId);
+              assertCurrentHost('thread/archive');
+              runtimeReleased = true;
+            } catch (error) {
+              // A timeout may race with a successful server-side archive. The
+              // next retry receives a precise structured "already archived"
+              // result; accept only that deterministic acknowledgement.
+              if (isAlreadyArchivedThreadError(error)) {
+                log.warn('thread/archive already completed before retry response', { threadId });
+                runtimeReleased = true;
+              } else if (!isCurrentHost() || !host.hasActiveClient()) {
+                // Host retirement or transport shutdown already reclaimed the
+                // Worker runtime. Complete local teardown so stale handles do
+                // not remain registered.
+                log.warn('thread/archive interrupted by app-server shutdown; continuing local close', {
+                  threadId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                runtimeReleased = true;
+              } else {
+                throw error;
+              }
+            }
           }
         }
+        // Session may upgrade a generic close while it is in flight. In that
+        // case only the provider archive above is new; local teardown already
+        // completed during the first close call.
+        if (closed) return;
         closed = true;
         unregisterCodexMcpContext(threadId);
         // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),

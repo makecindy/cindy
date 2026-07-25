@@ -329,6 +329,7 @@ import {
 import { createMakerSendTransaction } from './makerSendTransaction.js';
 import { registerMakerMessageDeleteHandler } from './messageDeleteHandler.js';
 import { normalizeUserMessage, materializeQueuedOssAttachments } from './normalizeAttachments.js';
+import { createOrcaRuntimeRelease } from './orcaRuntimeRelease.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
 import {
   shouldClearAgentIslandSessionForOrcaWorker,
@@ -5204,6 +5205,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
   }
 
+  const releaseOrcaWorkerRuntime = createOrcaRuntimeRelease({
+    getSession: (sessionId) => maker.getSession(sessionId) ?? null,
+    markRelease: markWorkerRuntimeReleaseIntent,
+    restoreRelease: restoreWorkerRuntimeRelease,
+    closeSession: (sessionId) => maker.closeSession(sessionId, { releaseRuntime: true }),
+    now: Date.now,
+    log,
+  });
+
   /**
    * disableOrcaInternal — 关闭 lead session 当前的协同模式。
    *   1. 查 active team;不存在则尝试兜底修复悬空 lead(见下),再返回
@@ -5255,25 +5265,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     const activeWorkers = workers.filter((w) => w.teamId === team.id);
     for (const w of activeWorkers) {
       orcaTeamService.clearAutoBridgeState(w.sessionId);
-      const sess = maker.getSession(w.sessionId);
-      if (sess) {
-        try {
-          if (sess.isTurnRunning?.()) {
-            await sess.abort();
-          }
-        } catch (err) {
-          log.warn('disableOrca: abort failed (continuing to close)', {
-            sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
-          });
-        }
-        try {
-          await maker.closeSession(w.sessionId, { releaseRuntime: true });
-        } catch (err) {
-          log.warn('disableOrca: closeSession failed; leaving team active for retry', {
-            sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
-          });
-          throw err;
-        }
+      try {
+        // Keep each successful close recoverable until the final team/session
+        // archive transaction completes. If a later Worker fails, earlier
+        // releases can still be resumed or retried from their persisted marker.
+        await releaseOrcaWorkerRuntime(w);
+      } catch (err) {
+        log.warn('disableOrca: closeSession failed; leaving team active for retry', {
+          sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
       }
       cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
       forgetKnownOrcaWorkerSession(w.sessionId);
@@ -5293,7 +5294,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
 
   ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string') throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    return disableOrcaInternal(leadSessionId);
+    try {
+      return await disableOrcaInternal(leadSessionId);
+    } catch (error) {
+      log.warn('SESSION_DISABLE_ORCA failed', {
+        leadSessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', t('newChat.collaboration.stopFailed'));
+    }
   });
 
   // ─── Orca worker IPC handlers ────────────────────────────────────────────
@@ -5373,7 +5382,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
 
   ipcMain.handle(MAKER_INVOKE.TEAM_END, async (_e, leadSessionId: unknown) => {
     if (typeof leadSessionId !== 'string') throwIpcError('INVALID_PARAMS', 'leadSessionId required');
-    const result = await disableOrcaInternal(leadSessionId);
+    let result: { ok: true };
+    try {
+      result = await disableOrcaInternal(leadSessionId);
+    } catch (error) {
+      log.warn('TEAM_END failed', {
+        leadSessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('INTERNAL', t('newChat.collaboration.stopFailed'));
+    }
     broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId: leadSessionId as string });
     return result;
   });
@@ -5413,6 +5431,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       }
       await maker.closeSession(sessionId, { releaseRuntime: true });
     },
+    releaseWorkerRuntime: releaseOrcaWorkerRuntime,
     closeWorkerSessionIfIdle: async (sessionId) => {
       if (sendToSessionLocks.has(sessionId)) return false;
       const sess = maker.getSession(sessionId);
@@ -5562,7 +5581,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     },
     closeWorkerSession: async (sessionId) => {
       if (!maker.getSession(sessionId)) return;
-      await maker.closeSession(sessionId, { releaseRuntime: true });
+      // Failed Worker creation has no resumable runtime contract yet. A generic
+      // close avoids thread/archive rejecting a thread with no rollout.
+      await maker.closeSession(sessionId);
     },
     archiveWorkerSession: archiveSingleWorkerSession,
     forgetWorkerSession: forgetKnownOrcaWorkerSession,
@@ -5879,7 +5900,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
         return { ok: true };
       } catch (err) {
-        return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+        log.warn('endTeam tool failed', {
+          leadSessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return { ok: false, errorCode: 'INTERNAL', message: 'failed to end collaboration' };
       }
     },
     archiveWorker: async ({ callerLeadSessionId, workerId }) => {

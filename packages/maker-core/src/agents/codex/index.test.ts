@@ -393,6 +393,7 @@ function installFakeHost(
   const unsubscribeThread = vi.fn(async (_threadId: string) => {});
   const archiveThread = vi.fn(async (threadId: string) => request(Method.ThreadArchive, { threadId }));
   const unarchiveThread = vi.fn(async (threadId: string) => request(Method.ThreadUnarchive, { threadId }));
+  const hasActiveClient = vi.fn(() => true);
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const host = {
@@ -402,6 +403,7 @@ function installFakeHost(
     unsubscribeThread,
     archiveThread,
     unarchiveThread,
+    hasActiveClient,
     isCodexProxyActive,
     getRemoteCompactionProviderId,
     getConnectionId: () => 'test-connection',
@@ -3279,6 +3281,58 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(host.archiveThread).toHaveBeenCalledTimes(2);
   });
 
+  it('accepts a precise already-archived response when retrying Worker close', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockRejectedValueOnce(Object.assign(
+      new Error('session thread-1 is archived'),
+      { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-already-archived',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).resolves.toBeUndefined();
+
+    expect(host.archiveThread).toHaveBeenCalledOnce();
+  });
+
+  it('does not swallow unrelated INVALID_REQUEST errors from thread/archive', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockRejectedValueOnce(Object.assign(
+      new Error('no rollout exists for thread'),
+      { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+    ));
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-invalid-archive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow('no rollout exists');
+  });
+
+  it('finishes Worker close without restarting an app-server client lost to transport failure', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.hasActiveClient.mockReturnValue(false);
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-dead-host',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).resolves.toBeUndefined();
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+  });
+
   it('does not archive a Worker thread during a generic resumable close', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -3292,6 +3346,22 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
 
     expect(host.archiveThread).not.toHaveBeenCalled();
+  });
+
+  it('can archive a Worker runtime after its generic local close already completed', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-close-upgrade',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await handle.close();
+    await handle.close({ releaseRuntime: true });
+
+    expect(host.archiveThread).toHaveBeenCalledOnce();
   });
 
   it('unarchives a persistently released Worker before thread/resume', async () => {

@@ -291,6 +291,11 @@ export class AppServerHost {
     return this.connectionId;
   }
 
+  /** Whether this host still owns a live app-server client without restarting it. */
+  hasActiveClient(): boolean {
+    return this.client !== null && !this.shuttingDown && !this.retired;
+  }
+
   // ── 生命周期 ──────────────────────────────────────────────────────────────
 
   /**

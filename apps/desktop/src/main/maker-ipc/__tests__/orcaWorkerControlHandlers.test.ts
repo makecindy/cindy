@@ -173,7 +173,7 @@ describe('Orca worker control IPC handlers', () => {
     ).rejects.toMatchObject({ code: 'WORKER_NOT_FOUND' });
   });
 
-  it('maps thrown service errors to INTERNAL instead of leaking raw exceptions', async () => {
+  it('maps thrown service errors to a stable INTERNAL message without leaking raw exceptions', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();
     deps.archiveWorker.mockRejectedValueOnce(new Error('store failed'));
@@ -184,6 +184,9 @@ describe('Orca worker control IPC handlers', () => {
         leadSessionId: 'lead-1',
         workerId: 'worker-1',
       }),
-    ).rejects.toMatchObject({ code: 'INTERNAL' });
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('store failed'),
+    });
   });
 });

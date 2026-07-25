@@ -192,6 +192,11 @@ export class Session {
    * 同时请求关闭；所有调用方都必须等到 transport / 子进程真正释放后才能继续回收 worktree。
    */
   private closePromise: Promise<void> | null = null;
+  /**
+   * releaseRuntime 是比普通 resumable close 更强的意图。普通 close 已在途时，
+   * 后到的 Worker 生命周期关闭会把该意图升级，并在 Session 进入 closed 前补做一次。
+   */
+  private closeReleaseRuntimeRequested = false;
   private eventLoopStarted = false;
   private sendReservation: SendReservation | null = null;
   /**
@@ -373,8 +378,11 @@ export class Session {
   }
 
   close(options?: AgentSessionCloseOptions): Promise<void> {
-    if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
+    if (options?.releaseRuntime === true) {
+      this.closeReleaseRuntimeRequested = true;
+    }
+    if (this.closePromise) return this.closePromise;
 
     return this.startClose(options);
   }
@@ -392,6 +400,9 @@ export class Session {
   }
 
   private startClose(options?: AgentSessionCloseOptions): Promise<void> {
+    if (options?.releaseRuntime === true) {
+      this.closeReleaseRuntimeRequested = true;
+    }
     const pending = this.performClose(options);
     const tracked = pending.catch((error: unknown) => {
       // A failed Worker archive must leave its runtime reachable so the idle
@@ -406,7 +417,19 @@ export class Session {
   private async performClose(options?: AgentSessionCloseOptions): Promise<void> {
     this.cancelSendReservation(this.sendReservation);
     try {
-      await this.handle.close(options);
+      let releaseRuntimeApplied = false;
+      do {
+        const applyReleaseRuntime = this.closeReleaseRuntimeRequested;
+        await this.handle.close(
+          applyReleaseRuntime
+            ? { ...options, releaseRuntime: true }
+            : options,
+        );
+        releaseRuntimeApplied ||= applyReleaseRuntime;
+        // handle.close() is the only await in this loop. A stronger close
+        // intent that arrives while it is in flight is observed here before
+        // Session status changes to closed.
+      } while (this.closeReleaseRuntimeRequested && !releaseRuntimeApplied);
     } catch (error) {
       // Do not transition to closed on a failed teardown: callers that rely on
       // closeIfIdle() need the still-live Session for a safe retry.
@@ -414,6 +437,7 @@ export class Session {
       throw error;
     }
     this.sendReservation = null;
+    this.closeReleaseRuntimeRequested = false;
     this.currentTurnOrigin = null;
     this.setStatus('closed');
     this.eventListeners.clear();

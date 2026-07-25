@@ -1,4 +1,5 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { t } from '../i18n.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import { throwOrcaServiceFailure } from './orcaServiceFailure.js';
@@ -29,8 +30,8 @@ export function registerOrcaWorkerControlHandlers(
         workerId: b.workerId,
         ...(forcedExpectedStatus ? { expectedStatus: forcedExpectedStatus } : b.expectedStatus ? { expectedStatus: b.expectedStatus } : {}),
       });
-    } catch (err) {
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+    } catch {
+      throwIpcError('INTERNAL', t('newChat.collaboration.idleWorkerFailed'));
     }
     if (!result.ok) throwOrcaServiceFailure(result);
     deps.logInfo('idleWorker done', { workerId: b.workerId });
@@ -52,8 +53,8 @@ export function registerOrcaWorkerControlHandlers(
         callerLeadSessionId: b.leadSessionId,
         workerId: b.workerId,
       });
-    } catch (err) {
-      throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
+    } catch {
+      throwIpcError('INTERNAL', t('newChat.collaboration.archiveWorkerFailed'));
     }
     if (!result.ok) throwOrcaServiceFailure(result);
     deps.logInfo('archiveWorker done', { workerId: b.workerId });

@@ -178,6 +178,9 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     closeWorkerSession: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSession:${sessionId}`);
     }),
+    releaseWorkerRuntime: vi.fn(async (worker) => {
+      calls.push(`releaseWorkerRuntime:${worker.sessionId}`);
+    }),
     closeWorkerSessionIfIdle: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSessionIfIdle:${sessionId}`);
       return true;
@@ -339,6 +342,29 @@ describe('OrcaTeamService', () => {
       'updateWorkerStatus:running',
       'broadcastOrcaWorkerChanged',
     ]);
+  });
+
+  it('resumes a released error worker before dispatching its next task', async () => {
+    const { deps, getWorker, service, setWorker } = createDeps();
+    setWorker(createWorker({
+      status: 'error',
+      idleSince: '2026-07-25T10:00:00.000Z',
+    }));
+
+    await expect(
+      service.sendToWorker({
+        callerLeadSessionId: 'lead-1',
+        targetSessionId: 'worker-1',
+        message: 'retry',
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      wakeKind: 'resumed',
+    } satisfies Partial<Extract<SendToWorkerResult, { ok: true }>>);
+
+    expect(deps.resumeWorkerSession).toHaveBeenCalledOnce();
+    expect(getWorker().status).toBe('running');
+    expect(getWorker().idleSince).toBeNull();
   });
 
   it('rejects ambiguous sendToWorker worker references before resume or dispatch', async () => {
@@ -1073,6 +1099,109 @@ describe('OrcaTeamService', () => {
     expect(calls).toContain('updateWorkerStatus:running');
   });
 
+  it('does not manually idle a worker while a new dispatch is in flight', async () => {
+    let releaseDispatch!: () => void;
+    let markDispatchStarted!: () => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    const { calls, deps, service, setWorker } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        markDispatchStarted();
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+        await params.onAccepted?.();
+        return {
+          ok: true,
+          mode: 'dispatched',
+          clientId: 'client-manual-idle-race',
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    const dispatch = service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1',
+      message: 'new task',
+      dispatchMeta: { source: 'test-source', context: 'manual-idle-race' },
+    });
+    await dispatchStarted;
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      message: 'worker worker-1 has a dispatch in progress',
+    });
+    expect(deps.markWorkerIdle).not.toHaveBeenCalled();
+    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+
+    releaseDispatch();
+    await expect(dispatch).resolves.toMatchObject({ dispatched: true });
+    expect(calls).toContain('updateWorkerStatus:running');
+  });
+
+  it('does not archive a worker while a new dispatch is in flight', async () => {
+    let releaseDispatch!: () => void;
+    let markDispatchStarted!: () => void;
+    const dispatchStarted = new Promise<void>((resolve) => {
+      markDispatchStarted = resolve;
+    });
+    const { deps, service, setWorker } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        markDispatchStarted();
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+        await params.onAccepted?.();
+        return {
+          ok: true,
+          mode: 'dispatched',
+          clientId: 'client-archive-race',
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: params.dispatchMeta.source,
+            dispatched: true,
+          },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    const dispatch = service.dispatchWorkerTask({
+      targetSessionId: 'worker-session-1',
+      message: 'new task',
+      dispatchMeta: { source: 'test-source', context: 'archive-race' },
+    });
+    await dispatchStarted;
+
+    await expect(service.archiveWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      message: 'worker worker-1 has a dispatch in progress',
+    });
+    expect(deps.releaseWorkerRuntime).not.toHaveBeenCalled();
+    expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+
+    releaseDispatch();
+    await expect(dispatch).resolves.toMatchObject({ dispatched: true });
+  });
+
   it('does not acknowledge a done worker while a resumed send-to-session lock is active', async () => {
     const { calls, deps, service, setWorker } = createDeps({
       hasSendToSessionLock: vi.fn(() => true),
@@ -1402,7 +1531,7 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'closeWorkerSession:worker-session-1',
+      'releaseWorkerRuntime:worker-session-1',
       'archiveWorkerSession:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
@@ -1423,7 +1552,7 @@ describe('OrcaTeamService', () => {
 
     expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'done');
     expect(calls).toEqual([
-      'closeWorkerSession:worker-session-1',
+      'releaseWorkerRuntime:worker-session-1',
       'archiveWorkerSession:worker-session-1',
       'updateWorkerStatus:done',
       'broadcastOrcaWorkerChanged',
@@ -1446,7 +1575,7 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([]);
-    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerRuntime).not.toHaveBeenCalled();
     expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
     expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
   });
@@ -1464,7 +1593,7 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([]);
-    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerRuntime).not.toHaveBeenCalled();
     expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
   });
 
@@ -1481,7 +1610,7 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([]);
-    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerRuntime).not.toHaveBeenCalled();
     expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
   });
 
@@ -1498,7 +1627,7 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([]);
-    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.releaseWorkerRuntime).not.toHaveBeenCalled();
     expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
     expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
   });
@@ -1506,8 +1635,8 @@ describe('OrcaTeamService', () => {
   it('does not persist archive state when closing its runtime fails', async () => {
     const forgetWorkerSession = vi.fn();
     const { calls, deps, service, setWorker } = createDeps({
-      closeWorkerSession: vi.fn(async (sessionId) => {
-        calls.push(`closeWorkerSession:${sessionId}`);
+      releaseWorkerRuntime: vi.fn(async (worker) => {
+        calls.push(`releaseWorkerRuntime:${worker.sessionId}`);
         throw new Error('close failed');
       }),
       forgetWorkerSession,
@@ -1520,7 +1649,7 @@ describe('OrcaTeamService', () => {
       message: 'archiveWorker: failed to release worker runtime: close failed',
     });
 
-    expect(calls).toEqual(['closeWorkerSession:worker-session-1']);
+    expect(calls).toEqual(['releaseWorkerRuntime:worker-session-1']);
     expect(forgetWorkerSession).not.toHaveBeenCalled();
     expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
     expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
@@ -1529,6 +1658,43 @@ describe('OrcaTeamService', () => {
       sessionId: 'worker-session-1',
       err: 'close failed',
     });
+  });
+
+  it('keeps a released runtime recoverable when archive persistence fails', async () => {
+    const forgetWorkerSession = vi.fn();
+    const { calls, deps, service, setWorker } = createDeps({
+      archiveWorkerSession: vi.fn(async (sessionId) => {
+        calls.push(`archiveWorkerSession:${sessionId}`);
+        throw new Error('store failed');
+      }),
+      forgetWorkerSession,
+    });
+    setWorker(createWorker({ status: 'running' }));
+
+    await expect(service.archiveWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'archiveWorker: failed to persist worker archive',
+    });
+
+    expect(calls).toEqual([
+      'releaseWorkerRuntime:worker-session-1',
+      'archiveWorkerSession:worker-session-1',
+    ]);
+    expect(forgetWorkerSession).toHaveBeenCalledWith('worker-session-1');
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      'archiveWorker: failed to persist worker archive',
+      {
+        workerId: 'worker-1',
+        sessionId: 'worker-session-1',
+        err: 'store failed',
+      },
+    );
   });
 });
 
