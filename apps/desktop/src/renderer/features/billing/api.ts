@@ -50,6 +50,9 @@ export const billingApi = {
   getCurrentSubscription(): Promise<BillingCurrentSubscription> {
     return window.electronAPI.billing.getCurrentSubscription();
   },
+  cancelCurrentSubscription(): Promise<BillingSubscription> {
+    return window.electronAPI.billing.cancelCurrentSubscription();
+  },
   refreshSubscriptionPurchase(purchaseAttemptId: string): Promise<BillingSubscription> {
     return window.electronAPI.billing.refreshSubscriptionPurchase({ purchaseAttemptId });
   },

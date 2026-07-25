@@ -20,6 +20,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         model?: string;
         effort?: string;
         price?: string;
+        percent?: string;
+        rate?: string;
       },
     ) => {
       const translations: Record<string, string> = {
@@ -42,6 +44,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.trigger.ariaWithEffort') {
         return `Select model. Current: ${options?.model}, effort: ${options?.effort}`;
+      }
+      if (key === 'newChat.modelSelector.pricing.discount') {
+        return `立省 ${options?.percent}%`;
       }
       return translations[key] ?? options?.defaultValue ?? key;
     },
@@ -460,7 +465,7 @@ describe('ModelSelector trigger variants', () => {
     expect(pricingRef.renderCalls).toBe(1);
   });
 
-  it('shows only the free promotion in the selected-model trigger', () => {
+  it('shows Gateway discount and free promotions in the selected-model trigger', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -476,7 +481,7 @@ describe('ModelSelector trigger variants', () => {
               contextWindow: 200000,
               efforts: ['high'],
               defaultEffort: 'high',
-              cost: { input: 6, output: 18 },
+              cost: { input: 6, output: 18, cacheRead: 1.2, cacheWrite: 7.5 },
             },
             {
               id: 'claude-sonnet-4-6',
@@ -500,12 +505,14 @@ describe('ModelSelector trigger variants', () => {
           approximate: false,
           inputPerMtok: 12,
           outputPerMtok: 36,
+          cacheReadPerMtok: 2.4,
+          cacheCreatePerMtok: 15,
         },
       },
     };
 
     try {
-      const belowStandardPrice = render(
+      const discounted = render(
         React.createElement(ModelSelector, {
           modelId: 'claude-opus-4-8',
           effort: 'high',
@@ -516,10 +523,12 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
         }),
       );
-      // 折价不再有徽标:实际价低于标准价的模型,trigger 上不挂任何促销徽标。
-      const belowStandardTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
-      expect(belowStandardTrigger.querySelector('[data-model-promotion-badge]')).toBeNull();
-      belowStandardPrice.unmount();
+      const discountTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+      const discountBadge = within(discountTrigger).getByText('立省 50%');
+      expect(discountBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
+      expect(discountBadge.className).toContain('bg-[var(--accent-cta-bg)]');
+      expect(discountBadge.className).toContain('text-[var(--accent-pure-cta-fg)]');
+      discounted.unmount();
 
       pricingRef.pricing = {};
       render(
@@ -791,7 +800,7 @@ describe('ModelSelector trigger variants', () => {
     vi.useRealTimers();
   });
 
-  it('shows the effective Gateway price without an original-price comparison', () => {
+  it('keeps discounted Gateway prices aligned between the row and model details', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -807,7 +816,7 @@ describe('ModelSelector trigger variants', () => {
               contextWindow: 200000,
               efforts: ['high'],
               defaultEffort: 'high',
-              cost: { input: 6, output: 18 },
+              cost: { input: 6, output: 18, cacheRead: 1.2, cacheWrite: 7.5 },
             },
           ],
         },
@@ -823,6 +832,8 @@ describe('ModelSelector trigger variants', () => {
           approximate: false,
           inputPerMtok: 12,
           outputPerMtok: 36,
+          cacheReadPerMtok: 2.4,
+          cacheCreatePerMtok: 15,
         },
       },
     };
@@ -840,19 +851,34 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
 
-      // 行内只显示实际价:标准价不再以划线形式并排,也不再挂折价徽标。
+      // 行内折后价在上、标准价划线在下,折价徽标挂在模型名一侧的 tags 区。
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
       expect(row.textContent).toContain('¥6 / ¥18');
-      expect(row.textContent).not.toContain('¥12 / ¥36');
-      expect(row.querySelector('[data-model-promotion-badge]')).toBeNull();
+      expect(row.textContent).toContain('¥12 / ¥36');
+      const rowBadge = within(row).getByText('立省 50%');
+      expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
+      expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
+      const priceStack = within(row).getByText('¥6 / ¥18').parentElement;
+      expect(priceStack?.getAttribute('data-model-price-stack')).toBe('true');
+      expect(priceStack).not.toBe(rowBadge.parentElement);
+      expect(rowBadge.compareDocumentPosition(priceStack as Node)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
 
       fireEvent.pointerEnter(row);
       const details = screen.getByRole('group', { name: /Qwen 3\.7/ });
       expect(within(details).getByText('¥6')).toBeTruthy();
       expect(within(details).getByText('¥18')).toBeTruthy();
-      expect(within(details).queryByText('¥12')).toBeNull();
-      expect(within(details).queryByText('¥36')).toBeNull();
-      expect(details.querySelector('[data-model-promotion-badge]')).toBeNull();
+      expect(within(details).getByText('¥12').className).toContain('line-through');
+      expect(within(details).getByText('¥36').className).toContain('line-through');
+      // 缓存价同样按折后价展示,标准缓存价并排划线。
+      expect(within(details).getByText('¥1.2')).toBeTruthy();
+      expect(within(details).getByText('¥2.4').className).toContain('line-through');
+      expect(within(details).getByText('¥7.5')).toBeTruthy();
+      expect(within(details).getByText('¥15').className).toContain('line-through');
+      const detailsBadge = within(details).getByText('立省 50%');
+      expect(detailsBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
+      expect(detailsBadge.parentElement?.className).toContain('ml-auto');
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       pricingRef.pricing = pricingRef.DEFAULT_PRICING;

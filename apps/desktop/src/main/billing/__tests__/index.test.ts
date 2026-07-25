@@ -161,6 +161,7 @@ describe('billing IPC', () => {
     BILLING_INVOKE.GET_CREDIT_USAGE,
     BILLING_INVOKE.GET_CATALOG,
     BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION,
+    BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION,
   ])('rejects any payload on the no-payload channel %s before network access', async (channel) => {
     const { call, fetch } = harness();
 
@@ -233,6 +234,30 @@ describe('billing IPC', () => {
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
+    });
+  });
+
+  it('cancels the current subscription through one fixed provider-neutral DELETE', async () => {
+    const { call, fetch } = harness();
+    const canceled = {
+      subscriptionId: 'subscription_1',
+      status: 'ACTIVE',
+      currentPeriodStartAt: '2026-07-01T00:00:00.000Z',
+      currentPeriodEndAt: '2026-08-01T00:00:00.000Z',
+      entitlementValidUntil: '2026-08-02T00:00:00.000Z',
+      cancelAtPeriodEnd: true,
+      effectivePlan: null,
+      purchaseAttemptId: null,
+      paymentAction: null,
+    };
+    fetch.mockResolvedValueOnce(canceled);
+
+    await expect(call(BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION)).resolves.toEqual(canceled);
+    expect(fetch).toHaveBeenCalledWith('/api/billing/subscription', {
+      baseUrl: 'https://model-access.example',
+      timeoutMs: 20_000,
+      redactErrorDetails: true,
+      method: 'DELETE',
     });
   });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BillingPaymentOrder, BillingSubscription } from '../../../../shared/billing';
 
@@ -8,6 +8,14 @@ const i18n = {
   language: 'en',
   resolvedLanguage: 'en' as string | undefined,
 };
+
+const uiMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
+
+const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
 const checkout = {
   state: {
@@ -53,7 +61,16 @@ vi.mock('@/features/feature-context', () => ({
   useRegisterContentHeader: vi.fn(),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ dataOwnerId: 'account-fixture' }),
+  useAuth: () => ({ dataOwnerId: authState.dataOwnerId }),
+}));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: uiMocks.confirm }),
+}));
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    error: uiMocks.toastError,
+    success: uiMocks.toastSuccess,
+  },
 }));
 vi.mock('../useBillingCheckout', () => ({
   useBillingCheckout: () => checkout,
@@ -63,6 +80,13 @@ vi.mock('qrcode', () => ({
 }));
 
 import { BillingPage } from '../BillingPage';
+
+beforeEach(() => {
+  uiMocks.confirm.mockReset().mockResolvedValue(false);
+  uiMocks.toastError.mockReset();
+  uiMocks.toastSuccess.mockReset();
+  authState.dataOwnerId = 'account-fixture';
+});
 
 describe('BillingPage remote catalog rendering', () => {
   beforeEach(() => {
@@ -826,6 +850,47 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
+  it('marks the current subscription offer and prevents selecting it again', async () => {
+    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: {
+        subscriptionId: 'subscription_fixture',
+        status: 'ACTIVE' as const,
+        currentPeriodStartAt: '2026-07-01T00:00:00.000Z',
+        currentPeriodEndAt: '2026-08-01T00:00:00.000Z',
+        entitlementValidUntil: '2026-08-02T00:00:00.000Z',
+        cancelAtPeriodEnd: true,
+        effectivePlan: {
+          version: 1 as const,
+          product: { code: 'plus', kind: 'SUBSCRIPTION' as const, level: 1 },
+          offer: { code: 'plus_month', interval: 'MONTH' as const },
+          terms: {
+            amount: '9',
+            currency: 'usd',
+            creditAmount: '100',
+            rolloverCap: '0',
+          },
+          capturedAt: '2026-07-01T00:00:00.000Z',
+        },
+        purchaseAttemptId: null,
+        paymentAction: null,
+      },
+    }));
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+    const dialog = await screen.findByRole('dialog');
+    const currentPlan = within(dialog).getByRole('button', { name: /Configured subscription/ });
+    expect(currentPlan).toHaveProperty('disabled', true);
+    expect(currentPlan.getAttribute('aria-current')).toBe('true');
+    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
+    expect(within(dialog).queryByText('billing.steps.channel.title')).toBeNull();
+    expect(within(dialog).queryByText('stripe')).toBeNull();
+
+    fireEvent.click(currentPlan);
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
+  });
+
   it.each(['CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
     'routes a %s terminal subscription to repurchase',
     async (status) => {
@@ -1241,6 +1306,7 @@ describe('BillingPage plan change', () => {
     })),
     getCatalog: vi.fn(async () => subscriptionCatalog),
     getCurrentSubscription: vi.fn(async () => ({ subscription: activeSubscription() })),
+    cancelCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
     confirmPlanChange: vi.fn(),
     refreshPlanChange: vi.fn(),
@@ -1272,6 +1338,162 @@ describe('BillingPage plan change', () => {
     vi.stubGlobal('crypto', {
       randomUUID: () => '00000000-0000-4000-8000-000000000042',
     });
+  });
+
+  it('confirms provider-neutral cancellation and keeps credits unchanged until period end', async () => {
+    const billing = install(billingMocks());
+    billing.cancelCurrentSubscription.mockResolvedValue({
+      ...activeSubscription(),
+      currentPeriodEndAt: '2026-09-01T00:00:00.000Z',
+      cancelAtPeriodEnd: true,
+    });
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+
+    await waitFor(() => expect(billing.cancelCurrentSubscription).toHaveBeenCalledWith());
+    expect(uiMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'billing.settings.subscriptionCard.cancelConfirmTitle',
+        confirmText: 'billing.settings.subscriptionCard.cancelConfirmAction',
+      }),
+    );
+    expect(billing.getBalance).toHaveBeenCalledTimes(1);
+    expect(uiMocks.toastSuccess).toHaveBeenCalledWith(
+      expect.stringContaining('"date":"Sep 1, 2026"'),
+    );
+    expect(
+      screen.getByText((text) => text.startsWith('billing.settings.subscriptionCard.endsAt')),
+    ).toBeTruthy();
+    expect(screen.queryByText('billing.settings.subscriptionCard.cancelAction')).toBeNull();
+  });
+
+  it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
+    'does not offer renewal cancellation for a %s subscription',
+    async (status) => {
+      const billing = billingMocks();
+      billing.getCurrentSubscription = vi.fn(async () => ({
+        subscription: { ...activeSubscription(), status },
+      }));
+      install(billing);
+
+      render(<BillingPage />);
+
+      await screen.findByText(`billing.subscriptionStatus.${status}`);
+      expect(screen.queryByText('billing.settings.subscriptionCard.cancelAction')).toBeNull();
+      expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
+    },
+  );
+
+  it('locks cancellation before confirmation resolves', async () => {
+    const billing = install(billingMocks());
+    let resolveConfirm!: (confirmed: boolean) => void;
+    uiMocks.confirm.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveConfirm = resolve;
+      }),
+    );
+
+    render(<BillingPage />);
+    const cancelButton = await screen.findByText('billing.settings.subscriptionCard.cancelAction');
+    fireEvent.click(cancelButton);
+    fireEvent.click(cancelButton);
+
+    expect(uiMocks.confirm).toHaveBeenCalledTimes(1);
+    expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
+
+    await act(async () => resolveConfirm(false));
+  });
+
+  it('drops a confirmed cancellation when the account changed while confirming', async () => {
+    const billing = install(billingMocks());
+    let resolveConfirm!: (confirmed: boolean) => void;
+    uiMocks.confirm.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveConfirm = resolve;
+      }),
+    );
+
+    const view = render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+    expect(uiMocks.confirm).toHaveBeenCalledTimes(1);
+
+    // 弹窗还开着时账号被换掉:section 按 dataOwnerId 重挂,但弹窗挂在 AuthProvider
+    // 之外仍然存活。此时确认不能落到新账号的订阅上。
+    authState.dataOwnerId = 'account-switched';
+    view.rerender(<BillingPage />);
+    await screen.findByText('billing.settings.subscriptionCard.cancelAction');
+
+    await act(async () => resolveConfirm(true));
+
+    expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
+  });
+
+  it('keeps the loading cancellation accessible and disables competing actions', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: activeSubscription({
+        planChangeId: 'plan_change_pending',
+        changeType: 'DOWNGRADE',
+        status: 'SCHEDULED',
+        quotedAmountMinor: null,
+        quotedCurrency: null,
+        quoteExpiresAt: null,
+        effectiveAt: '2026-08-01T00:00:00.000Z',
+        paymentAction: null,
+        targetPlan: null,
+      }),
+    }));
+    install(billing);
+    const canceled = { ...activeSubscription(), cancelAtPeriodEnd: true };
+    let resolveCancellation!: (subscription: BillingSubscription) => void;
+    billing.cancelCurrentSubscription.mockReturnValueOnce(
+      new Promise<BillingSubscription>((resolve) => {
+        resolveCancellation = resolve;
+      }),
+    );
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+
+    await waitFor(() => expect(billing.cancelCurrentSubscription).toHaveBeenCalledTimes(1));
+    expect(
+      screen
+        .getByRole('button', { name: 'billing.settings.subscriptionCard.cancelAction' })
+        .hasAttribute('disabled'),
+    ).toBe(true);
+    const refreshButton = screen.getByRole('button', { name: 'billing.actions.refreshCatalog' });
+    expect(refreshButton.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(refreshButton);
+    expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(1);
+    const undoButton = screen.getByText('billing.planChange.undo').closest('button')!;
+    expect(undoButton.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(undoButton);
+    expect(billing.cancelPlanChange).not.toHaveBeenCalled();
+
+    await act(async () => resolveCancellation(canceled));
+  });
+
+  it('shows the server-state rejection without inferring a payment provider', async () => {
+    const billing = install(billingMocks());
+    billing.cancelCurrentSubscription.mockRejectedValue(
+      new Error('[PRECONDITION_FAILED] billing request conflicts with the current state'),
+    );
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+
+    await waitFor(() =>
+      expect(uiMocks.toastError).toHaveBeenCalledWith(
+        'billing.settings.subscriptionCard.cancelNotSupported',
+      ),
+    );
+    expect(billing.cancelCurrentSubscription).toHaveBeenCalledWith();
+    expect(billing.getBalance).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('billing.settings.subscriptionCard.cancelAction')).toBeTruthy();
   });
 
   it('offers same-provider monthly plans in upgrade, same-tier, downgrade order', async () => {

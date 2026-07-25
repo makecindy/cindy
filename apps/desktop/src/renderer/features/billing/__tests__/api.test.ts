@@ -10,6 +10,7 @@ describe('billing renderer API', () => {
     getCreditUsage: vi.fn(),
     listOrders: vi.fn(),
     createTopup: vi.fn(),
+    cancelCurrentSubscription: vi.fn(),
     openPaymentRedirect: vi.fn(),
   };
 
@@ -18,6 +19,10 @@ describe('billing renderer API', () => {
     billing.getCreditUsage.mockReset().mockResolvedValue({ available: '12.34' });
     billing.listOrders.mockReset().mockResolvedValue({ orders: [], nextCursor: null });
     billing.createTopup.mockReset().mockResolvedValue({ orderId: 'order_fixture' });
+    billing.cancelCurrentSubscription.mockReset().mockResolvedValue({
+      subscriptionId: 'subscription_fixture',
+      cancelAtPeriodEnd: true,
+    });
     billing.openPaymentRedirect.mockReset().mockResolvedValue({ success: true });
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -51,6 +56,11 @@ describe('billing renderer API', () => {
       request,
       idempotencyKey: 'desktop:topup:fixture-0001',
     });
+  });
+
+  it('cancels the current subscription without exposing provider or request parameters', async () => {
+    await billingApi.cancelCurrentSubscription();
+    expect(billing.cancelCurrentSubscription).toHaveBeenCalledWith();
   });
 
   it('uses the dedicated billing redirect method', async () => {

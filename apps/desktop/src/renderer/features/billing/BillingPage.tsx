@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
@@ -77,7 +79,7 @@ const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capab
   'PROVIDER_MANAGED_SUBSCRIPTION',
 ]);
 
-const NON_TERMINAL_SUBSCRIPTION_STATUSES: BillingSubscription['status'][] = [
+const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] = [
   'INCOMPLETE',
   'TRIALING',
   'ACTIVE',
@@ -85,6 +87,8 @@ const NON_TERMINAL_SUBSCRIPTION_STATUSES: BillingSubscription['status'][] = [
   'UNPAID',
   'PAUSED',
 ];
+const SUBSCRIPTION_CANCELLABLE_STATUSES: BillingSubscription['status'][] =
+  SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.filter((status) => status !== 'INCOMPLETE');
 
 // This list only controls which card action opens the plan-change flow. It is
 // intentionally separate from the new-purchase guard above: INCOMPLETE still
@@ -226,6 +230,7 @@ export function BillingPage() {
 
 export function BillingSettingsSection({ accountId }: { accountId: string | null }) {
   const { t, i18n } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const [catalog, setCatalog] = useState<BillingCatalog | null>(null);
   const [catalogError, setCatalogError] = useState(false);
@@ -233,6 +238,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [currentSubscription, setCurrentSubscription] = useState<BillingSubscription | null>(null);
   const [loadingSubscription, setLoadingSubscription] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState(false);
+  const [cancelingSubscription, setCancelingSubscription] = useState(false);
   const [creditUsage, setCreditUsage] = useState<ModelAccessCreditUsage | null>(null);
   const [balance, setBalance] = useState<ModelAccessBalance | null>(null);
   const [usageDetailsUnavailable, setUsageDetailsUnavailable] = useState(false);
@@ -246,6 +252,23 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const [customAmount, setCustomAmount] = useState('');
   const checkout = useBillingCheckout(accountId);
   const previousCheckoutPhaseRef = useRef(checkout.state.phase);
+  const cancelSubscriptionLockRef = useRef(false);
+  // 取消订阅的 DELETE 不带 subscriptionId,服务端按「请求时已认证的账号」执行。
+  // ConfirmDialogProvider 挂在 AuthProvider 之外(见 App.tsx),弹窗会活过本 section
+  // 因 dataOwnerId 变化而发生的卸载,所以必须记住确认时的账号与挂载态。
+  const accountIdRef = useRef(accountId);
+  const sectionMountedRef = useRef(true);
+
+  useEffect(() => {
+    accountIdRef.current = accountId;
+  }, [accountId]);
+
+  useEffect(() => {
+    sectionMountedRef.current = true;
+    return () => {
+      sectionMountedRef.current = false;
+    };
+  }, []);
 
   const resetSelection = useCallback(() => {
     setSelectedOfferCode(null);
@@ -367,12 +390,24 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     [offers],
   );
 
+  const subscriptionPurchaseBlocked =
+    currentSubscription !== null &&
+    SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
+  const currentSubscriptionOfferCode = subscriptionPurchaseBlocked
+    ? (currentSubscription.effectivePlan?.offer.code ?? null)
+    : null;
   const selected = useMemo(
     () =>
       offers.find(
-        (entry) => entry.offer.code === selectedOfferCode && isCatalogOfferPurchasable(entry),
+        (entry) =>
+          entry.offer.code === selectedOfferCode &&
+          isCatalogOfferPurchasable(entry) &&
+          !(
+            entry.product.kind === 'SUBSCRIPTION' &&
+            entry.offer.code === currentSubscriptionOfferCode
+          ),
       ) ?? null,
-    [offers, selectedOfferCode],
+    [currentSubscriptionOfferCode, offers, selectedOfferCode],
   );
   const selectedOption = useMemo(
     () =>
@@ -383,10 +418,15 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   useEffect(() => {
     if (!selectedOfferCode) return;
     const selectedEntry = offers.find(({ offer }) => offer.code === selectedOfferCode);
-    if (!selectedEntry || !isCatalogOfferPurchasable(selectedEntry)) {
+    if (
+      !selectedEntry ||
+      !isCatalogOfferPurchasable(selectedEntry) ||
+      (selectedEntry.product.kind === 'SUBSCRIPTION' &&
+        selectedEntry.offer.code === currentSubscriptionOfferCode)
+    ) {
       resetSelection();
     }
-  }, [offers, resetSelection, selectedOfferCode]);
+  }, [currentSubscriptionOfferCode, offers, resetSelection, selectedOfferCode]);
 
   useEffect(() => {
     if (!selectedPurchaseOptionId) return;
@@ -421,9 +461,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     return null;
   }, [billingLocale, customAmount, selected, t]);
 
-  const subscriptionPurchaseBlocked =
-    currentSubscription !== null &&
-    NON_TERMINAL_SUBSCRIPTION_STATUSES.includes(currentSubscription.status);
   const canCheckout =
     !checkout.recovering &&
     selected !== null &&
@@ -473,6 +510,60 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       cancelAtPeriodEnd: currentSubscription.cancelAtPeriodEnd,
     };
   }, [billingLocale, currentSubscription, planNameOf, t]);
+
+  const cancelCurrentSubscription = useCallback(async () => {
+    if (
+      cancelSubscriptionLockRef.current ||
+      !currentSubscription ||
+      currentSubscription.cancelAtPeriodEnd ||
+      !SUBSCRIPTION_CANCELLABLE_STATUSES.includes(currentSubscription.status)
+    ) {
+      return;
+    }
+    cancelSubscriptionLockRef.current = true;
+    try {
+      const confirmingAccountId = accountIdRef.current;
+      const periodEndAt = currentPlanFacts?.periodEndAt ?? null;
+      const confirmed = await confirm({
+        title: t('billing.settings.subscriptionCard.cancelConfirmTitle'),
+        description: periodEndAt
+          ? t('billing.settings.subscriptionCard.cancelConfirmDescription', {
+              date: periodEndAt,
+            })
+          : t('billing.settings.subscriptionCard.cancelConfirmDescriptionWithoutDate'),
+        confirmText: t('billing.settings.subscriptionCard.cancelConfirmAction'),
+        cancelText: t('commonUi.confirmDialog.cancel'),
+      });
+      if (!confirmed) return;
+      // 确认期间账号被换掉(或本 section 已卸载)就放弃:再发请求会取消到另一个账号
+      // 的订阅,而取消不可撤销。
+      if (!sectionMountedRef.current || accountIdRef.current !== confirmingAccountId) return;
+
+      setCancelingSubscription(true);
+      try {
+        const canceled = await billingApi.cancelCurrentSubscription();
+        setCurrentSubscription(canceled);
+        setSubscriptionError(false);
+        const canceledPeriodEndAt = formatBillingDate(canceled.currentPeriodEndAt, billingLocale);
+        toast.success(
+          canceledPeriodEndAt
+            ? t('billing.settings.subscriptionCard.cancelSuccess', { date: canceledPeriodEndAt })
+            : t('billing.settings.subscriptionCard.cancelSuccessWithoutDate'),
+        );
+      } catch (error) {
+        const ipcError = extractIpcError(error);
+        toast.error(
+          ipcError?.code === 'PRECONDITION_FAILED'
+            ? t('billing.settings.subscriptionCard.cancelNotSupported')
+            : t('billing.settings.subscriptionCard.cancelFailed'),
+        );
+      } finally {
+        setCancelingSubscription(false);
+      }
+    } finally {
+      cancelSubscriptionLockRef.current = false;
+    }
+  }, [billingLocale, confirm, currentPlanFacts?.periodEndAt, currentSubscription, t]);
 
   // The server quote remains authoritative for business reachability. Until
   // that contract supports cross-interval/provider changes, keep those two
@@ -527,7 +618,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const selectOffer = (offerCode: string) => {
     if (selectedOfferCode === offerCode) return;
     const entry = offers.find(({ offer }) => offer.code === offerCode);
-    if (!entry || !isCatalogOfferPurchasable(entry)) return;
+    if (
+      !entry ||
+      !isCatalogOfferPurchasable(entry) ||
+      (entry.product.kind === 'SUBSCRIPTION' && entry.offer.code === currentSubscriptionOfferCode)
+    ) {
+      return;
+    }
     setSelectedOfferCode(offerCode);
     // 只有一种支付方式时默认选中,免去一次多余点击。
     setSelectedPurchaseOptionId(
@@ -610,7 +707,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
           <button
             type="button"
             onClick={() => void loadBillingState()}
-            disabled={loadingCatalog || loadingSubscription || loadingBalance}
+            disabled={
+              loadingCatalog || loadingSubscription || loadingBalance || cancelingSubscription
+            }
             className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:opacity-45"
           >
             {loadingCatalog || loadingSubscription || loadingBalance ? (
@@ -644,13 +743,16 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               error={subscriptionError}
               showPlanChangeEntry={showPlanChangeEntry}
               recoveryAvailable={recoverableSubscription !== null}
+              canceling={cancelingSubscription}
               actionDisabled={
                 loadingSubscription ||
                 subscriptionError ||
+                cancelingSubscription ||
                 (recoverableSubscription !== null && checkout.recovering)
               }
               pendingPlanChange={pendingPlanChange}
               pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
+              onCancelSubscription={() => void cancelCurrentSubscription()}
               onChangePlan={openPlanChange}
               onRecover={() => {
                 if (recoverableSubscription) checkout.resumeSubscription(recoverableSubscription);
@@ -722,6 +824,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         customAmount={customAmount}
         amountError={amountError}
         subscriptionPurchaseBlocked={subscriptionPurchaseBlocked}
+        currentSubscriptionOfferCode={currentSubscriptionOfferCode}
         canCheckout={canCheckout}
         onClose={closeSubscriptionDialog}
         onRetry={() => void loadBillingState()}
@@ -742,6 +845,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         customAmount={customAmount}
         amountError={amountError}
         subscriptionPurchaseBlocked={false}
+        currentSubscriptionOfferCode={null}
         canCheckout={canCheckout}
         onClose={closeTopupDialog}
         onRetry={() => void loadBillingState()}
@@ -848,9 +952,11 @@ function SubscriptionOverviewCard({
   error,
   showPlanChangeEntry,
   recoveryAvailable,
+  canceling,
   actionDisabled,
   pendingPlanChange,
   pendingTargetName,
+  onCancelSubscription,
   onChangePlan,
   onRecover,
   onPurchase,
@@ -862,9 +968,11 @@ function SubscriptionOverviewCard({
   error: boolean;
   showPlanChangeEntry: boolean;
   recoveryAvailable: boolean;
+  canceling: boolean;
   actionDisabled: boolean;
   pendingPlanChange: BillingPendingPlanChange | null;
   pendingTargetName: string | null;
+  onCancelSubscription: () => void;
   onChangePlan: () => void;
   onRecover: () => void;
   onPurchase: () => void;
@@ -938,23 +1046,45 @@ function SubscriptionOverviewCard({
             </>
           )}
         </div>
-        <button
-          type="button"
-          onClick={showPlanChangeEntry ? onChangePlan : recoveryAvailable ? onRecover : onPurchase}
-          disabled={actionDisabled}
-          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {showPlanChangeEntry
-            ? t('billing.settings.subscriptionCard.changeAction')
-            : recoveryAvailable
-              ? t('billing.recovery.continueSubscription')
-              : t('billing.settings.subscriptionCard.action')}
-        </button>
+        <div className="flex shrink-0 items-center gap-2.5">
+          {facts &&
+            !facts.cancelAtPeriodEnd &&
+            SUBSCRIPTION_CANCELLABLE_STATUSES.includes(facts.status) && (
+              <button
+                type="button"
+                onClick={onCancelSubscription}
+                disabled={actionDisabled}
+                aria-label={t('billing.settings.subscriptionCard.cancelAction')}
+                className="inline-flex h-8 select-none items-center justify-center rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--error-fg)] transition-colors hover:bg-[var(--error-bg)] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {canceling ? (
+                  <Spinner size={13} />
+                ) : (
+                  t('billing.settings.subscriptionCard.cancelAction')
+                )}
+              </button>
+            )}
+          <button
+            type="button"
+            onClick={
+              showPlanChangeEntry ? onChangePlan : recoveryAvailable ? onRecover : onPurchase
+            }
+            disabled={actionDisabled}
+            className="h-8 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {showPlanChangeEntry
+              ? t('billing.settings.subscriptionCard.changeAction')
+              : recoveryAvailable
+                ? t('billing.recovery.continueSubscription')
+                : t('billing.settings.subscriptionCard.action')}
+          </button>
+        </div>
       </div>
       {pendingPlanChange && (
         <PendingPlanChangeBanner
           pending={pendingPlanChange}
           targetName={pendingTargetName}
+          disabled={actionDisabled}
           onResume={onResumePending}
           onUndo={onCancelPending}
         />
@@ -966,11 +1096,13 @@ function SubscriptionOverviewCard({
 function PendingPlanChangeBanner({
   pending,
   targetName,
+  disabled,
   onResume,
   onUndo,
 }: {
   pending: BillingPendingPlanChange;
   targetName: string | null;
+  disabled: boolean;
   onResume: () => void;
   onUndo: () => void;
 }) {
@@ -1000,7 +1132,8 @@ function PendingPlanChangeBanner({
         <button
           type="button"
           onClick={onUndo}
-          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
+          disabled={disabled}
+          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {t('billing.planChange.undo')}
         </button>
@@ -1008,7 +1141,8 @@ function PendingPlanChangeBanner({
         <button
           type="button"
           onClick={onResume}
-          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
+          disabled={disabled}
+          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {t('billing.planChange.resume')}
         </button>
@@ -1138,9 +1272,7 @@ function UsageBreakdownCard({
               ['purchased', usage.purchased],
               ['promotional', usage.promotional],
             ] as const
-          ).map(([key, pool]) => (
-            <CreditPoolRow key={key} label={poolLabels[key]} pool={pool} />
-          ))
+          ).map(([key, pool]) => <CreditPoolRow key={key} label={poolLabels[key]} pool={pool} />)
         : balance
           ? (
               [
@@ -1301,6 +1433,7 @@ function BillingOfferDialog({
   customAmount,
   amountError,
   subscriptionPurchaseBlocked,
+  currentSubscriptionOfferCode,
   canCheckout,
   onClose,
   onRetry,
@@ -1319,6 +1452,7 @@ function BillingOfferDialog({
   customAmount: string;
   amountError: string | null;
   subscriptionPurchaseBlocked: boolean;
+  currentSubscriptionOfferCode: string | null;
   canCheckout: boolean;
   onClose: () => void;
   onRetry: () => void;
@@ -1391,21 +1525,28 @@ function BillingOfferDialog({
                     const { product, offer } = entry;
                     const active = selected?.offer.code === offer.code;
                     const unavailableReason = catalogOfferUnavailableReason(entry);
+                    const currentPlan =
+                      kind === 'SUBSCRIPTION' && offer.code === currentSubscriptionOfferCode;
                     return (
                       <button
                         key={offer.code}
                         type="button"
                         onClick={() => onSelectOffer(offer.code)}
-                        disabled={unavailableReason !== null}
+                        disabled={currentPlan || unavailableReason !== null}
                         aria-pressed={active}
+                        aria-current={currentPlan ? 'true' : undefined}
                         className={cn(
                           'flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
                           'focus-visible:ring-[var(--text-primary)]',
-                          'disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent',
-                          active
+                          'disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                          currentPlan
                             ? 'bg-[var(--surface-chip)]'
-                            : 'hover:bg-[var(--surface-hover-soft)]',
+                            : unavailableReason
+                              ? 'opacity-55'
+                              : active
+                                ? 'bg-[var(--surface-chip)]'
+                                : 'hover:bg-[var(--surface-hover-soft)]',
                         )}
                       >
                         <div className="min-w-0 flex-1">
@@ -1413,6 +1554,11 @@ function BillingOfferDialog({
                             <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                               {product.name}
                             </p>
+                            {currentPlan && (
+                              <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                {t('billing.catalog.currentPlan')}
+                              </span>
+                            )}
                             {unavailableReason && (
                               <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
                                 {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
@@ -1438,7 +1584,9 @@ function BillingOfferDialog({
                               </p>
                             )}
                           </div>
-                          {unavailableReason === null && <SelectionMark active={active} />}
+                          {!currentPlan && unavailableReason === null && (
+                            <SelectionMark active={active} />
+                          )}
                         </div>
                       </button>
                     );
