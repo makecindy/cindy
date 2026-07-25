@@ -31,6 +31,7 @@ import {
   type CredentialsPayload,
   type CredentialsSync,
 } from './credentialsSync.js';
+import { waitForModelsSyncRefresh } from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 export { isModelAccessReady } from './readiness.js';
 
@@ -127,6 +128,9 @@ function broadcastStatus(status: ModelAccessStatus): void {
 // setXdGatewayModels)。拉取失败保留最后一次完整成功快照；成功空列表同时清空模型和价格。
 
 let modelsSyncInflight: Promise<void> | null = null;
+/** 模型请求的单调尝试号与最近成功号，供手动刷新区分“旧成功 + 本次失败”。 */
+let modelsSyncAttempt = 0;
+let lastModelsSyncSucceededAttempt = 0;
 /** 在途目录请求所属的认证世代。 */
 let modelsSyncGen = -1;
 /** 旧世代请求在途时新账号的补发标记。 */
@@ -155,7 +159,7 @@ function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
   setXdGatewayModels(effective);
 }
 
-async function runModelsSync(myGen: number): Promise<void> {
+async function runModelsSync(myGen: number, myAttempt: number): Promise<void> {
   let payload: { models: ModelAccessGatewayModel[] };
   try {
     payload = await serverApiFetch<{ models: ModelAccessGatewayModel[] }>(MODELS_PATH, {
@@ -172,10 +176,12 @@ async function runModelsSync(myGen: number): Promise<void> {
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
     applyGatewayModels([]);
+    lastModelsSyncSucceededAttempt = myAttempt;
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
   applyGatewayModels(models);
+  lastModelsSyncSucceededAttempt = myAttempt;
 }
 
 /** 触发一次模型目录同步(同世代 single-flight;旧世代在途时为新账号排队补发)。 */
@@ -194,7 +200,8 @@ function scheduleModelsSync(): void {
     return;
   }
   modelsSyncGen = gen;
-  modelsSyncInflight = runModelsSync(gen)
+  const attempt = ++modelsSyncAttempt;
+  modelsSyncInflight = runModelsSync(gen, attempt)
     .catch((err) => {
       log.warn('xd gateway models sync threw', {
         error: err instanceof Error ? err.message : String(err),
@@ -238,6 +245,44 @@ function getSync(): CredentialsSync {
 /** 当前同步状态(renderer 首帧经 IPC 拉;main 内部也可直接读)。 */
 export function getModelAccessStatus(): ModelAccessStatus {
   return getSync().getStatus();
+}
+
+/**
+ * 设置页手动刷新：复用凭据 retry 状态机，并等待它触发的同源 `/models` single-flight
+ * 真正结束。凭据或模型请求任一失败都 reject，Renderer 才不会误报“已刷新”。
+ */
+export async function refreshXdGatewayModels(): Promise<void> {
+  if (!getAppCapabilities().canUseCindyGateway) {
+    throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
+  }
+  const status = await getSync().retry();
+  if (status.state !== 'ok') {
+    throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI credentials are not ready.');
+  }
+  const gen = authGeneration;
+  // onStatusChange(ok) 已经 schedule；重复调用会复用同世代在途请求。若此时仍有
+  // 旧账号 flight，先等它作废，再显式补发当前世代并等待当前尝试号的真实结果。
+  const outcome = await waitForModelsSyncRefresh({
+    expectedGeneration: gen,
+    schedule: scheduleModelsSync,
+    snapshot: () => ({
+      flight: modelsSyncInflight,
+      generation: modelsSyncGen,
+      attempt: modelsSyncAttempt,
+    }),
+    currentGeneration: () => authGeneration,
+    lastSuccessfulAttempt: () => lastModelsSyncSucceededAttempt,
+  });
+  switch (outcome) {
+    case 'succeeded':
+      return;
+    case 'not-started':
+      throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh did not start.');
+    case 'account-changed':
+      throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI account changed during model list refresh.');
+    case 'failed':
+      throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh failed.');
+  }
 }
 
 /** 存量手填 key 场景的写入通知(safe-storage IPC 层保留的兼容钩子):来源标记翻 manual。 */
@@ -317,6 +362,8 @@ export function resetModelAccessForTest(): void {
   modelsSyncInflight = null;
   modelsSyncGen = -1;
   modelsSyncRerunQueued = false;
+  modelsSyncAttempt = 0;
+  lastModelsSyncSucceededAttempt = 0;
   authGeneration = 0;
   lastAuthUserId = null;
   applyGatewayModels([]);

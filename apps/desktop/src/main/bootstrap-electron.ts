@@ -535,6 +535,7 @@ import {
   initModelAccess,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
+  refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
@@ -3614,6 +3615,7 @@ const registerIpcHandlers = () => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
         },
+        refreshXdGatewayModels,
       });
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
