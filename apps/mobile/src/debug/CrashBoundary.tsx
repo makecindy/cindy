@@ -124,6 +124,8 @@ function CrashFallback({ error, onReset }: { error: unknown; onReset: () => void
       >
         <Text style={styles.secondaryLabel}>{i18n.t('shared.crashScreen.reload')}</Text>
       </Pressable>
+      {/* 知情:导出即数据离开设备,说明仅本地保存/不自动上传/仅发可信支持。 */}
+      <Text style={styles.note}>{i18n.t('shared.crashScreen.exportNote')}</Text>
     </View>
   );
 }
@@ -153,6 +155,12 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textTertiary,
       fontSize: typeScale.caption,
       marginTop: spacing.xs,
+      textAlign: 'center',
+    },
+    note: {
+      color: colors.textTertiary,
+      fontSize: typeScale.caption,
+      marginTop: spacing.md,
       textAlign: 'center',
     },
     primaryButton: {

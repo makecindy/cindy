@@ -7,6 +7,7 @@
     "title": "Something went wrong",
     "body": "Sorry, the app just ran into an error. You can export the log to send us, or reload the app.",
     "exportLog": "Export log",
+    "exportNote": "The log stays on this device and is never uploaded automatically; it includes device and error details—share only with trusted support.",
     "reload": "Reload",
     "emptyTitle": "No crash log",
     "emptyBody": "No crashes have been recorded yet.",

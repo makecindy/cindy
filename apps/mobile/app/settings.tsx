@@ -473,12 +473,7 @@ export default function SettingsScreen() {
     setCrashLogAvailable(hasCrashLog());
   }, []);
 
-  const exportCrashLog = useCallback(async () => {
-    if (!hasCrashLog()) {
-      setCrashLogAvailable(false);
-      Alert.alert(t('settings.debug.crashLogEmptyTitle'), t('settings.debug.crashLogEmptyBody'));
-      return;
-    }
+  const runShareCrashLog = useCallback(async () => {
     try {
       // 动态 import:expo-sharing 顶层 requireNativeModule('ExpoSharing'),旧 dev client
       // 缺原生模块时顶层 import 会炸整个 bundle(同 MessageRenderer/lightbox 先例)。
@@ -495,6 +490,24 @@ export default function SettingsScreen() {
       Alert.alert(t('settings.debug.shareUnavailableTitle'), t('settings.debug.shareUnavailableBody'));
     }
   }, [t]);
+
+  const exportCrashLog = useCallback(() => {
+    if (!hasCrashLog()) {
+      setCrashLogAvailable(false);
+      Alert.alert(t('settings.debug.crashLogEmptyTitle'), t('settings.debug.crashLogEmptyBody'));
+      return;
+    }
+    // 导出即数据离开设备:分享前先明确披露内容与去向(仅本地保存、不自动上传、
+    // 含设备与错误详情、仅发可信支持),用户确认后再走系统分享面板。
+    Alert.alert(
+      t('settings.debug.exportCrashLog'),
+      t('settings.debug.exportDisclosureBody'),
+      [
+        { style: 'cancel', text: t('settings.debug.clearCrashCancel') },
+        { text: t('settings.debug.exportProceed'), onPress: () => void runShareCrashLog() },
+      ],
+    );
+  }, [runShareCrashLog, t]);
 
   const confirmClearCrashLog = useCallback(() => {
     Alert.alert(
@@ -695,6 +708,7 @@ export default function SettingsScreen() {
                 />,
                 <ActionInfoRow
                   accessibilityLabel={t('settings.debug.exportCrashLog')}
+                  detail={t('settings.debug.exportCrashLogDetail')}
                   key="debug.exportCrashLog"
                   label={t('settings.debug.exportCrashLog')}
                   onPress={() => void exportCrashLog()}
