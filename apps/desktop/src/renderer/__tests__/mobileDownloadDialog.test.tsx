@@ -373,6 +373,24 @@ describe('MobileDownloadDialog', () => {
     expect(await screen.findByAltText('sidebar.mobileDownload.qrAlt')).toBeTruthy();
   });
 
+  it('subscribes to Device Link pushes only while the dialog is open', async () => {
+    const props = {
+      onOpenChange: vi.fn(),
+      remoteAvailable: true,
+      onOpenRemoteSettings: vi.fn(),
+      onOpenDevices: vi.fn(),
+      triggerRef: detachedTriggerRef,
+    };
+    const view = render(<MobileDownloadDialog open={false} {...props} />);
+    await waitFor(() => expect(getState).toHaveBeenCalledTimes(1));
+    expect(onPresenceChanged).not.toHaveBeenCalled();
+
+    view.rerender(<MobileDownloadDialog open {...props} />);
+    expect(onPresenceChanged).toHaveBeenCalledTimes(1);
+    expect(onStatusChanged).toHaveBeenCalledTimes(1);
+    expect(onConnectionIssue).toHaveBeenCalledTimes(1);
+  });
+
   it('re-reads the remote state every time the dialog reopens', async () => {
     // 设置页改权限、重命名/删除设备都不经过 presence/status/connection-issue 推送,
     // 重新打开必须自己重读一次。
@@ -542,9 +560,8 @@ describe('MobileDownloadDialog', () => {
     expect(readyDot()).toBeNull();
   });
 
-  it('carries no brand artwork and reuses the shared dialog tokens', () => {
-    // §7:品牌图形只出现在 login / splash / new-session,弹窗用中性 chip + 线性图标。
-    expect(source).not.toContain('resources/icon.png');
+  it('uses the official Cindy artwork and the shared dialog tokens', () => {
+    expect(source).toContain('@/../../resources/icon.png?url');
     expect(source).toContain("t('sidebar.mobileDownload.title')");
     expect(source).toContain('<Smartphone');
     expect(source).toContain('<Monitor');
@@ -607,31 +624,40 @@ describe('MobileDownloadDialog', () => {
     );
   });
 
-  it('keeps the QR card flat per the design rules', () => {
-    // DESIGN.md §7:不加阴影、不放装饰性品牌图形;§14.4:不做常驻/循环装饰动效。
-    // 这三条曾被「旋转 app icon 折射边 + 卡片阴影 + 指针 3D 倾斜」违反,
-    // 回归后这里直接把契约钉死。
-    expect(source).not.toMatch(/mobile-download-qr-edge|onPointerMove|requestAnimationFrame/);
-    // Dialog 容器本身仍用 §4 授权的 --confirm-shadow;这里只禁二维码卡自带阴影。
-    expect(source).not.toMatch(/perspective\(|scale3d\(|mobile-download-qr-shadow/);
-    expect(source).not.toMatch(/linear-gradient|conic-gradient|#[0-9a-fA-F]{3,8}\b/);
-    expect(globalStyles).not.toMatch(/mobile-download-edge-turn|mobile-download-qr-edge/);
+  it('keeps the brand edge inside its registered exception', () => {
+    // §15.7 / §14.4 登记的窄范围例外只覆盖「品牌资产 + 纯 transform 的常驻旋转」。
+    // 例外之外的两项(卡片阴影、指针 3D 倾斜)必须保持关闭。
+    expect(source).not.toMatch(/perspective\(|scale3d\(|onPointerMove|requestAnimationFrame/);
+    expect(source).not.toMatch(/mobile-download-qr-shadow/);
     expect(globalStyles).not.toMatch(/--mobile-download-qr-shadow/);
     expect(themeColors).not.toMatch(/mobile-download-qr-shadow/);
+    // 红蓝只能来自官方 icon 资产,不自写品牌渐变/色值。
+    expect(source).not.toMatch(/linear-gradient|conic-gradient|#[0-9a-fA-F]{3,8}\b/);
 
     const cardRule = globalStyles.slice(
       globalStyles.indexOf('.mobile-download-qr-card {'),
-      globalStyles.indexOf('/* 按 <html lang> 切换 CJK 字体栈'),
+      globalStyles.indexOf('.mobile-download-qr-edge {'),
     );
     expect(cardRule).not.toMatch(/box-shadow|animation:|transform:/);
-    // 唯一保留的动效:linked ↔ onboarding 的尺寸补间(§14.4 size change 档)。
     expect(cardRule).toMatch(
       /transition:\s*\n\s*width var\(--motion-base\) var\(--motion-ease-move\),/,
     );
     expect(cardRule).toMatch(/height var\(--motion-base\) var\(--motion-ease-move\);/);
+
+    // 常驻动画只能碰 transform(合成器层),且必须登记进 reduced-motion 白名单。
+    const edgeStart = globalStyles.indexOf('.mobile-download-qr-edge {');
+    const edgeRule = globalStyles.slice(
+      edgeStart,
+      globalStyles.indexOf('@media (prefers-reduced-motion: reduce)', edgeStart),
+    );
+    expect(edgeRule).toContain(
+      'animation: mobile-download-edge-turn var(--mobile-download-edge-cycle) linear infinite',
+    );
+    expect(edgeRule).not.toMatch(/filter:|backdrop-filter:|mask-image:|width:|height:/);
+    expect(globalStyles).toMatch(/\.mobile-download-qr-edge\s*\{\s*animation: none;\s*transform:/);
   });
 
-  it('renders the QR card as a single flat bordered surface', () => {
+  it('renders the brand edge behind the QR surface', () => {
     render(
       <MobileDownloadDialog
         open
@@ -644,7 +670,8 @@ describe('MobileDownloadDialog', () => {
     );
 
     const card = screen.getByTestId('mobile-download-qr-card');
-    expect(card.className).toContain('border border-[var(--border-default)]');
-    expect(card.querySelectorAll('img')).toHaveLength(1);
+    const edge = card.querySelector('.mobile-download-qr-edge');
+    expect(edge).toBeTruthy();
+    expect(edge?.getAttribute('aria-hidden')).toBe('true');
   });
 });

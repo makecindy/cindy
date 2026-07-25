@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, Monitor, QrCode, Settings2, Smartphone, X } from 'lucide-react';
 import * as QRCode from 'qrcode';
 
+import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { toast } from '@/lib/toast';
@@ -152,9 +153,10 @@ function platformLabel(platform: string | null): string {
 
 /**
  * Desktop promotion surface for the regional Cindy mobile download page.
- * The card stays flat per DESIGN.md §7 — no shadow, no decorative brand
- * artwork, no persistent motion; only the linked/onboarding size change
- * animates (§14.4 size tier).
+ * The QR edge reuses the official app artwork, so its brand colors stay
+ * coupled to the asset instead of introducing component-level color values
+ * (registered exception: DESIGN.md §15.7 / §14.4). The card itself carries no
+ * shadow and no pointer tilt.
  */
 export function MobileDownloadDialog({
   open,
@@ -267,24 +269,28 @@ export function MobileDownloadDialog({
     void refreshRemoteSnapshot();
     // 这一轮预热已经覆盖了「挂载时就是打开状态」的情况,下面的重开刷新不要重复打一次。
     skipNextOpenRefreshRef.current = true;
-    const offPresence = window.electronAPI.deviceLink.onPresenceChanged(() => {
-      void refreshRemoteSnapshot();
-    });
-    const offStatus = window.electronAPI.deviceLink.onStatusChanged(() => {
-      void refreshRemoteSnapshot();
-    });
-    const offConnectionIssue = window.electronAPI.deviceLink.onConnectionIssue(() => {
-      void refreshRemoteSnapshot();
-    });
     return () => {
       active = false;
       refreshGeneration += 1;
-      offPresence();
-      offStatus();
-      offConnectionIssue();
       refreshRemoteRef.current = null;
     };
   }, [remoteAvailable]);
+
+  // 三个推送只在弹窗打开期间订阅 —— 组件随侧边栏常驻,关着的时候没人看这份快照,
+  // 没必要为每次 presence 抖动跑一轮 IPC;重新打开时上面那次全量读取会补上。
+  useEffect(() => {
+    if (!open || !remoteAvailable) return;
+
+    const refresh = () => refreshRemoteRef.current?.();
+    const offPresence = window.electronAPI.deviceLink.onPresenceChanged(refresh);
+    const offStatus = window.electronAPI.deviceLink.onStatusChanged(refresh);
+    const offConnectionIssue = window.electronAPI.deviceLink.onConnectionIssue(refresh);
+    return () => {
+      offPresence();
+      offStatus();
+      offConnectionIssue();
+    };
+  }, [open, remoteAvailable]);
 
   useEffect(() => {
     if (!open) {
@@ -380,16 +386,13 @@ export function MobileDownloadDialog({
           </Dialog.Close>
 
           <div className="flex flex-col items-center text-center">
-            {/* §7:工作界面不放品牌图形,这里用设计系统的中性 chip + 线性图标。 */}
-            <span
+            <img
+              src={cindyIconUrl}
+              alt=""
               aria-hidden="true"
-              className={cn(
-                'flex h-12 w-12 items-center justify-center rounded-xl',
-                'bg-[var(--surface-chip)] text-[var(--confirm-title)]',
-              )}
-            >
-              <Smartphone className="h-6 w-6" strokeWidth={1.6} />
-            </span>
+              className="h-16 w-16 select-none object-contain"
+              draggable={false}
+            />
 
             <Dialog.Title className="mt-3 text-lg font-medium text-[var(--confirm-title)]">
               {t('sidebar.mobileDownload.title')}
@@ -421,7 +424,6 @@ export function MobileDownloadDialog({
                 aria-label={t('sidebar.mobileDownload.openPage')}
                 className={cn(
                   'mobile-download-qr-card relative shrink-0 overflow-hidden rounded-xl',
-                  'border border-[var(--border-default)]',
                   hasLinkedMobile ? 'h-[132px] w-[132px]' : 'h-[228px] w-[228px]',
                   'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                   'disabled:cursor-not-allowed disabled:opacity-60',
@@ -431,9 +433,21 @@ export function MobileDownloadDialog({
                 }}
               >
                 <span
+                  aria-hidden="true"
+                  className="mobile-download-qr-edge pointer-events-none absolute inset-[-45%]"
+                >
+                  <img
+                    src={cindyIconUrl}
+                    alt=""
+                    className="h-full w-full select-none object-cover"
+                    draggable={false}
+                  />
+                </span>
+                {/* 2px:1px 时红蓝几乎看不见，3px 起就压成相框边了。 */}
+                <span
                   className={cn(
-                    'absolute inset-0 flex items-center justify-center overflow-hidden',
-                    'rounded-[11px] bg-[var(--confirm-bg)]',
+                    'absolute inset-[2px] flex items-center justify-center overflow-hidden',
+                    'rounded-[10px] bg-[var(--confirm-bg)]',
                   )}
                   aria-live="polite"
                 >

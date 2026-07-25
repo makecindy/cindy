@@ -57,6 +57,8 @@
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
+    /* 移动端下载卡品牌边的旋转周期(§14.4 登记的第四类常驻动效)。 */
+    --mobile-download-edge-cycle: 20s;
   }
 
   body {
@@ -195,14 +197,36 @@
   }
 }
 
-/* 移动端下载卡：DESIGN.md §7 的扁平中性处理 —— 不加阴影、不放装饰性品牌
-   图形、不做常驻动效。唯一保留的动效是设备列表刷新驱动的 228px ↔ 132px 尺寸
-   补间，属于 §14.4 的 size change 档（全局 reduced-motion 的
-   `* { transition: none }` 已覆盖它，无需单独登记白名单）。 */
+/* 移动端下载卡：官方 App icon 在 1px 裁切边缘内缓慢旋转，形成与卡片一体的
+   红蓝折射（DESIGN.md §15.7 / §14.4 登记的窄范围例外）。卡片本身不加阴影、
+   不做 3D 倾斜；除品牌边外，唯一动效是设备列表刷新驱动的尺寸补间。 */
+@keyframes mobile-download-edge-turn {
+  from {
+    transform: rotate(0deg) scale(1.45);
+  }
+  to {
+    transform: rotate(360deg) scale(1.45);
+  }
+}
+
 .mobile-download-qr-card {
   transition:
     width var(--motion-base) var(--motion-ease-move),
     height var(--motion-base) var(--motion-ease-move);
+}
+
+/* 只转 transform,不挂 filter/blur:滤镜会让这层每帧重新走一遍 GPU 滤镜通道,
+   而纯 transform 旋转能整层交给合成器,常驻动画不占 CPU。 */
+.mobile-download-qr-edge {
+  animation: mobile-download-edge-turn var(--mobile-download-edge-cycle) linear infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-download-qr-edge {
+    animation: none;
+    transform: rotate(18deg) scale(1.45);
+  }
 }
 
 /* 按 <html lang> 切换 CJK 字体栈 —— 同一汉字在中/日/韩字体中字形不同
