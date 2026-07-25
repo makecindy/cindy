@@ -846,7 +846,7 @@ export function GhostPluginPage() {
   );
 }
 
-function MarketPluginCard({
+export function MarketPluginCard({
   item,
   busy,
   onSelect,
@@ -886,18 +886,24 @@ function MarketPluginCard({
               {item.name}
             </span>
           </span>
-          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
-            <span>
+          <span className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-11 text-[var(--text-tertiary)]">
+            <span className="shrink-0">
               {t(`settings.ghosts.page.origin.${pluginPresentationOrigin(item)}`)}
             </span>
-            <span aria-hidden="true">·</span>
-            <span>v{item.version}</span>
-            <span aria-hidden="true">·</span>
-            <span className="truncate font-mono">{item.ghostId}</span>
+            <span className="shrink-0" aria-hidden="true">
+              ·
+            </span>
+            <span className="shrink-0">v{item.version}</span>
+            <span className="shrink-0" aria-hidden="true">
+              ·
+            </span>
+            <span className="min-w-0 truncate font-mono">{item.ghostId}</span>
             {item.author ? (
               <>
-                <span aria-hidden="true">·</span>
-                <span className="truncate">{item.author}</span>
+                <span className="shrink-0" aria-hidden="true">
+                  ·
+                </span>
+                <span className="min-w-0 truncate">{item.author}</span>
               </>
             ) : null}
           </span>

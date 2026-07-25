@@ -1,5 +1,5 @@
 /**
- * Regression coverage for installed Plugin card actions.
+ * Regression coverage for Plugin card actions and compact marketplace metadata.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
@@ -20,8 +20,9 @@ vi.mock('@/components/ui/tooltip', () => ({
   ),
 }));
 
-import { GhostPluginCard, InstalledGhostShortcut } from '../GhostPluginPage';
+import { GhostPluginCard, InstalledGhostShortcut, MarketPluginCard } from '../GhostPluginPage';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
+import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const installedPlugin: GhostPluginListItem = {
   id: 'filo-google',
@@ -30,6 +31,23 @@ const installedPlugin: GhostPluginListItem = {
   version: '1.0.0',
   enabled: true,
   canUse: true,
+};
+
+const marketPlugin: PluginMarketItem = {
+  pluginId: 'release-google-calendar',
+  ghostId: 'google-calendar',
+  name: 'Google Calendar',
+  description: 'Connect Google Calendar',
+  author: 'Cindy',
+  scope: 'public',
+  organizationId: null,
+  defaultInstall: false,
+  releaseId: 'release-1',
+  version: '1.3.11',
+  publishedAt: '2026-07-25T00:00:00.000Z',
+  icon: null,
+  installState: 'not-installed',
+  enabled: null,
 };
 
 describe('GhostPluginCard', () => {
@@ -115,5 +133,26 @@ describe('GhostPluginCard', () => {
     const fallbackIcon = container.querySelector('.lucide-workflow');
     expect(fallbackIcon).toBeTruthy();
     expect(fallbackIcon?.parentElement?.className).toContain('var(--surface-elevated)');
+  });
+
+  it('keeps fixed market metadata on one line while truncating long identities', () => {
+    render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy={false}
+        onSelect={vi.fn()}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    const origin = screen.getByText('settings.ghosts.page.origin.public');
+    const metadata = origin.parentElement;
+    expect(metadata?.className).toContain('whitespace-nowrap');
+    expect(metadata?.className).toContain('overflow-hidden');
+    expect(origin.className).toContain('shrink-0');
+    expect(screen.getByText('v1.3.11').className).toContain('shrink-0');
+    expect(screen.getByText('google-calendar').className).toContain('truncate');
+    expect(screen.getByText('google-calendar').className).toContain('min-w-0');
+    expect(screen.getByText('Cindy').className).toContain('truncate');
   });
 });
