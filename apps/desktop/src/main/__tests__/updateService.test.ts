@@ -120,6 +120,7 @@ beforeAll(() => {
   TEST_EXE = path.join(TEST_ROOT, 'app', 'xdt-maker.exe');
 });
 afterAll(() => {
+  if (!TEST_ROOT) return;
   fs.rmSync(TEST_ROOT, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 beforeEach(() => {
