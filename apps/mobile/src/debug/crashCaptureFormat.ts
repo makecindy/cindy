@@ -79,7 +79,9 @@ export function appendWithCap(existing: string, entry: string, maxChars = MAX_CR
   const next = existing + entry;
   if (next.length <= maxChars) return next;
   const marker = '…<日志已从头部截断 / truncated>…\n';
-  const keep = Math.max(0, maxChars - marker.length);
+  // 极端:上限比截断标记还短,放不下标记时直接返回尾部 maxChars,保证返回长度 <= 上限。
+  if (marker.length >= maxChars) return next.slice(next.length - maxChars);
+  const keep = maxChars - marker.length;
   return marker + next.slice(next.length - keep);
 }
 

@@ -195,4 +195,15 @@ describe('reloadWithMarker(OTA 重载顺序)', () => {
     expect(reloadAsync).toHaveBeenCalledTimes(1);
     expect(phaseAtReload).toBe('reloading');
   });
+
+  it('reload 失败时恢复原 phase(不残留 reloading 掩盖后续异常)', async () => {
+    stubErrorUtils();
+    installCrashCapture();
+    // 模拟已走到 ready 的正常运行态,随后手动检查更新触发 reload 但失败。
+    store.set('boot.json', JSON.stringify({ phase: 'ready', at: 1 }));
+    const reloadAsync = vi.fn(() => Promise.reject(new Error('reload unavailable')));
+    await expect(reloadWithMarker(reloadAsync)).rejects.toThrow('reload unavailable');
+    // phase 必须被恢复成 'ready',而不是残留 'reloading'。
+    expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('ready');
+  });
 });

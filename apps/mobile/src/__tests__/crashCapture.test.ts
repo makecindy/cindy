@@ -119,6 +119,12 @@ describe('appendWithCap', () => {
     // 尾部最新内容(entry 末尾)必须保留
     expect(out.endsWith('y')).toBe(true);
   });
+
+  it('上限比截断标记还短的极端情况:返回长度不超过上限', () => {
+    const out = appendWithCap('', 'abcdefghij', 5);
+    expect(out.length).toBeLessThanOrEqual(5);
+    expect(out).toBe('fghij');
+  });
 });
 
 describe('isAbnormalPreviousBoot', () => {
