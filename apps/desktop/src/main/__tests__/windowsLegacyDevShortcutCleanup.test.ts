@@ -330,4 +330,33 @@ describe('parseWindowsShortcut', () => {
 
     expect(parseWindowsShortcut(malformed)).toBeNull();
   });
+
+  it('does not treat an unterminated LocalBasePath as a valid target', () => {
+    // The LocalBasePath runs to the end of LinkInfo with no NUL terminator and
+    // its bytes end in a dev Electron suffix. Without requiring a terminator the
+    // parser would hand back that content and the link would be deleted.
+    const header = Buffer.alloc(0x4c);
+    header.writeUInt32LE(0x4c, 0);
+    SHELL_LINK_CLSID.copy(header, 4);
+    header.writeUInt32LE(0x0000_0002, 20); // HasLinkInfo only
+
+    const linkInfoHeaderSize = 0x1c;
+    const baseBytes = Buffer.from(
+      'C:\\x\\node_modules\\electron\\dist\\electron.exe',
+      'latin1',
+    );
+    const localBasePathOffset = linkInfoHeaderSize;
+    const linkInfoSize = localBasePathOffset + baseBytes.length; // no NUL, no suffix
+    const linkInfo = Buffer.alloc(linkInfoSize);
+    linkInfo.writeUInt32LE(linkInfoSize, 0);
+    linkInfo.writeUInt32LE(linkInfoHeaderSize, 4);
+    linkInfo.writeUInt32LE(0x1, 8); // VolumeIDAndLocalBasePath
+    linkInfo.writeUInt32LE(0, 12);
+    linkInfo.writeUInt32LE(localBasePathOffset, 16);
+    linkInfo.writeUInt32LE(0, 20);
+    linkInfo.writeUInt32LE(0, 24); // no suffix
+    baseBytes.copy(linkInfo, localBasePathOffset);
+
+    expect(parseWindowsShortcut(Buffer.concat([header, linkInfo]))).toBeNull();
+  });
 });

@@ -69,14 +69,22 @@ function decodeNullTerminated(
   // file; without this bound we would decode unrelated bytes as the path.
   const stop = Math.min(limit, buffer.length);
   if (start < 0 || start >= stop) return '';
+  // Require an actual NUL terminator within bounds. A field that runs to the end
+  // of the structure without one is malformed/hostile; returning its raw content
+  // as a "path" could let it impersonate a dev Electron link and get unlinked, so
+  // treat an unterminated field as absent instead.
   if (unicode) {
-    let end = start;
-    while (end + 1 < stop && !(buffer[end] === 0 && buffer[end + 1] === 0)) end += 2;
-    return buffer.toString('utf16le', start, end);
+    for (let end = start; end + 1 < stop; end += 2) {
+      if (buffer[end] === 0 && buffer[end + 1] === 0) {
+        return buffer.toString('utf16le', start, end);
+      }
+    }
+    return '';
   }
-  let end = start;
-  while (end < stop && buffer[end] !== 0) end += 1;
-  return buffer.toString('latin1', start, end);
+  for (let end = start; end < stop; end += 1) {
+    if (buffer[end] === 0) return buffer.toString('latin1', start, end);
+  }
+  return '';
 }
 
 /**
