@@ -128,29 +128,32 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
     for (const m of provider.models[agent] ?? []) {
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
-      if (!selected && isVisible && !isVisible(provider.id, m)) continue;
-      const entry: ModelListEntry = {
-        ...m,
-        sourceProviderId: provider.id,
-        sourceConnected: provider.connected,
+      // entry 构造延后到确定要用时(push / 替换):被 first-wins 丢弃的重复行不做无谓 spread。
+      const makeEntry = (): ModelListEntry => {
+        const entry: ModelListEntry = {
+          ...m,
+          sourceProviderId: provider.id,
+          sourceConnected: provider.connected,
+        };
+        if (provider.access !== undefined) entry.sourceAccess = provider.access;
+        return entry;
       };
-      if (provider.access !== undefined) entry.sourceAccess = provider.access;
-      if (dedupe === 'first-wins') {
-        if (seen.has(m.id)) {
-          // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
-          // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
-          // 用选中行**原位替换**首见行(位置守首见槽,输出顺序契约不变)。
-          if (selected) {
-            const i = out.findIndex((e) => e.id === m.id);
-            if (i !== -1 && !matchesSelected(keepSelected, out[i].sourceProviderId, out[i].id)) {
-              out[i] = entry;
-            }
+      if (dedupe === 'first-wins' && seen.has(m.id)) {
+        // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
+        // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
+        // 用选中行**原位替换**首见行(位置守首见槽,输出顺序契约不变;选中行豁免
+        // isVisible,与 push 路径同规则)。普通重复行直接丢弃。
+        if (selected) {
+          const i = out.findIndex((e) => e.id === m.id);
+          if (i !== -1 && !matchesSelected(keepSelected, out[i].sourceProviderId, out[i].id)) {
+            out[i] = makeEntry();
           }
-          continue;
         }
-        seen.add(m.id);
+        continue;
       }
-      out.push(entry);
+      if (!selected && isVisible && !isVisible(provider.id, m)) continue;
+      if (dedupe === 'first-wins') seen.add(m.id);
+      out.push(makeEntry());
     }
   }
   return out;
