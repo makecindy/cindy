@@ -18,15 +18,11 @@ import {
 } from '../../shared/modelPriceQuote.js';
 import type { ModelAccessGatewayModel } from '../../shared/modelAccess.js';
 import { providerSecretStorageKey } from '../../shared/providerSecrets.js';
-import {
-  type ModelPriceQuote,
-  type ModelPricingCatalog,
-} from '../../shared/regionalMoney.js';
+import { type ModelPriceQuote, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
-import { getCodexBudgetEffectiveCostMultiplier } from './turnCostCalculator.js';
 
 export { getCodexBudgetEffectiveCostMultiplier } from './turnCostCalculator.js';
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
@@ -53,22 +49,13 @@ let cacheScope: string | null = null;
 let cacheAt = 0;
 let modelSyncInflight: Promise<unknown> | null = null;
 const hydratedScopes = new Set<string>();
-const hydrateInflightByScope = new Map<
-  string,
-  Promise<ModelPricingCatalog | null>
->();
+const hydrateInflightByScope = new Map<string, Promise<ModelPricingCatalog | null>>();
 
 function currentKeyCacheIdentity(): string {
   try {
-    const physicalKey = resolveOwnerScopedSecretStorageKey(
-      providerSecretStorageKey('xd'),
-    );
+    const physicalKey = resolveOwnerScopedSecretStorageKey(providerSecretStorageKey('xd'));
     if (!physicalKey) return 'key=missing';
-    const file = path.join(
-      app.getPath('userData'),
-      'safe-storage',
-      `${physicalKey}.enc`,
-    );
+    const file = path.join(app.getPath('userData'), 'safe-storage', `${physicalKey}.enc`);
     const stat = statSync(file, { bigint: true });
     return `key=${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
   } catch {
@@ -132,16 +119,20 @@ function validateQuote(
 
 function validateCatalog(value: unknown): ModelPricingCatalog | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const xdValue = (value as Record<string, unknown>).xd;
+  const catalog = value as Record<string, unknown>;
+  if (Object.keys(catalog).length === 0) return {};
+  const xdValue = catalog.xd;
   if (!xdValue || typeof xdValue !== 'object' || Array.isArray(xdValue)) return null;
   const xd: Record<string, ModelPriceQuote> = {};
-  for (const [rawModelId, rawQuote] of Object.entries(xdValue)) {
+  const entries = Object.entries(xdValue);
+  for (const [rawModelId, rawQuote] of entries) {
     const modelId = rawModelId.trim();
     if (!modelId) continue;
     const quote = validateQuote(rawQuote, 'xd', modelId);
     if (quote) xd[modelId] = quote;
   }
-  return Object.keys(xd).length > 0 ? { xd } : null;
+  if (Object.keys(xd).length > 0) return { xd };
+  return entries.length === 0 ? {} : null;
 }
 
 async function writeDiskCache(
@@ -174,7 +165,9 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
   if (existing) return existing;
   const hydrateInflight = (async () => {
     try {
-      const raw = JSON.parse(await fs.readFile(diskCachePath(), 'utf8')) as Partial<DiskCachePayload>;
+      const raw = JSON.parse(
+        await fs.readFile(diskCachePath(), 'utf8'),
+      ) as Partial<DiskCachePayload>;
       if (
         raw.version !== DISK_CACHE_VERSION ||
         raw.scope !== scope ||
@@ -189,9 +182,7 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
       cache = pricing;
       cacheScope = scope;
       cacheAt = Number(raw.fetchedAt);
-      log.debug(
-        `hydrated model pricing cache: ${Object.keys(pricing.xd ?? {}).length} XD quotes`,
-      );
+      log.debug(`hydrated model pricing cache: ${Object.keys(pricing.xd ?? {}).length} XD quotes`);
       return pricing;
     } catch (err) {
       const code =
@@ -228,15 +219,14 @@ function broadcastPricing(pricing: ModelPricingCatalog | null): void {
  */
 export function replaceGatewayModelPricing(
   models: readonly ModelAccessGatewayModel[],
-): ModelPricingCatalog | null {
+): ModelPricingCatalog {
   const scope = currentScope();
-  const next = gatewayPricingCatalog(models, CURRENT_CINDY_REGION);
-  const pricing = Object.keys(next.xd ?? {}).length > 0 ? next : null;
+  const pricing = gatewayPricingCatalog(models, CURRENT_CINDY_REGION);
   cache = pricing;
   cacheScope = scope;
   cacheAt = Date.now();
   hydratedScopes.add(scope);
-  void writeDiskCache(scope, next, cacheAt);
+  void writeDiskCache(scope, pricing, cacheAt);
   broadcastPricing(pricing);
   return pricing;
 }
@@ -307,9 +297,7 @@ export function getCodexSubscriptionValuePrice(
   return getModelPriceQuote(pricing, 'openai', modelId);
 }
 
-export function getSubscriptionDirectValuePrice(
-  modelId: string,
-): ModelPriceQuote | undefined {
+export function getSubscriptionDirectValuePrice(modelId: string): ModelPriceQuote | undefined {
   return subscriptionDirectPriceQuote(modelId);
 }
 
@@ -318,10 +306,7 @@ export async function prewarmModelPricing(): Promise<void> {
   try {
     await getModelPricing();
   } catch (err) {
-    log.debug(
-      'prewarm model pricing failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+    log.debug('prewarm model pricing failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
