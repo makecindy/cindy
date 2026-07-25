@@ -235,12 +235,14 @@ export function usePlanChange(
     });
   }, [applyChange, withRequestLock]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (expectedSession = sessionRef.current) => {
+    if (expectedSession !== sessionRef.current) return;
     const current = stateRef.current;
     if (!current.planChange) return;
     const planChangeId = current.planChange.planChangeId;
-    const session = sessionRef.current;
+    const session = expectedSession;
     await withRequestLock(session, async () => {
+      if (session !== sessionRef.current) return;
       try {
         applyChange(await billingApi.refreshPlanChange(planChangeId), session);
       } catch {
@@ -270,11 +272,13 @@ export function usePlanChange(
   );
 
   const close = useCallback(() => {
-    setState((current) =>
-      current.phase === 'QUOTING' || current.phase === 'CONFIRMING'
-        ? current
-        : { ...current, open: false },
-    );
+    const current = stateRef.current;
+    if (current.phase === 'QUOTING' || current.phase === 'CONFIRMING') return;
+    sessionRef.current += 1;
+    inFlightRef.current = null;
+    const next = { ...current, open: false };
+    stateRef.current = next;
+    setState(next);
   }, []);
 
   useEffect(() => {
@@ -282,7 +286,9 @@ export function usePlanChange(
     // 不从本地存储或服务端恢复历史二维码。
     mountedRef.current = true;
     sessionRef.current += 1;
+    inFlightRef.current = null;
     settledNotifiedRef.current = new Set();
+    stateRef.current = INITIAL_STATE;
     setState(INITIAL_STATE);
     return () => {
       mountedRef.current = false;
@@ -298,11 +304,12 @@ export function usePlanChange(
       (state.phase !== 'AWAITING_PAYMENT' && state.phase !== 'PENDING_PROVIDER' && !state.stale)
     )
       return;
+    const session = sessionRef.current;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh();
+      if (document.visibilityState === 'visible') void refresh(session);
     }, 3_000);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refresh();
+      if (document.visibilityState === 'visible') void refresh(session);
     };
     window.addEventListener('focus', onVisible);
     document.addEventListener('visibilitychange', onVisible);

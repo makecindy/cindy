@@ -282,6 +282,36 @@ describe('usePlanChange', () => {
     expect(api.quotePlanChange.mock.calls[0]![1]).not.toBe(api.quotePlanChange.mock.calls[1]![1]);
   });
 
+  it('lets a new target start immediately after closing during an in-flight refresh', async () => {
+    api.quotePlanChange
+      .mockResolvedValueOnce(change())
+      .mockResolvedValueOnce(change({ planChangeId: 'plan_change_2' }));
+    let releaseRefresh!: (value: BillingPlanChange) => void;
+    api.refreshPlanChange.mockImplementation(
+      () => new Promise<BillingPlanChange>((resolve) => (releaseRefresh = resolve)),
+    );
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
+
+    await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = result.current.refresh();
+    });
+
+    await act(async () => {
+      result.current.close();
+      await result.current.startQuote('plus_month', null);
+    });
+    expect(api.quotePlanChange).toHaveBeenCalledTimes(2);
+    expect(result.current.state.planChange?.planChangeId).toBe('plan_change_2');
+
+    await act(async () => {
+      releaseRefresh(change({ status: 'APPLIED' }));
+      await refreshing;
+    });
+    expect(result.current.state.planChange?.planChangeId).toBe('plan_change_2');
+  });
+
   it('starts from a clean state on mount and never replays persisted intents', async () => {
     localStorage.setItem(
       `cindy.billing.plan-change-intent.v1:${encodeURIComponent(ACCOUNT_ID)}`,

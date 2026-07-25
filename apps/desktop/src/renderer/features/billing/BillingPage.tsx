@@ -335,6 +335,15 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
   }, [checkout.state.subscription]);
 
+  const closeCheckout = useCallback(() => {
+    const abandonedIncomplete = checkout.state.subscription?.status === 'INCOMPLETE';
+    checkout.close();
+    if (abandonedIncomplete) {
+      setCurrentSubscription(null);
+      void loadSubscription();
+    }
+  }, [checkout, loadSubscription]);
+
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
@@ -811,7 +820,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
       <BillingCheckoutDialog
         state={checkout.state}
-        onClose={checkout.close}
+        onClose={closeCheckout}
         onRefresh={() => void checkout.refreshActive()}
         onRetry={() => void checkout.retry()}
       />

@@ -282,6 +282,31 @@ describe('useBillingCheckout ephemeral sessions', () => {
     expect(result.current.state).toMatchObject({ open: false, phase: 'IDLE', error: false });
   });
 
+  it('does not let a queued poll callback refresh the abandoned order after close', async () => {
+    const order = pendingOrder();
+    api.createTopup.mockResolvedValue(order);
+    let queuedFocus: EventListener | null = null;
+    const addEventListener = vi.spyOn(window, 'addEventListener');
+    addEventListener.mockImplementation((type, listener) => {
+      if (type === 'focus') queuedFocus = listener as EventListener;
+    });
+    const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
+
+    await act(() =>
+      result.current.startTopup({ offerCode: 'credit_topup_20', purchaseOptionId: 'option_1' }),
+    );
+    expect(queuedFocus).not.toBeNull();
+
+    await act(async () => {
+      result.current.close();
+      queuedFocus!(new Event('focus'));
+      await Promise.resolve();
+    });
+
+    expect(api.refreshTopup).not.toHaveBeenCalled();
+    expect(result.current.state).toMatchObject({ open: false, phase: 'IDLE', order: null });
+  });
+
   it('retries a failed order through the retry endpoint with a new key', async () => {
     const failed = { ...pendingOrder(), status: 'FAILED' as const, paymentAction: null };
     api.createTopup.mockResolvedValueOnce(failed);

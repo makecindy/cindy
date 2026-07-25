@@ -183,9 +183,11 @@ export function useBillingCheckout(accountId: string | null) {
     [accountId, applySubscription, failCurrentOperation, withRequestLock],
   );
 
-  const refreshActive = useCallback(async () => {
-    const session = sessionRef.current;
+  const refreshActive = useCallback(async (expectedSession = sessionRef.current) => {
+    if (expectedSession !== sessionRef.current) return;
+    const session = expectedSession;
     await withRequestLock(session, async () => {
+      if (session !== sessionRef.current) return;
       const current = stateRef.current;
       try {
         if (current.kind === 'TOPUP' && current.order) {
@@ -307,12 +309,16 @@ export function useBillingCheckout(accountId: string | null) {
   // next selection starts over with a new idempotency key.
   const close = useCallback(() => {
     sessionRef.current += 1;
+    inFlightRef.current = null;
+    stateRef.current = INITIAL_STATE;
     setState(INITIAL_STATE);
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     sessionRef.current += 1;
+    inFlightRef.current = null;
+    stateRef.current = INITIAL_STATE;
     setState(INITIAL_STATE);
     clearLegacyBillingIntentStorage(accountId);
     return () => {
@@ -323,11 +329,12 @@ export function useBillingCheckout(accountId: string | null) {
   useEffect(() => {
     const shouldPoll = state.open && state.phase === 'AWAITING_PAYMENT';
     if (!shouldPoll) return;
+    const session = sessionRef.current;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refreshActive();
+      if (document.visibilityState === 'visible') void refreshActive(session);
     }, 3_000);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refreshActive();
+      if (document.visibilityState === 'visible') void refreshActive(session);
     };
     window.addEventListener('focus', onVisible);
     document.addEventListener('visibilitychange', onVisible);

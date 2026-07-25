@@ -1584,6 +1584,43 @@ describe('BillingPage plan change', () => {
     });
   });
 
+  it('stops treating the abandoned checkout subscription as current when the dialog closes', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(
+      async () => ({ subscription: null }),
+    ) as unknown as typeof billing.getCurrentSubscription;
+    install(billing);
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: {
+        subscriptionId: 'subscription_incomplete',
+        status: 'INCOMPLETE',
+        currentPeriodStartAt: null,
+        currentPeriodEndAt: null,
+        entitlementValidUntil: null,
+        cancelAtPeriodEnd: false,
+        effectivePlan: null,
+        purchaseAttemptId: 'attempt_incomplete',
+        paymentAction: null,
+      },
+    });
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByLabelText('billing.actions.close'));
+
+    expect(checkout.close).toHaveBeenCalled();
+    await waitFor(() => expect(billing.getCurrentSubscription.mock.calls.length).toBeGreaterThan(1));
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
+    fireEvent.click(screen.getByText('stripe').closest('button')!);
+    expect(screen.getByText('billing.actions.pay').closest('button')).toHaveProperty(
+      'disabled',
+      false,
+    );
+  });
+
   it('still blocks a duplicate purchase while a real subscription is live', async () => {
     const billing = billingMocks();
     billing.getCurrentSubscription = vi.fn(async () => ({
