@@ -21,7 +21,11 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-import { PluginManagementLayout, PluginManagementPage } from '../PluginManagementLayout';
+import {
+  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
+  PluginManagementLayout,
+  PluginManagementPage,
+} from '../PluginManagementLayout';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 
 function CurrentPath() {
@@ -80,6 +84,12 @@ describe('PluginManagementLayout', () => {
     expect(pageFrame?.className).toContain('max-w-[920px]');
   });
 
+  it('uses a content-width responsive card grid for both catalogs', () => {
+    expect(PLUGIN_MANAGEMENT_CARD_GRID_CLASS).toContain('auto-fit');
+    expect(PLUGIN_MANAGEMENT_CARD_GRID_CLASS).toContain('min(100%,22.5rem)');
+    expect(PLUGIN_MANAGEMENT_CARD_GRID_CLASS).not.toMatch(/\b(?:sm|md|lg):grid-cols-/);
+  });
+
   it('keeps catalog children in a height-constrained flex column so their main area can scroll', () => {
     render(
       <MemoryRouter>
@@ -120,5 +130,32 @@ describe('PluginManagementLayout', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear skill search' }));
     expect(onQueryChange).toHaveBeenCalledWith('');
+  });
+
+  it('keeps search directly editable and blurs an empty search with Escape', async () => {
+    render(
+      <MemoryRouter>
+        <PluginManagementLayout
+          activeTab="skills"
+          query=""
+          onQueryChange={vi.fn()}
+          searchPlaceholder="Search skills"
+          clearSearchLabel="Clear skill search"
+        >
+          <span>Content</span>
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+
+    const searchInput = screen.getByRole('textbox', { name: 'Search skills' });
+    const searchControl = searchInput.parentElement;
+
+    expect(searchControl?.getAttribute('data-expanded')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Search skills' })).toBeNull();
+    searchInput.focus();
+    await waitFor(() => expect(document.activeElement).toBe(searchInput));
+
+    fireEvent.keyDown(searchInput, { key: 'Escape' });
+    expect(document.activeElement).not.toBe(searchInput);
   });
 });

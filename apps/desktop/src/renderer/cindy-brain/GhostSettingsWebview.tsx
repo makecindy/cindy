@@ -49,17 +49,22 @@ const AUTO_HEIGHT_MIN = 48;
 const AUTO_HEIGHT_MAX = 800;
 
 /**
- * 自适应模式的结构 CSS(dom-ready 注入,id 守卫幂等):
+ * 设置 guest 的结构 CSS(dom-ready 注入,id 守卫幂等):
+ * - 所有模式先把文档和子元素宽度收在宿主卡片内,让插件作者的固定宽控件
+ *   在极窄内容区也能收缩,而不是顶出卡片;
+ * 自适应高度模式再追加:
  * - html/body 高度钉 auto:意识页写 height:100%/100vh 会让 body 高恒等于
  *   当前视口高,量出来的值永远追着容器现值走(只涨不缩的棘轮,内容变矮后
  *   底部空白收不回去),钉 auto 后 body 高回归内容本身;
  * - overflow-x 裁掉:设置卡片里横滚动条永远不是想要的,且它会吃掉十几像素
  *   视口高、连带勾出纵滚动条(量高不知道横滚动条的存在)。
  * 纵向滚动开关不在这里——由量高脚本按"内容是否超 clamp 上限"逐次决定。
- * 仅自适应模式注入;settingsHeight 固定高度是作者显式选择,布局不干预。
+ * 固定高度只跳过高度规则,仍应用宽度收口。
  */
-const AUTO_HEIGHT_GUEST_CSS =
-  'html,body{height:auto !important;min-height:0 !important;}html{overflow-x:hidden;}';
+const RESPONSIVE_GUEST_CSS =
+  'html,body{width:100%!important;max-width:100%!important;overflow-x:hidden!important;}*,*::before,*::after{box-sizing:border-box;min-width:0;max-width:100%;}';
+const RESPONSIVE_STYLE_SCRIPT = `(function(){if(document.getElementById('__xdt_settings_w'))return;var s=document.createElement('style');s.id='__xdt_settings_w';s.textContent=${JSON.stringify(RESPONSIVE_GUEST_CSS)};(document.head||document.documentElement).appendChild(s)})()`;
+const AUTO_HEIGHT_GUEST_CSS = 'html,body{height:auto !important;min-height:0 !important;}';
 const AUTO_HEIGHT_STYLE_SCRIPT = `(function(){if(document.getElementById('__xdt_auto_h'))return;var s=document.createElement('style');s.id='__xdt_auto_h';s.textContent=${JSON.stringify(AUTO_HEIGHT_GUEST_CSS)};(document.head||document.documentElement).appendChild(s)})()`;
 
 /**
@@ -334,15 +339,18 @@ function SettingsWebviewBody({
     };
     const onDomReady = () => {
       injector.onDomReady();
+      const prepareResponsiveLayout = webview
+        .executeJavaScript(RESPONSIVE_STYLE_SCRIPT)
+        .catch(() => {});
       if (fixedHeight !== undefined) {
-        // 固定高度不量高,补一次空执行,只为把淡入排到主题 CSS 之后。
-        void webview.executeJavaScript('0').then(reveal, reveal);
+        // 固定高度不量高,宽度收口后揭示;这次往返也把淡入排到主题 CSS 之后。
+        void prepareResponsiveLayout.then(reveal, reveal);
         return;
       }
       // 结构 CSS 先落地再量(html/body 钉 auto 会改变 body 高,顺序反了首量
       // 就是错值);脚本自带 id 守卫,dom-ready 因 guest 内跳转重入时幂等。
-      void webview
-        .executeJavaScript(AUTO_HEIGHT_STYLE_SCRIPT)
+      void prepareResponsiveLayout
+        .then(() => webview.executeJavaScript(AUTO_HEIGHT_STYLE_SCRIPT))
         .catch(() => {})
         .then(measure);
       measureTimers.push(setTimeout(measure, 250), setTimeout(measure, 1000));
@@ -411,7 +419,7 @@ function SettingsWebviewBody({
     <div
       ref={hostRef}
       data-ghost-webview
-      className="relative flex"
+      className="relative flex min-w-0 w-full max-w-full overflow-hidden"
       style={{ height: fixedHeight ?? autoHeight }}
     >
       {/* 首帧快照(上层盖住透明装载期的 webview;pointer-events 穿透,撤图前
@@ -447,7 +455,7 @@ export function GhostSettingsWebview({
   return (
     <div
       className={cn(
-        'flex flex-col gap-3 rounded-xl border px-5 py-4',
+        'flex min-w-0 max-w-full flex-col gap-3 rounded-xl border px-5 py-4',
         appearance === 'plugin'
           ? 'border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[color-mix(in_srgb,var(--surface-elevated)_82%,var(--surface))]'
           : 'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',

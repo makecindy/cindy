@@ -2,7 +2,7 @@
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
- * Outputs: accessible detail interactions without mutating Ghost runtime data directly.
+ * Outputs: accessible detail interactions and a single-row responsive action hero.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -199,7 +199,7 @@ export function GhostPluginDetailView({
         </button>
 
         <header>
-          <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-5">
+          <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon
               iconDataUrl={detail.iconDataUrl}
               iconId={detail.id}
@@ -214,7 +214,7 @@ export function GhostPluginDetailView({
             </div>
 
             <div
-              className="plugin-detail-actions flex shrink-0 items-center gap-3"
+              className="plugin-detail-actions flex shrink-0 flex-nowrap items-center gap-1.5"
               style={WINDOW_NO_DRAG_STYLE}
             >
               {updateVersion ? (
@@ -238,7 +238,7 @@ export function GhostPluginDetailView({
                 disabled={!canUse}
                 title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
                 className={cn(
-                  'inline-flex h-10 min-w-[88px] items-center justify-center rounded-full px-5 text-13 font-medium',
+                  'plugin-detail-primary-action inline-flex h-10 min-w-[88px] items-center justify-center whitespace-nowrap rounded-full px-3 text-13 font-medium',
                   'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
                   'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -383,20 +383,24 @@ export function GhostPluginMetadata({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 text-13 leading-5 text-[var(--text-tertiary)]">
+    <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden whitespace-nowrap text-13 leading-5 text-[var(--text-tertiary)]">
       {author ? (
         <>
-          <span>{t('settings.ghosts.detail.byAuthor', { author })}</span>
+          <span className="truncate">{t('settings.ghosts.detail.byAuthor', { author })}</span>
           <MetadataDivider />
         </>
       ) : null}
-      <span>v{version}</span>
+      <span className="shrink-0">v{version}</span>
     </div>
   );
 }
 
 function MetadataDivider() {
-  return <span aria-hidden="true">·</span>;
+  return (
+    <span className="shrink-0" aria-hidden="true">
+      ·
+    </span>
+  );
 }
 
 function DetailSectionHeader({

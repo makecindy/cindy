@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Plus, Sparkles, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, Plus, Sparkles, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -57,7 +57,11 @@ import {
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
 import { formatSetupGateDescription } from './lib/ghostSetupGateModel';
-import { PluginManagementLayout, PluginManagementPage } from './PluginManagementLayout';
+import {
+  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
+  PluginManagementLayout,
+  PluginManagementPage,
+} from './PluginManagementLayout';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
@@ -71,6 +75,8 @@ import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
+const PLUGIN_CATALOG_TOOLBAR_CLASS =
+  'plugin-catalog-toolbar mb-5 flex items-center justify-between gap-4';
 type PluginPresentationFilter = 'all' | PluginPresentationOrigin;
 type PresentedGhostPluginItem = GhostPluginListItem & {
   origin: PluginPresentationOrigin;
@@ -332,9 +338,7 @@ export function GhostPluginPage() {
     ? (marketByGhostId.get(selectedDetail.id) ?? null)
     : null;
   const selectedMarketUpdate =
-    selectedMarketInstall?.installState === 'update-available'
-      ? selectedMarketInstall
-      : null;
+    selectedMarketInstall?.installState === 'update-available' ? selectedMarketInstall : null;
 
   const panelStatus = useMemo(() => {
     if (!selectedDetail || selectedDetail.panelMinWidth === null) return null;
@@ -770,64 +774,18 @@ export function GhostPluginPage() {
                   {installedShortcutItems.length}
                 </span>
               </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-1">
-                {installedShortcutItems
-                  .slice(0, MAX_VISIBLE_INSTALLED_GHOSTS)
-                  .map((item) => renderInstalledGhost(item, setSelectedId))}
-                {installedShortcutItems.length > MAX_VISIBLE_INSTALLED_GHOSTS ? (
-                  <button
-                    type="button"
-                    onClick={() => setInstalledExpanded((expanded) => !expanded)}
-                    className={cn(
-                      'group flex w-16 shrink-0 justify-center rounded-[12px] px-2 py-2',
-                      'transition-transform duration-150 ease-out hover:-translate-y-px active:translate-y-0 active:scale-[0.98]',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                      'motion-reduce:transform-none motion-reduce:transition-none',
-                    )}
-                    aria-expanded={installedExpanded}
-                    aria-label={t(
-                      installedExpanded
-                        ? 'settings.ghosts.page.installedCollapse'
-                        : 'settings.ghosts.page.installedExpand',
-                      { count: installedShortcutItems.length - MAX_VISIBLE_INSTALLED_GHOSTS },
-                    )}
-                  >
-                    <span className="grid size-12 grid-cols-2 grid-rows-2 place-content-center gap-1 rounded-[22%] border-[0.5px] border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-chip)_58%,transparent)] p-2 shadow-[var(--plugin-icon-shadow)] transition-colors duration-150 group-hover:bg-[color-mix(in_srgb,var(--surface-chip)_78%,transparent)]">
-                      {installedShortcutItems
-                        .slice(MAX_VISIBLE_INSTALLED_GHOSTS, MAX_VISIBLE_INSTALLED_GHOSTS + 3)
-                        .map((item) => (
-                          <span
-                            key={item.id}
-                            className="flex size-3.5 items-center justify-center overflow-hidden rounded-[5px] bg-[var(--surface-elevated)]"
-                          >
-                            <GhostPluginIcon
-                              iconDataUrl={item.iconDataUrl}
-                              iconId={item.id}
-                              iconName={item.name}
-                              size="mini"
-                            />
-                          </span>
-                        ))}
-                      <span className="col-start-2 row-start-2 flex size-3.5 items-center justify-center rounded-[5px] bg-[var(--surface-elevated)] text-[9px] font-medium tabular-nums text-[var(--text-secondary)]">
-                        +{installedShortcutItems.length - MAX_VISIBLE_INSTALLED_GHOSTS}
-                      </span>
-                    </span>
-                  </button>
-                ) : null}
-              </div>
-              {installedExpanded && installedShortcutItems.length > MAX_VISIBLE_INSTALLED_GHOSTS ? (
-                <div className="plugin-motion-stagger mt-2 flex flex-wrap items-center gap-1">
-                  {installedShortcutItems
-                    .slice(MAX_VISIBLE_INSTALLED_GHOSTS)
-                    .map((item) => renderInstalledGhost(item, setSelectedId))}
-                </div>
-              ) : null}
+              <InstalledGhostQueue
+                items={installedShortcutItems}
+                expanded={installedExpanded}
+                onExpandedChange={setInstalledExpanded}
+                onSelect={setSelectedId}
+              />
             </section>
           ) : null}
 
           <section className="plugin-motion-page-section mt-6 min-w-0">
-            <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-baseline gap-2">
+            <div className={PLUGIN_CATALOG_TOOLBAR_CLASS}>
+              <div className="flex shrink-0 items-baseline gap-2 whitespace-nowrap">
                 <h2 className="text-20 font-medium text-[var(--text-primary)]">
                   {t('settings.ghosts.page.allTitle')}
                 </h2>
@@ -836,7 +794,7 @@ export function GhostPluginPage() {
                 </span>
               </div>
               <div
-                className="flex max-w-full items-center gap-1 overflow-x-auto"
+                className="plugin-catalog-filters flex min-w-0 max-w-full items-center gap-1 overflow-x-auto"
                 role="group"
                 aria-label={t('settings.ghosts.page.filtersAria')}
                 style={WINDOW_NO_DRAG_STYLE}
@@ -883,7 +841,7 @@ export function GhostPluginPage() {
             ) : null}
 
             {items.length > 0 || availableMarketItems.length > 0 ? (
-              <div className="plugin-motion-stagger grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
                 {items.map((item) => (
                   <GhostPluginCard
                     key={item.id}
@@ -1035,7 +993,7 @@ function GhostPluginActions({
         <button
           type="button"
           className={cn(
-            'group inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)]',
+            'plugin-management-action-trigger group inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)]',
             'bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]',
             'transition-[background-color,border-color,transform] duration-150 ease-out',
             'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
@@ -1045,11 +1003,13 @@ function GhostPluginActions({
           aria-label={t('settings.ghosts.page.addPluginAria')}
         >
           <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
-          {t('settings.ghosts.page.addPlugin')}
+          <span className="plugin-management-action-label">
+            {t('settings.ghosts.page.addPlugin')}
+          </span>
           <ChevronDown
             size={13}
             strokeWidth={1.75}
-            className="transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+            className="plugin-management-action-chevron transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
             aria-hidden="true"
           />
         </button>
@@ -1233,6 +1193,79 @@ export function InstalledGhostShortcut({
   );
 }
 
-function renderInstalledGhost(item: GhostPluginListItem, onSelect: (id: string) => void) {
-  return <InstalledGhostShortcut key={item.id} item={item} onSelect={onSelect} />;
+/** Installed shortcuts share one wrapping queue in both collapsed and expanded states. */
+export function InstalledGhostQueue({
+  items,
+  expanded,
+  onExpandedChange,
+  onSelect,
+}: {
+  items: readonly GhostPluginListItem[];
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  onSelect: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const hasOverflow = items.length > MAX_VISIBLE_INSTALLED_GHOSTS;
+  const visibleItems = expanded ? items : items.slice(0, MAX_VISIBLE_INSTALLED_GHOSTS);
+
+  return (
+    <div
+      data-testid="installed-plugin-queue"
+      className={cn(
+        'flex min-w-0 flex-wrap items-center gap-1',
+        expanded && 'plugin-motion-stagger',
+      )}
+    >
+      {visibleItems.map((item) => (
+        <InstalledGhostShortcut key={item.id} item={item} onSelect={onSelect} />
+      ))}
+      {hasOverflow ? (
+        <button
+          type="button"
+          onClick={() => onExpandedChange(!expanded)}
+          className={cn(
+            'group flex w-16 shrink-0 justify-center rounded-[12px] px-2 py-2',
+            'transition-transform duration-150 ease-out hover:-translate-y-px active:translate-y-0 active:scale-[0.98]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            'motion-reduce:transform-none motion-reduce:transition-none',
+          )}
+          aria-expanded={expanded}
+          aria-label={t(
+            expanded
+              ? 'settings.ghosts.page.installedCollapse'
+              : 'settings.ghosts.page.installedExpand',
+            { count: items.length - MAX_VISIBLE_INSTALLED_GHOSTS },
+          )}
+        >
+          {expanded ? (
+            <span className="flex size-12 items-center justify-center rounded-[22%] border-[0.5px] border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-chip)_58%,transparent)] text-[var(--text-secondary)] shadow-[var(--plugin-icon-shadow)] transition-colors duration-150 group-hover:bg-[color-mix(in_srgb,var(--surface-chip)_78%,transparent)]">
+              <ChevronUp size={18} strokeWidth={1.8} aria-hidden="true" />
+            </span>
+          ) : (
+            <span className="grid size-12 grid-cols-2 grid-rows-2 place-content-center gap-1 rounded-[22%] border-[0.5px] border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-chip)_58%,transparent)] p-2 shadow-[var(--plugin-icon-shadow)] transition-colors duration-150 group-hover:bg-[color-mix(in_srgb,var(--surface-chip)_78%,transparent)]">
+              {items
+                .slice(MAX_VISIBLE_INSTALLED_GHOSTS, MAX_VISIBLE_INSTALLED_GHOSTS + 3)
+                .map((item) => (
+                  <span
+                    key={item.id}
+                    className="flex size-3.5 items-center justify-center overflow-hidden rounded-[5px] bg-[var(--surface-elevated)]"
+                  >
+                    <GhostPluginIcon
+                      iconDataUrl={item.iconDataUrl}
+                      iconId={item.id}
+                      iconName={item.name}
+                      size="mini"
+                    />
+                  </span>
+                ))}
+              <span className="col-start-2 row-start-2 flex size-3.5 items-center justify-center rounded-[5px] bg-[var(--surface-elevated)] text-[9px] font-medium tabular-nums text-[var(--text-secondary)]">
+                +{items.length - MAX_VISIBLE_INSTALLED_GHOSTS}
+              </span>
+            </span>
+          )}
+        </button>
+      ) : null}
+    </div>
+  );
 }

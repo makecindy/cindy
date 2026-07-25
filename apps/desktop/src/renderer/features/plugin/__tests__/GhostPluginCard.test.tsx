@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -20,7 +20,12 @@ vi.mock('@/components/ui/tooltip', () => ({
   ),
 }));
 
-import { GhostPluginCard, InstalledGhostShortcut, MarketPluginCard } from '../GhostPluginPage';
+import {
+  GhostPluginCard,
+  InstalledGhostQueue,
+  InstalledGhostShortcut,
+  MarketPluginCard,
+} from '../GhostPluginPage';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
@@ -62,6 +67,45 @@ describe('GhostPluginCard', () => {
     expect(button.getAttribute('title')).toBeNull();
     fireEvent.click(button);
     expect(onSelect).toHaveBeenCalledWith('filo-google');
+  });
+
+  it('puts the collapse control after every installed plugin in the expanded queue', () => {
+    const plugins = Array.from({ length: 7 }, (_, index) => ({
+      ...installedPlugin,
+      id: `plugin-${index + 1}`,
+      name: `Plugin ${index + 1}`,
+    }));
+    const { container, rerender } = render(
+      <InstalledGhostQueue
+        items={plugins}
+        expanded={false}
+        onExpandedChange={(expanded) => {
+          rerender(
+            <InstalledGhostQueue
+              items={plugins}
+              expanded={expanded}
+              onExpandedChange={vi.fn()}
+              onSelect={vi.fn()}
+            />,
+          );
+        }}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Plugin 5' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Plugin 6' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.installedExpand' }));
+
+    const queue = container.querySelector('[data-testid="installed-plugin-queue"]');
+    const collapse = screen.getByRole('button', {
+      name: 'settings.ghosts.page.installedCollapse',
+    });
+    expect(screen.getByRole('button', { name: 'Plugin 7' })).toBeTruthy();
+    expect(queue?.lastElementChild).toBe(collapse);
+    expect(within(collapse).queryByText('+2')).toBeNull();
+    expect(collapse.querySelector('.lucide-chevron-up')).toBeTruthy();
   });
 
   it('opens the plugin detail from the card body without firing the action', () => {

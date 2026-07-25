@@ -52,6 +52,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
+import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
 import {
   DetailsSection,
   GhostPluginDetailView,
@@ -150,11 +151,15 @@ describe('Ghost plugin detail sections', () => {
     const scrollSurface = container.querySelector('main');
     const detailFrame = container.querySelector('article');
     const backButton = detailFrame?.querySelector(':scope > button');
+    const detailHero = detailFrame?.querySelector('.plugin-detail-hero');
+    const detailActions = detailFrame?.querySelector('.plugin-detail-actions');
     expect(scrollSurface?.className).toContain('[scrollbar-gutter:stable_both-edges]');
     expect(detailFrame?.className).toContain('plugin-detail-frame');
     expect(detailFrame?.className).toContain('mx-auto');
     expect(detailFrame?.className).toContain('max-w-[824px]');
     expect(backButton?.className).toContain('-ml-3');
+    expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
+    expect(detailActions?.className).toContain('flex-nowrap');
   });
 
   it('disables every market update entry while an update is busy', async () => {
@@ -207,6 +212,42 @@ describe('Ghost plugin detail sections', () => {
     expect(metadata.textContent).toBe('By Cindy·v1.1.4');
     expect(metadata.className).toContain('text-[var(--text-tertiary)]');
     expect(metadata.innerHTML).not.toContain('text-[var(--text-secondary)]');
+  });
+
+  it('marks Cindy model preferences as a card-width responsive control group', () => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        ghosts: {
+          cindyPrefsSync: () => ({
+            overrides: {},
+            image: {
+              options: [{ id: 'image-default', label: 'Image Default' }],
+              defaultModel: { id: 'image-default', label: 'Image Default' },
+            },
+            video: {
+              options: [{ id: 'video-default', label: 'Video Default' }],
+              defaultModel: { id: 'video-default', label: 'Video Default' },
+            },
+          }),
+          setCindyPref: vi.fn(),
+        },
+      },
+    });
+
+    const { container } = render(
+      <CindyCapabilityPrefs
+        ghostId="builtin.example"
+        capabilities={['image.generate']}
+        appearance="plugin"
+      />,
+    );
+
+    expect(container.querySelector('.cindy-capability-prefs')).toBeTruthy();
+    expect(container.querySelector('.cindy-capability-row')).toBeTruthy();
+    const select = screen.getByRole('combobox');
+    expect(select.className).toContain('cindy-capability-select');
+    expect(select.className).toContain('max-w-[60%]');
   });
 
   it('shows only the Tool description after an explicit click', async () => {

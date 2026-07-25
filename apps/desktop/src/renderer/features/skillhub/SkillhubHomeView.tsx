@@ -25,6 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import {
+  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
   PluginManagementLayout,
   PluginManagementPage,
 } from '@/features/plugin/PluginManagementLayout';
@@ -173,7 +174,9 @@ export function SkillhubHomeView() {
               </h1>
               <p className="mt-2 max-w-2xl text-14 leading-6 text-[var(--text-secondary)]">
                 {t(
-                  marketAllowed ? 'skillhub.home.description' : 'skillhub.home.descriptionLocalOnly',
+                  marketAllowed
+                    ? 'skillhub.home.description'
+                    : 'skillhub.home.descriptionLocalOnly',
                 )}
               </p>
             </div>
@@ -220,10 +223,7 @@ export function SkillhubHomeView() {
               />
               {marketLoading && recommended.length === 0 ? (
                 // 占位骨架:与真实卡片同栅格、同行数、同高度,内容到位后原地替换不跳动。
-                <div
-                  className="grid grid-cols-[repeat(auto-fill,minmax(360px,1fr))] gap-3"
-                  aria-hidden
-                >
+                <div className={PLUGIN_MANAGEMENT_CARD_GRID_CLASS} aria-hidden>
                   {Array.from({ length: RECOMMENDED_LIMIT }).map((_, i) => (
                     <div
                       key={i}
@@ -241,7 +241,7 @@ export function SkillhubHomeView() {
                   {t('skillhub.home.recommendedEmpty')}
                 </div>
               ) : (
-                <div className="plugin-motion-stagger grid grid-cols-[repeat(auto-fill,minmax(360px,1fr))] gap-3">
+                <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
                   {recommended.map((s) => (
                     <button
                       key={s.name}
@@ -385,7 +385,7 @@ function LocalGroup({
   return (
     <div className="flex flex-col gap-3">
       <span className="px-1 text-13 font-medium text-[var(--text-secondary)]">{label}</span>
-      <div className="plugin-motion-stagger grid grid-cols-1 gap-3 md:grid-cols-2">
+      <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
         {skills.map((s) => {
           const Icon = KIND_ICON[s.kind] ?? Package;
           // 来源:'skillhub' = 从市场安装的副本(填充徽标);'local' = 自己开发/发布、
