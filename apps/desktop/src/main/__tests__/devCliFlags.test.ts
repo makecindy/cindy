@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   resolveDevCliFlags,
   resolveSingleInstanceLockUserDataDir,
+  shouldBlockSharedPrimaryDev,
   shouldEnforcePassiveMigrationCompatibility,
   shouldRequestSingleInstanceLock,
 } from '../devCliFlags';
@@ -242,6 +243,47 @@ describe('shouldEnforcePassiveMigrationCompatibility', () => {
       shouldEnforcePassiveMigrationCompatibility({
         isPackaged: true,
         schedulerPassive: true,
+        isolated: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldBlockSharedPrimaryDev', () => {
+  it('只阻止共用正式版 userData 的 primary dev', () => {
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: false,
+        isolated: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: true,
+        isolated: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: false,
+        isolated: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: false,
+        isolated: false,
+        hasUserDataOverride: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: true,
+        schedulerPassive: false,
         isolated: false,
       }),
     ).toBe(false);

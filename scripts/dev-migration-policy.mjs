@@ -57,26 +57,30 @@ export function findUnmergedMigrationArtifacts(repoRoot) {
   };
 }
 
-export function usesIsolatedUserData(argv) {
-  return argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
+export function usesIsolatedUserData(argv, env = process.env) {
+  return (
+    argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')) ||
+    env.XDT_ISOLATED === '1' ||
+    Boolean(env.XDT_USER_DATA_DIR?.trim())
+  );
+}
+
+export function usesPassiveUserData(argv) {
+  return argv.includes('--passive') || argv.includes('--preserve-running');
 }
 
 /**
- * Shared userData may only execute migrations that are already canonical on origin/main.
+ * A primary dev process must never migrate the shared userData directory. The
+ * directory may belong to an older packaged release, and a migration from this
+ * checkout can make that release unable to open it. Passive previews remain
+ * read-only, while isolated dev gets its own migration history.
+ *
  * Run this before the restart pipeline stops any existing Cindy instance.
  */
-export function assertSharedDevMigrationPolicy(repoRoot, argv) {
-  if (usesIsolatedUserData(argv)) return;
-  const artifacts = findUnmergedMigrationArtifacts(repoRoot);
-  if (artifacts.committed.length === 0 && artifacts.workingTree.length === 0) return;
-  const detail = [
-    ...artifacts.committed.map((file) => `committed: ${file}`),
-    ...artifacts.workingTree.map((line) => `working tree: ${line}`),
-  ].join('\n  ');
+export function assertSharedDevMigrationPolicy(_repoRoot, argv, env = process.env) {
+  if (usesIsolatedUserData(argv, env) || usesPassiveUserData(argv)) return;
   throw new Error(
-    `Shared Cindy userData cannot run migration artifacts that are not canonical on ${artifacts.baseRef}.\n` +
-      `  ${detail}\n` +
-      'Rebase and renumber the migration before shared testing, or explicitly use a named sandbox: ' +
-      'pnpm restart:desktop:remote -- --isolated=<name>',
+    'Primary desktop dev cannot migrate shared Cindy userData because it may upgrade the release database and prevent an older release from opening it.\n' +
+      'Use pnpm restart:desktop:remote -- --isolated=<name> for dev migrations, or --passive for a shared read-only preview.',
   );
 }

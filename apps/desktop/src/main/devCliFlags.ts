@@ -99,12 +99,9 @@ export function shouldRequestSingleInstanceLock(input: {
  *
  * packaged 用真实 userData —— release 之间单实例，双击第二份安装包会聚焦已运行
  * 窗口。dev 用 `<userData>/dev-single-instance-lock` 子目录 —— dev 之间仍单实例
- * （深链 second-instance redirect 保持有效），但**不再与共库的正式版互斥**：
- * dev + release 共享 userData 双开是明确支持的工作流（2026-07-19 dev 改为与
- * packaged 抢同一把锁曾误伤该工作流，2026-07-20 按 flavor 分域恢复）。跨实例
- * 并发由 SQLite WAL + busy_timeout、scheduler DB 级原子认领、auth
- * replacement-retry 等既有仲裁收敛，与 `--passive` 共库多开走的是同一套机制。
- * `--isolated` 沙箱的 userData 本身独立，锁子目录随之独立，语义不变。
+ * （深链 second-instance redirect 保持有效），并与 packaged 锁分域。共享正式版
+ * userData 只允许 `--passive`，而 passive 会跳过获取锁；primary dev 必须使用
+ * `--isolated`，其 userData 本身独立，锁子目录随之独立。
  */
 export function resolveSingleInstanceLockUserDataDir(input: {
   isPackaged: boolean;
@@ -128,6 +125,27 @@ export function shouldEnforcePassiveMigrationCompatibility(input: {
   isolated: boolean;
 }): boolean {
   return !input.isPackaged && input.schedulerPassive && !input.isolated;
+}
+
+/**
+ * Primary dev must not open the packaged release's userData. A newer checkout
+ * can migrate that database past the installed release's migration history.
+ * Isolated dev owns a separate database; passive shared dev is compatibility
+ * checked and never runs migrations.
+ */
+export function shouldBlockSharedPrimaryDev(input: {
+  isPackaged: boolean;
+  schedulerPassive: boolean;
+  isolated: boolean;
+  /** 手动 XDT_USER_DATA_DIR 也代表用户明确选择了 dev 数据目录。 */
+  hasUserDataOverride?: boolean;
+}): boolean {
+  return (
+    !input.isPackaged &&
+    !input.schedulerPassive &&
+    !input.isolated &&
+    !input.hasUserDataOverride
+  );
 }
 
 export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {

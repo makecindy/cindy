@@ -73,6 +73,7 @@ installInvokeCapture();
 import { machineIdSync } from 'node-machine-id';
 import {
   resolveDevCliFlags,
+  shouldBlockSharedPrimaryDev,
   shouldEnforcePassiveMigrationCompatibility,
 } from './devCliFlags.js';
 
@@ -87,6 +88,19 @@ const devFlags = resolveDevCliFlags({
   envSchedulerPassive: process.env.XDT_SCHEDULER_PASSIVE,
   envEndpointsCdn: process.env.XDT_ENDPOINTS_CDN,
 });
+if (shouldBlockSharedPrimaryDev({
+  isPackaged: app.isPackaged,
+  schedulerPassive: devFlags.schedulerPassive,
+  isolated: devFlags.isolated,
+  hasUserDataOverride: devFlags.userDataDirOverride !== null,
+})) {
+  stderr.write(
+    '[cindy] Primary desktop dev cannot use shared Cindy userData because it may upgrade ' +
+      'the release database and prevent an older release from opening it.\n' +
+      '[cindy] Restart with --isolated=<name>, or use --passive for a shared read-only preview.\n',
+  );
+  exit(1);
+}
 if (devFlags.schedulerPassive) {
   // 统一收敛到 env:scheduler-host 只认 XDT_SCHEDULER_PASSIVE,不重复解析 argv。
   process.env.XDT_SCHEDULER_PASSIVE = '1';
@@ -144,10 +158,10 @@ if (devFlags.needsIsolatedDeviceId) {
   stderr.write(`[cindy] dev isolated deviceId → ${isolatedDeviceId}\n`);
 }
 
-// 实例注册表对 dev 与 packaged 一律登记:dev/release 按 flavor 分锁域、共享同一
-// userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
-// 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
-// dev 实例会在 release 实例仍存活时误判独占并搬走 legacy 配置。
+// 实例注册表对 dev 与 packaged 一律登记：passive dev / release 共享 userData 时，
+// owner-namespace 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」。
+// packaged 不登记的话，后续 primary 实例会在 release 仍存活时误判独占并搬走
+// legacy 配置。
 {
   const rootDir = app.isPackaged
     ? path.resolve(app.getAppPath())

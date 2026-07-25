@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -95,33 +94,23 @@ test("desktop restart runner keeps the kill-before-deps order by default", () =>
 	]);
 });
 
-test("desktop restart rejects an unmerged migration before the kill step", () => {
-	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-restart-policy-"));
+test("desktop restart blocks shared primary dev before the kill step", () => {
 	const calls = [];
-	try {
-		fs.mkdirSync(path.join(repo, "apps", "desktop", "drizzle"), { recursive: true });
-		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0000_init.sql"), "SELECT 0;\n");
-		const git = (...args) => {
-			const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
-			assert.equal(result.status, 0, result.stderr);
-		};
-		git("init", "-b", "main");
-		git("config", "user.name", "Restart Policy Test");
-		git("config", "user.email", "restart-policy@example.invalid");
-		git("add", ".");
-		git("commit", "-m", "base");
-		git("update-ref", "refs/remotes/origin/main", "HEAD");
-		git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-		git("switch", "-c", "feature");
-		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0001_feature.sql"), "SELECT 1;\n");
+	assert.throws(
+		() => runDesktopRestart(["--wait-ready"], "/repo/cindy", (step) => calls.push(step)),
+		/may upgrade the release database and prevent an older release from opening/,
+	);
+	assert.deepEqual(calls, []);
+});
 
-		assert.throws(
-			() => runDesktopRestart(["--wait-ready"], repo, (step) => calls.push(step)),
-			/Shared Cindy userData cannot run migration artifacts/,
+test("desktop restart allows isolated and passive dev modes", () => {
+	const root = "/repo/cindy";
+	for (const modeArg of ["--isolated=feature", "--passive", "--preserve-running"]) {
+		const calls = [];
+		assert.doesNotThrow(() =>
+			runDesktopRestart(["--wait-ready", modeArg], root, (step) => calls.push(step)),
 		);
-		assert.deepEqual(calls, []);
-	} finally {
-		fs.rmSync(repo, { recursive: true, force: true });
+		assert.ok(calls.length > 0, `${modeArg} should reach the restart pipeline`);
 	}
 });
 
