@@ -240,6 +240,20 @@ export class BrowserGuestResourceWatchdog {
 }
 
 /**
+ * 资源事件的目标 renderer 选择(纯函数,ipc.ts 消费):guest 的实际宿主
+ * (hostWebContents)优先 —— 主窗内嵌 RSB / detached 子窗口 / 副窗口各自是
+ * 独立 renderer,pool 与订阅只在宿主侧存在,送错 renderer 事件会被静默丢弃。
+ * 宿主已销毁 / guest 已死的竞态下回退到全局 host,双方都不可用返回 null。
+ */
+export function pickResourceEventTarget<T extends { isDestroyed(): boolean }>(
+  owner: T | null | undefined,
+  fallback: T | null,
+): T | null {
+  const wc = owner && !owner.isDestroyed() ? owner : fallback;
+  return wc && !wc.isDestroyed() ? wc : null;
+}
+
+/**
  * ForegroundTabTracker —— 记录"每个 renderer 当前展示哪个浏览器 tab"。
  *
  * renderer 通过 `set-foreground` 上报全量状态(tabId | null);多窗口(主窗内嵌

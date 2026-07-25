@@ -131,10 +131,10 @@ export function setForegroundBrowserTab(tabId: string, active: boolean): void {
   const api = ipc();
   if (active) {
     currentForegroundTabId = tabId;
-    void api?.setForeground({ tabId }).catch(() => undefined);
+    if (api) void api.setForeground({ tabId }).catch(() => undefined);
   } else if (currentForegroundTabId === tabId) {
     currentForegroundTabId = null;
-    void api?.setForeground({ tabId: null }).catch(() => undefined);
+    if (api) void api.setForeground({ tabId: null }).catch(() => undefined);
   }
 }
 

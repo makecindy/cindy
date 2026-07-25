@@ -21,6 +21,7 @@ import {
   FG_CPU_PERCENT,
   FG_MEMORY_KILL_KB,
   ForegroundTabTracker,
+  pickResourceEventTarget,
   type GuestProcessMetric,
   type GuestWebContentsLike,
   type ResourceWatchdogDeps,
@@ -248,6 +249,29 @@ describe('BrowserGuestResourceWatchdog', () => {
       logger: { info: vi.fn(), warn: vi.fn() },
     };
     expect(() => new BrowserGuestResourceWatchdog(throwingDeps).tick()).not.toThrow();
+  });
+});
+
+describe('pickResourceEventTarget', () => {
+  const live = () => ({ isDestroyed: () => false });
+  const dead = () => ({ isDestroyed: () => true });
+
+  it('prefers the guest owner renderer over the global host', () => {
+    const owner = live();
+    const fallback = live();
+    expect(pickResourceEventTarget(owner, fallback)).toBe(owner);
+  });
+
+  it('falls back to the global host when the owner is missing or destroyed', () => {
+    const fallback = live();
+    expect(pickResourceEventTarget(null, fallback)).toBe(fallback);
+    expect(pickResourceEventTarget(undefined, fallback)).toBe(fallback);
+    expect(pickResourceEventTarget(dead(), fallback)).toBe(fallback);
+  });
+
+  it('returns null when both are unavailable', () => {
+    expect(pickResourceEventTarget(dead(), null)).toBeNull();
+    expect(pickResourceEventTarget(null, dead())).toBeNull();
   });
 });
 

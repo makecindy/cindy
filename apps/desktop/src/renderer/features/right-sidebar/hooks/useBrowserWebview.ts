@@ -93,7 +93,18 @@ export interface UseBrowserWebviewResult {
   dismissResourceAlert: () => void;
 }
 
-export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowserWebviewResult {
+/**
+ * @param visible 本 tab 当前是否真的展示给用户(active && shellVisible)。
+ *   用于"淘汰后重建":资源看门狗 / LRU 淘汰会销毁后台 tab 的 pool entry,而
+ *   Shell 常驻挂载所有 TabBody(不卸载),acquire effect 不会自然重跑 —— 这里
+ *   监听 pool release,等 tab 重新可见时 bump epoch 重新 acquire,否则用户切回
+ *   被淘汰的 tab 会看到空壳。不可见期间保持懒惰,不为看不见的 tab 重建 webview。
+ */
+export function useBrowserWebview(
+  tabId: string,
+  sessionId?: string,
+  visible?: boolean,
+): UseBrowserWebviewResult {
   // pool entry 引用 + 反应式 state。entry 本身在 pool 模块管;hook 只观察。
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
   const [url, setUrl] = useState('');
@@ -113,6 +124,37 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
   const suppressStaleUrlRef = useRef<{ targetUrl: string; staleUrl: string } | null>(null);
   const navigationAttemptsRef = useRef<number[]>([]);
   const navigationFuseTrippedRef = useRef(false);
+  // crash 的渲染期镜像 —— kill-notice 晚于 render-process-gone 到达时,订阅回调
+  // 需要读当前 crash 值来决定升级 / 挂起,useState 闭包会 stale,走 ref。
+  const crashRef = useRef(crash);
+  crashRef.current = crash;
+  // 淘汰后重建:entry 被 pool release 后置位;tab 重新可见时 bump epoch 让
+  // acquire effect 重跑(见函数头注释)。
+  const [entryEpoch, setEntryEpoch] = useState(0);
+  const releasedRef = useRef(false);
+  const visibleRef = useRef(visible === true);
+  visibleRef.current = visible === true;
+
+  useEffect(() => {
+    const unsub = browserWebviewPool.onRelease((releasedTabId) => {
+      if (releasedTabId !== tabId) return;
+      // 可见中被 release(理论上只有用户关 tab —— 此时本组件即将 unmount,
+      // bump 一次也无害);不可见的淘汰恢复推迟到重新可见。
+      if (visibleRef.current) {
+        setEntryEpoch((e) => e + 1);
+      } else {
+        releasedRef.current = true;
+      }
+    });
+    return unsub;
+  }, [tabId]);
+
+  useEffect(() => {
+    if (visible && releasedRef.current) {
+      releasedRef.current = false;
+      setEntryEpoch((e) => e + 1);
+    }
+  }, [visible]);
   const setObservedUrl = useCallback((nextUrl: string) => {
     const suppress = suppressStaleUrlRef.current;
     if (suppress) {
@@ -131,6 +173,22 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
 
   useEffect(() => {
     const entry = browserWebviewPool.acquire(tabId);
+    if (webviewRef.current && webviewRef.current !== entry.webview) {
+      // 重新物化(淘汰后再激活):上一代 webview 的观测 state 全部失效。复位为
+      // 空值,让 BrowserTabBody 的"按 wrapper 代际"首次导航重新驱动加载,否则
+      // stale url 会让导航判定"已在目标页"而跳过。
+      urlRef.current = '';
+      suppressStaleUrlRef.current = null;
+      setUrl('');
+      setTitle('');
+      setFavicon('');
+      setIsLoading(false);
+      setCanGoBack(false);
+      setCanGoForward(false);
+      setIsAudible(false);
+      setCrash(null);
+      setResourceAlert(null);
+    }
     webviewRef.current = entry.webview;
     setWrapper(entry.wrapper);
 
@@ -266,11 +324,15 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
 
     // 资源看门狗事件(bridge 转发):cpu-alert → 提示条;kill-notice → 若 crash
     // 事件先到、notice 后到,把已有 crash state 升级成资源原因(反序兜底)。
+    // 升级路径必须同时消费掉 pending cause —— 否则残留的 'memory' 会错标该 tab
+    // 下一次无关崩溃(review P1)。notice 先到的正序路径 pending 保留,由随后的
+    // render-process-gone handler 消费。
     const unsubResourceEvent = subscribeTabResourceEvent(tabId, (event) => {
       if (event.kind === 'cpu-alert') {
         setResourceAlert({ cpuPercent: event.cpuPercent });
-      } else if (event.kind === 'kill-notice') {
-        setCrash((prev) => (prev ? { ...prev, cause: 'resource-memory' } : prev));
+      } else if (event.kind === 'kill-notice' && crashRef.current) {
+        consumePendingKillCause(tabId);
+        setCrash({ ...crashRef.current, cause: 'resource-memory' });
       }
     });
 
@@ -301,7 +363,7 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
       // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
       // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
     };
-  }, [tabId, sessionId, setObservedUrl]);
+  }, [tabId, sessionId, setObservedUrl, entryEpoch]);
 
   const navigate = useCallback((nextUrl: string) => {
     const wv = webviewRef.current;

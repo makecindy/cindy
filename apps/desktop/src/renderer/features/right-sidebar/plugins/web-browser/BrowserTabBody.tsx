@@ -59,6 +59,10 @@ interface BrowserTabBodyProps {
   /** 顶层 active tab 才响应来自 main 的 webview-内 Cmd+L 信号 + 后续 mute /
    *  暂停媒体等行为。Shell 注入。 */
   active?: boolean;
+  /** 整个右侧栏是否展开可见。Shell 注入;真实可见性 = active && shellVisible ——
+   *  侧栏收起时 active tab 依旧 mount 且 active=true,资源看门狗的前台判定
+   *  必须用组合值,否则收起的 tab 永远享受前台豁免(review P1)。 */
+  shellVisible?: boolean;
 }
 
 function normalizeNavigationUrl(url: string): string {
@@ -73,19 +77,22 @@ function isSameNavigationUrl(a: string, b: string): boolean {
   return normalizeNavigationUrl(a) === normalizeNavigationUrl(b);
 }
 
-export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
+export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabBodyProps) {
   const { t } = useTranslation();
   // tabId 从 ctx 拿(Shell 注入,每个 tab 实例稳定),用作 BrowserWebviewPool 的
   // entry key — pool 据此把同一个 webview DOM 节点跟 tab 绑定一辈子。
   // sessionId 跟 tabId 一起喂给 hook,用于 dom-ready 后给 main 端 TabRegistry
   // 上报 (sessionId, tabId, webContentsId) 三元组(Phase 2 browser bridge)。
   const { tabId, sessionId } = ctx;
+  // 真实可见性:顶层 active tab 且整个侧栏展开。shellVisible 缺省(旧宿主 /
+  // 测试)按可见处理,与 active 的既有缺省语义一致。
+  const tabVisible = active === true && shellVisible !== false;
   // BrowserChrome 的 imperative ref —— Cmd/Ctrl+L 快捷键调它的 focusUrlBar()。
   const chromeRef = useRef<BrowserChromeHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
-  const browser = useBrowserWebview(tabId, sessionId);
-  const initialNavigationTabRef = useRef<string | null>(null);
+  const browser = useBrowserWebview(tabId, sessionId, tabVisible);
+  const lastNavigatedWrapperRef = useRef<HTMLDivElement | null>(null);
   const stateUrlRef = useRef(state.url);
   const browserUrlRef = useRef(browser.url);
   const suppressStaleUrlRef = useRef<{ targetUrl: string; staleUrl: string } | null>(null);
@@ -161,16 +168,21 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
   // 的观测结果,绝不能再反向驱动 loadURL:跨 origin 重定向时 React state 可能
   // 落后一帧,双向 reconcile 会把 authorize / callback 互相覆盖成死循环。
   // 用户地址栏与 agent 导航都有各自明确的命令入口,不依赖 state 反向触发。
+  //
+  // 按 wrapper **代际**(而不是 tabId)判定"首次":资源看门狗 / LRU 淘汰销毁
+  // entry 后,重新可见时 hook 会 acquire 出一个全新 wrapper —— 新代际的 webview
+  // 是空的,必须重新用持久化 URL 驱动一次加载(review P1:淘汰后空壳)。
   useEffect(() => {
-    if (initialNavigationTabRef.current === tabId) return;
-    initialNavigationTabRef.current = tabId;
+    const wrapper = browser.wrapper;
+    if (!wrapper || lastNavigatedWrapperRef.current === wrapper) return;
+    lastNavigatedWrapperRef.current = wrapper;
     const nextUrl = stateUrlRef.current || 'about:blank';
     const currentUrl = browserUrlRef.current;
     if (currentUrl && isSameNavigationUrl(currentUrl, nextUrl)) return;
     // about:blank 默认状态下也要 navigate,确保 webview 真的处于 about:blank,
     // 不会停留在 pool 创建时未 setAttribute('src') 的"未初始化"状态。
     navigateRef.current(nextUrl);
-  }, [tabId]);
+  }, [tabId, browser.wrapper]);
 
   const reloadRef = useRef(browser.reload);
   const goBackRef = useRef(browser.goBack);
@@ -266,13 +278,15 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
   );
 
   // 前台上报:资源看门狗据此区分前台 / 后台 guest(前台只在内存超硬阈值时才
-  // 强杀,后台可激进淘汰)。active 翻转 / tab 切换 / 组件卸载都要同步。
+  // 强杀,后台可激进淘汰)。用 tabVisible(active && shellVisible)而不是裸
+  // active:侧栏收起时 active tab 依旧 mount,不算前台。可见性翻转 / tab 切换 /
+  // 组件卸载都要同步。
   useEffect(() => {
-    setForegroundBrowserTab(tabId, active === true);
+    setForegroundBrowserTab(tabId, tabVisible);
     return () => {
       setForegroundBrowserTab(tabId, false);
     };
-  }, [active, tabId]);
+  }, [tabVisible, tabId]);
 
   // webview guest 内 Cmd/Ctrl+L:main 推送过来,只有 active tab 响应。
   useEffect(() => {
