@@ -421,6 +421,31 @@ test('resolvePosixShell preserves Unix PATH lookup and locates Git for Windows s
   );
 });
 
+test('resolvePosixShell never probes relative candidates from blank or invalid Windows env paths', () => {
+  const candidates = [];
+  assert.equal(
+    resolvePosixShell('sh', {
+      platform: 'win32',
+      env: {
+        ProgramFiles: '',
+        'ProgramFiles(x86)': 'relative',
+        LOCALAPPDATA: ' ',
+      },
+      spawnSyncImpl: () => ({ status: 1, stdout: '' }),
+      existsSync: (candidate) => {
+        candidates.push(candidate);
+        return false;
+      },
+    }),
+    null,
+  );
+  assert.deepEqual(candidates, [
+    path.win32.join('C:\\Program Files', 'Git', 'bin', 'sh.exe'),
+    path.win32.join('C:\\Program Files (x86)', 'Git', 'bin', 'sh.exe'),
+  ]);
+  assert.ok(candidates.every((candidate) => path.win32.isAbsolute(candidate)));
+});
+
 // --- 端到端：真 git 仓库 ---
 
 const canRunGitFixture = process.platform !== 'win32';

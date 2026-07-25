@@ -20,6 +20,10 @@ export function resolvePosixShell(
   const winPath = path.win32;
   const executable = `${shellName}.exe`;
   const candidates = [];
+  const absoluteEnvDir = (value, fallback = null) => {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    return normalized && winPath.isAbsolute(normalized) ? normalized : fallback;
+  };
   const probe = spawnSyncImpl('where.exe', ['git.exe'], { encoding: 'utf8' });
   if (probe.status === 0 && typeof probe.stdout === 'string') {
     for (const line of probe.stdout.split(/\r?\n/)) {
@@ -29,10 +33,15 @@ export function resolvePosixShell(
     }
   }
 
+  const programFiles = absoluteEnvDir(env.ProgramFiles, 'C:\\Program Files');
+  const programFilesX86 = absoluteEnvDir(env['ProgramFiles(x86)'], 'C:\\Program Files (x86)');
+  const localAppData = absoluteEnvDir(env.LOCALAPPDATA);
   candidates.push(
-    winPath.join(env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', executable),
-    winPath.join(env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Git', 'bin', executable),
-    winPath.join(env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'bin', executable),
+    winPath.join(programFiles, 'Git', 'bin', executable),
+    winPath.join(programFilesX86, 'Git', 'bin', executable),
   );
+  if (localAppData) {
+    candidates.push(winPath.join(localAppData, 'Programs', 'Git', 'bin', executable));
+  }
   return candidates.find((candidate) => candidate && existsSync(candidate)) ?? null;
 }
