@@ -38,6 +38,17 @@ describe('redactSensitiveText', () => {
     expect(output).toContain('https://[REDACTED]@example.com/path');
   });
 
+  it('redacts username-only URL userinfo (bare token) and leaves path @ untouched', () => {
+    const output = redactSensitiveText(
+      'clone https://ghp_tokenValue123@github.com/org/repo and see user@host/inbox@2 path',
+    );
+
+    expect(output).not.toContain('ghp_tokenValue123');
+    expect(output).toContain('https://[REDACTED]@github.com/org/repo');
+    // `@` inside a path (no scheme:// userinfo) must be preserved.
+    expect(output).toContain('user@host/inbox@2');
+  });
+
   it('redacts complete non-Bearer Authorization values', () => {
     const output = redactSensitiveText('Authorization: Basic dXNlcjpwYXNz');
 
