@@ -13,6 +13,7 @@ interface MarketPluginDetailViewProps {
   busy: boolean;
   onBack: () => void;
   onInstall: () => void;
+  onIconLoadError: () => void;
 }
 /** 尚未安装的市场 Plugin 详情；只展示协议事实，不创建 renderer 侧安装逻辑。 */
 export function MarketPluginDetailView({
@@ -20,6 +21,7 @@ export function MarketPluginDetailView({
   busy,
   onBack,
   onInstall,
+  onIconLoadError,
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
   const permissions = ghostPermissionItems(detail.manifest);
@@ -49,11 +51,12 @@ export function MarketPluginDetailView({
         </button>
 
         <header>
-          <div className="grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-5">
+          <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon
               iconDataUrl={detail.icon?.url}
               iconId={detail.ghostId}
               iconName={detail.name}
+              onIconLoadError={onIconLoadError}
               size="detail"
             />
             <div className="min-w-0">
@@ -77,7 +80,7 @@ export function MarketPluginDetailView({
               onClick={onInstall}
               disabled={actionDisabled}
               className={cn(
-                'inline-flex h-10 min-w-[104px] items-center justify-center gap-2 rounded-full px-5 text-13 font-medium',
+                'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
                 'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',

@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react';
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { File, Paths } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
@@ -362,6 +362,14 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         accessibilityHint={accessibilityHint}
         accessibilityLabel={accessibilityLabel}
         allowFileAccess={false}
+        // iOS 给 WKWebView 里的可编辑区域挂一条系统表单导航条(上一项 / 下一项 /
+        // 完成),iOS 26 起画成键盘上方的独立浮动胶囊。composer 只有这一个字段,
+        // 前后导航恒为禁用态,整条对用户没有任何价值却占掉一行。RN TextInput
+        // 没有这条,所以只有会话页这个富文本输入框会出现。
+        //
+        // 仅 iPhone:iPad 上同一个 accessory view 承载撤销 / 重做 / 粘贴等真实
+        // 编辑能力(本 app app.json 声明了 supportsTablet),清掉是功能回退。
+        hideKeyboardAccessoryView={Platform.OS === 'ios' && !Platform.isPad}
         javaScriptEnabled
         keyboardDisplayRequiresUserAction={false}
         onMessage={handleMessage}

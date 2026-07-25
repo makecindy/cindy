@@ -2,6 +2,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
+import {
+  __resetGhostPanelBubbleStateForTest,
+  getGhostPanelBubbleState,
+  minimizeGhostPanel,
+} from '../../lib/ghostPanelBubbleState';
 import { __resetPanelRegistryForTest, hasPanelKind, listPanelKinds } from '../../panels/registry';
 import {
   __resetGhostPanelsForTest,
@@ -27,6 +32,7 @@ function ghost(id: string, panel?: GhostManifest['panel'] | null, enabled = true
 afterEach(() => {
   __resetPanelRegistryForTest();
   __resetGhostPanelsForTest();
+  __resetGhostPanelBubbleStateForTest();
 });
 
 describe('syncGhostPanelRegistrations · 注册表与已装清单对齐', () => {
@@ -56,6 +62,24 @@ describe('syncGhostPanelRegistrations · 注册表与已装清单对齐', () => 
     syncGhostPanelRegistrations([]);
     expect(hasPanelKind('ghost:a')).toBe(false);
     expect(hasPanelKind('ghost:b')).toBe(false);
+  });
+
+  it('同步时对齐气泡状态:卸载删条目、停用强制还原(不留死角)', () => {
+    minimizeGhostPanel('gone');
+    minimizeGhostPanel('disabled');
+    syncGhostPanelRegistrations([ghost('disabled', undefined, false)]);
+    const bubbles = getGhostPanelBubbleState();
+    expect(bubbles.gone).toBeUndefined();
+    expect(bubbles.disabled?.minimized).not.toBe(true);
+  });
+
+  it('同步时对齐气泡状态:卸载删条目、停用强制还原(不留死角)', () => {
+    minimizeGhostPanel('gone');
+    minimizeGhostPanel('disabled');
+    syncGhostPanelRegistrations([ghost('disabled', undefined, false)]);
+    const bubbles = getGhostPanelBubbleState();
+    expect(bubbles.gone).toBeUndefined();
+    expect(bubbles.disabled?.minimized).not.toBe(true);
   });
 });
 

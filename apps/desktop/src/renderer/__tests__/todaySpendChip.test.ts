@@ -193,10 +193,20 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('weekly.modelDisplayName ? `${weekly.modelDisplayName} ${countdown}` : countdown');
     expect(source).toContain('todaySpend.claude.sessionValueLabel');
     expect(source).toContain('todaySpend.claude.planLine');
-    // 告警只看影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped);headers 的
-    // allowed_warning 是 turn 内唯一的「接近限额」实时信号, 必须纳入告警态
-    expect(source).toContain('isClaudeSubscriptionAlerting(');
-    expect(source).toContain("status === 'rejected' || status === 'allowed_warning'");
+    // 告警判定是纯数据判定, 统一收在 shared/claudeSubscriptionUsage.ts (有直接单测:
+    // main/usage/__tests__/claudeSubscriptionUsage.test.ts), 组件只消费, 不再本地重写。
+    expect(source).toContain('isClaudeSubscriptionAlerting,');
+    expect(source).toContain('hasAlertingClaudeSessionWindow,');
+    expect(source).not.toContain('function isClaudeSubscriptionAlerting(');
+    expect(source).not.toContain('function hasAlertingClaudeSessionWindow(');
+    // chip 变红只看当前会话真受限 (rejected / 影响本会话的窗口告警); headers 的
+    // allowed_warning 综合了其它模型的分模型周限, 不得单独染红 —— 否则跑 Opus 的
+    // 会话会因 Fable 周限吃紧变红, 而 chip 上根本没有那一段。
+    expect(source).not.toContain("status === 'rejected' || status === 'allowed_warning'");
+    // tooltip 比 chip 宽一档: allowed_warning 仍提示 (紧邻全量窗口列表, 有上下文)
+    expect(source).toContain(
+      "status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)",
+    );
     // Claude 订阅 / bridge 订阅不读 gateway quota (不反映订阅花费); 默认路由 key reconcile
     // 完成前形态未定, 同样不放行网关 quota 读 (避免形态闪切)
     expect(source).toContain("vendorKey === 'cc' && !isClaudeSubscription && !isSubscriptionBridge && !ccBillingFormPending");

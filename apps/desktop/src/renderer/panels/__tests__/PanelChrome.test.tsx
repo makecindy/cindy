@@ -86,4 +86,28 @@ describe('PanelChrome · 撑满系统按钮', () => {
     expect(hole.style.left).toBe(`${CHROME_ACTIONS_GEOMETRY.defaultLeft}px`);
     expect(hole.style.width).toBe(`${CHROME_ACTIONS_GEOMETRY.clusterWidth}px`);
   });
+
+  it('传 onMinimize → 长出气泡最小化按钮并触发回调;三按钮 DOM 顺序 minimize→detach→maximize', () => {
+    const onMinimize = vi.fn();
+    render(
+      <PanelMaximizeContext.Provider value={{ maximizedKind: null, toggle: () => undefined }}>
+        <PanelChrome
+          title="测试面板"
+          panelKind="ghost:demo"
+          onDetach={() => undefined}
+          onMinimize={onMinimize}
+        />
+      </PanelMaximizeContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.minimizeAria' }));
+    expect(onMinimize).toHaveBeenCalledTimes(1);
+    const labels = screen
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('aria-label'));
+    expect(labels).toEqual([
+      'panelChrome.minimizeAria',
+      'panelChrome.detachAria',
+      'panelChrome.maximizeAria',
+    ]);
+  });
 });

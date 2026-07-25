@@ -18,12 +18,14 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, Search } from 'lucide-react-native';
 import {
   Animated,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   View,
   useWindowDimensions,
 } from 'react-native';
+import type { TextInput as RNTextInput } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -154,6 +156,7 @@ export function ModelPickerSheet({
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [query, setQuery] = useState('');
   const scrollRef = useRef<ScrollView | null>(null);
+  const searchInputRef = useRef<RNTextInput>(null);
   const didAutoScrollRef = useRef(false);
   // 二级 Surface 滑入/滑出动画(0 = 就位;windowHeight = 屏下)。动画期间锁交互防连点。
   const secondaryTranslate = useRef(new Animated.Value(windowHeight)).current;
@@ -284,6 +287,15 @@ export function ModelPickerSheet({
     if (view.kind === 'options' && !optionsTarget) backToModels();
   }, [view, optionsTarget, backToModels]);
 
+  // Android:搜索聚焦(→full,键盘开)后再把面板拖回 half,列表会重新被键盘挤成一条,
+  // 而 onFocus 不会再触发(见搜索框注释)。把「拖到 half」当作用户想收起键盘——blur 搜索框
+  // 让键盘落下,adjustResize 恢复窗高后 half 即正常半屏,不再被遮挡。iOS 无此路径(不吸 full、
+  // 由 KAV 处理),原样透传。blur 对未聚焦输入是 no-op,故无需额外跟踪聚焦态。
+  const handlePrimarySnapChange = useCallback((next: ContextSheetSnap) => {
+    if (next === 'half' && Platform.OS === 'android') searchInputRef.current?.blur();
+    setPrimarySnap(next);
+  }, []);
+
   const handleSelectedRowLayout = useCallback(
     (y: number): void => {
       if (didAutoScrollRef.current || hasQuery) return;
@@ -310,9 +322,16 @@ export function ModelPickerSheet({
         accessibilityLabel={t('models.picker.searchAccessibility')}
         autoCapitalize="none"
         autoCorrect={false}
+        // Android 靠原生 adjustResize 避让键盘(SheetModal 在 Android 不套 KAV,见其头注释):
+        // 停在 half 档时键盘一开,面板缩成「0.56 ×(屏高−键盘)」的一小条,列表几乎没了。
+        // 聚焦搜索时吸到 full,铺满键盘上方全部可用高度,边打字边看列表。失焦不收回(留 full,
+        // 少一次跳动)。iOS 走 KAV padding 把 half 面板顶到键盘上方即可,吸 full 反而会把面板
+        // 顶部(含搜索框)推出屏幕外,故不在 iOS 触发。
+        onFocus={Platform.OS === 'android' ? () => setPrimarySnap('full') : undefined}
         onChangeText={setQuery}
         placeholder={t('models.picker.searchPlaceholder')}
         placeholderTextColor={colors.textTertiary}
+        ref={searchInputRef}
         style={styles.searchInput}
         testID={`${testID}.search`}
         value={query}
@@ -390,7 +409,7 @@ export function ModelPickerSheet({
         headerTrailing={permissionTrigger}
         heights={heights}
         onClose={onClose}
-        onSnapChange={setPrimarySnap}
+        onSnapChange={handlePrimarySnapChange}
         pinnedTop={primaryPinnedTop}
         scrollRef={scrollRef}
         snap={primarySnap}

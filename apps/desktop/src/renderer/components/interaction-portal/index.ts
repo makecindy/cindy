@@ -11,3 +11,7 @@
 
 export { InteractionPromptHost } from './InteractionPromptHost';
 export { InteractionPromptSlot } from './InteractionPromptSlot';
+export {
+  InteractionPromptCardShell,
+  type InteractionPromptViewerState,
+} from './InteractionPromptCardShell';

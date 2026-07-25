@@ -89,6 +89,12 @@
 - commit、push 和创建 PR 的执行时机由开发者或 Codex、Claude Code、Cindy 等宿主
   工作流决定；仓库规则本身不额外授权外部写操作。
 - 提交 PR 时遵循 `.github/PULL_REQUEST_TEMPLATE.md`，如实说明改动、验证和风险。
+- **DCO 签名（硬性要求）**：本仓每个 commit 都必须带 `Signed-off-by` trailer，且其中的
+  名字与邮箱都要与 commit 的 author（或 committer）一致，用 `git commit -s` 生成；
+  agent 的自动提交同样适用。PR 上的 DCO check（DCO GitHub App，配置见
+  `.github/dco.yml`）会拦下漏签的 commit。`git commit` 没有自动签名的配置项，一次配好
+  可跑 `pnpm dco:install-hook` 装 `.githooks/prepare-commit-msg`；提交前自查用
+  `pnpm check:dco`。DCO 全文见根目录 `DCO`，贡献者说明见 `CONTRIBUTING.md`。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地
   跑完仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在

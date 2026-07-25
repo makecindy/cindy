@@ -31,10 +31,11 @@
  * login-email 派生凭证没有收单动作,404 同未声明。
  */
 
+import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../../shared/ghost.js';
 import { GhostKvError } from '../ghostKvStore.js';
 
 /** 单条凭证值的字符上限(粘贴的 key/token 量级;超限 413)。 */
-export const GHOST_SECRET_VALUE_MAX_CHARS = 4096;
+export { GHOST_SECRET_VALUE_MAX_CHARS };
 
 export interface GhostSecretsRequestOutcome {
   status: number;

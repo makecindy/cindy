@@ -196,6 +196,8 @@ function RootLayout() {
   }, []);
   // Dev-only:JS 停摆探测器,把 JS 线程忙死的时间边界钉进 Metro 日志流(内部 __DEV__ gate)。
   useEffect(() => startJsStallWatchdog(), []);
+  // 使用统计(TapDB):这里只是"尝试"初始化——用户没同意过《隐私政策》时同意闸会
+  // 直接挡回 not_consented,原生 SDK 一个字节都不会读写(见 analytics/mobileTapdb)。
   useEffect(() => {
     void initMobileTapdb();
   }, []);

@@ -71,22 +71,49 @@ installInvokeCapture();
 //   - --passive / XDT_SCHEDULER_PASSIVE:定时任务自动触发让位给同机另一实例。
 // 必须在 app 'ready' 前调用。仅 dev(非 packaged)生效,生产忽略,零线上影响。
 import { machineIdSync } from 'node-machine-id';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import {
   resolveDevCliFlags,
+  shouldBlockSharedPrimaryDev,
   shouldEnforcePassiveMigrationCompatibility,
 } from './devCliFlags.js';
 
+const defaultUserDataDir = app.getPath('userData');
 const devFlags = resolveDevCliFlags({
   argv: process.argv,
   isPackaged: app.isPackaged,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
-  defaultUserDataDir: app.getPath('userData'),
+  defaultUserDataDir,
   envIsolated: process.env.XDT_ISOLATED,
   envIsolationName: process.env.XDT_ISOLATED_NAME,
   envDeviceIdOverride: process.env.XDT_DEVICE_ID_OVERRIDE,
   envSchedulerPassive: process.env.XDT_SCHEDULER_PASSIVE,
   envEndpointsCdn: process.env.XDT_ENDPOINTS_CDN,
 });
+const protectedUserDataDirs = [
+  defaultUserDataDir,
+  ...Array.from(
+    new Set([
+      ...Object.values(BRAND_IDENTITY.userDataDirNameByRegion),
+      ...BRAND_IDENTITY.legacyUserDataDirNames,
+    ]),
+  ).map((dirName) => path.join(app.getPath('appData'), dirName)),
+];
+if (shouldBlockSharedPrimaryDev({
+  isPackaged: app.isPackaged,
+  schedulerPassive: devFlags.schedulerPassive,
+  isolated: devFlags.isolated,
+  userDataDirOverride: devFlags.userDataDirOverride,
+  protectedUserDataDirs,
+})) {
+  stderr.write(
+    '[cindy] Primary desktop dev cannot use shared Cindy userData because it may upgrade ' +
+      'the release database and prevent an older release from opening it.\n' +
+      '[cindy] Restart with --isolated=<name>, or use --passive / --preserve-running ' +
+      'for a shared read-only preview.\n',
+  );
+  exit(1);
+}
 if (devFlags.schedulerPassive) {
   // 统一收敛到 env:scheduler-host 只认 XDT_SCHEDULER_PASSIVE,不重复解析 argv。
   process.env.XDT_SCHEDULER_PASSIVE = '1';
@@ -144,10 +171,10 @@ if (devFlags.needsIsolatedDeviceId) {
   stderr.write(`[cindy] dev isolated deviceId → ${isolatedDeviceId}\n`);
 }
 
-// 实例注册表对 dev 与 packaged 一律登记:dev/release 按 flavor 分锁域、共享同一
-// userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
-// 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
-// dev 实例会在 release 实例仍存活时误判独占并搬走 legacy 配置。
+// 实例注册表对 dev 与 packaged 一律登记：passive dev / release 共享 userData 时，
+// owner-namespace 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」。
+// packaged 不登记的话，后续 primary 实例会在 release 仍存活时误判独占并搬走
+// legacy 配置。
 {
   const rootDir = app.isPackaged
     ? path.resolve(app.getAppPath())

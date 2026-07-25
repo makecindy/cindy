@@ -18,7 +18,7 @@ custom environment or commercial support is not guaranteed.
   steps, and redacted logs.
 - Feature requests: use the feature request template and describe the use case
   and expected outcome.
-- Usage questions: use GitHub Discussions or a question issue.
+- Usage questions: open an issue with the “Usage question / 使用问题” form.
 
 Do not post real user data, access tokens, private keys, or internal addresses
 in public issues, discussions, or logs.

@@ -86,6 +86,7 @@ import {
   pushToolStep,
   renderActivity,
 } from '../im/shared/turnActivity.js';
+import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import type { HookRunOutcome, HookSessionRunner } from './dispatcher.js';
 import { resolveHookSessionConfig, type ResolvedHookSessionConfig } from './defaults.js';
@@ -468,6 +469,16 @@ export function createMakerHookSessionRunner(deps: {
       // (用户在桌面端继续用该会话时交互仍走桌面弹窗)。
       const ownInteractionIds = new Set<string>();
       const hookInteractionsInstalled = req.onInteraction !== undefined;
+      const headlessTurn = {
+        closed: false,
+        release: null as (() => void) | null,
+      };
+      const markHeadlessTurnDispatched = (): void => {
+        // A failed/cancelled send may still report a late accept. Never
+        // acquire a marker after the hook run has already finalized.
+        if (headlessTurn.closed || headlessTurn.release) return;
+        headlessTurn.release = beginHeadlessGhostSetupTurn(session.id);
+      };
       if (req.onInteraction) {
         const sendCard = req.onInteraction;
         const sendCancel = req.onInteractionCancel;
@@ -506,6 +517,9 @@ export function createMakerHookSessionRunner(deps: {
       }
       /** turn 收口清扫: 未决交互按默认自决 + 归还桌面版 listener。幂等。 */
       const finalizeInteractions = (): void => {
+        headlessTurn.closed = true;
+        headlessTurn.release?.();
+        headlessTurn.release = null;
         if (!hookInteractionsInstalled) return;
         for (const iid of [...ownInteractionIds]) {
           cancelHookInteraction(iid, '任务已结束, 此交互已失效');
@@ -863,6 +877,10 @@ export function createMakerHookSessionRunner(deps: {
           origin,
           planMode: false,
           onAccepted: async () => {
+            // Admission may wait behind a user-driven Desktop turn. Only this
+            // accepted hook turn is headless; preparation and queue wait are
+            // still part of the unrelated interactive turn.
+            markHeadlessTurnDispatched();
             // send 被接受才落 user 消息(与 scheduler 同序: 不让 agent 在
             // "消息没存下"的情况下空跑); 失败即整体失败
             // agentMeta 形状受 CcMeta 约束, 只放 origin(scheduleId 已携带

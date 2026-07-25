@@ -2,13 +2,13 @@
  * Plugin catalog and detail coordinator backed by the latest Ghost host APIs.
  *
  * Inputs: installed Ghost snapshots and user actions.
- * Outputs: the Plugin list/detail UI plus install, toggle, and command-launch flows.
+ * Outputs: the Plugin list/detail UI, focus-stable installed queue, and Plugin action flows.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Plus, Sparkles, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, Plus, Sparkles, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
@@ -57,7 +57,11 @@ import {
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
 import { formatSetupGateDescription } from './lib/ghostSetupGateModel';
-import { PluginManagementLayout, PluginManagementPage } from './PluginManagementLayout';
+import {
+  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
+  PluginManagementLayout,
+  PluginManagementPage,
+} from './PluginManagementLayout';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
@@ -67,11 +71,18 @@ import {
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
+import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
+const PLUGIN_CATALOG_TOOLBAR_CLASS =
+  'plugin-catalog-toolbar mb-5 flex items-center justify-between gap-4';
 type PluginPresentationFilter = 'all' | PluginPresentationOrigin;
-type PresentedGhostPluginItem = GhostPluginListItem & { origin: PluginPresentationOrigin };
+type PresentedGhostPluginItem = GhostPluginListItem & {
+  origin: PluginPresentationOrigin;
+  /** 市场存在更新时的市场记录;列表卡片据此显示更新徽标与直达入口。 */
+  marketUpdate: PluginMarketItem | null;
+};
 
 const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
   'all',
@@ -102,25 +113,59 @@ export function GhostPluginPage() {
   const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
+  // 市场操作的同步互斥锁。React state 在提交前有窗口期,快速连点会让多个回调
+  // 都读到 null;ref 先到先得,state 只驱动按钮禁用等 UI 展示。每次占锁都返回
+  // 唯一 lease,避免账号/模式切换后的旧异步流程误释放新流程持有的同 pluginId 锁。
+  const marketBusyLockRef = useRef<{ pluginId: string } | null>(null);
+  const acquireMarketBusy = useCallback((pluginId: string) => {
+    if (marketBusyLockRef.current !== null) return null;
+    const lease = { pluginId };
+    marketBusyLockRef.current = lease;
+    setMarketBusyId(pluginId);
+    return lease;
+  }, []);
+  const releaseMarketBusy = useCallback((lease: { pluginId: string }) => {
+    if (marketBusyLockRef.current !== lease) return;
+    marketBusyLockRef.current = null;
+    setMarketBusyId((current) => (current === lease.pluginId ? null : current));
+  }, []);
+  const isMarketBusyLeaseActive = useCallback(
+    (lease: { pluginId: string }) => marketBusyLockRef.current === lease,
+    [],
+  );
   const marketRefreshRequestRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
-  const refreshMarket = useCallback(async () => {
+  const refreshMarket = useCallback(async (preserveOnError = false) => {
     const requestId = ++marketRefreshRequestRef.current;
     try {
       const snapshot = await window.electronAPI.pluginMarket.snapshot();
-      if (requestId === marketRefreshRequestRef.current) setMarketSnapshot(snapshot);
-    } catch (error) {
-      if (requestId === marketRefreshRequestRef.current) {
-        setMarketSnapshot({
-          items: [],
-          unavailableReason: error instanceof Error ? error.message : String(error),
-        });
+      if (requestId !== marketRefreshRequestRef.current) return;
+      // Main intentionally represents market outages as data so the initial page can render a
+      // non-blocking empty state. During icon renewal, convert that fulfilled unavailable result
+      // back into a failure: the catch path preserves the visible snapshot and the hook retries.
+      if (preserveOnError && snapshot.unavailableReason !== null) {
+        throw new Error(snapshot.unavailableReason);
       }
+      setMarketSnapshot(snapshot);
+    } catch (error) {
+      if (requestId !== marketRefreshRequestRef.current) return;
+      setMarketSnapshot((current) =>
+        preserveOnError && current
+          ? current
+          : {
+              items: [],
+              unavailableReason: error instanceof Error ? error.message : String(error),
+            },
+      );
+      // Background icon renewal keeps the current snapshot visible, but must still report
+      // failure to the renewal hook so it can schedule a bounded retry.
+      if (preserveOnError) throw error;
     }
   }, []);
   useEffect(() => {
     setMarketSnapshot(null);
     setMarketDetail(null);
+    marketBusyLockRef.current = null;
     setMarketBusyId(null);
     marketDetailRequestRef.current += 1;
     void refreshMarket();
@@ -204,10 +249,20 @@ export function GhostPluginPage() {
             ghost.manifest.id !== 'cindy-mivo' ||
             !ghosts.some((candidate) => candidate.manifest.id === 'xd-mivo'),
         )
-        .map((ghost) => ({
-          ...toGhostPluginListItem(ghost),
-          origin: pluginPresentationOrigin(marketByGhostId.get(ghost.manifest.id)),
-        })),
+        .map((ghost) => {
+          const marketItem = marketByGhostId.get(ghost.manifest.id) ?? null;
+          return {
+            ...toGhostPluginListItem(ghost),
+            origin: pluginPresentationOrigin(marketItem),
+            // 迁移账本(legacy-unresolved)会让 main 把同版本 release 也判成
+            // update-available;列表入口只对版本号确实变化的更新亮牌。
+            marketUpdate:
+              marketItem?.installState === 'update-available' &&
+              marketItem.version !== ghost.manifest.version
+                ? marketItem
+                : null,
+          };
+        }),
     [ghosts, marketByGhostId],
   );
   const installedItems = useMemo(
@@ -283,9 +338,7 @@ export function GhostPluginPage() {
     ? (marketByGhostId.get(selectedDetail.id) ?? null)
     : null;
   const selectedMarketUpdate =
-    selectedMarketInstall?.installState === 'update-available'
-      ? selectedMarketInstall
-      : null;
+    selectedMarketInstall?.installState === 'update-available' ? selectedMarketInstall : null;
 
   const panelStatus = useMemo(() => {
     if (!selectedDetail || selectedDetail.panelMinWidth === null) return null;
@@ -330,22 +383,27 @@ export function GhostPluginPage() {
     [ghosts, t],
   );
 
-  const handleUpdate = useCallback(async () => {
-    if (!selectedDetail) return;
-    if (selectedMarketUpdate) {
-      setMarketBusyId(selectedMarketUpdate.pluginId);
+  // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
+  // 权限 diff,经用户确认后才安装,不做静默升级。
+  const handleMarketUpdate = useCallback(
+    async (ghostId: string) => {
+      const marketItem = marketByGhostId.get(ghostId);
+      if (!marketItem || marketItem.installState !== 'update-available') return;
+      const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
+      // 列表每张卡都有直达入口,同步互斥防止并发更新互相覆盖忙碌状态。
+      const marketBusyLease = acquireMarketBusy(marketItem.pluginId);
+      if (!marketBusyLease) return;
       try {
-        const next = await window.electronAPI.pluginMarket.detail(
-          selectedMarketUpdate.pluginId,
-        );
+        const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         const diff = diffGhostPermissionItems(
-          selectedGhost?.manifest ?? next.manifest,
+          installedGhost?.manifest ?? next.manifest,
           next.manifest,
         );
         const approved = await confirm({
           title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
           description: t('settings.ghosts.updateConfirm.body', {
-            from: selectedGhost?.manifest.version ?? selectedDetail.version,
+            from: installedGhost?.manifest.version ?? next.version,
             to: next.version,
           }),
           content: <GhostPermissionDiffView diff={diff} />,
@@ -353,11 +411,11 @@ export function GhostPluginPage() {
           confirmText: t('settings.ghosts.updateConfirm.confirm'),
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
-        if (!approved) return;
-        const result = await window.electronAPI.pluginMarket.install(
-          selectedMarketUpdate.pluginId,
-          { allowPermissionExpansion: diff.added.length > 0 },
-        );
+        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
+        const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
+          allowPermissionExpansion: diff.added.length > 0,
+        });
+        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
           t('settings.ghosts.toast.updated', {
             name: result.ghost.manifest.name,
@@ -366,22 +424,33 @@ export function GhostPluginPage() {
         );
         await refreshMarket();
       } catch (error) {
-        toast.error(t(pluginMarketErrorKey(error)));
+        if (isMarketBusyLeaseActive(marketBusyLease)) {
+          toast.error(t(pluginMarketErrorKey(error)));
+        }
       } finally {
-        setMarketBusyId(null);
+        releaseMarketBusy(marketBusyLease);
       }
+    },
+    [
+      acquireMarketBusy,
+      confirm,
+      ghosts,
+      isMarketBusyLeaseActive,
+      marketByGhostId,
+      refreshMarket,
+      releaseMarketBusy,
+      t,
+    ],
+  );
+
+  const handleUpdate = useCallback(async () => {
+    if (!selectedDetail) return;
+    if (selectedMarketUpdate) {
+      await handleMarketUpdate(selectedDetail.id);
       return;
     }
     await pickAndUpdateGhost(selectedDetail.id, { t, confirm, confirmWithCheckbox });
-  }, [
-    confirm,
-    confirmWithCheckbox,
-    refreshMarket,
-    selectedDetail,
-    selectedGhost,
-    selectedMarketUpdate,
-    t,
-  ]);
+  }, [confirm, confirmWithCheckbox, handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
 
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
@@ -494,37 +563,80 @@ export function GhostPluginPage() {
 
   const handleSelectMarket = useCallback(
     async (pluginId: string) => {
+      // 与 handleMarketUpdate 共用同一互斥锁:更新进行中不叠加其它市场操作。
+      const marketBusyLease = acquireMarketBusy(pluginId);
+      if (!marketBusyLease) return;
       const requestId = ++marketDetailRequestRef.current;
-      setMarketBusyId(pluginId);
       try {
         const detail = await window.electronAPI.pluginMarket.detail(pluginId);
-        if (requestId === marketDetailRequestRef.current) setMarketDetail(detail);
+        if (
+          requestId === marketDetailRequestRef.current &&
+          isMarketBusyLeaseActive(marketBusyLease)
+        ) {
+          setMarketDetail(detail);
+        }
       } catch (error) {
-        if (requestId === marketDetailRequestRef.current) {
+        if (
+          requestId === marketDetailRequestRef.current &&
+          isMarketBusyLeaseActive(marketBusyLease)
+        ) {
           toast.error(t(pluginMarketErrorKey(error)));
         }
       } finally {
-        if (requestId === marketDetailRequestRef.current) setMarketBusyId(null);
+        releaseMarketBusy(marketBusyLease);
       }
     },
-    [t],
+    [acquireMarketBusy, isMarketBusyLeaseActive, releaseMarketBusy, t],
+  );
+
+  const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
+    // A background icon renewal may observe navigation, but must never invalidate a
+    // user-initiated detail request by advancing its request generation.
+    const requestId = marketDetailRequestRef.current;
+    try {
+      const detail = await window.electronAPI.pluginMarket.detail(pluginId);
+      if (requestId !== marketDetailRequestRef.current) return;
+      setMarketDetail((current) => (current?.pluginId === pluginId ? detail : current));
+    } catch (error) {
+      // A background URL renewal must not close an otherwise usable detail page.
+      if (requestId === marketDetailRequestRef.current) throw error;
+    }
+  }, []);
+  const visibleMarketIcons = useMemo(
+    () => [...marketItems.map((item) => item.icon), marketDetail?.icon],
+    [marketDetail?.icon, marketItems],
+  );
+  const refreshVisibleMarketIcons = useCallback(async () => {
+    const refreshes: Promise<void>[] = [refreshMarket(true)];
+    if (marketDetail?.pluginId) {
+      refreshes.push(refreshVisibleMarketDetail(marketDetail.pluginId));
+    }
+    await Promise.all(refreshes);
+  }, [marketDetail?.pluginId, refreshMarket, refreshVisibleMarketDetail]);
+  const handleMarketIconLoadError = usePluginIconRefresh(
+    visibleMarketIcons,
+    refreshVisibleMarketIcons,
   );
 
   const handleInstallFromMarket = useCallback(async () => {
     if (!marketDetail) return;
-    const confirmed = await confirm({
-      title: t('settings.ghosts.market.installConfirmTitle', {
-        name: marketDetail.name,
-      }),
-      description: t('settings.ghosts.market.installConfirmDescription'),
-      confirmText: t('settings.ghosts.market.install'),
-      cancelText: t('settings.ghosts.installConfirm.cancel'),
-      autoFocusConfirm: true,
-    });
-    if (!confirmed) return;
-    setMarketBusyId(marketDetail.pluginId);
+    // 确认框等待期间也持有 lease。账号/模式切换会清除当前 lease,
+    // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
+    const marketBusyLease = acquireMarketBusy(marketDetail.pluginId);
+    if (!marketBusyLease) return;
     try {
+      const confirmed = await confirm({
+        title: t('settings.ghosts.market.installConfirmTitle', {
+          name: marketDetail.name,
+        }),
+        description: t('settings.ghosts.market.installConfirmDescription'),
+        confirmText: t('settings.ghosts.market.install'),
+        cancelText: t('settings.ghosts.installConfirm.cancel'),
+        autoFocusConfirm: true,
+      });
+      if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
+      if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       toast.success(
         t('settings.ghosts.toast.installedAsleep', {
           name: result.ghost.manifest.name,
@@ -534,11 +646,21 @@ export function GhostPluginPage() {
       setSelectedId(result.ghost.manifest.id);
       await refreshMarket();
     } catch (error) {
-      toast.error(t(pluginMarketErrorKey(error)));
+      if (isMarketBusyLeaseActive(marketBusyLease)) {
+        toast.error(t(pluginMarketErrorKey(error)));
+      }
     } finally {
-      setMarketBusyId(null);
+      releaseMarketBusy(marketBusyLease);
     }
-  }, [confirm, marketDetail, refreshMarket, t]);
+  }, [
+    acquireMarketBusy,
+    confirm,
+    isMarketBusyLeaseActive,
+    marketDetail,
+    refreshMarket,
+    releaseMarketBusy,
+    t,
+  ]);
 
   if (marketDetail) {
     return (
@@ -550,6 +672,7 @@ export function GhostPluginPage() {
           setMarketDetail(null);
         }}
         onInstall={() => void handleInstallFromMarket()}
+        onIconLoadError={handleMarketIconLoadError}
       />
     );
   }
@@ -574,6 +697,12 @@ export function GhostPluginPage() {
             ? t('settings.ghosts.market.update')
             : undefined
         }
+        updateVersion={
+          selectedMarketUpdate && selectedMarketUpdate.version !== selectedDetail.version
+            ? selectedMarketUpdate.version
+            : undefined
+        }
+        updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
       />
@@ -645,64 +774,18 @@ export function GhostPluginPage() {
                   {installedShortcutItems.length}
                 </span>
               </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-1">
-                {installedShortcutItems
-                  .slice(0, MAX_VISIBLE_INSTALLED_GHOSTS)
-                  .map((item) => renderInstalledGhost(item, setSelectedId))}
-                {installedShortcutItems.length > MAX_VISIBLE_INSTALLED_GHOSTS ? (
-                  <button
-                    type="button"
-                    onClick={() => setInstalledExpanded((expanded) => !expanded)}
-                    className={cn(
-                      'group flex w-16 shrink-0 justify-center rounded-[12px] px-2 py-2',
-                      'transition-transform duration-150 ease-out hover:-translate-y-px active:translate-y-0 active:scale-[0.98]',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                      'motion-reduce:transform-none motion-reduce:transition-none',
-                    )}
-                    aria-expanded={installedExpanded}
-                    aria-label={t(
-                      installedExpanded
-                        ? 'settings.ghosts.page.installedCollapse'
-                        : 'settings.ghosts.page.installedExpand',
-                      { count: installedShortcutItems.length - MAX_VISIBLE_INSTALLED_GHOSTS },
-                    )}
-                  >
-                    <span className="grid size-12 grid-cols-2 grid-rows-2 place-content-center gap-1 rounded-[22%] border-[0.5px] border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-chip)_58%,transparent)] p-2 shadow-[var(--plugin-icon-shadow)] transition-colors duration-150 group-hover:bg-[color-mix(in_srgb,var(--surface-chip)_78%,transparent)]">
-                      {installedShortcutItems
-                        .slice(MAX_VISIBLE_INSTALLED_GHOSTS, MAX_VISIBLE_INSTALLED_GHOSTS + 3)
-                        .map((item) => (
-                          <span
-                            key={item.id}
-                            className="flex size-3.5 items-center justify-center overflow-hidden rounded-[5px] bg-[var(--surface-elevated)]"
-                          >
-                            <GhostPluginIcon
-                              iconDataUrl={item.iconDataUrl}
-                              iconId={item.id}
-                              iconName={item.name}
-                              size="mini"
-                            />
-                          </span>
-                        ))}
-                      <span className="col-start-2 row-start-2 flex size-3.5 items-center justify-center rounded-[5px] bg-[var(--surface-elevated)] text-[9px] font-medium tabular-nums text-[var(--text-secondary)]">
-                        +{installedShortcutItems.length - MAX_VISIBLE_INSTALLED_GHOSTS}
-                      </span>
-                    </span>
-                  </button>
-                ) : null}
-              </div>
-              {installedExpanded && installedShortcutItems.length > MAX_VISIBLE_INSTALLED_GHOSTS ? (
-                <div className="plugin-motion-stagger mt-2 flex flex-wrap items-center gap-1">
-                  {installedShortcutItems
-                    .slice(MAX_VISIBLE_INSTALLED_GHOSTS)
-                    .map((item) => renderInstalledGhost(item, setSelectedId))}
-                </div>
-              ) : null}
+              <InstalledGhostQueue
+                items={installedShortcutItems}
+                expanded={installedExpanded}
+                onExpandedChange={setInstalledExpanded}
+                onSelect={setSelectedId}
+              />
             </section>
           ) : null}
 
           <section className="plugin-motion-page-section mt-6 min-w-0">
-            <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-baseline gap-2">
+            <div className={PLUGIN_CATALOG_TOOLBAR_CLASS}>
+              <div className="flex shrink-0 items-baseline gap-2 whitespace-nowrap">
                 <h2 className="text-20 font-medium text-[var(--text-primary)]">
                   {t('settings.ghosts.page.allTitle')}
                 </h2>
@@ -711,7 +794,7 @@ export function GhostPluginPage() {
                 </span>
               </div>
               <div
-                className="flex max-w-full items-center gap-1 overflow-x-auto"
+                className="plugin-catalog-filters flex min-w-0 max-w-full items-center gap-1 overflow-x-auto"
                 role="group"
                 aria-label={t('settings.ghosts.page.filtersAria')}
                 style={WINDOW_NO_DRAG_STYLE}
@@ -758,7 +841,7 @@ export function GhostPluginPage() {
             ) : null}
 
             {items.length > 0 || availableMarketItems.length > 0 ? (
-              <div className="plugin-motion-stagger grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
                 {items.map((item) => (
                   <GhostPluginCard
                     key={item.id}
@@ -766,6 +849,11 @@ export function GhostPluginPage() {
                     sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
                     onSelect={() => setSelectedId(item.id)}
                     onAction={() => void handleUseGhost(item.id)}
+                    updateVersion={item.marketUpdate?.version}
+                    updateBusy={item.marketUpdate !== null && marketBusyId !== null}
+                    onUpdate={
+                      item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
+                    }
                     effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
                     toggleDisabled={scopeDir !== null && !item.enabled}
                     onToggle={(enabled) => void handleToggle(item.id, enabled)}
@@ -775,8 +863,9 @@ export function GhostPluginPage() {
                   <MarketPluginCard
                     key={item.pluginId}
                     item={item}
-                    busy={marketBusyId === item.pluginId}
+                    busy={marketBusyId !== null}
                     onSelect={() => void handleSelectMarket(item.pluginId)}
+                    onIconLoadError={handleMarketIconLoadError}
                   />
                 ))}
               </div>
@@ -801,14 +890,16 @@ export function GhostPluginPage() {
   );
 }
 
-function MarketPluginCard({
+export function MarketPluginCard({
   item,
   busy,
   onSelect,
+  onIconLoadError,
 }: {
   item: PluginMarketItem;
   busy: boolean;
   onSelect: () => void;
+  onIconLoadError: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -831,6 +922,7 @@ function MarketPluginCard({
           iconDataUrl={item.icon?.url}
           iconId={item.ghostId}
           iconName={item.name}
+          onIconLoadError={onIconLoadError}
         />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
           <span className="flex min-w-0 items-center gap-2">
@@ -838,18 +930,24 @@ function MarketPluginCard({
               {item.name}
             </span>
           </span>
-          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
-            <span>
+          <span className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-11 text-[var(--text-tertiary)]">
+            <span className="shrink-0">
               {t(`settings.ghosts.page.origin.${pluginPresentationOrigin(item)}`)}
             </span>
-            <span aria-hidden="true">·</span>
-            <span>v{item.version}</span>
-            <span aria-hidden="true">·</span>
-            <span className="truncate font-mono">{item.ghostId}</span>
+            <span className="shrink-0" aria-hidden="true">
+              ·
+            </span>
+            <span className="shrink-0">v{item.version}</span>
+            <span className="shrink-0" aria-hidden="true">
+              ·
+            </span>
+            <span className="min-w-0 truncate font-mono">{item.ghostId}</span>
             {item.author ? (
               <>
-                <span aria-hidden="true">·</span>
-                <span className="truncate">{item.author}</span>
+                <span className="shrink-0" aria-hidden="true">
+                  ·
+                </span>
+                <span className="min-w-0 truncate">{item.author}</span>
               </>
             ) : null}
           </span>
@@ -895,7 +993,7 @@ function GhostPluginActions({
         <button
           type="button"
           className={cn(
-            'group inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)]',
+            'plugin-management-action-trigger group inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)]',
             'bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]',
             'transition-[background-color,border-color,transform] duration-150 ease-out',
             'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
@@ -905,11 +1003,13 @@ function GhostPluginActions({
           aria-label={t('settings.ghosts.page.addPluginAria')}
         >
           <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
-          {t('settings.ghosts.page.addPlugin')}
+          <span className="plugin-management-action-label">
+            {t('settings.ghosts.page.addPlugin')}
+          </span>
           <ChevronDown
             size={13}
             strokeWidth={1.75}
-            className="transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+            className="plugin-management-action-chevron transition-transform duration-150 group-data-[state=open]:rotate-180 motion-reduce:transition-none"
             aria-hidden="true"
           />
         </button>
@@ -955,6 +1055,9 @@ export function GhostPluginCard({
   sourceLabel,
   onSelect,
   onAction,
+  onUpdate,
+  updateVersion,
+  updateBusy = false,
   onToggle,
   effectiveEnabled,
   toggleDisabled = false,
@@ -963,6 +1066,10 @@ export function GhostPluginCard({
   sourceLabel?: string;
   onSelect: () => void;
   onAction: () => void;
+  /** 市场存在新版本时的直达更新入口;与 updateVersion 同时提供。 */
+  onUpdate?: () => void;
+  updateVersion?: string;
+  updateBusy?: boolean;
   onToggle?: (enabled: boolean) => void;
   effectiveEnabled?: boolean;
   toggleDisabled?: boolean;
@@ -987,8 +1094,15 @@ export function GhostPluginCard({
       >
         <GhostPluginIcon iconDataUrl={item.iconDataUrl} iconId={item.id} iconName={item.name} />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
-          <span className="truncate text-15 font-medium text-[var(--text-primary)]">
-            {item.name}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-15 font-medium text-[var(--text-primary)]">
+              {item.name}
+            </span>
+            {updateVersion ? (
+              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium leading-4 text-[var(--text-secondary)]">
+                {t('settings.ghosts.market.updateAvailable')}
+              </span>
+            ) : null}
           </span>
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
             {sourceLabel ? (
@@ -1015,21 +1129,39 @@ export function GhostPluginCard({
             aria-label={t('settings.ghosts.enableAria', { name: item.name })}
           />
         ) : null}
-        <button
-          type="button"
-          onClick={onAction}
-          disabled={!(effectiveEnabled ?? item.enabled) || !item.canUse}
-          className={cn(
-            'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
-            'transition-[background-color,border-color,transform,opacity] duration-150',
-            'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-          )}
-          aria-label={t('settings.ghosts.page.useAria', { name: item.name })}
-        >
-          {t('settings.ghosts.page.useAction')}
-        </button>
+        {updateVersion && onUpdate ? (
+          <button
+            type="button"
+            onClick={onUpdate}
+            disabled={updateBusy}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
+              'transition-[background-color,border-color,transform,opacity] duration-150',
+              'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+            )}
+            aria-label={t('settings.ghosts.market.updateAria', { name: item.name })}
+          >
+            {t('settings.ghosts.market.updateAction')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onAction}
+            disabled={!(effectiveEnabled ?? item.enabled) || !item.canUse}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
+              'transition-[background-color,border-color,transform,opacity] duration-150',
+              'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
+            )}
+            aria-label={t('settings.ghosts.page.useAria', { name: item.name })}
+          >
+            {t('settings.ghosts.page.useAction')}
+          </button>
+        )}
       </div>
     </article>
   );
@@ -1061,6 +1193,80 @@ export function InstalledGhostShortcut({
   );
 }
 
-function renderInstalledGhost(item: GhostPluginListItem, onSelect: (id: string) => void) {
-  return <InstalledGhostShortcut key={item.id} item={item} onSelect={onSelect} />;
+/** Installed shortcuts share one wrapping queue in both collapsed and expanded states. */
+export function InstalledGhostQueue({
+  items,
+  expanded,
+  onExpandedChange,
+  onSelect,
+}: {
+  items: readonly GhostPluginListItem[];
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  onSelect: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const hasOverflow = items.length > MAX_VISIBLE_INSTALLED_GHOSTS;
+  const visibleItems = expanded ? items : items.slice(0, MAX_VISIBLE_INSTALLED_GHOSTS);
+
+  return (
+    <div
+      data-testid="installed-plugin-queue"
+      className={cn(
+        'flex min-w-0 flex-wrap items-center gap-1',
+        expanded && 'plugin-motion-stagger',
+      )}
+    >
+      {visibleItems.map((item) => (
+        <InstalledGhostShortcut key={item.id} item={item} onSelect={onSelect} />
+      ))}
+      {hasOverflow ? (
+        <button
+          key="installed-overflow-toggle"
+          type="button"
+          onClick={() => onExpandedChange(!expanded)}
+          className={cn(
+            'group flex w-16 shrink-0 justify-center rounded-[12px] px-2 py-2',
+            'transition-transform duration-150 ease-out hover:-translate-y-px active:translate-y-0 active:scale-[0.98]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+            'motion-reduce:transform-none motion-reduce:transition-none',
+          )}
+          aria-expanded={expanded}
+          aria-label={t(
+            expanded
+              ? 'settings.ghosts.page.installedCollapse'
+              : 'settings.ghosts.page.installedExpand',
+            { count: items.length - MAX_VISIBLE_INSTALLED_GHOSTS },
+          )}
+        >
+          {expanded ? (
+            <span className="flex size-12 items-center justify-center rounded-[22%] border-[0.5px] border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-chip)_58%,transparent)] text-[var(--text-secondary)] shadow-[var(--plugin-icon-shadow)] transition-colors duration-150 group-hover:bg-[color-mix(in_srgb,var(--surface-chip)_78%,transparent)]">
+              <ChevronUp size={18} strokeWidth={1.8} aria-hidden="true" />
+            </span>
+          ) : (
+            <span className="grid size-12 grid-cols-2 grid-rows-2 place-content-center gap-1 rounded-[22%] border-[0.5px] border-[color-mix(in_srgb,var(--border-default)_62%,transparent)] bg-[color-mix(in_srgb,var(--surface-chip)_58%,transparent)] p-2 shadow-[var(--plugin-icon-shadow)] transition-colors duration-150 group-hover:bg-[color-mix(in_srgb,var(--surface-chip)_78%,transparent)]">
+              {items
+                .slice(MAX_VISIBLE_INSTALLED_GHOSTS, MAX_VISIBLE_INSTALLED_GHOSTS + 3)
+                .map((item) => (
+                  <span
+                    key={item.id}
+                    className="flex size-3.5 items-center justify-center overflow-hidden rounded-[5px] bg-[var(--surface-elevated)]"
+                  >
+                    <GhostPluginIcon
+                      iconDataUrl={item.iconDataUrl}
+                      iconId={item.id}
+                      iconName={item.name}
+                      size="mini"
+                    />
+                  </span>
+                ))}
+              <span className="col-start-2 row-start-2 flex size-3.5 items-center justify-center rounded-[5px] bg-[var(--surface-elevated)] text-[9px] font-medium tabular-nums text-[var(--text-secondary)]">
+                +{items.length - MAX_VISIBLE_INSTALLED_GHOSTS}
+              </span>
+            </span>
+          )}
+        </button>
+      ) : null}
+    </div>
+  );
 }

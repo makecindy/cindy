@@ -62,9 +62,55 @@ Git LFS 和依赖安装。该文档是安装命令的唯一权威说明；本指
 贡献，默认按 Apache-2.0 的条款并入并对外分发，无需额外签署 CLA。
 
 我们要求每个 commit 通过 [Developer Certificate of Origin](https://developercertificate.org/)
-声明来源合法：提交时使用 `git commit -s`，在 commit message 末尾生成
-`Signed-off-by: 你的名字 <你的邮箱>` 行，表示你有权按上述条款提交这份贡献。
-请不要提交你无权授权的代码（例如未经许可复制的专有代码）。
+声明来源合法（DCO 1.1 全文见仓库根的 [`DCO`](DCO) 文件）：提交时使用 `git commit -s`，
+在 commit message 末尾生成 `Signed-off-by: 你的名字 <你的邮箱>` 行，表示你有权按上述
+条款提交这份贡献。签名里的**名字和邮箱都**必须与该 commit 的 author（或 committer）
+一致——这一行是本人声明，不能替别人签。请不要提交你无权授权的代码（例如未经许可
+复制的专有代码）。
+
+PR 上的 **DCO check**（[DCO GitHub App](https://github.com/apps/dco)）会校验这个 PR
+的每个 commit，merge commit 与 bot 提交豁免，不追溯 DCO 生效前的历史提交。本地可以
+提前自查：`pnpm check:dco`。漏签时补签：
+
+```bash
+# 只有最新一个 commit 漏签
+git commit --amend -s --no-edit
+
+# 多个 commit 漏签（<base> 用 PR 的 base commit）
+git rebase --signoff <base>
+
+# 改完后更新 PR
+git push --force-with-lease
+```
+
+如果不想改写历史（例如 PR 上已经有想保留的 review 讨论），可以改推一个
+**remediation commit**：正文里包含下面这行原样格式，其中 sha 是被补签 commit 的完整
+40 位 sha，并且这个 commit 自己也要带签名。
+
+```text
+I, 你的名字 <你的邮箱>, hereby add my Signed-off-by to this commit: <40 位完整 sha>
+
+Signed-off-by: 你的名字 <你的邮箱>
+```
+
+两个 commit 的 author 以及这行里的名字、邮箱必须完全一致。替别人的 commit 补签用：
+
+```text
+On behalf of 原作者 <原作者邮箱>, I, 你的名字 <你的邮箱>, hereby add my Signed-off-by to this commit: <40 位完整 sha>
+
+Signed-off-by: 你的名字 <你的邮箱>
+```
+
+注意 `pnpm check:dco` 刻意比 PR 上的门禁保守：它只认直接签名、不识别 remediation
+commit，也不豁免 bot 提交（bot 身份取决于 GitHub 账号类型，本地判不了）。因此本地通过则
+PR 上必过，反之不然——用了 remediation、或范围里含 bot 提交时，以 PR 上的 DCO check 为准。
+
+`git commit` 本身没有「自动签名」的配置项（`format.signOff` 只作用于
+`git format-patch` / `git am`）。想一次配好，可以装上本仓的 prepare-commit-msg hook——
+正本是 [`.githooks/prepare-commit-msg`](.githooks/prepare-commit-msg)，一个普通 shell
+脚本，建议装之前先自己读一遍：`pnpm dco:install-hook` 会把它复制进本地 hooks 目录，
+不改远端，删掉已安装的那份即卸载；也可以直接 `git config core.hooksPath .githooks`
+（这会接管整个 hooks 目录）。
 
 ## 安全问题
 

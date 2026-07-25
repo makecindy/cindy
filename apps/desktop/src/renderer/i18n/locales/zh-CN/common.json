@@ -646,6 +646,11 @@
       "autoUpdateEnabledToast": "已开启空闲时自动安装更新",
       "autoUpdateDisabledToast": "已关闭空闲时自动安装更新",
       "autoUpdateSaveFailed": "保存自动更新设置失败",
+      "analyticsLabel": "使用统计",
+      "analyticsDescription": "帮助我们了解 Cindy 的启动与留存情况。上报设备型号、系统版本、应用版本、设备标识符等设备与使用环境信息，登录后还包含你的账号 ID；不包含任何对话内容、文件或提示词。关闭后立即停止上报。",
+      "analyticsEnabledToast": "已开启使用统计",
+      "analyticsDisabledToast": "已关闭使用统计",
+      "analyticsSaveFailed": "保存使用统计设置失败",
       "debugLogLabel": "Debug 日志",
       "debugLogDescription": "开启后输出全量调试日志：main/maker logger 抬到 debug 级，新建的 Claude Code 会话额外输出 API 请求 URL/状态/耗时、Node 层 DNS/TCP/TLS 握手时序，以及 SDK 内部信息。日志量较大,定位问题后请关闭。dev 模式下始终开启。",
       "social": {
@@ -934,10 +939,6 @@
       }
     },
     "sessionImport": {
-      "linkedTitle": "本地会话链接",
-      "linkedDescription": "只读扫描本机 Claude Code 与 Codex 历史。Codex 会话会链接到原 thread 并直接续聊，不会重放历史；Claude 会话仍作为本地历史导入。",
-      "linkSelected": "链接选中",
-      "linked": "已链接",
       "title": "本地会话导入",
       "description": "只读扫描本机 Claude Code 与 Codex 历史。只有列表里勾选的会话会被导入；已跳过的内部会话不会展示，也不会导入。",
       "scan": "扫描",
@@ -978,7 +979,9 @@
         "scanFailed": "扫描失败",
         "importFailed": "导入失败",
         "imported": "导入完成：新增 {{inserted}} 条，更新 {{updated}} 条"
-      }
+      },
+      "selectAll": "全选当前筛选结果（{{count}} 条）",
+      "selectedOutsideFilter": "（其中 {{count}} 条在当前筛选之外）"
     },
     "connections": {
       "codex": {
@@ -1731,6 +1734,15 @@
       "directControl": {
         "title": "自动操作电脑",
         "description": "让 agent 检查窗口、读取界面并点击或输入",
+        "status": {
+          "ready": "可以使用",
+          "needsPermission": "需要系统授权",
+          "notInstalled": "尚未安装驱动",
+          "disabled": "已关闭",
+          "checking": "正在检查权限…",
+          "setup": "设置权限",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "切换直接操作电脑",
         "driverInfo": "自动操作电脑由开源 CUA Driver 提供，运行在本机，用于读取屏幕并执行点击、输入等操作。",
         "openSourceProject": "查看开源项目",
@@ -1748,14 +1760,25 @@
           "cancel": "稍后再说"
         },
         "permissionGuide": {
-          "title": "等待系统授权",
-          "description": "请在系统设置中为 CuaDriver 开启以下权限（在权限列表里找到左侧图标对应的 App）。全部开启后这里会自动继续。",
-          "waiting": "待授权"
+          "waiting": "等待你开启",
+          "step": "打开自动操作电脑",
+          "completeEyebrow": "权限已完成",
+          "dragTitle": "将 CuaDriver 拖入「{{permission}}」",
+          "turnOnAppTitle": "在「{{permission}}」中打开 CuaDriver",
+          "dragHint": "拖拽",
+          "draggingTitle": "正在拖拽 CuaDriver",
+          "draggingHint": "放入「{{permission}}」列表",
+          "appName": "CuaDriver",
+          "turnOnTitle": "打开「{{permission}}」",
+          "turnOnDescription": "请在系统设置中打开这项权限。开启后，Cindy 会自动继续。",
+          "readyTitle": "Computer Use 已就绪",
+          "readyDescription": "现在可以让 Cindy 操作这台电脑。"
         },
         "permissions": {
-          "macosHint": "macOS 需要为 Cua Driver 授予「辅助功能」和「屏幕录制」核心权限。实际使用时，系统还可能按目标 App 或具体动作弹出额外确认。",
-          "accessibilityLabel": "CuaDriver 辅助功能",
-          "screenRecordingLabel": "CuaDriver 屏幕录制",
+          "title": "系统授权",
+          "macosHint": "电脑使用需要「辅助功能」和「屏幕录制」。实际使用时，macOS 仍可能按目标 App 或具体动作弹出额外确认。",
+          "accessibilityLabel": "辅助功能",
+          "screenRecordingLabel": "屏幕录制",
           "grant": "去授权",
           "accessibility": "辅助功能：{{status}}",
           "screenRecording": "屏幕录制：{{status}}",
@@ -1767,6 +1790,8 @@
           "openAccessibility": "打开辅助功能设置",
           "openScreenRecording": "打开屏幕录制设置",
           "recheck": "重新检查",
+          "moreDetails": "更多说明",
+          "hideDetails": "收起说明",
           "windowsHint": "Windows 不需要额外系统授权。使用时请保持目标应用在当前活动桌面中可见，agent 会接管前台操作。",
           "linuxHint": "Linux 不需要 macOS 的 TCC 授权；请确保当前桌面会话允许窗口读取和输入自动化。"
         },
@@ -1789,9 +1814,10 @@
           "disabled": "已禁用直接电脑控制",
           "toggleFailed": "切换直接电脑控制失败",
           "installFailed": "cua-driver 安装失败",
-          "permissionFailed": "cua-driver 授权未完成",
-          "permissionPending": "请完成 Cua Driver 的系统授权，然后此处会自动启用",
+          "permissionFailed": "电脑使用权限未完成",
+          "permissionPending": "请完成这两项系统权限，然后回到这里点击“重新检查”",
           "permissionSettingsOpened": "已打开系统权限设置。完成授权后，请回到这里点“重新检查”。",
+          "permissionSettingsMonitoring": "已打开系统权限设置。完成授权后，状态会自动更新。",
           "openPermissionSettingsFailed": "无法打开系统权限设置"
         }
       }
@@ -2250,6 +2276,10 @@
         "install": "安装",
         "details": "详情",
         "update": "从市场更新",
+        "updateAvailable": "可更新",
+        "updateAction": "更新",
+        "updateAria": "更新 {{name}}",
+        "updateTo": "更新到 v{{version}}",
         "installed": "已安装",
         "conflict": "插件标识冲突",
         "unavailable": "插件市场暂时不可用；已安装插件仍可正常管理和使用。",
@@ -2398,12 +2428,16 @@
         "noChange": "权限无变化。",
         "pick": "可请求你选择一个文件夹交给它",
         "pickDetail": "它发起请求时,Cindy 会弹出系统的选择文件夹窗口;选哪个、给不给,都由你亲手决定,取消则它什么都拿不到。",
+        "workspace": "可请求为项目文件夹在侧边栏创建会话入口",
+        "workspaceDetail": "它发起请求时,由你亲手选择文件夹,或在确认卡上看到完整路径后再决定;它正在处理你发起的调用时,当前会话工作目录内的子文件夹可直接使用,不再单独确认。文件夹已有会话时直接复用,不重复创建。创建的只是空会话,不会自动开始任何任务。",
         "sessionContext": "可获知当前会话正在使用的项目文件夹位置",
         "sessionContextDetail": "只在它为当前会话干活时告知位置信息(会话编号与项目文件夹路径),不包含文件内容,也不因此获得文件访问权。",
         "preview": "可在右侧栏浏览器中打开以下网站的预览页面",
         "previewDetail": "只能打开下方列出的网站;每次打开都会提示是哪个插件打开的。",
         "nodeChildSpawn": "Node 程序可请宿主再启动包内申报过的子进程",
-        "nodeChildSpawnDetail": "只能启动它自己包里申报过的 JS 文件(与主程序同样的本机权限),不能执行任意命令;插件停用或退出时子进程一并关闭。"
+        "nodeChildSpawnDetail": "只能启动它自己包里申报过的 JS 文件(与主程序同样的本机权限),不能执行任意命令;插件停用或退出时子进程一并关闭。",
+        "skill": "为 AI 助手添加技能「{{name}}」",
+        "skillDetail": "技能是一份指令文件,AI 会把它当作自己的指令加载执行,拥有你的全部权限,对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用,停用或卸载即移除;仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -2490,7 +2524,9 @@
         "slotCard": "消息卡片",
         "slotNetwork": "网络访问",
         "slotNotify": "系统提示",
-        "slotFs": "写文件"
+        "slotFs": "写文件",
+        "slotSkill": "Agent 技能",
+        "slotWorkspace": "工作区会话"
       },
       "commandPaletteTag": "插件指令",
       "updateConfirm": {
@@ -2502,6 +2538,10 @@
       "pick": {
         "dialogTitle": "选择文件夹",
         "dialogMessage": "插件「{{name}}」请求你选择一个文件夹"
+      },
+      "workspace": {
+        "dialogTitle": "选择项目文件夹",
+        "dialogMessage": "插件「{{name}}」请求你选择一个项目文件夹,用于在侧边栏创建会话"
       }
     },
     "mcp": {
@@ -3086,11 +3126,15 @@
   "panelChrome": {
     "maximizeAria": "撑满内容区",
     "restoreAria": "还原面板大小",
-    "detachAria": "在独立窗口中打开"
+    "detachAria": "在独立窗口中打开",
+    "minimizeAria": "最小化为浮动气泡"
   },
   "ghostPanelWindow": {
     "mergeBack": "合并回主窗口",
     "unavailable": "该插件面板当前不可用"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "恢复 {{name}} 面板"
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
@@ -3196,7 +3240,15 @@
         "unresponsiveDesc": "页面长时间未响应,可重新加载或稍候等待",
         "navigationLoopTitle": "已停止重复跳转",
         "navigationLoopDesc": "页面在短时间内反复跳转,已暂停导航。请重新加载页面后重试",
+        "resourceKilledTitle": "页面占用内存过高",
+        "resourceKilledDesc": "该页面占用内存过高,已被终止以保护应用运行。可重新加载",
+        "forceKill": "强制终止",
         "reload": "重新加载"
+      },
+      "resourceAlert": {
+        "cpuHint": "此页面占用大量系统资源",
+        "terminate": "终止页面",
+        "dismiss": "忽略"
       }
     },
     "terminal": {
@@ -3633,6 +3685,75 @@
       "queueTooltip": "点击排队发送；按 {{shortcut}} 插话，不打断当前任务",
       "stop": "停止生成"
     },
+    "pluginSetup": {
+      "title": "{{name}} 设置",
+      "assessmentReadFailed": "无法读取插件配置状态。",
+      "setupIncomplete": "插件尚未完成配置。",
+      "setupChangedDuringResume": "插件配置在调用恢复前发生变化，请完成设置后重试。",
+      "chooseOne": "选择一种配置方式",
+      "restoreAria": "展开 {{name}} 设置",
+      "minimizeAria": "收起 {{name}} 设置",
+      "completeOnDesktop": "请在被控桌面完成设置，本卡片会自动更新状态。",
+      "cancel": "取消",
+      "cancelling": "正在取消…",
+      "retry": "重试",
+      "saveConfiguration": "保存配置",
+      "saving": "保存中…",
+      "error": {
+        "ACTION_FAILED": "设置操作未完成，请重试。",
+        "ACTION_STALE": "设置已更新，请重新选择配置操作。",
+        "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
+        "AUTH_FAILED": "未能完成授权，请重试。",
+        "INLINE_INVALID": "配置内容无效，请检查后重试。",
+        "INLINE_UNAVAILABLE": "当前版本无法在对话中保存此配置，请更新 Cindy 后重试。",
+        "SAVE_FAILED": "未能保存配置，请重试。",
+        "WINDOW_CLOSED": "发起设置的窗口已关闭，请回到该会话重试。",
+        "TARGET_UNAVAILABLE": "插件已停用、卸载或不可用，请检查插件状态后重试。",
+        "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
+        "TIMEOUT": "等待设置超时，请重试。"
+      },
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI 模型服务",
+          "description": "使用插件声明的图片或视频能力前，需要先连接可用的模型服务"
+        }
+      },
+      "form": {
+        "placeholder": "请输入{{label}}",
+        "required": "请输入{{label}}",
+        "tooLong": "最多输入 {{maxLength}} 个字符",
+        "openLink": "获取{{label}}",
+        "openLinkFailed": "暂时无法打开该页面，请重试。"
+      },
+      "action": {
+        "oauth_connect": "授权",
+        "open_plugin_settings": "打开设置",
+        "manage_connection": "管理连接",
+        "open_client_settings": "打开模型设置"
+      },
+      "phase": {
+        "pending": "待设置",
+        "action_running": "进行中…",
+        "waiting_external": "等待授权…",
+        "verifying": "验证中…",
+        "satisfied": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消"
+      },
+      "timeout": "等待超时",
+      "oauthCancelled": "授权已取消",
+      "oauthFailed": "授权失败：{{detail}}",
+      "pluginUninstalledDuringOauth": "目标插件已卸载或不可用",
+      "inlineSecretInvalid": "凭证内容无效",
+      "pluginUnavailable": "目标插件已卸载或不可用",
+      "inlineActionExpired": "配置动作已失效，请重新尝试",
+      "inlineSecretDeclChanged": "凭证声明已变更，请重新尝试",
+      "inlineSecretStoreFailed": "凭证保存失败",
+      "targetNotFound": "目标插件已卸载或当前不可用",
+      "targetDisabled": "目标插件已被停用",
+      "targetDisabledInWorkdir": "用户已在当前工作目录停用该插件;不要重试。",
+      "targetToolNotFound": "目标插件不再提供该工具"
+    },
     "createAgent": {
       "quickStart": "快速开始",
       "quickStarts": {
@@ -3698,6 +3819,8 @@
         "output": "输出",
         "cacheRead": "缓存读取",
         "cacheCreate": "缓存写入",
+        "free": "限时免费",
+        "discount": "立省 {{percent}}%",
         "perMillion": "模型标准价格",
         "fixedFx": "按固定汇率 1 USD = 6.7 CNY 约算",
         "subscriptionEstimate": "价值估算，不代表实际账单"
@@ -4841,7 +4964,8 @@
       "card": {
         "awaitingPermission": "等待授权",
         "awaitingQuestion": "等待你的回复",
-        "awaitingPlan": "等待计划审阅"
+        "awaitingPlan": "等待计划审阅",
+        "awaitingPluginSetup": "等待插件设置"
       },
       "showAllSessions": "显示全部 {{count}} 项",
       "dialogues": "对话",
@@ -6068,6 +6192,7 @@
       "descriptionDir": "以下目录/文件在当前会话的工作目录之外。允许后,其中的文件会交给该插件上传(它只拿到一次性票据,拿不到路径)。",
       "descriptionSaveDir": "以下目录在当前会话的工作目录之外。允许后,该插件可以把下载的文件存入其中(不会覆盖已有文件)。",
       "descriptionFsWrite": "该插件请求在当前会话的工作目录写入以下文件。允许后,本会话内它写同一目录不再询问。",
+      "descriptionWorkspace": "该文件夹在当前会话的工作目录之外。允许后,Cindy 会以它为工作目录在侧边栏创建一个空会话(已有会话时直接复用),不会读取其中的文件。",
       "dirMeta": "{{count}} 个文件 · {{size}}",
       "directory": "目录",
       "allowDirs": "同时允许这些文件所在目录(本会话内同目录媒体文件不再询问)",
@@ -6998,7 +7123,6 @@
     "sidebar": "点数与订阅",
     "settings": {
       "title": "使用情况和计费",
-      "subtitle": "查看可用额度与当前套餐，或按需购买点数。",
       "subscriptionCard": {
         "title": "当前套餐",
         "empty": "当前没有生效中的订阅",
@@ -7013,15 +7137,13 @@
         "endsAt": "套餐将于 {{date}} 结束"
       },
       "topupCard": {
-        "title": "点数",
-        "description": "购买点数，为按量使用的模型和功能充值。",
-        "cardTitle": "按需购买点数",
-        "cardDescription": "按需补充可用额度，购买金额以结算页为准。",
         "action": "购买点数"
       }
     },
     "balance": {
       "title": "可用额度",
+      "creditParityCny": "1 点 = 1 元，用于 Cindy AI 用量结算；支付由第三方渠道处理。",
+      "creditParityUsd": "1 点 = 1 美元，用于 Cindy AI 用量结算；支付由第三方渠道处理。",
       "plan": "订阅额度",
       "purchased": "已购额度",
       "promotional": "赠送额度",
@@ -7030,17 +7152,15 @@
       "unavailable": "暂时无法获取额度，请刷新后重试。"
     },
     "usage": {
+      "title": "额度使用",
       "observedAt": "额度更新于 {{date}}",
-      "used": "已用",
-      "total": "总额",
+      "poolDetail": "已用 {{used}} · 总额 {{total}}",
       "remaining": "剩余",
       "progressLabel": "{{label}}使用进度",
       "historyUnavailable": "历史记录不完整，暂时仅显示剩余额度。",
-      "percentUsed": "已使用 {{percent}}%",
       "detailsUnavailable": "用量明细暂时不可用，当前仅显示各类余额。",
       "promotionalDetails": {
         "title": "赠送额度明细",
-        "description": "当前赠送与总余额基于同一次额度快照，已用额度仅统计实际模型消费。",
         "count": "{{count}} 笔",
         "empty": "当前没有赠送额度记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
@@ -7059,31 +7179,15 @@
     },
     "dialogs": {
       "subscription": {
-        "title": "选择订阅套餐",
-        "description": "展示服务端当前公开的订阅套餐；暂不可购买的套餐会标注状态。"
+        "title": "选择订阅套餐"
       },
       "topup": {
-        "title": "购买点数",
-        "description": "展示服务端当前公开的点数商品；暂不可购买的商品会标注状态。"
+        "title": "购买点数"
       }
     },
-    "eyebrow": "账户与用量",
-    "title": "选择适合你的方案",
-    "subtitle": "套餐和支付方式均由服务端实时下发。先选择方案，再查看该方案当前支持的支付方式。",
     "steps": {
-      "offer": {
-        "title": "选择套餐",
-        "description": "展示服务端当前公开的充值和订阅方案。"
-      },
       "channel": {
-        "title": "选择支付方式",
-        "description": "不同套餐支持的支付方式可能不同。",
-        "selectOfferFirst": "选择套餐后，这里会显示该套餐支持的支付方式"
-      },
-      "confirm": {
-        "title": "确认并支付",
-        "description": "核对方案与支付方式后创建支付。",
-        "selectChannelFirst": "选择支付方式后即可确认订单"
+        "title": "选择支付方式"
       }
     },
     "actions": {
@@ -7103,10 +7207,6 @@
         "OFFER_COMING_SOON": "敬请期待",
         "NO_AVAILABLE_PAYMENT_CHANNEL": "暂无可用支付方式"
       }
-    },
-    "offerKinds": {
-      "topup": "点数充值",
-      "subscription": "订阅套餐"
     },
     "amount": {
       "custom": "自定义金额",
@@ -7132,7 +7232,6 @@
       "alipay": "支付宝",
       "stripe": "银行卡"
     },
-    "securityNotice": "支付由所选渠道安全处理，Cindy 不保存你的支付凭证",
     "currentSubscription": {
       "title": "当前订阅",
       "purchaseBlocked": "当前已有未结束的订阅，请先处理现有订阅后再购买新套餐。"
@@ -7157,7 +7256,6 @@
     "checkout": {
       "creatingTitle": "正在创建支付",
       "awaitingTitle": "等待支付",
-      "fulfillingTitle": "正在发放点数",
       "completedTitle": "支付成功",
       "failedTitle": "暂时无法完成",
       "expiredTitle": "支付已过期",
@@ -7172,7 +7270,6 @@
       "redirectHint": "请在支付页面完成操作，完成后返回 Cindy。",
       "openPayment": "打开支付页面",
       "refreshingAction": "正在获取支付方式…",
-      "creditingBody": "支付已完成，正在等待点数到账…",
       "paymentCompleted": "支付已完成。",
       "requestFailed": "请求失败。可以重试；结果不确定时会继续复用原幂等请求。",
       "expiredBody": "支付链接已过期，请重新创建支付。",
@@ -7181,8 +7278,6 @@
     },
     "planChange": {
       "targetTitle": "更改订阅套餐",
-      "targetDescription": "套餐变更沿用当前支付方式，最终价格与生效时间以下一步确认为准。",
-      "targetDescriptionWithCurrent": "当前套餐：{{plan}}。变更沿用当前支付方式，最终价格与生效时间以下一步确认为准。",
       "upgradeBadge": "升级",
       "downgradeBadge": "降级",
       "emptyTitle": "暂无可切换的套餐",

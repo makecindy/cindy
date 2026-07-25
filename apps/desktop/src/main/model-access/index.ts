@@ -31,6 +31,8 @@ import {
   type CredentialsPayload,
   type CredentialsSync,
 } from './credentialsSync.js';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+export { isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
 
@@ -52,6 +54,13 @@ const log = createLogger('modelAccess');
 
 const CREDENTIALS_PATH = '/api/model-access/credentials';
 const MODELS_PATH = '/api/model-access/models';
+
+function notifyXdProviderKeyChanged(): void {
+  getGhostSetupChangeBus().emitAll({
+    source: 'host_config',
+    ref: 'model-provider',
+  });
+}
 
 function fetchCredentials(): Promise<CredentialsPayload> {
   return serverApiFetch<CredentialsPayload>(CREDENTIALS_PATH, {
@@ -75,7 +84,9 @@ function rotateCredentials(): Promise<CredentialsPayload> {
 async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
   const needRestart = getCodexProxyAuthInjectionState() === 'env-key';
   if (!needRestart) {
-    return getProviderSecretStore().set('xd', key);
+    const stored = getProviderSecretStore().set('xd', key);
+    if (stored) notifyXdProviderKeyChanged();
+    return stored;
   }
   try {
     await prepareCodexForAuthModeChange();
@@ -90,6 +101,7 @@ async function writeXdKeyWithCodexSideEffect(key: string): Promise<boolean> {
     cancelCodexAuthModeChange();
     return false;
   }
+  notifyXdProviderKeyChanged();
   try {
     await finalizeCodexAfterAuthModeChange();
   } catch (err) {

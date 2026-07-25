@@ -368,9 +368,11 @@ export function pinnedSessionIdsInDisplayOrder(sessions: readonly Session[]): st
  *   - projects        按 latestActivityAt desc；组内 sessions 按 status → sortTime desc
  *
  * 草稿判定：workingDir 缺失 OR
- *   (非 scheduler / 非 Orca lead 且 userSendAt == null AND _count.messages === 0)
+ *   (非 scheduler / 非 plugin / 非 Orca lead 且 userSendAt == null AND _count.messages === 0)
  *   → 归未分类。scheduler session 的归属由自动化任务配置决定，刚绑定时可能
- *   还没落 user prompt/message count，不能按用户手动草稿处理。
+ *   还没落 user prompt/message count，不能按用户手动草稿处理。plugin session
+ *   是插件经 workspace 槽为指定目录创建的空会话入口——"零消息落在项目分组"
+ *   正是它的产品目的，套草稿规则会让它掉未分类、功能不成立。
  *
  * 异常输入：
  *   - 空数组 / 全 null → 各段返回空数组
@@ -402,6 +404,8 @@ export function groupSessions(
   // 可靠的"非空"证据，避免把这类孤儿错判成草稿堆到未分类。
   // scheduler 会话不套这条草稿规则：它由自动化任务显式绑定 workingDir，且
   // session-bound 事件可能早于 user prompt/message count 落库。
+  // plugin 会话(workspace 槽)同样豁免:它就是插件为目录准备的零消息会话
+  // 入口,创建时目录已经过用户授权,落项目分组是功能本身。
   const unclassified: Session[] = [];
   const dialogues: Session[] = [];
   const groups = new Map<string, Session[]>();
@@ -414,10 +418,10 @@ export function groupSessions(
     const dir = normalizeWorkingDir(s.workingDir);
     const noPhysicalMessages = (s._count?.messages ?? 0) === 0;
     const isOrcaLead = isOrcaLeadSession(s);
-    const isSchedulerSession = s.source === 'scheduler';
+    const isAutoPlacedSession = s.source === 'scheduler' || s.source === 'plugin';
     if (
       dir == null ||
-      (!isSchedulerSession && !isOrcaLead && s.userSendAt == null && noPhysicalMessages)
+      (!isAutoPlacedSession && !isOrcaLead && s.userSendAt == null && noPhysicalMessages)
     ) {
       unclassified.push(s);
     } else {

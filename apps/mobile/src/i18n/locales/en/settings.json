@@ -84,9 +84,16 @@
   "legal": {
     "sectionTitle": "Legal",
     "privacyPolicy": "Privacy Policy",
+    "userAgreement": "User Agreement",
     "view": "View",
     "openPrivacyPolicy": "Open the privacy policy",
-    "appFilingNumber": "App Filing Number"
+    "openUserAgreement": "Open the user agreement",
+    "appFilingNumber": "App Filing Number",
+    "analytics": "Usage statistics",
+    "analyticsHint": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts.",
+    "analyticsSaveFailed": "Couldn't save this setting; it may revert after a restart.",
+    "analyticsReset": "Reset to default",
+    "analyticsResetAction": "Reset"
   },
   "account": {
     "logoutHint": "Signing out only clears the sign-in state and local remote mirror on this phone. Sessions on your computer are not affected.",

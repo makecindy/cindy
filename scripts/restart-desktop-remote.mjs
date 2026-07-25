@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDesktopUserDataRoot } from './dev-migration-policy.mjs';
 import { applyDesktopDevStartupConfig } from './shared/desktop-dev-region.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -391,17 +392,17 @@ function closeDarwinTerminalTtys(ttys) {
  * `-<名字>` 后缀,每个名字一条完全独立的沙箱。只在 dev 生效——主进程入口只在
  * 非 packaged 时应用该覆写。
  */
-function defaultIsolatedUserDataDir(isolationName) {
+export function defaultIsolatedUserDataDir(
+  isolationName,
+  {
+    env = process.env,
+    platform = process.platform,
+    homedir = os.homedir,
+  } = {},
+) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
   const dirName = `${BRAND_USER_DATA_DIR_NAME}-dev${isolationName ? `-${isolationName}` : ''}`;
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    return path.join(appData, dirName);
-  }
-  if (process.platform === 'darwin') {
-    return path.join(process.env.HOME || '', 'Library', 'Application Support', dirName);
-  }
-  const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config');
-  return path.join(xdgConfig, dirName);
+  return pathApi.join(resolveDesktopUserDataRoot(env, platform, homedir), dirName);
 }
 
 function devScriptForMode(mode) {
@@ -605,6 +606,16 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
   );
 }
 
+/**
+ * The kill-only phase controls existing processes but does not launch Desktop.
+ * Skipping startup initialization keeps that phase from printing default
+ * region/endpoint values that can contradict the following real startup.
+ */
+export function applyDesktopStartupConfigForPhase(options) {
+  if (options.argv.includes('--kill-only')) return null;
+  return applyDesktopDevStartupConfig(options);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const killOnly = argv.includes('--kill-only');
@@ -616,7 +627,7 @@ async function main() {
     : null;
   // --local 切换到本地模式(连 localhost:3333);缺省走 remote(连 xdt-api)。
   const mode = argv.includes('--local') ? 'local' : 'remote';
-  const startupConfig = applyDesktopDevStartupConfig({ argv, mode });
+  const startupConfig = applyDesktopStartupConfigForPhase({ argv, mode });
   const isolatedArg = argv.find((a) => a === '--isolated' || a.startsWith('--isolated='));
   if (preserveRunning && killOnly) {
     throw new Error('--preserve-running cannot be combined with the internal --kill-only stage');
@@ -646,12 +657,14 @@ async function main() {
       '--preserve-running reuses the current Cindy login via shared userData and cannot be combined with --isolated',
     );
   }
-  console.log(`==> Desktop region: ${startupConfig.region}`);
+  if (startupConfig) {
+    console.log(`==> Desktop region: ${startupConfig.region}`);
+  }
   // --passive: 定时任务被动模式 —— 本实例不参与自动触发(交给同机 primary,
   // 典型场景多个 dev preview 与 release/primary 共享数据时 preview 让位)。
   // 实现方式是置 XDT_SCHEDULER_PASSIVE=1,经 devEnvPrefix 白名单透传进新开的
   // 系统终端 / 直接 spawn 的 dev 进程。
-  if (argv.includes('--passive') || preserveRunning) {
+  if (startupConfig && (argv.includes('--passive') || preserveRunning)) {
     process.env.XDT_SCHEDULER_PASSIVE = '1';
     console.log(
       preserveRunning
@@ -664,9 +677,9 @@ async function main() {
   // 经 devEnvPrefix 白名单透传,主进程 devCliFlags/clientEndpointsService 消费。
   // 注意 local 模式的 endpoint.local.json 生成不在本脚本——dev(local)脚本链里的
   // apps/desktop/scripts/dev-local-env.mjs 统一负责(human 直跑与 restart 同路径)。
-  if (startupConfig.endpointsCdn) {
+  if (startupConfig?.endpointsCdn) {
     console.log(`==> Endpoints via CDN: dev will fetch the ${startupConfig.region} online endpoint manifest.`);
-  } else if (mode === 'remote' && startupConfig.endpointManifestFile) {
+  } else if (startupConfig && mode === 'remote' && startupConfig.endpointManifestFile) {
     console.log(`==> Endpoint manifest: ${startupConfig.endpointManifestFile}`);
   }
   // --isolated[=<名字>]: dev 使用独立的 userData 目录(数据库/登录态/会话全部与
@@ -680,7 +693,7 @@ async function main() {
   // 主进程据此派生独立 deviceId(dev-[<名字>-]<机器指纹>,机器指纹只有主进程能取)
   // ——服务端登录凭证按 (user, device) 一对一存,不派生的话沙箱登录会覆盖正式版
   // 的续期凭证,同机互踢。
-  if (isolatedArg) {
+  if (startupConfig && isolatedArg) {
     let isolationName = '';
     if (isolatedArg.includes('=')) {
       isolationName = isolatedArg.slice('--isolated='.length);
@@ -699,7 +712,7 @@ async function main() {
     fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
     console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);
   }
-  if (!killOnly) ensureDesktopEnv();
+  if (startupConfig) ensureDesktopEnv();
 
   const devAncestor = findDevAncestor();
   if (devAncestor && !preserveRunning) {

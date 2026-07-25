@@ -84,9 +84,16 @@
   "legal": {
     "sectionTitle": "备案信息",
     "privacyPolicy": "隐私政策",
+    "userAgreement": "用户协议",
     "view": "查看",
     "openPrivacyPolicy": "打开隐私政策",
-    "appFilingNumber": "App 备案号"
+    "openUserAgreement": "打开用户协议",
+    "appFilingNumber": "App 备案号",
+    "analytics": "使用统计",
+    "analyticsHint": "帮助我们了解 Cindy 的启动与留存情况。上报设备型号、系统版本、应用版本、设备标识符等设备与使用环境信息，登录后还包含你的账号 ID；不包含任何对话内容、文件或提示词。",
+    "analyticsSaveFailed": "设置未能保存，重启后可能恢复原值。",
+    "analyticsReset": "恢复默认",
+    "analyticsResetAction": "恢复"
   },
   "account": {
     "logoutHint": "退出只会清除这台手机上的登录态和本地远程镜像，不会影响电脑端会话。",

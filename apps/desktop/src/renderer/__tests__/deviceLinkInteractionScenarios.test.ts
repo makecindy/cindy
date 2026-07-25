@@ -660,7 +660,8 @@ describe('远程交互接线不变式', () => {
     const src = read('lib/makerChatStore.ts');
     expect(src).toContain('const deviceLinkRemote = isRemoteSession(sessionId);');
     expect(src).toContain('const sshRemote = Boolean(current.remoteHostId);');
-    expect(src).toContain(
+    // 该三元可能被 prettier 折成多行:先把空白折叠成单空格,只锁 token 序列。
+    expect(src.replace(/\s+/g, ' ')).toContain(
       '...(deviceLinkRemote ? {} : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() })',
     );
   });
@@ -1006,13 +1007,19 @@ describe('远程交互接线不变式', () => {
   it('main RESOLVE_INTERACTION handler 解决后广播 dismissed(dismissRendererInteraction)', () => {
     const src = readFileSync(resolve(__dirname, '../../main/maker-ipc/register.ts'), 'utf8');
     // handler 可以只委托 helper,但 helper 必须负责 resolved 广播和权威落库。
+    // 截取窗口用下一个语法边界而非固定字符数:handler/helper 体量会随入参校验、
+    // 注释增长,固定窗口会在无行为回归时误报(#329 曾把调用挤出 1000 字符窗口)。
     const handlerStart = src.indexOf('ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION');
     expect(handlerStart).toBeGreaterThan(-1);
-    const handlerBody = src.slice(handlerStart, handlerStart + 1000);
+    const handlerEnd = src.indexOf('ipcMain.handle(', handlerStart + 1);
+    const handlerBody = src.slice(handlerStart, handlerEnd === -1 ? undefined : handlerEnd);
     expect(handlerBody).toContain('resolvePendingInteraction(');
     const helperStart = src.indexOf('function resolvePendingInteraction');
     expect(helperStart).toBeGreaterThan(-1);
-    const body = src.slice(helperStart, helperStart + 1800);
+    // 顶层函数体内嵌套块都有缩进,列首 '\n}' 即 helper 自己的闭括号。
+    const helperEnd = src.indexOf('\n}', helperStart);
+    expect(helperEnd).toBeGreaterThan(-1);
+    const body = src.slice(helperStart, helperEnd);
     expect(body).toContain('resolver.resolve(');
     expect(body).toContain('dismissRendererInteraction(');
     // F1:resolve 后被控端权威落库 ask/plan answered 状态。

@@ -3,6 +3,9 @@
 # vitest(vite 转换链)加载「CRLF + shebang」组合会直接 SyntaxError,unix 下直接执行也会坏,
 # 与 *.sh 同理固定 LF 检出。
 *.mjs text eol=lf
+# git hook 没有扩展名，命不中上面两条。Windows autocrlf 检出成 CRLF 后 `#!/bin/sh\r`
+# 无法执行，git commit 会直接 `fatal: cannot exec`——装了 hook 的人从此提交不了。
+.githooks/** text eol=lf
 # SQLite migration 内容参与用户数据库 drift hash；跨平台统一 LF。
 apps/desktop/drizzle/**/*.sql text eol=lf
 # sqlite-vec 扩展二进制（平台特定 .dylib / .dll）—— 走 Git LFS

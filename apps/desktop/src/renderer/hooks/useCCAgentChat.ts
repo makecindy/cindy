@@ -36,6 +36,10 @@ import {
   type ChatMessage,
   type PendingPermission,
   type PendingAskUser,
+  type PendingPluginSetup,
+  type PluginSetupCommandInFlight,
+  type PluginSetupInlineFormValues,
+  type PluginSetupViewerState,
   type PendingIssueConfirm,
   type PendingRenameSessionsConfirm,
   type PendingGhostGrantConfirm,
@@ -187,6 +191,17 @@ interface UseCCAgentChatReturn {
   respondToPermission: (result: CCAgentPermissionResult) => void;
   /** F7.2: Currently pending ask-user-question */
   pendingAskUser: PendingAskUser | null;
+  /** Host-owned plugin setup snapshot. */
+  pendingPluginSetup: PendingPluginSetup | null;
+  pluginSetupViewerState: PluginSetupViewerState;
+  pluginSetupCommandInFlight: PluginSetupCommandInFlight | null;
+  setPluginSetupViewerState: (next: PluginSetupViewerState) => void;
+  respondToPluginSetup: (
+    requestId: string,
+    action: 'run_action' | 'submit_form' | 'cancel',
+    actionId?: string,
+    values?: PluginSetupInlineFormValues,
+  ) => void;
   /** F-AUQ-MIN-1: Current AskUserQuestion viewer state (expanded / minimized). */
   askUserViewerState: AskUserViewerState;
   /** F-AUQ-MIN-2/4: Switch the AskUserQuestion viewer between expanded and minimized. */
@@ -569,6 +584,19 @@ export function useCCAgentChat(
     [sessionId],
   );
 
+  const respondToPluginSetup = useCallback(
+    (
+      requestId: string,
+      action: 'run_action' | 'submit_form' | 'cancel',
+      actionId?: string,
+      values?: PluginSetupInlineFormValues,
+    ) => {
+      if (!sessionId) return;
+      makerChatStore.respondToPluginSetup(sessionId, requestId, action, actionId, values);
+    },
+    [sessionId],
+  );
+
   const cancelPlanReview = useCallback(
     (requestId: string) => {
       if (!sessionId) return;
@@ -597,6 +625,14 @@ export function useCCAgentChat(
     (next: AskUserViewerState) => {
       if (!sessionId) return;
       makerChatStore.setAskUserViewerState(sessionId, next);
+    },
+    [sessionId],
+  );
+
+  const setPluginSetupViewerState = useCallback(
+    (next: PluginSetupViewerState) => {
+      if (!sessionId) return;
+      makerChatStore.setPluginSetupViewerState(sessionId, next);
     },
     [sessionId],
   );
@@ -790,6 +826,11 @@ export function useCCAgentChat(
     pendingPermission: lightState.pendingPermission,
     respondToPermission,
     pendingAskUser: lightState.pendingAskUser,
+    pendingPluginSetup: lightState.pendingPluginSetup,
+    pluginSetupViewerState: lightState.pluginSetupViewerState,
+    pluginSetupCommandInFlight: lightState.pluginSetupCommandInFlight,
+    setPluginSetupViewerState,
+    respondToPluginSetup,
     askUserViewerState: lightState.askUserViewerState,
     setAskUserViewerState,
     askUserDraft: lightState.askUserDraft,

@@ -136,6 +136,11 @@ import {
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
 import { docContainsAtomChip } from './composerDocState';
 import {
+  isComposerBlankPointerTarget,
+  isInteractiveFocusedElement,
+  resolveComposerBlankFocusIntent,
+} from './composerBlankPointerFocus';
+import {
   applyPastedTextChipEdit,
   PastedTextChipNode,
   replacePastedTextChipWithPlainText,
@@ -143,6 +148,7 @@ import {
 } from './PastedTextChipNode';
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { Selection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
@@ -608,28 +614,6 @@ function scrollVoiceInputDraftEndIntoView(editor: Editor): void {
   } else if (draftBox.bottom < scrollerBox.top + PAD) {
     scroller.scrollTop -= scrollerBox.top + PAD - draftBox.bottom;
   }
-}
-
-function isInteractiveFocusedElement(element: Element | null): boolean {
-  if (!(element instanceof HTMLElement)) return false;
-  if (element.isContentEditable) return true;
-  const tagName = element.tagName.toLowerCase();
-  if (['button', 'input', 'select', 'textarea'].includes(tagName)) return true;
-  if (tagName === 'a' && element.hasAttribute('href')) return true;
-  if (element.tabIndex >= 0) return true;
-  const role = element.getAttribute('role');
-  return (
-    role === 'button' ||
-    role === 'textbox' ||
-    role === 'searchbox' ||
-    role === 'combobox' ||
-    role === 'menuitem' ||
-    role === 'tab' ||
-    role === 'checkbox' ||
-    role === 'radio' ||
-    role === 'switch' ||
-    role === 'option'
-  );
 }
 
 function hasFocusMovedToInteractiveElement(focusAnchor: Element | null, editor: Editor): boolean {
@@ -4976,6 +4960,36 @@ export function ChatInput({
                       : 'focus-within:border-[var(--chat-input-border-focus)]',
                   ],
             )}
+            // 卡片里的空白(文字行下方的空隙、工具栏两组按钮之间的空档、四周
+            // padding)没有元素承接点击:浏览器默认会把焦点从 contenteditable 撤到
+            // <body>,正在输入的光标凭空消失;而点空白又该能进入输入态。所以先
+            // preventDefault 掉这次默认的焦点转移,再按需补一次不带坐标的 focus ——
+            // 「进入输入态」归空白区,「定位插入点」只归点击文字那一行。
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              if (
+                !isComposerBlankPointerTarget(
+                  event.target,
+                  event.currentTarget,
+                  editor && !editor.isDestroyed ? editor.view.dom : null,
+                  event,
+                )
+              ) {
+                return;
+              }
+              event.preventDefault();
+              if (!editor || editor.isDestroyed) return;
+              const { selection, doc } = editor.state;
+              const intent = resolveComposerBlankFocusIntent({
+                isDestroyed: editor.isDestroyed,
+                isEditable: editor.isEditable,
+                isFocused: editor.isFocused,
+                caretAtDocStart:
+                  selection.empty && selection.from === Selection.atStart(doc).from,
+              });
+              if (intent === 'keep-caret') editor.commands.focus();
+              else if (intent === 'doc-end') editor.commands.focus('end');
+            }}
             onDragEnter={(e) => {
               e.preventDefault();
               e.stopPropagation();

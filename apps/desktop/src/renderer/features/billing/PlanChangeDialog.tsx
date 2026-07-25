@@ -35,11 +35,11 @@ export type PlanChangeCandidate = {
   direction: 'UPGRADE' | 'DOWNGRADE';
 };
 
-function formatEffectiveDate(iso: string): string {
+function formatEffectiveDate(iso: string, locale: string): string {
   const timestamp = Date.parse(iso);
   if (!Number.isFinite(timestamp)) return iso;
   try {
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(locale, {
       dateStyle: 'medium',
       timeStyle: 'short',
     }).format(timestamp);
@@ -51,22 +51,22 @@ function formatEffectiveDate(iso: string): string {
 export function PlanChangeTargetDialog({
   open,
   candidates,
-  currentPlanName,
   onClose,
   onSelect,
 }: {
   open: boolean;
   candidates: PlanChangeCandidate[];
-  currentPlanName: string | null;
   onClose: () => void;
   onSelect: (candidate: PlanChangeCandidate) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[9990] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          aria-describedby={undefined}
           className={cn(
             'fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(640px,calc(100vh-48px))]',
             'w-[calc(100vw-48px)] max-w-[640px] -translate-x-1/2 -translate-y-1/2 flex-col',
@@ -74,19 +74,10 @@ export function PlanChangeTargetDialog({
             'bg-[var(--surface-elevated)] text-[var(--text-primary)] focus:outline-none',
           )}
         >
-          <div className="flex items-start justify-between gap-4 px-6 pb-4 pt-5">
-            <div>
-              <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">
-                {t('billing.planChange.targetTitle')}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1.5 max-w-[500px] text-12 leading-5 text-[var(--text-secondary)]">
-                {currentPlanName
-                  ? t('billing.planChange.targetDescriptionWithCurrent', {
-                      plan: currentPlanName,
-                    })
-                  : t('billing.planChange.targetDescription')}
-              </Dialog.Description>
-            </div>
+          <div className="flex items-center justify-between gap-4 px-6 pb-4 pt-5">
+            <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">
+              {t('billing.planChange.targetTitle')}
+            </Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -110,7 +101,7 @@ export function PlanChangeTargetDialog({
                 </p>
               </div>
             ) : (
-              <div className="space-y-2.5">
+              <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
                 {candidates.map((candidate) => {
                   const DirectionIcon =
                     candidate.direction === 'UPGRADE' ? ArrowUpRight : ArrowDownRight;
@@ -120,17 +111,17 @@ export function PlanChangeTargetDialog({
                       type="button"
                       onClick={() => onSelect(candidate)}
                       className={cn(
-                        'group relative flex min-h-[84px] w-full items-center gap-5 rounded-xl border px-4 py-3.5 text-left',
-                        'border-[var(--border-default)] transition-colors hover:bg-[var(--surface-hover-soft)]',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-primary)]',
-                        'focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)]',
+                        'flex w-full items-center justify-between gap-4 px-4 py-3 text-left',
+                        'transition-colors hover:bg-[var(--surface-hover-soft)]',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                        'focus-visible:ring-[var(--text-primary)]',
                       )}
                     >
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-[var(--text-primary)]">
+                        <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                           {candidate.product.name}
                         </p>
-                        <p className="mt-1 inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
+                        <p className="mt-0.5 inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
                           <DirectionIcon size={12} />
                           {candidate.direction === 'UPGRADE'
                             ? t('billing.planChange.upgradeBadge')
@@ -138,9 +129,13 @@ export function PlanChangeTargetDialog({
                         </p>
                       </div>
                       <div className="shrink-0 text-right">
-                        <p className="text-lg font-medium tracking-[-0.02em]">
+                        <p className="text-13 font-medium tabular-nums text-[var(--text-primary)]">
                           {candidate.offer.amount
-                            ? formatMoney(candidate.offer.amount, candidate.offer.currency)
+                            ? formatMoney(
+                                candidate.offer.amount,
+                                candidate.offer.currency,
+                                billingLocale,
+                              )
                             : '—'}
                           {candidate.offer.interval && (
                             <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
@@ -149,7 +144,7 @@ export function PlanChangeTargetDialog({
                           )}
                         </p>
                         {candidate.offer.creditAmount && (
-                          <p className="mt-1 text-11 text-[var(--text-secondary)]">
+                          <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
                             {t('billing.credits', { amount: candidate.offer.creditAmount })}
                           </p>
                         )}
@@ -198,7 +193,8 @@ export function PlanChangeStatusDialog({
   onRefresh: () => void;
   onAbandon: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const change = state.planChange;
   const action: BillingPaymentAction | null = change?.paymentAction ?? null;
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -255,7 +251,7 @@ export function PlanChangeStatusDialog({
   const isUpgrade = change?.changeType === 'UPGRADE';
   const quotedAmount =
     change && change.quotedAmountMinor !== null && change.quotedCurrency
-      ? formatPlanChangeMinorAmount(change.quotedAmountMinor, change.quotedCurrency)
+      ? formatPlanChangeMinorAmount(change.quotedAmountMinor, change.quotedCurrency, billingLocale)
       : null;
   const settled =
     state.phase === 'SCHEDULED' ||
@@ -328,7 +324,7 @@ export function PlanChangeStatusDialog({
                       ? t('billing.planChange.upgradeDueNow', { amount: quotedAmount })
                       : t('billing.planChange.upgradeNoAmount')
                     : t('billing.planChange.downgradeAt', {
-                        date: formatEffectiveDate(change.effectiveAt),
+                        date: formatEffectiveDate(change.effectiveAt, billingLocale),
                       })}
                 </p>
                 <p className="mt-2 max-w-[400px] text-12 leading-5 text-[var(--text-secondary)]">
@@ -421,7 +417,7 @@ export function PlanChangeStatusDialog({
                     ? t('billing.planChange.appliedBody')
                     : change
                       ? t('billing.planChange.scheduledBody', {
-                          date: formatEffectiveDate(change.effectiveAt),
+                          date: formatEffectiveDate(change.effectiveAt, billingLocale),
                         })
                       : t('billing.planChange.scheduledTitle')}
                 </p>

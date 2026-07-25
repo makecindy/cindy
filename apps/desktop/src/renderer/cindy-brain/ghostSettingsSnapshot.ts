@@ -5,8 +5,8 @@
  * 跨 app 重启可用);下次进入详情页首帧直接贴这张图(像素与真内容一致),
  * webview 在图底下装载,就绪后无缝撤图换真身。用户看不到空白帧与高度跳变。
  *
- * 快照只是"上一次的画面",不承载任何真实状态:失配(版本 / 主题 / 宽度 /
- * DPR 任一变化)或过期(TTL)就整张作废走老的淡入路径,绝不拿旧像素硬凑新布局。
+ * 快照只是"上一次的画面",不承载任何真实状态:失配(插件版本 / 宿主布局版本 /
+ * 主题 / 宽度 / DPR 任一变化)或过期(TTL)就整张作废走老的淡入路径。
  * 位图来自宿主对 guest 的 capturePage(嵌入方主动读,零桥模型不破),
  * 内容不受信也无所谓——它只被当成 <img> 的像素,不进任何执行上下文。
  *
@@ -29,6 +29,8 @@ export interface GhostSettingsSnapshot {
   themeCss: string;
   /** 拍摄时的意识版本(原位更新后界面可能全变,作废)。 */
   version: string;
+  /** 拍摄时的宿主设置布局版本(注入规则变化后旧位图作废)。 */
+  layoutRevision: number;
   /** 拍摄时刻(epoch ms):TTL 过期判定 + 总量超预算时的 LRU 淘汰序。 */
   capturedAt: number;
 }
@@ -41,6 +43,9 @@ export interface GhostSettingsSnapshotContext {
 }
 
 const STORAGE_PREFIX = 'ghostSettings.snapshot.';
+
+/** 宿主设置 guest 的布局契约版本;布局注入改变时递增以主动淘汰旧快照。 */
+export const GHOST_SETTINGS_LAYOUT_REVISION = 3;
 
 /**
  * 单条持久化体积上限(字符数,localStorage 按 UTF-16 计):设置区是纯色底 +
@@ -75,6 +80,7 @@ function isValidSnapshot(value: unknown): value is GhostSettingsSnapshot {
     Number.isFinite(v.dpr) &&
     typeof v.themeCss === 'string' &&
     typeof v.version === 'string' &&
+    v.layoutRevision === GHOST_SETTINGS_LAYOUT_REVISION &&
     typeof v.capturedAt === 'number' &&
     Number.isFinite(v.capturedAt)
   );
@@ -192,13 +198,14 @@ export function pruneGhostSettingsSnapshots(installedGhostIds: Iterable<string>)
   }
 }
 
-/** 上下文匹配:版本 / 主题 CSS / DPR 全等才允许贴图。 */
+/** 上下文匹配:插件版本 / 宿主布局版本 / 主题 CSS / DPR 全等才允许贴图。 */
 export function snapshotMatchesContext(
   snapshot: GhostSettingsSnapshot,
   ctx: GhostSettingsSnapshotContext,
 ): boolean {
   return (
     snapshot.version === ctx.version &&
+    snapshot.layoutRevision === GHOST_SETTINGS_LAYOUT_REVISION &&
     snapshot.themeCss === ctx.themeCss &&
     snapshot.dpr === ctx.dpr
   );

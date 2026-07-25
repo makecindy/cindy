@@ -436,6 +436,246 @@ describe('keep-alive microphone idle window', () => {
     expect(track.stopped).toBe(false);
   });
 
+  it('does not open the microphone when enumeration outlives a power release', async () => {
+    let resolveEnumerate: (value: unknown) => void = () => undefined;
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        enumerateDevices: vi.fn(() => new Promise((resolve) => {
+          resolveEnumerate = resolve;
+        })),
+        getUserMedia,
+        addEventListener: vi.fn(),
+      },
+    });
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      deviceId: 'specific-device',
+      onInterrupted: vi.fn(),
+    });
+    const starting = engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(powerCallback).toBeDefined();
+
+    powerCallback?.({ reason: 'screen_locked' });
+    await vi.advanceTimersByTimeAsync(0);
+    // Enumeration succeeds *after* the release, reporting the device as present.
+    resolveEnumerate([{ kind: 'audioinput', deviceId: 'specific-device' }]);
+
+    await expect(starting).rejects.toThrow(/disposed/i);
+    // The one-shot event has passed; nothing may reopen the device now.
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('does not report an error when a release hits a still-starting capture', async () => {
+    let resolvePool: (value: unknown) => void = () => undefined;
+    const pool = await import('../audioContextPool');
+    vi.mocked(pool.prewarmVoiceInputAudio).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePool = resolve as (value: unknown) => void;
+      }) as ReturnType<typeof pool.prewarmVoiceInputAudio>,
+    );
+    const onInterrupted = vi.fn();
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted,
+    });
+    const starting = engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    powerCallback?.({ reason: 'screen_locked' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The device must be closed, but a capture that never reached `ready` has
+    // to surface as a silent cancellation: both UIs route onInterrupted to
+    // their active-recording failure path, and that error would outlive the
+    // cancellation that follows.
+    expect(track.stopped).toBe(true);
+    expect(onInterrupted).not.toHaveBeenCalled();
+
+    resolvePool({
+      context: {
+        currentTime: 0,
+        state: 'running',
+        destination,
+        createGain: vi.fn(() => sink),
+        createMediaStreamSource: vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() })),
+        resume: vi.fn(async () => undefined),
+      },
+      workletReady: Promise.resolve(),
+      workletUrl: WORKLET_URL,
+    });
+    await expect(starting).rejects.toThrow(/disposed/i);
+  });
+
+  it('can release a stream acquired before context warmup settles', async () => {
+    let resolvePool: (value: unknown) => void = () => undefined;
+    const pool = await import('../audioContextPool');
+    vi.mocked(pool.prewarmVoiceInputAudio).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePool = resolve as (value: unknown) => void;
+      }) as ReturnType<typeof pool.prewarmVoiceInputAudio>,
+    );
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted: vi.fn(),
+    });
+    const starting = engine.start();
+    // getUserMedia has resolved; the shared context warmup is still pending and
+    // could stay that way for the whole suspend.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(powerCallback).toBeDefined();
+
+    powerCallback?.({ reason: 'system_suspend' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The device is already open, so the release must reach it now rather than
+    // waiting for warmup to settle.
+    expect(track.stopped).toBe(true);
+
+    resolvePool({
+      context: {
+        currentTime: 0,
+        state: 'running',
+        destination,
+        createGain: vi.fn(() => sink),
+        createMediaStreamSource: vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() })),
+        resume: vi.fn(async () => undefined),
+      },
+      workletReady: Promise.resolve(),
+      workletUrl: WORKLET_URL,
+    });
+    await starting.catch(() => undefined);
+  });
+
+  it('reports cancellation when direct getUserMedia rejects after a release', async () => {
+    let rejectStream: (error: unknown) => void = () => undefined;
+    getUserMedia.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectStream = reject;
+    }));
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted: vi.fn(),
+    });
+    const starting = engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(powerCallback).toBeDefined();
+
+    powerCallback?.({ reason: 'system_suspend' });
+    await vi.advanceTimersByTimeAsync(0);
+    // Suspend routinely makes the pending request reject rather than resolve.
+    // That must read as cancellation, not as a device failure worth surfacing.
+    rejectStream(Object.assign(new Error('The request is not allowed'), { name: 'AbortError' }));
+
+    await expect(starting).rejects.toThrow(/disposed/i);
+  });
+
+  it('stops the direct stream when a later startup step fails', async () => {
+    const pool = await import('../audioContextPool');
+    vi.mocked(pool.prewarmVoiceInputAudio).mockResolvedValue({
+      context: {
+        currentTime: 0,
+        state: 'suspended',
+        destination,
+        createGain: vi.fn(() => sink),
+        createMediaStreamSource: vi.fn(() => ({ connect: vi.fn(), disconnect: vi.fn() })),
+        resume: vi.fn(async () => {
+          throw new Error('resume failed');
+        }),
+      } as unknown as AudioContext,
+      workletReady: Promise.resolve(),
+      workletUrl: WORKLET_URL,
+    });
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted: vi.fn(),
+    });
+
+    // The device is already open by the time this step fails. Whether or not
+    // the engine reached the registry, the failure path has to close it.
+    await expect(engine.start()).rejects.toThrow(/resume failed/i);
+    expect(track.stopped).toBe(true);
+  });
+
+  it('aborts a direct startup interrupted by a power release', async () => {
+    let resolveStream: (value: unknown) => void = () => undefined;
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStream = resolve;
+    }));
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted: vi.fn(),
+    });
+    const starting = engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(powerCallback).toBeDefined();
+
+    // The lock lands while the device handshake is still pending, so this
+    // engine is not in the registry yet and the one-shot callback cannot see
+    // it. Startup must abort itself rather than come up after the event.
+    powerCallback?.({ reason: 'screen_locked' });
+    await vi.advanceTimersByTimeAsync(0);
+    resolveStream({ getAudioTracks: () => [track], getTracks: () => [track] });
+
+    await expect(starting).rejects.toThrow(/disposed/i);
+    expect(track.stopped).toBe(true);
+  });
+
+  it('stops a direct stream that arrives after an HMR swap', async () => {
+    let resolveStream: (value: unknown) => void = () => undefined;
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStream = resolve;
+    }));
+
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted: vi.fn(),
+    });
+    const starting = engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Vite swaps the module while the device handshake is still pending. The
+    // engine has not reached the registry, so releasing the registry alone
+    // would let the stream arrive afterwards and open the microphone inside a
+    // module whose power listener is already gone.
+    await mod.disposeVoiceInputAudioModuleForHmr();
+    resolveStream({ getAudioTracks: () => [track], getTracks: () => [track] });
+
+    await expect(starting).rejects.toThrow(/disposed/i);
+    expect(track.stopped).toBe(true);
+  });
+
+  it('releases a direct capture stream on a power event', async () => {
+    const onInterrupted = vi.fn();
+    // fast activation off: this capture never touches the keep-alive session,
+    // so only the direct-engine registry can close it on suspend/lock.
+    const engine = new mod.WebMicAudioEngine({
+      workletUrl: WORKLET_URL,
+      keepAlive: false,
+      onInterrupted,
+    });
+    await engine.start();
+    expect(powerCallback).toBeDefined();
+
+    powerCallback?.({ reason: 'system_suspend' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onInterrupted).toHaveBeenCalled();
+    expect(track.stopped).toBe(true);
+  });
+
   it('shares one startup between concurrent callers', async () => {
     let resolveStream: (value: unknown) => void = () => undefined;
     getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {

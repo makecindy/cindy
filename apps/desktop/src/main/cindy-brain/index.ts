@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, type WebContents } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -18,7 +19,10 @@ import {
   isValidGhostId,
   layoutWithGhostPanel,
   type GhostHostNoticeKey,
+  type GhostImageAspectRatio,
   type GhostManifest,
+  type GhostSetupAllowedAction,
+  type GhostSetupAssessment,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -62,8 +66,20 @@ import {
   setGhostWakeHandler,
 } from './runtime/electronSandboxAdapter.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import { createGhostKvStore, removeGhostKvBestEffort } from './ghostKvStore.js';
-import { handleGhostSetupStatusRequest } from './ghostSetupStatus.js';
+import {
+  createGhostKvStore,
+  removeGhostKvBestEffort,
+  type GhostKvStore,
+} from './ghostKvStore.js';
+import {
+  evaluateGhostSetupAssessment,
+  handleGhostSetupStatusRequest,
+} from './ghostSetupStatus.js';
+import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
+import { GhostSetupManifestTracker } from './ghostSetupManifestTracker.js';
+import type { GhostSetupActionResult } from './ghostSetupCoordinator.js';
+import type { GhostSetupInteractionResponseTarget } from './ghostSetupInteractionBridge.js';
+import { executeGhostSetupInlineSubmission } from './ghostSetupInlineExecutor.js';
 import { handleGhostSecretsRequest } from './runtime/ghostSecretsEndpoint.js';
 import { handleGhostOauthRequest } from './runtime/ghostOauthEndpoint.js';
 import { handleGhostConnectionsRequest } from './runtime/ghostConnectionsEndpoint.js';
@@ -71,9 +87,11 @@ import { GhostOauthAccountManager, type GhostOauthDecl } from './ghostOauthAccou
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
 import { getResolvedMainLocale, t } from '../i18n.js';
+import { reconcileGhostSkillLinks } from './skillSlot.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
   FILO_GOOGLE_GHOST_ID,
+  FILO_GOOGLE_SECRET_KEY,
   migrateFiloGoogleAccounts,
   type LegacyGoogleAccountRow,
 } from './googleAccountsMigration.js';
@@ -82,18 +100,21 @@ import {
   LEGACY_JIRA_CONNECTION_FILE,
   LEGACY_JIRA_RT_FILE,
   XD_ATLASSIAN_GHOST_ID,
+  XD_ATLASSIAN_SECRET_KEY,
   migrateAtlassianAccounts,
 } from './atlassianAccountsMigration.js';
 import {
   LEGACY_GITHUB_CONNECTION_FILE,
   LEGACY_GITHUB_TOKEN_FILE,
   CINDY_GITHUB_GHOST_ID,
+  CINDY_GITHUB_SECRET_KEY,
   migrateGithubAccounts,
 } from './githubAccountsMigration.js';
 import {
   LEGACY_GITLAB_CONNECTION_FILE,
   LEGACY_GITLAB_TOKEN_FILE,
   CINDY_GITLAB_GHOST_ID,
+  CINDY_GITLAB_CONNECTION_KEY,
   migrateGitlabAccounts,
 } from './gitlabAccountsMigration.js';
 import { GHOST_SCHEME, ghostExternalLinkUrls, parseGhostPartition } from '../../shared/ghost.js';
@@ -113,13 +134,14 @@ import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { GhostPreviewSlot } from './previewSlot.js';
+import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { getDirDepositVault, getSaveDepositVault } from './dirDeposit.js';
+import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import {
   GhostSubscriptionGateway,
   GhostTurnTranslator,
@@ -146,6 +168,7 @@ import {
   type CindyCapabilityKey,
 } from './cindyPrefsStore.js';
 import {
+  isGhostDisabledForWorkdir,
   listDisabledGhostIdsForWorkdir,
   setGhostDisabledForWorkdir,
 } from './ghostWorkdirPrefs.js';
@@ -160,6 +183,10 @@ import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
+import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
+import { assessGhostHostSetupRequirements } from './ghostHostSetupRequirements.js';
+import { isModelAccessReady } from '../model-access/readiness.js';
 // ⚠️ 下面三个依赖必须保持模块顶层静态 import,禁止改回函数内 await import():
 // 运行时 import() 会被 Rollup 编译成跨 chunk 的 require(尤其 drizzle-orm 会拆独立
 // chunk),而 bootstrap chunk 因 conf(electron-store 依赖)的模块副作用
@@ -203,6 +230,18 @@ function currentGhostAppContext() {
 }
 
 let managerSingleton: GhostManager | null = null;
+let ghostSetupManifestTrackerSingleton: GhostSetupManifestTracker | null = null;
+
+function getGhostSetupManifestTracker(): GhostSetupManifestTracker {
+  if (!ghostSetupManifestTrackerSingleton) {
+    ghostSetupManifestTrackerSingleton = new GhostSetupManifestTracker(
+      getGhostSetupChangeBus(),
+      isGhostAvailableForActiveSession,
+    );
+  }
+  return ghostSetupManifestTrackerSingleton;
+}
+
 const ghostMutationCoordinator = new GhostMutationCoordinator();
 
 /**
@@ -514,6 +553,7 @@ export function getGhostManager(): GhostManager {
       trustRegistry: loadGhostTrustRegistry(),
       log,
     });
+    getGhostSetupManifestTracker().seed(managerSingleton.list());
   }
   return managerSingleton;
 }
@@ -1244,6 +1284,88 @@ export function getGhostPickSlot(): GhostPickSlot {
   return pickSlotSingleton;
 }
 
+let workspaceSlotSingleton: GhostWorkspaceSlot | null = null;
+
+/**
+ * 工作区会话槽单例(workspace):资格审/限速/目录授权/判重在 GhostWorkspaceSlot,
+ * 这里只组装 Electron 系统对话框、确认卡桥(lane='workspace')、在途 callId
+ * 反查(cardService)与会话目录快照;真实的判重/创建/聚焦服务由 maker-ipc
+ * 初始化完成后经 setGhostWorkspaceSessionService 注入(保持 cindy-brain 不
+ * 反向依赖 maker-ipc)。
+ */
+export function getGhostWorkspaceSlot(): GhostWorkspaceSlot {
+  if (!workspaceSlotSingleton) {
+    workspaceSlotSingleton = new GhostWorkspaceSlot({
+      getGhost: findAvailableGhost,
+      showDirectoryDialog: async ({ ghostName, purpose }) => {
+        const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) throw new Error('没有可挂靠的宿主窗口');
+        // main 侧 t() 只插值 {{appName}},插件名在调用点替换(与 pick 槽同做法)。
+        const message = t('settings.ghosts.workspace.dialogMessage').replaceAll('{{name}}', ghostName);
+        const result = await dialog.showOpenDialog(win, {
+          title: t('settings.ghosts.workspace.dialogTitle'),
+          message: purpose ? `${message}\n${purpose}` : message,
+          properties: ['openDirectory', 'createDirectory'],
+        });
+        if (result.canceled || result.filePaths.length === 0) return null;
+        return result.filePaths[0];
+      },
+      // 严格在途:交卷/重开后的 callId 不再是有效的目录授权上下文凭证。
+      resolveCallContext: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
+      getSessionDirInfo: async (sessionId) => {
+        const snapshot = await getSessionFsSnapshot(sessionId);
+        if (!snapshot) return null;
+        return { workingDir: snapshot.workingDir, remoteHostId: snapshot.remoteHostId };
+      },
+      statDir: async (dirAbs) => {
+        try {
+          const stat = await fs.promises.stat(dirAbs);
+          return stat.isDirectory() ? 'ok' : 'not-directory';
+        } catch (error) {
+          // ENOTDIR = 路径中间某段不是目录,语义上更接近"不是目录"而非"不存在"。
+          return (error as NodeJS.ErrnoException)?.code === 'ENOTDIR'
+            ? 'not-directory'
+            : 'not-found';
+        }
+      },
+      isInsideWorkdir: (dirAbs, workdirAbs) => {
+        try {
+          return isPathInsideDir(fs.realpathSync.native(workdirAbs), fs.realpathSync.native(dirAbs));
+        } catch {
+          return false;
+        }
+      },
+      confirmDir: async ({ ghostId, sessionId, dirAbs }) => {
+        const bridge = getGhostGrantConfirmBridge();
+        if (!bridge) {
+          throw new Error('确认通道未就绪');
+        }
+        const decision = await bridge.request(sessionId, {
+          ghostId,
+          ghostName: findAvailableGhost(ghostId)?.manifest.name ?? ghostId,
+          lane: 'workspace',
+          items: [{ name: path.basename(dirAbs), absPath: dirAbs, size: 0, isDirectory: true }],
+        });
+        if (decision.confirmed) return { ok: true };
+        return {
+          ok: false,
+          message:
+            decision.reason === 'timeout'
+              ? '确认超时:用户未在时限内响应,本次工作区会话请求已取消'
+              : '用户拒绝了本次工作区会话请求,不要重试;如确有需要请先与用户沟通',
+        };
+      },
+      log,
+    });
+  }
+  return workspaceSlotSingleton;
+}
+
+/** maker-ipc 完成初始化后注入判重/创建/聚焦服务;保持 cindy-brain 不反向依赖它。 */
+export function setGhostWorkspaceSessionService(service: WorkspaceSessionService | null): void {
+  getGhostWorkspaceSlot().setSessionService(service);
+}
+
 let previewSlotSingleton: GhostPreviewSlot | null = null;
 
 /** 插件预览开页通道(main → 全窗口 renderer;右侧栏开 web-browser 标签)。 */
@@ -1377,6 +1499,17 @@ async function runGhostVideo(params: {
   return { buffer: r.buffer, mimeType: r.mimeType };
 }
 
+/**
+ * 意识画幅意图 → XD Gateway size。三档尺寸是 gpt-image 系的原生枚举
+ * (1024x1024 / 1536x1024 / 1024x1536,比例即枚举名);Gemini 系由网关按
+ * 比例转译。意识侧枚举扩值域时此表必须同步补齐(Record 穷尽性由类型锁住)。
+ */
+const GHOST_ASPECT_TO_GATEWAY_SIZE: Record<GhostImageAspectRatio, string> = {
+  '1:1': '1024x1024',
+  '3:2': '1536x1024',
+  '2:3': '1024x1536',
+};
+
 /** XD Gateway 图片响应 → 字节 + mime(gen / edit 同一解码口径)。 */
 function decodeImageResponse(res: {
   data: Array<{ b64_json?: string }>;
@@ -1398,10 +1531,15 @@ export function getGhostCindySlot(): GhostCindySlot {
         getAppCapabilities().canUseCindyGateway ? findAvailableGhost(id) : null,
       // model 已在 modelSlot 按白名单校验(白名单 = GatewayImageModel 全集),
       // 这里收窄类型是安全的。
-      generateImage: async ({ prompt, model }) => {
+      generateImage: async ({ prompt, model, aspectRatio }) => {
         try {
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.generateImage({ model: model as GatewayImageModel, prompt }),
+            await getCindyProxyMediaService().backend.generateImage({
+              model: model as GatewayImageModel,
+              prompt,
+              // 不带画幅意图时不传 size,网关缺省 'auto'(模型自定)。
+              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+            }),
           );
         } catch (err) {
           humanizeImageChannelError(err);
@@ -1551,12 +1689,28 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // 授权成功(新连/同身份重连)→ 主机代言 tips(带意识身份头;账号有
       // 展示标签时报"已连接 xxx",没有时报通用授权成功)。
       onAccountConnected: ({ ghostId, label }) => {
+        getGhostSetupChangeBus().emit(ghostId, { source: 'oauth' });
         broadcastGhostHostNotice(
           ghostId,
           label
             ? { textKey: 'oauthConnected', textArgs: { label } }
             : { textKey: 'oauthConnectedNoLabel' },
         );
+      },
+      onAccountStatusChanged: ({ ghostId, secretKey }) => {
+        getGhostSetupChangeBus().emit(ghostId, {
+          source: 'oauth',
+          ref: secretKey,
+        });
+      },
+      isConnectTargetCurrent: (ghostId, secretKey, decl) => {
+        const ghost = findAvailableGhost(ghostId);
+        const currentDecl = ghost
+          ? withRuntimeFiloGoogleClient(ghost.manifest).network?.secrets?.find(
+              (secret) => secret.key === secretKey && secret.source === 'oauth',
+            )?.oauth
+          : undefined;
+        return currentDecl !== undefined && isDeepStrictEqual(currentDecl, decl);
       },
     });
   }
@@ -1582,6 +1736,163 @@ function getGhostConnectionManager(): GhostConnectionManager {
     });
   }
   return ghostConnectionManagerSingleton;
+}
+
+let ghostSetupKvStore: GhostKvStore | null = null;
+
+/**
+ * Runtime-authoritative setup assessment used by ghost_list and ghost_call.
+ * Unlike the legacy plugin-page projection this path is strict: storage or
+ * manifest drift errors propagate and therefore block dispatch.
+ */
+export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
+  const ghost = findAvailableGhost(ghostId);
+  if (!ghost || !ghostSetupKvStore) {
+    throw new Error(`ghost setup unavailable: ${ghostId}`);
+  }
+  const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+  const oauthManager = getGhostOauthAccountManager();
+  const connectionManager = getGhostConnectionManager();
+  let kvSnapshot: Record<string, unknown> | null = null;
+  return evaluateGhostSetupAssessment(
+    runtimeManifest,
+    {
+      secretSaved: (key) => ghostSecretSaved(ghostId, key),
+      oauthStatus: (key) => {
+        const decl = runtimeManifest.network?.secrets?.find((secret) => secret.key === key)?.oauth;
+        const accounts = oauthManager.listAccounts(ghostId, key);
+        return {
+          clientConfigured: oauthManager.clientConfigured(ghostId, key, decl),
+          connected: accounts.filter((account) => account.status === 'connected').length,
+          expired: accounts.filter((account) => account.status === 'expired').length,
+        };
+      },
+      connectionCount: (key) => connectionManager.list(ghostId, key).length,
+      kvValue: (key) => {
+        if (kvSnapshot === null) kvSnapshot = ghostSetupKvStore?.readStrict(ghostId) ?? {};
+        return kvSnapshot[key];
+      },
+    },
+    {
+      revision: getGhostSetupChangeBus().currentRevision(ghostId),
+      strict: true,
+      additionalGroups: assessGhostHostSetupRequirements(runtimeManifest, {
+        clientConfigReady: (configId) =>
+          configId === 'model-provider' && isModelAccessReady(),
+      }),
+    },
+  );
+}
+
+/**
+ * Executes only Host-generated setup actions. The action id is revalidated by
+ * the coordinator against a fresh assessment before this entry is called.
+ */
+export async function executeGhostSetupAction(args: {
+  sessionId: string;
+  ghostId: string;
+  action: GhostSetupAllowedAction;
+  responseTarget?: GhostSetupInteractionResponseTarget;
+}): Promise<GhostSetupActionResult> {
+  const ghost = findAvailableGhost(args.ghostId);
+  if (!ghost) {
+    return {
+      ok: false,
+      errorCode: 'TARGET_UNAVAILABLE',
+      message: t('newChat.pluginSetup.pluginUnavailable'),
+    };
+  }
+  if (args.action.kind === 'oauth_connect') {
+    const prefix = 'oauth_connect:secret:';
+    if (!args.action.id.startsWith(prefix)) {
+      return { ok: false, errorCode: 'ACTION_STALE', message: '授权动作已失效' };
+    }
+    const secretKey = args.action.id.slice(prefix.length);
+    const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
+    const decl = runtimeManifest.network?.secrets?.find(
+      (secret) => secret.key === secretKey && secret.source === 'oauth',
+    )?.oauth;
+    if (!decl) {
+      return {
+        ok: false,
+        errorCode: 'ACTION_STALE',
+        message: '授权声明已变更，请重新尝试',
+      };
+    }
+    const connected = await getGhostOauthAccountManager().connectAccount(
+      args.ghostId,
+      secretKey,
+      decl,
+    );
+    return connected.ok
+      ? { ok: true }
+      : {
+          ok: false,
+          errorCode: connected.error === 'CANCELLED' ? 'AUTH_CANCELLED' : 'AUTH_FAILED',
+          message:
+            connected.error === 'CANCELLED'
+              ? t('newChat.pluginSetup.oauthCancelled')
+              : connected.detail ?? t('newChat.pluginSetup.oauthFailed').replace('{{detail}}', connected.error),
+        };
+  }
+
+  const navigation = ghostSetupNavigationForAction(args.ghostId, args.action);
+  if (!navigation) {
+    return { ok: false, errorCode: 'ACTION_STALE', message: '不支持的插件设置动作' };
+  }
+  if (!args.responseTarget || args.responseTarget.isDestroyed()) {
+    return {
+      ok: false,
+      errorCode: 'WINDOW_CLOSED',
+      message: '发起设置的窗口已关闭，请重新尝试',
+    };
+  }
+  // Settings are rendered by the trusted Desktop Renderer. Main sends only a
+  // fixed local route target after validating the action against this ghost;
+  // no URL or route supplied by Agent/plugin is accepted. The response target
+  // is captured from the trusted RESOLVE_INTERACTION sender, so another window
+  // observing the globally-broadcast snapshot is never navigated by this action.
+  args.responseTarget.send(MAKER_PUSH.PLUGIN_SETUP_NAVIGATE, {
+    sessionId: args.sessionId,
+    ...navigation,
+  });
+  return { ok: true, waitingExternal: true };
+}
+
+/**
+ * 仅供 trusted Desktop inline-setup IPC 调用。Secret 值不经过通用
+ * InteractionDecision，也不进入 assessment、snapshot 或日志。
+ */
+export async function executeGhostSetupInlineAction(args: {
+  sessionId: string;
+  ghostId: string;
+  action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }>;
+  value: string;
+}): Promise<GhostSetupActionResult> {
+  return executeGhostSetupInlineSubmission(
+    {
+      getAssessment: getGhostSetupAssessment,
+      getManifest: (ghostId) => {
+        const ghost = findAvailableGhost(ghostId);
+        return ghost ? withRuntimeFiloGoogleClient(ghost.manifest) : null;
+      },
+      storeSecret: storeGhostSecret,
+      emitChange: (ghostId, secretKey) => {
+        getGhostSetupChangeBus().emit(ghostId, {
+          source: 'secret',
+          ref: secretKey,
+        });
+      },
+      onSaved: (ghostId, label) => {
+        broadcastGhostHostNotice(ghostId, {
+          textKey: 'secretSaved',
+          textArgs: { name: label },
+        });
+      },
+      logger: log,
+    },
+    args,
+  );
 }
 
 /**
@@ -2033,6 +2344,9 @@ export function registerGhostIpc(): void {
   ipcRegistered = true;
   const manager = getGhostManager();
   const runtime = getGhostRuntime();
+  // 启动即对账一次 skill 槽链接:上次会话崩溃/异常退出留下的悬空链接、
+  // 换账号后的期望态变化,都在这里自愈(后续变更由 ghosts:changed 广播驱动)。
+  scheduleGhostSkillReconcile();
   setGhostSandboxDevToolsDisabled(app.isPackaged);
   setGhostAppContextProvider(currentGhostAppContext);
   // 面板唤醒电子脑(cindy-ghost://<id>/wake 供片分支):面板零桥,唤醒经它
@@ -2053,6 +2367,7 @@ export function registerGhostIpc(): void {
     getRootDir: () => ownerScopedUserDataPath('ghost-kv'),
     log,
   });
+  ghostSetupKvStore = ghostKv;
   const ghostInstalled = (ghostId: string): boolean =>
     findAvailableGhost(ghostId) !== null;
   setGhostKvStore({
@@ -2060,6 +2375,7 @@ export function registerGhostIpc(): void {
     write: (ghostId, value) => {
       if (!ghostInstalled(ghostId)) return; // 幽灵写静默丢弃,不留文件
       ghostKv.write(ghostId, value);
+      getGhostSetupChangeBus().emit(ghostId, { source: 'kv' });
     },
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识
@@ -2096,8 +2412,15 @@ export function registerGhostIpc(): void {
       vault: {
         saved: (id, key) => readGhostSecret(id, key) !== null,
         tail: (id, key) => readGhostSecretTail(id, key),
-        store: (id, key, value) => storeGhostSecret(id, key, value),
-        remove: (id, key) => removeGhostSecret(id, key),
+        store: (id, key, value) => {
+          const stored = storeGhostSecret(id, key, value);
+          if (stored) getGhostSetupChangeBus().emit(id, { source: 'secret', ref: key });
+          return stored;
+        },
+        remove: (id, key) => {
+          removeGhostSecret(id, key);
+          getGhostSetupChangeBus().emit(id, { source: 'secret', ref: key });
+        },
       },
       // 入库成功 → 主机代言 tips("凭证「xxx」已保存",带意识身份头);
       // 文案里的名字用清单声明的 label(给用户看的名称),兜底裸 key。
@@ -2129,6 +2452,9 @@ export function registerGhostIpc(): void {
       oauthSecrets,
       manager: getGhostOauthAccountManager(),
       ghostId,
+      onChanged: (secretKey) => {
+        getGhostSetupChangeBus().emit(ghostId, { source: 'oauth', ref: secretKey });
+      },
       log,
     });
   });
@@ -2179,8 +2505,11 @@ export function registerGhostIpc(): void {
         });
         return response === 0;
       },
-      // 新连接添加成功 → 主机代言 tips(带意识身份头;与 secretSaved 同接法)。
       onChanged: (declKey) => {
+        getGhostSetupChangeBus().emit(ghostId, { source: 'connection', ref: declKey });
+      },
+      // 新连接添加成功 → 主机代言 tips(带意识身份头;与 secretSaved 同接法)。
+      onAdded: (declKey) => {
         const label = connectionDecls.find((c) => c.key === declKey)?.label ?? declKey;
         broadcastGhostHostNotice(ghostId, { textKey: 'connectionAdded', textArgs: { label } });
       },
@@ -2220,7 +2549,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateFiloGoogleAccounts({
+          const migrated = migrateFiloGoogleAccounts({
             readLegacyManifest: () => {
               try {
                 const raw = JSON.parse(
@@ -2249,6 +2578,12 @@ export function registerGhostIpc(): void {
             },
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(FILO_GOOGLE_GHOST_ID, {
+              source: 'oauth',
+              ref: FILO_GOOGLE_SECRET_KEY,
+            });
+          }
         } catch (err) {
           log.warn('filo-google 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2262,7 +2597,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateAtlassianAccounts({
+          const migrated = migrateAtlassianAccounts({
             readLegacyRefreshToken: () => {
               try {
                 if (!safeStorage.isEncryptionAvailable()) return null;
@@ -2290,6 +2625,12 @@ export function registerGhostIpc(): void {
             },
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(XD_ATLASSIAN_GHOST_ID, {
+              source: 'oauth',
+              ref: XD_ATLASSIAN_SECRET_KEY,
+            });
+          }
         } catch (err) {
           log.warn('xd-atlassian 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2306,7 +2647,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateGithubAccounts({
+          const migrated = migrateGithubAccounts({
             readLegacyToken: () => {
               try {
                 if (!safeStorage.isEncryptionAvailable()) return null;
@@ -2333,6 +2674,12 @@ export function registerGhostIpc(): void {
             },
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(CINDY_GITHUB_GHOST_ID, {
+              source: 'secret',
+              ref: CINDY_GITHUB_SECRET_KEY,
+            });
+          }
         } catch (err) {
           log.warn('cindy-github 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2347,7 +2694,7 @@ export function registerGhostIpc(): void {
       ) {
         try {
           const legacyDir = path.join(app.getPath('userData'), 'safe-storage');
-          migrateGitlabAccounts({
+          const migrated = migrateGitlabAccounts({
             readLegacyToken: () => {
               try {
                 if (!safeStorage.isEncryptionAvailable()) return null;
@@ -2381,6 +2728,12 @@ export function registerGhostIpc(): void {
             manager: getGhostConnectionManager(),
             log,
           });
+          if (migrated > 0) {
+            getGhostSetupChangeBus().emit(CINDY_GITLAB_GHOST_ID, {
+              source: 'connection',
+              ref: CINDY_GITLAB_CONNECTION_KEY,
+            });
+          }
         } catch (err) {
           log.warn('cindy-gitlab 搬账意外失败(不阻断启动)', { err: err instanceof Error ? err.message : String(err) });
         }
@@ -2413,7 +2766,8 @@ export function registerGhostIpc(): void {
   // fsSlot 三档守门)/ agent-request(Agent 新回合,一次性用户票或后台权限
   // 守门)/ node-request(随包 Node JSON-RPC/MCP stdio 中继)/ pick-request
   // (系统级选文件夹,用户亲选即授权)/ preview-request(右侧栏开预览标签,
-  // preview.hosts 白名单守门)。其它类型一律拒。
+  // preview.hosts 白名单守门)/ workspace-request(工作区会话入口,亲选或
+  // 确认卡授权,判重/创建在 workspaceSlot)。其它类型一律拒。
   ipcMain.handle('ghost-pipe:ping', (event) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -2472,6 +2826,11 @@ export function registerGhostIpc(): void {
     // 限速/单发/结果分档在 pickSlot。
     if (type === 'pick-request') {
       return getGhostPickSlot().handleRequest(id, payload);
+    }
+    // workspace-request = 工作区会话入口(workspace 槽):目录亲选或确认卡
+    // 授权,已有 active 会话复用;限速/判重/创建守门在 workspaceSlot。
+    if (type === 'workspace-request') {
+      return getGhostWorkspaceSlot().handleRequest(id, payload);
     }
     // preview-request = 右侧栏开预览标签(preview 槽):URL 必须命中身份卡
     // preview.hosts 白名单;守门/限速在 previewSlot,落地在 renderer。
@@ -2713,7 +3072,14 @@ export function registerGhostIpc(): void {
     if (typeof disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled must be a boolean');
     }
+    const wasDisabled = isGhostDisabledForWorkdir(ghostId, workdir);
     const next = setGhostDisabledForWorkdir(workdir, ghostId, disabled);
+    // A setup card may already be waiting for this plugin in the affected
+    // project. Wake all waiters for the plugin; each one revalidates its own
+    // captured workdir and only the matching scope is rejected.
+    if (wasDisabled !== disabled) {
+      getGhostSetupChangeBus().emit(ghostId, { source: 'workdir_policy' });
+    }
     // 生效面变了(新会话花名册 / $ 菜单),借 ghosts:changed 通知所有窗口
     // 重拉——载荷仍是完整已装清单,消费方按需再 sendSync 取目录级清单。
     broadcastGhostsChanged(manager.list());
@@ -2737,6 +3103,10 @@ export function registerGhostIpc(): void {
       capability as CindyCapabilityKey,
       model as string | null,
     );
+    getGhostSetupChangeBus().emit(ghostId, {
+      source: 'host_config',
+      ref: `cindy-pref:${String(capability)}`,
+    });
     return { overrides };
   });
 
@@ -3114,6 +3484,7 @@ function broadcastGhostProvisioning(active: boolean): void {
 }
 
 function broadcastGhostsChanged(ghosts: InstalledGhost[]): void {
+  getGhostSetupManifestTracker().note(ghosts);
   const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
@@ -3130,6 +3501,47 @@ function broadcastGhostsChanged(ghosts: InstalledGhost[]): void {
       });
     }
   }
+  // skill 槽共享链接对账:装/卸/启停/换版全走本广播,一处挂接全覆盖。
+  // 异步合并执行,不阻塞广播;用全量 list() 而非 per-session 过滤后的 visible
+  // (链接对账关心"装了什么",与当前会话可见性无关)。
+  scheduleGhostSkillReconcile();
+}
+
+// —— skill 槽链接对账调度:合并突发广播(in-flight + pending 双标志),
+//    永不并发两趟 fs 对账;失败仅 warn,幂等设计靠下一次广播/启动自愈。
+let skillReconcileInFlight = false;
+let skillReconcilePending = false;
+function scheduleGhostSkillReconcile(): void {
+  skillReconcilePending = true;
+  if (skillReconcileInFlight) return;
+  skillReconcileInFlight = true;
+  void (async () => {
+    try {
+      while (skillReconcilePending) {
+        skillReconcilePending = false;
+        try {
+          const result = await reconcileGhostSkillLinks({
+            ghosts: getGhostManager().list(),
+            brainRoot: brainRootDir(),
+          });
+          if (result.warnings.length > 0) {
+            log.warn('ghost skill reconcile warnings', { warnings: result.warnings });
+          }
+          if (result.changed) {
+            log.info('ghost skill links reconciled', {
+              actions: result.actions.filter((a) => a.op !== 'kept'),
+            });
+          }
+        } catch (err) {
+          log.warn('ghost skill reconcile failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    } finally {
+      skillReconcileInFlight = false;
+    }
+  })();
 }
 
 let ghostsChangedObserver: ((ghosts: InstalledGhost[]) => void) | null = null;

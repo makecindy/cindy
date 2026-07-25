@@ -17,10 +17,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { Check, ChevronDown, Globe, MonitorCog, Download, LogIn, ExternalLink, RefreshCw, Smartphone } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Globe,
+  MonitorCog,
+  Download,
+  LogIn,
+  ExternalLink,
+  RefreshCw,
+  Smartphone,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import accessibilityPermissionIcon from '@/assets/system-settings/accessibility-icon.png';
+import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recording-icon.png';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
@@ -31,9 +42,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { androidDeviceLabel, androidStatusFallback, describeAndroidDeviceStatus } from './androidStatusPresentation';
+import {
+  getComputerPermissionSwitchChecked,
+  isComputerPermissionPreflightInconclusive,
+  isComputerPermissionReady,
+  shouldStartComputerPermissionGuide,
+} from './computerPermissionFlow';
 
 const log = createLogger('ComputerUseSection');
 
@@ -43,8 +59,6 @@ const ANDROID_PLUGIN_ID = 'android';
 const BROWSER_PLUGIN_ID = 'browser';
 const COMPUTER_PLUGIN_ID = 'computer';
 const COMPUTER_PERMISSION_POLL_INTERVAL_MS = 1_500;
-// 手动开两个系统权限(找 App、看提示、来回切窗口)轻松超过 90s——超时会把引导
-// 弹窗收掉、开关弹回关闭,用户会以为流程失败(2026-07-03 实踩),给足 5 分钟。
 const COMPUTER_PERMISSION_POLL_TIMEOUT_MS = 300_000;
 const MAC_ACCESSIBILITY_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
@@ -78,11 +92,6 @@ function androidSourceLabelKey(source: AndroidAdbPathSource | null | undefined):
   }
 }
 
-function isComputerPermissionReady(status: ComputerDriverStatus | null): boolean {
-  const permissionState = status?.permissionState;
-  return !permissionState?.required || permissionState.status === 'granted';
-}
-
 function isComputerAccessibilityPermissionReady(status: ComputerDriverStatus | null): boolean {
   return status?.permissionState?.accessibility === 'granted';
 }
@@ -111,207 +120,66 @@ function getComputerPermissionLogSummary(status: ComputerDriverStatus | null) {
   };
 }
 
-function getMissingComputerPermissionSettingsUrl(status: ComputerDriverStatus | null): string | null {
-  const permissionState = status?.permissionState;
-  if (permissionState?.platform !== 'macos') return null;
-  if (permissionState.status !== 'missing') return null;
-  if (!isComputerAccessibilityPermissionReady(status)) return MAC_ACCESSIBILITY_SETTINGS_URL;
-  if (!isComputerScreenRecordingPermissionReady(status)) return MAC_SCREEN_RECORDING_SETTINGS_URL;
-  return null;
-}
-
-function getComputerAccessibilityPermissionLabel(status: ComputerDriverStatus | null, t: (key: string) => string): string {
-  const permissionState = status?.permissionState;
-  if (permissionState?.accessibility === 'unknown' || permissionState?.status === 'unknown') {
-    return t('settings.computerUse.directControl.permissions.unknown');
-  }
-  return t('settings.computerUse.directControl.permissions.grant');
-}
-
-function getComputerScreenRecordingPermissionLabel(status: ComputerDriverStatus | null, t: (key: string) => string): string {
-  const permissionState = status?.permissionState;
-  if (
-    permissionState?.screenRecording === 'unknown' ||
-    permissionState?.screenRecordingCapturable === 'unknown' ||
-    permissionState?.status === 'unknown'
-  ) {
-    return t('settings.computerUse.directControl.permissions.unknown');
-  }
-  return t('settings.computerUse.directControl.permissions.grant');
-}
-
 interface ComputerUseSectionProps {
   /** Active session working dir — the project whose .claude/settings.json the
    *  browser enable toggle reads/writes. */
   workingDir?: string;
 }
 
-interface ComputerPermissionBadgeProps {
-  label: string;
-  granted: boolean;
-  onClick: () => void;
-  grantLabel: string;
-  grantedLabel: string;
-}
-
-function ComputerPermissionBadge({
+function ComputerPermissionRow({
   label,
+  iconSrc,
   granted,
-  onClick,
-  grantLabel,
-  grantedLabel,
-}: ComputerPermissionBadgeProps) {
+  pending,
+  actionLabel,
+  onAction,
+}: {
+  label: string;
+  iconSrc: string;
+  granted: boolean;
+  pending: boolean;
+  actionLabel: string;
+  onAction: () => void;
+}) {
   return (
     <button
       type="button"
-      onClick={onClick}
-      aria-label={`${label}: ${granted ? grantedLabel : grantLabel}`}
+      onClick={onAction}
+      disabled={pending}
       className={cn(
-        'inline-flex min-h-7 items-center gap-2 rounded-full px-3 text-12 font-medium transition-colors',
-        granted
-          ? 'bg-transparent px-0 text-[var(--settings-section-sublabel)] hover:text-[var(--settings-section-title)]'
-          : 'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)] hover:bg-[var(--settings-btn-secondary-hover-bg)]',
+        'flex min-h-[64px] w-full min-w-0 items-center gap-3 rounded-xl px-3.5 py-3 text-left',
+        'border border-solid border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+        'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+        'disabled:cursor-default disabled:hover:bg-[var(--settings-input-bg)]',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
       )}
     >
-      <span>{label}</span>
-      {granted ? (
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-section-title)]">
-            <Check size={10} strokeWidth={2.4} className="text-[var(--settings-section-title)]" />
-          </span>
-          {grantedLabel}
-        </span>
-      ) : (
-        <span>{grantLabel}</span>
-      )}
+      <img className="size-8 shrink-0 object-contain grayscale opacity-70" src={iconSrc} alt="" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
+        {label}
+      </span>
+      <span
+        className={cn(
+          'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
+          pending
+            ? 'border border-dashed border-[var(--settings-input-border)] bg-[var(--surface-chip)] text-[var(--settings-section-desc)]'
+            : granted
+              ? 'border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] text-[var(--settings-section-title)]'
+              : 'border border-[var(--surface-chip)] bg-[var(--surface-chip)] text-[var(--settings-section-title)]',
+        )}
+      >
+        {pending ? <Spinner size={12} /> : null}
+        <span>{actionLabel}</span>
+        {granted && !pending ? <Check size={13} strokeWidth={2.3} aria-hidden="true" /> : null}
+      </span>
     </button>
   );
 }
 
-/** 引导弹窗里的单条权限行:实时勾选态,granted 后打勾。 */
-function GuidePermissionRow({ label, granted, waitingLabel, grantedLabel }: {
-  label: string;
-  granted: boolean;
-  waitingLabel: string;
-  grantedLabel: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg bg-[var(--settings-input-bg)] px-3 py-2.5">
-      <span className="text-13 font-medium text-[var(--confirm-title)]">{label}</span>
-      {granted ? (
-        <span className="inline-flex items-center gap-1.5 text-12 text-[var(--confirm-desc)]">
-          <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
-            <Check size={10} strokeWidth={2.4} className="text-[var(--confirm-title)]" />
-          </span>
-          {grantedLabel}
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-12 text-[var(--confirm-desc)]">
-          <Spinner size={12} />
-          {waitingLabel}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/**
- * 授权引导常驻弹窗:轮询期间一直挂着,实时显示两项权限的授予状态,全部就位后由
- * 外层(pending=false)自动收掉;用户也可随时取消。带 CuaDriver 的真实安装图标,
- * 方便用户在系统设置的权限列表里认出要开的是哪一个 App。
- * 结构沿用 ConfirmDialog(docs/design-rules/cindy-design-system.md §Dialog);overlay 走 --overlay-modal token。
- */
-function ComputerPermissionGuideDialog({ open, status, iconDataUrl, onCancel }: {
-  open: boolean;
-  status: ComputerDriverStatus | null;
-  iconDataUrl: string | null;
-  onCancel: () => void;
-}) {
+export function ComputerUseSection({
+  workingDir,
+}: ComputerUseSectionProps) {
   const { t } = useTranslation();
-  return (
-    <AlertDialog.Root open={open}>
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay
-          className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)] data-[state=open]:animate-confirm-overlay-in data-[state=closed]:animate-confirm-overlay-out"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        />
-        <AlertDialog.Content
-          className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'w-full max-w-[400px] rounded-xl p-4',
-            'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
-            'data-[state=open]:animate-confirm-content-in',
-            'data-[state=closed]:animate-confirm-content-out',
-          )}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-        >
-          <div className="flex items-start gap-3">
-            {iconDataUrl ? (
-              // CuaDriver 的 icns 画布不带 alpha,四角烤死了近黑色(系统设置里干净是
-              // 因为 macOS 26 显示时自动套圆角遮罩)。实测其自带圆角 ≈24% 画布
-              // (40px 下 ≈9.6px),裁剪半径必须**大于**它才能把暗角整圈裁掉——取
-              // 11px(27.5%),连同边缘抗锯齿渐变一起裁进白色区域内。
-              <img
-                src={iconDataUrl}
-                alt="CuaDriver"
-                className="h-10 w-10 shrink-0 rounded-[11px] border border-[var(--settings-input-border)] object-cover"
-                draggable={false}
-              />
-            ) : (
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[var(--settings-input-bg)]">
-                <MonitorCog size={22} className="text-[var(--confirm-title)]" />
-              </span>
-            )}
-            <div className="min-w-0">
-              <AlertDialog.Title className="text-lg font-medium text-[var(--confirm-title)]">
-                {t('settings.computerUse.directControl.permissionGuide.title')}
-              </AlertDialog.Title>
-              <AlertDialog.Description className="mt-1 text-13 leading-[1.5] text-[var(--confirm-desc)]">
-                {t('settings.computerUse.directControl.permissionGuide.description')}
-              </AlertDialog.Description>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-col gap-2">
-            <GuidePermissionRow
-              label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
-              granted={isComputerAccessibilityPermissionReady(status)}
-              waitingLabel={t('settings.computerUse.directControl.permissionGuide.waiting')}
-              grantedLabel={t('settings.computerUse.directControl.permissions.granted')}
-            />
-            <GuidePermissionRow
-              label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
-              granted={isComputerScreenRecordingPermissionReady(status)}
-              waitingLabel={t('settings.computerUse.directControl.permissionGuide.waiting')}
-              grantedLabel={t('settings.computerUse.directControl.permissions.granted')}
-            />
-          </div>
-          <div className="mt-5 flex justify-end">
-            <AlertDialog.Cancel asChild>
-              <button
-                onClick={onCancel}
-                className={cn(
-                  'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                  'active:scale-[0.98] border bg-transparent',
-                  'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                  'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                  'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                )}
-              >
-                {t('commonUi.confirmDialog.cancel')}
-              </button>
-            </AlertDialog.Cancel>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
-  );
-}
-
-export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
-  const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
   // null = not loaded yet (blank, no flash). After load, all resolve.
   const [browserEnabled, setBrowserEnabled] = useState<boolean | null>(null);
   const [androidEnabled, setAndroidEnabled] = useState<boolean | null>(null);
@@ -337,46 +205,66 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const [computerTogglePending, setComputerTogglePending] = useState(false);
   const [computerInstallPending, setComputerInstallPending] = useState(false);
   const [computerPermissionPending, setComputerPermissionPending] = useState(false);
-  // CuaDriver.app 真实图标(引导弹窗识别参照);null = 未取到,降级通用图标。
-  const [driverIconDataUrl, setDriverIconDataUrl] = useState<string | null>(null);
-  const driverIconFetchedRef = useRef(false);
+  const [computerPermissionRecheckPending, setComputerPermissionRecheckPending] = useState(false);
+  const [computerDetailsOpen, setComputerDetailsOpen] = useState(false);
+  const computerUseSectionMountedRef = useRef(true);
+  const computerTogglePendingRef = useRef(false);
+  const computerPermissionPendingRef = useRef(false);
   const computerPermissionPollTimerRef = useRef<number | null>(null);
-  // grant 子进程在途时轮询只等待、不再发 status(避免探测与授权流程互相打架)。
+  // Native grant remains cancellable while the user is moving between Settings panes.
   const computerPermissionGrantInProgressRef = useRef(false);
   const computerEnableIntentRef = useRef(false);
   // 授权流程代际号:引导弹窗「取消」时 +1。grant/preflight 的 await 期间用户可能
   // 已取消,continuation 必须校验代际,否则被取消的流程仍会打开系统设置抢焦点。
   const computerPermissionFlowSeqRef = useRef(0);
-  // 授权引导流程中最近一次自动打开的系统设置页 URL —— 同一个权限页只自动打开一次,
-  // 权限逐个就位后再自动打开下一个缺失项的设置页(辅助功能 → 屏幕录制)。
-  const lastOpenedComputerPermissionUrlRef = useRef<string | null>(null);
-
+  const computerPermissionCompletionInFlightRef = useRef(false);
   const resetComputerPermissionFlow = useCallback(() => {
     computerPermissionGrantInProgressRef.current = false;
   }, []);
 
-  // 引导弹窗打开时按需取一次 CuaDriver 图标(main 侧也有缓存,幂等)。
+  const cancelNativeComputerPermissionGrant = useCallback(() => {
+    void window.electronAPI.maker.computer.cancelPermissionGrant().catch((err) => {
+      log.debug('computer.cancelPermissionGrant failed (ignored)', err);
+    });
+  }, []);
+
   useEffect(() => {
-    if (!computerPermissionPending || driverIconFetchedRef.current) return;
-    driverIconFetchedRef.current = true;
-    void window.electronAPI.maker.computer.driverIcon()
-      .then((r) => setDriverIconDataUrl(r.iconDataUrl))
-      .catch((err) => log.debug('computer.driverIcon failed (generic icon fallback)', err));
+    computerPermissionPendingRef.current = computerPermissionPending;
   }, [computerPermissionPending]);
 
-  // 引导弹窗的取消:终止整个授权等待流程(轮询随 pending=false 自行停止)。
+  // Leaving Settings / Plugin detail invalidates the whole enable attempt,
+  // including install and fresh-preflight awaits before the guide is visible.
+  useEffect(() => {
+    computerUseSectionMountedRef.current = true;
+    return () => {
+      computerUseSectionMountedRef.current = false;
+      computerPermissionFlowSeqRef.current += 1;
+      computerEnableIntentRef.current = false;
+      computerPermissionCompletionInFlightRef.current = false;
+      const hadActivePermissionFlow = (
+        computerTogglePendingRef.current
+        || computerPermissionPendingRef.current
+        || computerPermissionGrantInProgressRef.current
+      );
+      resetComputerPermissionFlow();
+      if (hadActivePermissionFlow) {
+        cancelNativeComputerPermissionGrant();
+      }
+      computerTogglePendingRef.current = false;
+    };
+  }, [cancelNativeComputerPermissionGrant, resetComputerPermissionFlow]);
+
+  // 引导弹窗的取消:终止当前的一次性授权请求。
   const handleCancelPermissionGuide = useCallback(() => {
     computerPermissionFlowSeqRef.current += 1;
     setComputerPermissionPending(false);
     computerEnableIntentRef.current = false;
+    computerPermissionCompletionInFlightRef.current = false;
     resetComputerPermissionFlow();
-    lastOpenedComputerPermissionUrlRef.current = null;
     // 收割 main 侧在途的 grant 子进程:取消必须让原生授权流程真正停下,
     // 而不是只藏起引导弹窗(否则 15s 复用窗口内下次点击还会接上旧流程)。
-    void window.electronAPI.maker.computer.cancelPermissionGrant().catch((err) => {
-      log.debug('computer.cancelPermissionGrant failed (ignored)', err);
-    });
-  }, [resetComputerPermissionFlow]);
+    cancelNativeComputerPermissionGrant();
+  }, [cancelNativeComputerPermissionGrant, resetComputerPermissionFlow]);
 
   const openComputerPermissionSettings = useCallback(
     async (url: string, reason: string): Promise<boolean> => {
@@ -386,41 +274,92 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         toast.error(t('settings.computerUse.directControl.toast.openPermissionSettingsFailed'));
         return false;
       }
-      lastOpenedComputerPermissionUrlRef.current = url;
       return true;
     },
     [t],
   );
 
+  // Native macOS onboarding observes the System Settings checkbox in main.
+  // Feed those changes back into this panel so the two permission steps can
+  // advance without asking the user to press Recheck.
+  useEffect(() => {
+    return window.electronAPI.maker.computer.onPermissionGuideStatusChanged((status) => {
+      setComputerStatus(status);
+      if (!computerPermissionPendingRef.current) return;
+      if (!status.installed || !isComputerPermissionReady(status)) {
+        return;
+      }
+
+      if (computerPermissionCompletionInFlightRef.current) return;
+      computerPermissionCompletionInFlightRef.current = true;
+      setComputerPermissionPending(false);
+      resetComputerPermissionFlow();
+      cancelNativeComputerPermissionGrant();
+      if (computerEnableIntentRef.current || computerEnabled) {
+        void window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, true)
+          .then((result) => {
+            setComputerEnabled(true);
+            if (result.codexMcpRefreshed === false) {
+              toast.warning(t('settings.computerUse.codexRefreshDeferred'));
+              return;
+            }
+            toast.success(t('settings.computerUse.directControl.toast.enabled'));
+          })
+          .catch((err) => {
+            log.warn('plugins.setEnabled(computer) after native guide failed', err);
+            toast.error(t('settings.computerUse.directControl.toast.toggleFailed'));
+          })
+          .finally(() => {
+            computerPermissionCompletionInFlightRef.current = false;
+          });
+      } else {
+        computerPermissionCompletionInFlightRef.current = false;
+      }
+    });
+  }, [
+    cancelNativeComputerPermissionGrant,
+    computerEnabled,
+    resetComputerPermissionFlow,
+    t,
+  ]);
+
   const refreshComputerPermissionStatus = useCallback(async (
     reason: string,
-    options?: { fresh?: boolean; live?: boolean },
+    options?: { fresh?: boolean; bypassCache?: boolean; passiveOnly?: boolean },
   ) => {
-    // fresh:重启 daemon 后现场实测 —— 「辅助功能被撤销」只有重启 daemon 才读得到
-    // (运行中的 daemon 对 AX 撤销无感知),仅用于用户显式动作(重新检查 / 开启开关)。
-    // live:不重启但绕过弹窗抑制缓存现场实测 —— 授权引导轮询用,权限逐项授予的
-    // 进度(授予方向 daemon 实时可见)不能被缓存冻住,否则第二个权限的设置页永远
-    // 不会自动打开;引导期间系统本就在弹授权对话框,实测语义一致。
+    // fresh:重启 daemon 后现场实测 —— 「辅助功能被撤销」只有重启 daemon 才读得到。
+    // 仅在 driver 替换或已进入授权流程后使用；页面进入/Recheck 走 passiveOnly，
+    // 开启开关会重新验证可变的 macOS TCC 状态，不能消费可能已过期的页面快照。
     const status = await window.electronAPI.maker.computer.status({
       forcePermissionProbe: true,
       ...(options?.fresh ? { freshPermissionProbe: true } : {}),
-      ...(options?.live ? { bypassPermissionProbeCache: true } : {}),
+      ...(options?.bypassCache ? { bypassPermissionProbeCache: true } : {}),
+      ...(options?.passiveOnly ? { passivePermissionProbeOnly: true } : {}),
     });
     log.debug('computer permission status refreshed', {
       flowReason: reason,
       fresh: options?.fresh === true,
-      live: options?.live === true,
+      bypassCache: options?.bypassCache === true,
+      passiveOnly: options?.passiveOnly === true,
       ...getComputerPermissionLogSummary(status),
     });
     setComputerStatus(status);
     return status;
   }, []);
 
-  const requestComputerPermissionGrant = useCallback(async (reason: string) => {
+  const requestComputerPermissionGrant = useCallback(async (
+    reason: string,
+    openedPaneUrl?: string,
+  ) => {
     computerPermissionGrantInProgressRef.current = true;
     log.debug('computer permission grant requested', { reason });
     try {
-      const result = await window.electronAPI.maker.computer.grantPermissions();
+      const result = await window.electronAPI.maker.computer.grantPermissions({
+        // The native coach presents the drag/enable steps beside System Settings.
+        // Permission status itself advances only after explicit user actions.
+        showGuide: window.electronAPI.platform === 'darwin',
+        ...(openedPaneUrl ? { openedPaneUrl } : {}),
+      });
       log.debug('computer permission grant result', {
         flowReason: reason,
         ok: result.ok,
@@ -432,6 +371,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       computerPermissionGrantInProgressRef.current = false;
     }
   }, []);
+
+  // 独立引导浮窗里的关闭按钮由 main 广播回来。
+  useEffect(() => {
+    return window.electronAPI.maker.computer.onPermissionGuideCancelled(
+      handleCancelPermissionGuide,
+    );
+  }, [handleCancelPermissionGuide]);
   // 更新检查每次打开面板只跑一次;status 对象在 install/授权流程里会反复刷新,
   // 用 ref 防止重复触发网络请求。
   const driverUpdateCheckedRef = useRef(false);
@@ -544,7 +490,15 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           log.warn('browser.status failed', err);
           return { detected: false, browserKind: null, executablePath: null } as BrowserAvailability;
         }),
-        window.electronAPI.maker.computer.status({ forcePermissionProbe: true }).catch((err) => {
+        // Entering Automation is the shared refresh boundary for every card.
+        // CuaDriver 0.12.2+ reports its own TCC state without opening the legacy
+        // grant flow. Bypass our prior-result cache so reopening this page
+        // reflects the latest settings without requiring a manual Recheck.
+        window.electronAPI.maker.computer.status({
+          forcePermissionProbe: true,
+          bypassPermissionProbeCache: true,
+          passivePermissionProbeOnly: true,
+        }).catch((err) => {
           log.warn('computer.status failed', err);
           return {
             installed: false,
@@ -628,9 +582,26 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       const result = await window.electronAPI.maker.computer.updateDriver(
         joinOnly ? { joinOnly: true } : undefined,
       );
-      setComputerStatus(result.status);
+      let nextStatus = result.status;
+      if (nextStatus.installed && nextStatus.permissionState?.platform === 'macos') {
+        // A driver replacement may receive a new TCC identity. Re-probe the
+        // installed binary before allowing the capability to look usable.
+        nextStatus = await refreshComputerPermissionStatus('driver-update', { fresh: true });
+      }
+      setComputerStatus(nextStatus);
+      if (!isComputerPermissionReady(nextStatus)) {
+        setComputerPermissionPending(false);
+        setComputerEnabled(false);
+        if (computerEnabled) {
+          await window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, false)
+            .catch((error) => log.warn('disabling computer after permission reset failed', error));
+        }
+        toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
+      }
       setDriverUpdate(null);
-      toast.success(t('settings.computerUse.directControl.update.toast.success'));
+      if (isComputerPermissionReady(nextStatus)) {
+        toast.success(t('settings.computerUse.directControl.update.toast.success'));
+      }
     } catch (err) {
       log.warn('computer driver update failed', err);
       toast.error(t('settings.computerUse.directControl.update.toast.failed'));
@@ -645,7 +616,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     } finally {
       setDriverUpdatePending(false);
     }
-  }, [t]);
+  }, [computerEnabled, refreshComputerPermissionStatus, t]);
 
   useEffect(() => {
     if (!computerStatus?.installed || driverUpdateCheckedRef.current) return;
@@ -692,15 +663,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     );
   }, [t]);
 
-  useEffect(() => {
-    return () => {
-      if (computerPermissionPollTimerRef.current !== null) {
-        window.clearTimeout(computerPermissionPollTimerRef.current);
-        computerPermissionPollTimerRef.current = null;
-      }
-    };
-  }, []);
-
+  // CLI-only CuaDriver installs use the legacy `permissions grant` process and
+  // have no native-guide broadcasts. Keep checking that live permission state
+  // while the shared pending UI is visible. The completion ref also prevents a
+  // native broadcast and this fallback poll from enabling the plugin twice.
   useEffect(() => {
     if (!computerPermissionPending) {
       if (computerPermissionPollTimerRef.current !== null) {
@@ -714,36 +680,26 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     const deadline = Date.now() + COMPUTER_PERMISSION_POLL_TIMEOUT_MS;
     const poll = async () => {
       try {
-        if (computerPermissionGrantInProgressRef.current) {
-          log.debug('computer permission poll waiting for grant to settle');
-          computerPermissionPollTimerRef.current = window.setTimeout(poll, COMPUTER_PERMISSION_POLL_INTERVAL_MS);
-          return;
-        }
-        const status = await refreshComputerPermissionStatus('poll', { live: true });
-        if (cancelled) return;
-        if (isComputerPermissionReady(status)) {
-          // ⚠️ 完成态收尾必须「先启用、后收弹窗」,且不做 cancelled 早退:
-          // setComputerPermissionPending(false) / setComputerEnabled(true) 都会让本
-          // effect 立刻清理重建(cancelled=true),之前写在 await 后面的 cancelled
-          // 早退会把「启用开关 + 成功提示」整段跳过 —— 表现为授权完成后弹窗消失、
-          // 开关却回到关闭,而 main 侧插件已被启用,前后端状态错开(2026-07-03 实踩)。
-          // 这里的 setState 即使撞上组件卸载也只是 React 18 的 no-op,无需早退。
-          if (computerEnableIntentRef.current || computerEnabled) {
-            await persistComputerEnabled(true);
+        if (!computerPermissionGrantInProgressRef.current) {
+          const status = await refreshComputerPermissionStatus('permission-poll', {
+            bypassCache: true,
+          });
+          if (cancelled) return;
+          if (isComputerPermissionReady(status)) {
+            if (computerPermissionCompletionInFlightRef.current) return;
+            computerPermissionCompletionInFlightRef.current = true;
+            setComputerPermissionPending(false);
+            resetComputerPermissionFlow();
+            cancelNativeComputerPermissionGrant();
+            try {
+              if (computerEnableIntentRef.current || computerEnabled) {
+                await persistComputerEnabled(true);
+              }
+            } finally {
+              computerPermissionCompletionInFlightRef.current = false;
+            }
+            return;
           }
-          setComputerPermissionPending(false);
-          resetComputerPermissionFlow();
-          lastOpenedComputerPermissionUrlRef.current = null;
-          return;
-        }
-        // 授权是逐项完成的(辅助功能 → 屏幕录制):上一项就位后,自动把下一个
-        // 缺失项的系统设置页带到用户面前;同一页只自动打开一次,避免反复抢焦点。
-        const nextPermissionUrl = getMissingComputerPermissionSettingsUrl(status);
-        if (
-          nextPermissionUrl &&
-          nextPermissionUrl !== lastOpenedComputerPermissionUrlRef.current
-        ) {
-          void openComputerPermissionSettings(nextPermissionUrl, 'poll-next-permission');
         }
       } catch (err) {
         log.warn('computer permission poll failed', err);
@@ -753,14 +709,15 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       if (Date.now() >= deadline) {
         setComputerPermissionPending(false);
         resetComputerPermissionFlow();
-        lastOpenedComputerPermissionUrlRef.current = null;
-        if (!computerEnabled) {
-          computerEnableIntentRef.current = false;
-        }
+        cancelNativeComputerPermissionGrant();
+        if (!computerEnabled) computerEnableIntentRef.current = false;
         toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
         return;
       }
-      computerPermissionPollTimerRef.current = window.setTimeout(poll, COMPUTER_PERMISSION_POLL_INTERVAL_MS);
+      computerPermissionPollTimerRef.current = window.setTimeout(
+        poll,
+        COMPUTER_PERMISSION_POLL_INTERVAL_MS,
+      );
     };
 
     void poll();
@@ -772,9 +729,9 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       }
     };
   }, [
+    cancelNativeComputerPermissionGrant,
     computerEnabled,
     computerPermissionPending,
-    openComputerPermissionSettings,
     persistComputerEnabled,
     refreshComputerPermissionStatus,
     resetComputerPermissionFlow,
@@ -908,88 +865,80 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
 
   const handleToggleComputer = useCallback(
     async (next: boolean) => {
+      const flowSeq = computerPermissionFlowSeqRef.current;
+      const isCurrentFlow = () => (
+        computerUseSectionMountedRef.current
+        && computerPermissionFlowSeqRef.current === flowSeq
+      );
+      computerTogglePendingRef.current = true;
       setComputerTogglePending(true);
       computerEnableIntentRef.current = next;
+      if (next) computerPermissionCompletionInFlightRef.current = false;
       let nextStatus = computerStatus;
       try {
-        if (next) {
-          nextStatus = await refreshComputerPermissionStatus('toggle', { fresh: true });
-        }
-
-        if (next && (!nextStatus?.installed || !isComputerPermissionReady(nextStatus))) {
-          const confirmed = await confirm({
-            title: t('settings.computerUse.directControl.permissionIntro.title'),
-            description: t(
-              nextStatus?.permissionState?.platform === 'macos'
-                ? 'settings.computerUse.directControl.permissionIntro.macosDescription'
-                : 'settings.computerUse.directControl.permissionIntro.description',
-            ),
-            confirmText: t('settings.computerUse.directControl.permissionIntro.confirm'),
-            cancelText: t('settings.computerUse.directControl.permissionIntro.cancel'),
-            autoFocusConfirm: true,
-          });
-          if (!confirmed) {
-            computerEnableIntentRef.current = false;
-            lastOpenedComputerPermissionUrlRef.current = null;
-            return;
-          }
-        }
-
         if (next && !nextStatus?.installed) {
           setComputerInstallPending(true);
           const installResult = await window.electronAPI.maker.computer.installDriver();
+          if (!isCurrentFlow()) return;
           nextStatus = installResult.status;
           setComputerStatus(installResult.status);
           if (!installResult.status.installed) {
             throw new Error(installResult.status.error ?? 'cua-driver install did not produce an installed driver');
           }
         }
-        if (next && !isComputerPermissionReady(nextStatus)) {
+        if (next && nextStatus?.permissionState?.platform === 'macos') {
+          nextStatus = await refreshComputerPermissionStatus('toggle-fresh-preflight', {
+            fresh: true,
+            bypassCache: true,
+          });
+          if (!isCurrentFlow()) return;
+        }
+        if (next && isComputerPermissionPreflightInconclusive(nextStatus)) {
+          computerEnableIntentRef.current = false;
+          setComputerPermissionPending(false);
+          resetComputerPermissionFlow();
+          toast.error(t('settings.computerUse.directControl.toast.permissionFailed'));
+          return;
+        }
+        if (shouldStartComputerPermissionGuide(next, nextStatus)) {
+          if (!isCurrentFlow()) return;
           setComputerPermissionPending(true);
-          const flowSeq = computerPermissionFlowSeqRef.current;
           nextStatus = await requestComputerPermissionGrant('toggle');
           // 用户在 grant 等待期间点了引导弹窗的「取消」:整个流程已终止,
           // 不再打开系统设置/弹提示。
           if (computerPermissionFlowSeqRef.current !== flowSeq) return;
           if (!isComputerPermissionReady(nextStatus)) {
-            const settingsUrl = getMissingComputerPermissionSettingsUrl(nextStatus);
-            if (settingsUrl) {
-              const opened = await openComputerPermissionSettings(settingsUrl, 'toggle');
-              if (opened) {
-                toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
-              } else {
-                computerEnableIntentRef.current = false;
-                setComputerPermissionPending(false);
-                resetComputerPermissionFlow();
-                lastOpenedComputerPermissionUrlRef.current = null;
-                toast.error(t('settings.computerUse.directControl.toast.permissionFailed'));
-              }
-            } else {
-              toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
-            }
+            toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
             return;
           }
           setComputerPermissionPending(false);
           resetComputerPermissionFlow();
-          lastOpenedComputerPermissionUrlRef.current = null;
+        }
+        if (next && isComputerPermissionReady(nextStatus)) {
+          // The early status card may have been shown while a fresh check was
+          // in flight; close it when that check proves permissions are already
+          // complete.
+          setComputerPermissionPending(false);
+          resetComputerPermissionFlow();
         }
 
+        if (!isCurrentFlow()) return;
         await persistComputerEnabled(next);
         if (!next) {
           computerEnableIntentRef.current = false;
           setComputerPermissionPending(false);
           resetComputerPermissionFlow();
-          lastOpenedComputerPermissionUrlRef.current = null;
         }
         if (nextStatus !== computerStatus) {
           setComputerStatus(nextStatus);
         }
       } catch (err) {
+        if (!isCurrentFlow()) return;
         log.warn('setProjectEnabled(computer) failed', err);
         computerEnableIntentRef.current = false;
         setComputerPermissionPending(false);
         resetComputerPermissionFlow();
-        lastOpenedComputerPermissionUrlRef.current = null;
+        cancelNativeComputerPermissionGrant();
         toast.error(
           next && !nextStatus?.installed
             ? t('settings.computerUse.directControl.toast.installFailed')
@@ -998,14 +947,16 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             : t('settings.computerUse.directControl.toast.toggleFailed'),
         );
       } finally {
-        setComputerInstallPending(false);
-        setComputerTogglePending(false);
+        computerTogglePendingRef.current = false;
+        if (computerUseSectionMountedRef.current) {
+          setComputerInstallPending(false);
+          setComputerTogglePending(false);
+        }
       }
     },
     [
       computerStatus,
-      confirm,
-      openComputerPermissionSettings,
+      cancelNativeComputerPermissionGrant,
       persistComputerEnabled,
       refreshComputerPermissionStatus,
       requestComputerPermissionGrant,
@@ -1036,32 +987,46 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
 
   const handleOpenComputerPermission = useCallback(
     async (url: string, granted: boolean) => {
+      if (computerPermissionPending) return;
+      const flowSeq = computerPermissionFlowSeqRef.current;
+      // Open the exact System Settings pane before starting native onboarding.
+      // The old order waited for the paused grant flow first, so the user saw
+      // no feedback while the guide was preparing and the pane could open late.
+      const opened = await openComputerPermissionSettings(
+        url,
+        granted ? 'badge-granted' : 'badge-missing',
+      );
+      if (
+        !computerUseSectionMountedRef.current
+        || computerPermissionFlowSeqRef.current !== flowSeq
+      ) {
+        return;
+      }
+      if (!opened) return;
       if (granted) {
-        await openComputerPermissionSettings(url, 'badge-granted');
         return;
       }
 
       setComputerPermissionPending(true);
-      const flowSeq = computerPermissionFlowSeqRef.current;
+      const initialStatus = computerStatus;
       try {
-        const preflightStatus = await refreshComputerPermissionStatus('badge-preflight');
-        if (computerPermissionFlowSeqRef.current !== flowSeq) return;
-        if (isComputerPermissionReady(preflightStatus)) {
+        // Page entry/Recheck already supplied the source-of-truth snapshot.
+        // Pass it straight into the guide so its first frame chooses the
+        // current missing step without another probe or a driver restart.
+        if (isComputerPermissionReady(initialStatus)) {
           setComputerPermissionPending(false);
           resetComputerPermissionFlow();
-          lastOpenedComputerPermissionUrlRef.current = null;
           if (computerEnableIntentRef.current || computerEnabled) {
             await persistComputerEnabled(true);
           }
           return;
         }
 
-        const status = await requestComputerPermissionGrant('badge');
+        const status = await requestComputerPermissionGrant('badge', url);
         if (computerPermissionFlowSeqRef.current !== flowSeq) return;
         if (isComputerPermissionReady(status)) {
           setComputerPermissionPending(false);
           resetComputerPermissionFlow();
-          lastOpenedComputerPermissionUrlRef.current = null;
           if (computerEnableIntentRef.current || computerEnabled) {
             await persistComputerEnabled(true);
           }
@@ -1069,71 +1034,91 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         }
 
         log.debug('computer permission grant still pending after badge action', getComputerPermissionLogSummary(status));
-        const settingsUrl = getMissingComputerPermissionSettingsUrl(status) ?? url;
-        const opened = await openComputerPermissionSettings(settingsUrl, 'badge-missing');
-        if (opened) {
-          toast.warning(t('settings.computerUse.directControl.toast.permissionSettingsOpened'));
-        }
-        setComputerPermissionPending(false);
-        resetComputerPermissionFlow();
-        lastOpenedComputerPermissionUrlRef.current = null;
+        // The System Settings pane is already open. Keep the guide alive and
+        // let its native observer complete the remaining step.
+        toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
       } catch (err) {
+        if (
+          !computerUseSectionMountedRef.current
+          || computerPermissionFlowSeqRef.current !== flowSeq
+        ) {
+          return;
+        }
         log.warn('computer permission grant failed', err);
         setComputerPermissionPending(false);
         resetComputerPermissionFlow();
-        lastOpenedComputerPermissionUrlRef.current = null;
+        cancelNativeComputerPermissionGrant();
         toast.error(t('settings.computerUse.directControl.toast.permissionFailed'));
       }
     },
     [
       computerEnabled,
+      computerStatus,
+      computerPermissionPending,
+      cancelNativeComputerPermissionGrant,
       openComputerPermissionSettings,
       persistComputerEnabled,
-      refreshComputerPermissionStatus,
       requestComputerPermissionGrant,
       resetComputerPermissionFlow,
       t,
     ],
   );
 
-  const handleRefreshComputerStatus = useCallback(async () => {
+  // Recheck restarts the daemon so it picks up revoked permissions that a
+  // running daemon cannot detect (AX revoke is invisible to the live process;
+  // Screen Recording removal may not kill the daemon on all macOS versions).
+  // fresh=true is required: passiveOnly kept the old daemon alive and its
+  // stale TCC preflight kept reporting "granted" even after the user removed
+  // CuaDriver from Screen Recording.
+  const handleRecheckComputerStatus = useCallback(async () => {
+    setComputerPermissionRecheckPending(true);
     try {
-      const status = await refreshComputerPermissionStatus('recheck', { fresh: true });
-      if (status.installed && isComputerPermissionReady(status)) {
-        lastOpenedComputerPermissionUrlRef.current = null;
-        if (computerEnableIntentRef.current || computerEnabled) {
-          await persistComputerEnabled(true);
-        }
-      } else {
+      const status = await refreshComputerPermissionStatus('recheck', {
+        fresh: true,
+        bypassCache: true,
+      });
+      if (!status.installed || !isComputerPermissionReady(status)) {
         log.debug('computer permission recheck found missing permissions', getComputerPermissionLogSummary(status));
       }
-      setComputerPermissionPending(false);
     } catch (err) {
       log.warn('computer.status refresh failed', err);
-      setComputerPermissionPending(false);
-      lastOpenedComputerPermissionUrlRef.current = null;
       toast.error(t('settings.computerUse.directControl.toast.toggleFailed'));
+    } finally {
+      setComputerPermissionRecheckPending(false);
     }
-  }, [computerEnabled, persistComputerEnabled, refreshComputerPermissionStatus, t]);
+  }, [refreshComputerPermissionStatus, t]);
 
-  // First render: blank until all reads land (no flash, rule 7).
-  if (
+  const automationViewLoading =
     browserEnabled === null
     || computerEnabled === null
     || availability === null
-    || computerStatus === null
-  ) {
+    || computerStatus === null;
+
+  // First render: blank until all reads land (no flash, rule 7).
+  if (automationViewLoading) {
     return null;
   }
 
-  // 开关在「切换 / 安装 / 等待系统授权」的整个流程中置灰,视觉位置跟随用户意图
-  // (开启中的等待期显示为开、避免"点了却弹回去"的错觉),流程结束才恢复可交互。
-  const computerSwitchChecked = computerTogglePending
-    ? computerEnableIntentRef.current
-    : computerInstallPending || computerPermissionPending
-      ? computerEnableIntentRef.current || computerEnabled
-      : computerEnabled;
-  const computerSwitchDisabled = computerTogglePending || computerInstallPending || computerPermissionPending;
+  const computerAccessibilityGranted = isComputerAccessibilityPermissionReady(computerStatus);
+  const computerScreenRecordingGranted = isComputerScreenRecordingPermissionReady(computerStatus);
+  const computerAccessibilityPending = computerPermissionPending && !computerAccessibilityGranted;
+  const computerScreenRecordingPending =
+    computerPermissionPending &&
+    computerAccessibilityGranted &&
+    !computerScreenRecordingGranted;
+  const computerReady =
+    computerStatus.installed && isComputerPermissionReady(computerStatus);
+  // Persisted opt-in and runtime readiness are separate states. Keeping an
+  // unavailable enabled configuration checked lets the user turn it off
+  // instead of forcing the only interaction back into onboarding.
+  const computerSwitchChecked = getComputerPermissionSwitchChecked(
+    computerEnabled,
+    computerTogglePending,
+    computerEnableIntentRef.current,
+  );
+  const computerSwitchDisabled =
+    computerTogglePending || computerInstallPending || computerPermissionPending;
+
   const configuredDefaultAndroidDevice =
     androidConfig?.value.defaultDeviceSerial
     ?? androidStatus?.configured_default_device_serial
@@ -1182,6 +1167,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       </div>
 
       <div
+        id="automation-browser"
         className={cn(
           'flex flex-col overflow-hidden rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
@@ -1269,6 +1255,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />
 
       <div
+        id="automation-computer"
         className={cn(
           'flex flex-col overflow-hidden rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
@@ -1301,154 +1288,210 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
             aria-label={t('settings.computerUse.directControl.toggleAria')}
           />
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-          <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-            {computerInstallPending
-              ? t('settings.computerUse.directControl.installing')
-              : computerPermissionPending
-                ? t('settings.computerUse.directControl.authorizing')
-                : computerStatus.installed
-                  ? t('settings.computerUse.directControl.detected', {
-                      version: computerStatus.version ?? 'cua-driver',
-                      path: computerStatus.executablePath ?? 'cua-driver',
-                      daemon: computerStatus.daemonRunning
-                        ? t('settings.computerUse.directControl.daemonRunning')
-                        : t('settings.computerUse.directControl.daemonStopped'),
-                    })
-                  : t('settings.computerUse.directControl.notDetected')}
-          </p>
-          <button type="button" onClick={handleOpenCuaProject} className={ACTION_BUTTON_CLASS}>
-            <ExternalLink size={12} className="shrink-0" />
-            {t('settings.computerUse.directControl.openSourceProject')}
-          </button>
-        </div>
-        {/* 安静的更新入口:仅当检查到新版本时出现,一行小字 + 一个按钮,无任何主动提醒。
-            更新中把文案换成下载进度(main 侧采样广播),并在行底部铺一条 2px 进度条。 */}
-        {computerStatus.installed && driverUpdate?.latestVersion ? (
-          <div className="relative border-t border-[var(--settings-theme-card-border)]">
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-[14px]">
-              <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                {(() => {
-                  if (!driverUpdatePending) {
-                    return t('settings.computerUse.directControl.update.available', {
-                      version: driverUpdate.latestVersion,
-                    });
-                  }
-                  if (driverUpdateProgress?.phase === 'downloading' && driverUpdateProgress.downloadedBytes !== null) {
-                    const mb = (driverUpdateProgress.downloadedBytes / 1024 / 1024).toFixed(1);
-                    if (driverUpdateProgress.totalBytes) {
-                      const totalMb = (driverUpdateProgress.totalBytes / 1024 / 1024).toFixed(1);
-                      const percent = Math.min(
-                        100,
-                        Math.round((driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) * 100),
-                      );
-                      return t('settings.computerUse.directControl.update.downloadingPercent', {
-                        percent,
-                        downloaded: mb,
-                        total: totalMb,
-                      });
-                    }
-                    return t('settings.computerUse.directControl.update.downloadingBytes', { downloaded: mb });
-                  }
-                  if (driverUpdateProgress?.phase === 'installing') {
-                    return t('settings.computerUse.directControl.update.installing');
-                  }
-                  return t('settings.computerUse.directControl.update.updating');
-                })()}
+        {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
+        {window.electronAPI.platform === 'darwin' ? (
+          <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-13 font-medium text-[var(--settings-section-title)]">
+                {t('settings.computerUse.directControl.permissions.title')}
               </p>
-              <button
-                type="button"
-                onClick={() => void handleUpdateDriver()}
-                disabled={driverUpdatePending || computerInstallPending}
-                className={ACTION_BUTTON_CLASS}
-              >
-                <Download size={12} className="shrink-0" />
-                {driverUpdatePending
-                  ? t('settings.computerUse.directControl.update.updating')
-                  : t('settings.computerUse.directControl.update.action')}
-              </button>
+              {computerInstallPending || computerPermissionPending ? (
+                <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
+                  <Spinner size={12} />
+                  {computerInstallPending
+                    ? t('settings.computerUse.directControl.installing')
+                    : t('settings.computerUse.directControl.authorizing')}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleRecheckComputerStatus()}
+                  disabled={computerPermissionRecheckPending}
+                  className={cn(ACTION_BUTTON_CLASS, 'h-6 px-2.5')}
+                >
+                  {computerPermissionRecheckPending ? (
+                    <Spinner size={12} />
+                  ) : (
+                    <RefreshCw size={12} className="shrink-0" />
+                  )}
+                  {t('settings.computerUse.directControl.permissions.recheck')}
+                </button>
+              )}
             </div>
-            {driverUpdatePending &&
-            driverUpdateProgress?.phase === 'downloading' &&
-            driverUpdateProgress.downloadedBytes !== null &&
-            driverUpdateProgress.totalBytes ? (
-              <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
-                <div
-                  className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) * 100,
-                    )}%`,
-                  }}
-                />
-              </div>
-            ) : null}
+
+            <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+              <ComputerPermissionRow
+                label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
+                iconSrc={accessibilityPermissionIcon}
+                granted={computerAccessibilityGranted}
+                pending={computerAccessibilityPending}
+                actionLabel={
+                  computerAccessibilityPending
+                    ? t('settings.computerUse.directControl.permissionGuide.waiting')
+                    : computerAccessibilityGranted
+                      ? t('settings.computerUse.directControl.permissions.granted')
+                      : t('settings.computerUse.directControl.permissions.grant')
+                }
+                onAction={() =>
+                  void (
+                    computerStatus.installed
+                      ? handleOpenComputerPermission(
+                          MAC_ACCESSIBILITY_SETTINGS_URL,
+                          computerAccessibilityGranted,
+                        )
+                      : handleToggleComputer(true)
+                  )
+                }
+              />
+              <ComputerPermissionRow
+                label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
+                iconSrc={screenRecordingPermissionIcon}
+                granted={computerScreenRecordingGranted}
+                pending={computerScreenRecordingPending}
+                actionLabel={
+                  computerScreenRecordingPending
+                    ? t('settings.computerUse.directControl.permissionGuide.waiting')
+                    : computerScreenRecordingGranted
+                      ? t('settings.computerUse.directControl.permissions.granted')
+                      : t('settings.computerUse.directControl.permissions.grant')
+                }
+                onAction={() =>
+                  void (
+                    computerStatus.installed
+                      ? handleOpenComputerPermission(
+                          MAC_SCREEN_RECORDING_SETTINGS_URL,
+                          computerScreenRecordingGranted,
+                        )
+                      : handleToggleComputer(true)
+                  )
+                }
+              />
+            </div>
           </div>
         ) : null}
-        {computerStatus.installed && computerStatus.permissionState?.platform === 'macos' ? (
-          <div className="flex flex-wrap items-center gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-            <ComputerPermissionBadge
-              label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
-              granted={isComputerAccessibilityPermissionReady(computerStatus)}
-              onClick={() =>
-                void handleOpenComputerPermission(
-                  MAC_ACCESSIBILITY_SETTINGS_URL,
-                  isComputerAccessibilityPermissionReady(computerStatus),
-                )
-              }
-              grantLabel={getComputerAccessibilityPermissionLabel(computerStatus, t)}
-              grantedLabel={t('settings.computerUse.directControl.permissions.granted')}
-            />
-            <ComputerPermissionBadge
-              label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
-              granted={isComputerScreenRecordingPermissionReady(computerStatus)}
-              onClick={() =>
-                void handleOpenComputerPermission(
-                  MAC_SCREEN_RECORDING_SETTINGS_URL,
-                  isComputerScreenRecordingPermissionReady(computerStatus),
-                )
-              }
-              grantLabel={getComputerScreenRecordingPermissionLabel(computerStatus, t)}
-              grantedLabel={t('settings.computerUse.directControl.permissions.granted')}
-            />
+
+        <div className="relative border-t border-[var(--settings-theme-card-border)] px-4 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-11 text-[var(--settings-section-desc)]">
+                {computerStatus.installed
+                  ? t('settings.computerUse.directControl.status.version', {
+                      version: computerStatus.version ?? 'cua-driver',
+                    })
+                  : t('settings.computerUse.directControl.notDetected')}
+              </span>
+              {window.electronAPI.platform !== 'darwin' && computerInstallPending ? (
+                <>
+                  <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
+                    ·
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-11 text-[var(--settings-section-desc)]">
+                    <Spinner size={12} />
+                    {t('settings.computerUse.directControl.installing')}
+                  </span>
+                </>
+              ) : null}
+              {computerStatus.installed && driverUpdate?.latestVersion ? (
+                <>
+                  <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
+                    ·
+                  </span>
+                  <span className="text-11 text-[var(--settings-section-desc)]">
+                    {driverUpdatePending
+                      ? driverUpdateProgress?.phase === 'installing'
+                        ? t('settings.computerUse.directControl.update.installing')
+                        : t('settings.computerUse.directControl.update.updating')
+                      : t('settings.computerUse.directControl.update.available', {
+                          version: driverUpdate.latestVersion,
+                        })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleUpdateDriver()}
+                    disabled={driverUpdatePending || computerInstallPending}
+                    className={cn(ACTION_BUTTON_CLASS, 'h-6 px-2.5')}
+                  >
+                    <Download size={12} className="shrink-0" />
+                    {driverUpdatePending
+                      ? t('settings.computerUse.directControl.update.updating')
+                      : t('settings.computerUse.directControl.update.action')}
+                  </button>
+                </>
+              ) : null}
+            </div>
             <button
               type="button"
-              onClick={() => void handleRefreshComputerStatus()}
-              className={ACTION_BUTTON_CLASS}
+              onClick={() => setComputerDetailsOpen((open) => !open)}
+              aria-expanded={computerDetailsOpen}
+              className={cn(
+                'inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5',
+                'text-11 font-medium text-[var(--settings-section-desc)]',
+                'transition-colors hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              )}
             >
-              {t('settings.computerUse.directControl.permissions.recheck')}
+              {computerDetailsOpen
+                ? t('settings.computerUse.directControl.permissions.hideDetails')
+                : t('settings.computerUse.directControl.permissions.moreDetails')}
+              <ChevronDown
+                size={12}
+                className={cn(
+                  'transition-transform duration-200',
+                  computerDetailsOpen && 'rotate-180',
+                )}
+              />
             </button>
+          </div>
+          {driverUpdatePending &&
+          driverUpdateProgress?.phase === 'downloading' &&
+          driverUpdateProgress.downloadedBytes !== null &&
+          driverUpdateProgress.totalBytes ? (
+            <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
+              <div
+                className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) * 100,
+                  )}%`,
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        {computerDetailsOpen ? (
+          <div className="flex flex-col gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3.5">
+            <div className="flex flex-col gap-2">
+              <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                {t('settings.computerUse.directControl.driverInfo')}
+              </p>
+              {window.electronAPI.platform === 'darwin' ? (
+                <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                  {computerReady
+                    ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
+                    : t('settings.computerUse.directControl.permissions.macosHint')}
+                </p>
+              ) : null}
+            </div>
+            <div>
+              <button
+                type="button"
+                onClick={handleOpenCuaProject}
+                className={ACTION_BUTTON_CLASS}
+              >
+                <ExternalLink size={12} className="shrink-0" />
+                {t('settings.computerUse.directControl.openSourceProject')}
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
 
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.computerUse.directControl.driverInfo')}
-      </p>
-      {computerStatus.installed && computerStatus.permissionState?.platform === 'macos' ? (
-        <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {isComputerPermissionReady(computerStatus)
-            ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
-            : t('settings.computerUse.directControl.permissions.macosHint')}
-        </p>
-      ) : null}
-      {computerStatus.installed && computerStatus.permissionState?.platform === 'windows' ? (
-        <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.computerUse.directControl.permissions.windowsHint')}
-        </p>
-      ) : null}
-      {computerStatus.installed && computerStatus.permissionState?.platform === 'linux' ? (
-        <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.computerUse.directControl.permissions.linuxHint')}
-        </p>
-      ) : null}
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.computerUse.directControl.toggleHint')}
-      </p>
       <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />
 
       <div
+        id="automation-android"
         className={cn(
           'flex flex-col overflow-hidden rounded-xl',
           'bg-[var(--settings-theme-card-bg)]',
@@ -1643,13 +1686,6 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
         {t('settings.computerUse.android.toggleHint')}
       </p>
-
-      <ComputerPermissionGuideDialog
-        open={computerPermissionPending}
-        status={computerStatus}
-        iconDataUrl={driverIconDataUrl}
-        onCancel={handleCancelPermissionGuide}
-      />
     </div>
   );
 }

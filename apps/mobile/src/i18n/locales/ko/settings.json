@@ -84,9 +84,16 @@
   "legal": {
     "sectionTitle": "법적 정보",
     "privacyPolicy": "개인정보 처리방침",
+    "userAgreement": "이용약관",
     "view": "보기",
     "openPrivacyPolicy": "개인정보 처리방침 열기",
-    "appFilingNumber": "앱 등록 번호"
+    "openUserAgreement": "이용약관 열기",
+    "appFilingNumber": "앱 등록 번호",
+    "analytics": "사용 통계",
+    "analyticsHint": "Cindy의 실행 및 지속 사용 현황을 파악하는 데 사용합니다. 기기 모델, OS 버전, 앱 버전, 기기 식별자 등 기기 및 사용 환경 정보를 전송하며 로그인 후에는 계정 ID도 포함됩니다. 대화 내용, 파일, 프롬프트는 전혀 포함하지 않습니다.",
+    "analyticsSaveFailed": "설정을 저장하지 못했습니다. 다시 시작하면 이전 값으로 되돌아갈 수 있습니다.",
+    "analyticsReset": "기본값으로 되돌리기",
+    "analyticsResetAction": "되돌리기"
   },
   "account": {
     "logoutHint": "로그아웃하면 이 휴대폰의 로그인 상태와 로컬 원격 미러만 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",

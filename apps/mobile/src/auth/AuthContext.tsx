@@ -59,7 +59,11 @@ import {
   getSecureItem,
   setSecureItem,
 } from '@/auth/secureStorage';
-import { clearTapdbUser, setTapdbUser } from '@/analytics/mobileTapdb';
+import { clearTapdbUser, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
+import {
+  clearAnalyticsConsent,
+  migrateExistingLoginAsConsented,
+} from '@/analytics/analyticsConsentStore';
 import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications';
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
@@ -578,6 +582,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch {
           // transient:保留降级会话,由下方自愈 effect 自动补刷 token。
         }
+        // 使用统计同意闸的一次性存量迁移。放在这里而不是下面的 tapdb effect 里,
+        // 有两个原因:
+        //  1. 判定必须等 refresh 结束——只看 effect 首次触发时的 user,会漏掉
+        //     「有 refresh token 但本地 profile 缺失、靠 refresh 才拿回用户」的
+        //     存量用户,他们的迁移窗口会被提前关死。
+        //  2. 必须 await。迁移写 AsyncStorage 是异步的,而 effect 里的
+        //     setTapdbUser() 是 fire-and-forget:两者并发时后者几乎必然读到
+        //     consent:false 拿到 not_consented,且此后不再重试,整次启动都不上报。
+        // 迁移只认冷启动恢复出来的登录态:登录页的协议门豁免企业 SSO,那些用户
+        // 从没点过「同意」,不能被这里推定。
+        if (!cancelled && userRef.current) {
+          await migrateExistingLoginAsConsented().catch(() => undefined);
+        }
       } finally {
         if (!cancelled) {
           setIsBusy(false);
@@ -645,6 +662,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [accessToken, applyUser, initialized, refresh, user]);
 
+  // 存量同意迁移已在冷启动流程里 await 完成(见上方 initialize),这里只负责绑定
+  // 账号标识 —— initialized 变 true 时迁移必然已经落盘。
   useEffect(() => {
     if (!initialized) return;
     if (user?.id) void setTapdbUser(user.id);
@@ -984,6 +1003,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
     await clearCanaryChannel().catch(() => undefined);
+    // 使用统计的同意记录也随登出清除。手机端没有游客模式:登出后 NavigationGate 会
+    // 把所有路由重定向到 /login,设置页里的统计开关从此不可达。保留同意会让用户处在
+    // 「还在被统计、却再也关不掉」的状态;清掉之后,下次登录会重新过登录页的协议门。
+    await stopMobileTapdbReporting().catch(() => undefined);
+    await clearAnalyticsConsent().catch(() => undefined);
     await serializeRefreshTokenMutation(() =>
       deleteSecureItem(REFRESH_TOKEN_KEY).catch(() => undefined),
     );

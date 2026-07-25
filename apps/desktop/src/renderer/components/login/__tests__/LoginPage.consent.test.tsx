@@ -70,13 +70,21 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
 
 const openExternal = vi.fn(async () => ({ success: true }));
 const authEnterLocal = vi.fn(async () => ({ mode: 'local' }));
+// 协议门放行时会把「已同意」落到 main(TapDB 采集的前置条件,见
+// main/analytics-settings-store.ts)。它是 fire-and-forget,不参与登录派发时序。
+const acceptPrivacyConsent = vi.fn(async () => ({
+  privacyConsentAccepted: true,
+  analyticsEnabled: true,
+  allowed: true,
+}));
 
 beforeEach(() => {
   openExternal.mockClear();
   authEnterLocal.mockClear();
+  acceptPrivacyConsent.mockClear();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin', openExternal, authEnterLocal },
+    value: { platform: 'darwin', openExternal, authEnterLocal, acceptPrivacyConsent },
   });
 });
 

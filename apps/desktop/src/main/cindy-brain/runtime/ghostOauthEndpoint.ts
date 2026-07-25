@@ -69,9 +69,22 @@ export async function handleGhostOauthRequest(args: {
   oauthSecrets: ReadonlyMap<string, GhostOauthDecl>;
   manager: GhostOauthEndpointManager;
   ghostId: string;
+  /** Successful semantic persistence only; never receives credential values. */
+  onChanged?: (secretKey: string) => void;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostOauthRequestOutcome> {
   const { method, pathname, readBodyText, oauthSecrets, manager, ghostId, log } = args;
+  const notifyChanged = (secretKey: string): void => {
+    try {
+      args.onChanged?.(secretKey);
+    } catch (err) {
+      log?.warn('ghost oauth onChanged 通知失败(不影响入库结果)', {
+        ghostId,
+        secretKey,
+        err: String(err),
+      });
+    }
+  };
 
   if (pathname === '/oauth') {
     if (method !== 'GET') return { status: 405 };
@@ -139,9 +152,11 @@ export async function handleGhostOauthRequest(args: {
         clientSecret = trimmed.length > 0 ? trimmed : undefined;
       }
       try {
-        return manager.setClientConfig(ghostId, secretKey, clientId, clientSecret)
-          ? { status: 204 }
-          : { status: 500 };
+        if (!manager.setClientConfig(ghostId, secretKey, clientId, clientSecret)) {
+          return { status: 500 };
+        }
+        notifyChanged(secretKey);
+        return { status: 204 };
       } catch (err) {
         log?.warn('ghost oauth client 凭证入库意外失败', { ghostId, secretKey, err: String(err) });
         return { status: 500 };
@@ -150,6 +165,7 @@ export async function handleGhostOauthRequest(args: {
     if (method === 'DELETE') {
       try {
         manager.clearClientConfig(ghostId, secretKey);
+        notifyChanged(secretKey);
         return { status: 204 };
       } catch (err) {
         log?.warn('ghost oauth client 凭证清除意外失败', { ghostId, secretKey, err: String(err) });
@@ -237,6 +253,7 @@ export async function handleGhostOauthRequest(args: {
     if (!accountId) return { status: 404 };
     try {
       manager.disconnectAccount(ghostId, secretKey, accountId);
+      notifyChanged(secretKey);
       return { status: 204 };
     } catch (err) {
       log?.warn('ghost oauth 断开账号意外失败', { ghostId, secretKey, err: String(err) });
@@ -251,7 +268,9 @@ export async function handleGhostOauthRequest(args: {
     const accountId = parsed.body.accountId;
     if (typeof accountId !== 'string' || accountId.length === 0) return { status: 400 };
     try {
-      return manager.setDefaultAccount(ghostId, secretKey, accountId) ? { status: 204 } : { status: 404 };
+      if (!manager.setDefaultAccount(ghostId, secretKey, accountId)) return { status: 404 };
+      notifyChanged(secretKey);
+      return { status: 204 };
     } catch (err) {
       log?.warn('ghost oauth 设默认账号意外失败', { ghostId, secretKey, err: String(err) });
       return { status: 500 };

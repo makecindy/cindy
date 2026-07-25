@@ -127,8 +127,23 @@ export function LoginPage() {
     stamp: ConsentStamp;
   } | null>(null);
 
+  /* 把「用户明示同意《隐私政策》」这个事实落到 main。
+     它是 TapDB 采集的前置条件(见 main/analytics-settings-store.ts):没有这条
+     记录,统计 SDK 一个字节都不会发。写在**放行时刻**而不是勾 radio 时刻——
+     勾了又取消不算同意,同意并继续使用才算。幂等,失败不阻断登录(闸保持关闭)。 */
+  const persistPrivacyConsent = () => {
+    // 记录同意**绝不能挡住登录链路**:preload 面缺失、IPC 未就绪都可能让这里抛。
+    // 失败时闸保持关闭(= 不采集),这是安全的一侧。
+    try {
+      void window.electronAPI.acceptPrivacyConsent().catch(() => undefined);
+    } catch {
+      // no-op
+    }
+  };
+
   const requireConsent = (action: () => void) => {
     if (consentAccepted) {
+      persistPrivacyConsent();
       action();
       return;
     }
@@ -142,6 +157,8 @@ export function LoginPage() {
     // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
     setConsentAccepted(true);
     setConsentDialogOpen(false);
+    // 点了弹窗上的「同意」即为明示同意,与下面 pending 是否还能续接无关。
+    persistPrivacyConsent();
     const pending = pendingConsentAction.current;
     pendingConsentAction.current = null;
     if (!pending) return;

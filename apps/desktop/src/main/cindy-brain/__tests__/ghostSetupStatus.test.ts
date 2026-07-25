@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost';
 import {
   evaluateGhostSetup,
+  evaluateGhostSetupAssessment,
+  GhostSetupAssessmentError,
   handleGhostSetupStatusRequest,
   type GhostSetupProbes,
 } from '../ghostSetupStatus';
@@ -52,7 +54,9 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
       tools: [{ name: 'deploy', description: '部署' }],
       network: {
         hosts: ['workers.example.com'],
-        secrets: [{ key: 'pages_token', label: 'Pages Token', source: 'login-email', inject: INJECT }],
+        secrets: [
+          { key: 'pages_token', label: 'Pages Token', source: 'login-email', inject: INJECT },
+        ],
       },
     });
     expect(evaluateGhostSetup(m, probes()).ready).toBe(true);
@@ -114,6 +118,8 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
             key: 'mail_authorization_code',
             label: '邮箱授权码',
             methods: ['mail/action'],
+            hint: '请填写邮箱服务生成的授权码',
+            url: 'https://mail.example/settings',
           },
         ],
       },
@@ -127,6 +133,27 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
         probes({ secretSaved: (key) => key === 'mail_authorization_code' }),
       ),
     ).toEqual({ ready: true, missingGroups: [], reauth: [] });
+    expect(
+      evaluateGhostSetupAssessment(m, probes(), { revision: 1 }).groups[0]?.items[0],
+    ).toMatchObject({
+      ref: 'secret:mail_authorization_code',
+      kind: 'secret',
+      description: '请填写邮箱服务生成的授权码',
+      actions: [
+        {
+          kind: 'inline_form',
+          form: {
+            fields: [
+              {
+                id: 'value',
+                type: 'secret',
+                externalLink: { url: 'https://mail.example/settings' },
+              },
+            ],
+          },
+        },
+      ],
+    });
   });
 
   it('连接声明:零连接未就绪,≥1 条就绪(GitLab 形态)', () => {
@@ -135,7 +162,13 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
       tools: [{ name: 'mr', description: '查 MR' }],
       settingsHtml: 'settings.html',
       network: {
-        connections: [{ key: 'gitlab_conn', label: 'GitLab 实例', inject: { header: 'PRIVATE-TOKEN', format: '{value}' } }],
+        connections: [
+          {
+            key: 'gitlab_conn',
+            label: 'GitLab 实例',
+            inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+          },
+        ],
       },
     });
     expect(evaluateGhostSetup(m, probes()).ready).toBe(false);
@@ -296,6 +329,248 @@ describe('evaluateGhostSetup · requires: [] 显式 opt-out', () => {
     });
     // 同一份声明去掉 setup 时启发式会拦(对照组),opt-out 后放行。
     expect(evaluateGhostSetup(m, probes())).toEqual({ ready: true, missingGroups: [], reauth: [] });
+  });
+});
+
+describe('evaluateGhostSetupAssessment · Setup Runtime 完整判定', () => {
+  it('保留 any-of 关系、全部条目状态、Action 和 Host revision', () => {
+    const m = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'search', description: '搜' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.search.example', 'accounts.google.example'],
+        secrets: [
+          {
+            key: 'key_a',
+            label: 'Key A',
+            hint: '从控制台复制 API Key',
+            url: 'https://console.example.com/keys',
+            inject: INJECT,
+          },
+          {
+            key: 'google',
+            label: 'Google',
+            source: 'oauth',
+            inject: INJECT,
+            oauth: {
+              authorizeUrl: 'https://accounts.google.example/auth',
+              tokenUrl: 'https://accounts.google.example/token',
+            },
+          },
+        ],
+      },
+      setup: { requires: [{ anyOf: ['secret:key_a', 'secret:google'] }] },
+    });
+    const assessment = evaluateGhostSetupAssessment(
+      m,
+      probes({
+        oauthStatus: () => ({ clientConfigured: true, connected: 0, expired: 1 }),
+      }),
+      { revision: 7 },
+    );
+    expect(assessment).toEqual({
+      state: 'required',
+      revision: 7,
+      groups: [
+        {
+          id: 'manifest:1',
+          mode: 'any_of',
+          items: [
+            {
+              ref: 'secret:key_a',
+              kind: 'secret',
+              label: 'Key A',
+              description: '从控制台复制 API Key',
+              state: 'missing',
+              actions: [
+                {
+                  id: expect.stringMatching(/^inline_form:[a-f0-9]{24}$/),
+                  kind: 'inline_form',
+                  form: {
+                    fields: [
+                      {
+                        id: 'value',
+                        type: 'secret',
+                        label: 'Key A',
+                        description: '从控制台复制 API Key',
+                        externalLink: {
+                          url: 'https://console.example.com/keys',
+                        },
+                        required: true,
+                        maxLength: 4096,
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              ref: 'secret:google',
+              kind: 'oauth',
+              label: 'Google',
+              state: 'expired',
+              actions: [
+                {
+                  id: 'oauth_connect:secret:google',
+                  kind: 'oauth_connect',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const inlineAction = assessment.groups[0].items[0].actions[0];
+    expect(inlineAction.id).not.toContain('key_a');
+  });
+
+  it('可合并 Host client_config 虚拟组，不要求 manifest 伪造 Secret', () => {
+    const m = manifest({ slots: ['tool'], tools: [{ name: 'draw', description: '画' }] });
+    const assessment = evaluateGhostSetupAssessment(m, probes(), {
+      revision: 3,
+      additionalGroups: [
+        {
+          id: 'host:image-provider',
+          mode: 'any_of',
+          items: [
+            {
+              ref: 'client_config:image-provider',
+              kind: 'client_config',
+              label: '图片模型',
+              state: 'missing',
+              actions: [
+                {
+                  id: 'open_client_settings:client_config:image-provider',
+                  kind: 'open_client_settings',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(assessment.state).toBe('required');
+    expect(assessment.groups[0]?.items[0]?.kind).toBe('client_config');
+  });
+
+  it('严格模式遇到 manifest 漂移时 fail-closed，旧投影仍兼容 fail-open', () => {
+    const drifted = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'work', description: '干活' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{ key: 'declared', label: 'Declared', inject: INJECT }],
+      },
+      setup: { requires: [{ anyOf: ['secret:declared'] }] },
+    });
+    drifted.setup = {
+      requires: [{ anyOf: [{ kind: 'secret', key: 'removed' }] }],
+    };
+    expect(() => evaluateGhostSetupAssessment(drifted, probes(), { revision: 0 })).toThrow(
+      GhostSetupAssessmentError,
+    );
+    expect(evaluateGhostSetup(drifted, probes()).ready).toBe(true);
+  });
+
+  it('严格模式统一拒绝悬空 connection、缺 settingsHtml 的 kv 与 login-email requirement', () => {
+    const connectionDrift = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'work', description: '干活' }],
+      settingsHtml: 'settings.html',
+      network: {
+        connections: [
+          {
+            key: 'declared',
+            label: 'Declared',
+            inject: { header: 'Authorization', format: '{value}' },
+          },
+        ],
+      },
+      setup: { requires: [{ anyOf: ['connection:declared'] }] },
+    });
+    connectionDrift.setup = {
+      requires: [{ anyOf: [{ kind: 'connection', key: 'removed' }] }],
+    };
+    expect(() => evaluateGhostSetupAssessment(connectionDrift, probes(), { revision: 1 })).toThrow(
+      GhostSetupAssessmentError,
+    );
+
+    const kvDrift = manifest({
+      slots: ['tool'],
+      tools: [{ name: 'work', description: '干活' }],
+      settingsHtml: 'settings.html',
+      setup: { requires: [{ anyOf: [{ kv: 'mode', label: '模式' }] }] },
+    });
+    kvDrift.settingsHtml = undefined;
+    expect(() => evaluateGhostSetupAssessment(kvDrift, probes(), { revision: 1 })).toThrow(
+      GhostSetupAssessmentError,
+    );
+
+    const loginEmailDrift = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'work', description: '干活' }],
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [
+          {
+            key: 'identity',
+            label: 'Identity',
+            source: 'login-email',
+            inject: INJECT,
+          },
+        ],
+      },
+    });
+    loginEmailDrift.setup = {
+      requires: [{ anyOf: [{ kind: 'secret', key: 'identity' }] }],
+    };
+    expect(() => evaluateGhostSetupAssessment(loginEmailDrift, probes(), { revision: 1 })).toThrow(
+      GhostSetupAssessmentError,
+    );
+  });
+
+  it('OAuth client 未配置时先打开插件设置，client 可用后才允许授权', () => {
+    const m = manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'gmail', description: '邮件' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['accounts.google.example'],
+        secrets: [
+          {
+            key: 'google',
+            label: 'Google',
+            source: 'oauth',
+            inject: INJECT,
+            oauth: {
+              authorizeUrl: 'https://accounts.google.example/auth',
+              tokenUrl: 'https://accounts.google.example/token',
+            },
+          },
+        ],
+      },
+    });
+    const withoutClient = evaluateGhostSetupAssessment(m, probes(), { revision: 1 });
+    expect(withoutClient.groups[0]?.items[0]?.actions[0]?.kind).toBe('open_plugin_settings');
+    const withClient = evaluateGhostSetupAssessment(
+      m,
+      probes({
+        oauthStatus: () => ({ clientConfigured: true, connected: 0, expired: 0 }),
+      }),
+      { revision: 2 },
+    );
+    expect(withClient.groups[0]?.items[0]?.actions[0]?.kind).toBe('oauth_connect');
+  });
+
+  it('Runtime revision 必须是非负整数', () => {
+    const m = manifest({ slots: ['tool'], tools: [{ name: 'work', description: '干活' }] });
+    for (const revision of [-1, 1.5, Number.NaN]) {
+      expect(() => evaluateGhostSetupAssessment(m, probes(), { revision })).toThrow(
+        GhostSetupAssessmentError,
+      );
+    }
   });
 });
 

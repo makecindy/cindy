@@ -86,6 +86,7 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 ### 提交前检查
 
 - [ ] 已 review 完整 diff
+- [ ] 每个 commit 都带 DCO 签名（`git commit -s`，见 [DCO](../DCO)）
 - [ ] UI 改动已在「UI 变化」注明引用的设计规范章节（不涉及 UI 则跳过）
 - [ ] 未提交凭证、令牌或授权文件
 - [ ] 已补充必要文档

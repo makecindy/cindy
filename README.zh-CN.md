@@ -129,6 +129,8 @@ agent 的模式。依赖服务端的能力在该模式下不可用。
 改动通过 pull request 合入 `main`。请先阅读
 [`CONTRIBUTING.md`](CONTRIBUTING.md)，再按
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) 提交。
+每个 commit 需带 [DCO](DCO) 签名（`git commit -s`），由 PR 上的 DCO check 校验；
+不需要签 CLA。
 同时请遵守 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)；普通使用问题见
 [`SUPPORT.md`](SUPPORT.md)，安全问题仍按 [`SECURITY.md`](SECURITY.md) 私下报告。
 

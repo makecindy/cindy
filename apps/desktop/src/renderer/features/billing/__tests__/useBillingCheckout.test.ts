@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   listOrders: vi.fn(),
@@ -46,7 +46,11 @@ describe('billing checkout phase projection', () => {
     });
   });
 
-  it('keeps paid top-ups crediting until fulfillment succeeds', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('treats successful top-ups as completed regardless of fulfillment projection', () => {
     const base = {
       orderId: 'order_fixture',
       productCode: 'credit_topup',
@@ -58,10 +62,10 @@ describe('billing checkout phase projection', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
     };
-    expect(phaseForOrder(base)).toBe('FULFILLING');
-    expect(phaseForOrder({ ...base, fulfillmentStatus: 'PENDING' })).toBe('FULFILLING');
+    expect(phaseForOrder(base)).toBe('COMPLETED');
+    expect(phaseForOrder({ ...base, fulfillmentStatus: 'PENDING' })).toBe('COMPLETED');
     expect(phaseForOrder({ ...base, fulfillmentStatus: 'SUCCEEDED' })).toBe('COMPLETED');
-    expect(phaseForOrder({ ...base, fulfillmentStatus: 'FAILED' })).toBe('FULFILLING');
+    expect(phaseForOrder({ ...base, fulfillmentStatus: 'FAILED' })).toBe('COMPLETED');
   });
 
   it('shows active subscriptions as paid without exposing entitlement state', () => {
@@ -82,60 +86,51 @@ describe('billing checkout phase projection', () => {
   });
 
   it('lets the server confirm expiry instead of trusting the client clock', () => {
-    expect(
-      isRecoverableTopup({
-        status: 'PENDING',
-        paymentAction: {
-          expiresAt: '2000-01-01T00:00:00.000Z',
-        },
-      }),
-    ).toBe(true);
+    const pendingOrder = {
+      status: 'PENDING' as const,
+      paymentAction: {
+        expiresAt: '2000-01-01T00:00:00.000Z',
+      },
+    };
+    expect(isRecoverableTopup(pendingOrder)).toBe(true);
   });
 
   it('keeps created top-ups with a payment action recoverable', () => {
-    expect(
-      isRecoverableTopup({
-        status: 'CREATED',
-        paymentAction: {
-          expiresAt: '2099-01-01T00:00:00.000Z',
-        },
-      }),
-    ).toBe(true);
+    const createdOrder = {
+      status: 'CREATED' as const,
+      paymentAction: {
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+    };
+    expect(isRecoverableTopup(createdOrder)).toBe(true);
   });
 
   it('keeps pending top-ups recoverable before a payment action is projected', () => {
-    expect(
-      isRecoverableTopup({
-        status: 'CREATED',
-        paymentAction: null,
-      }),
-    ).toBe(true);
-    expect(
-      isRecoverableTopup({
-        status: 'PENDING',
-        paymentAction: null,
-      }),
-    ).toBe(true);
+    const createdOrder = { status: 'CREATED' as const, paymentAction: null };
+    const pendingOrder = { status: 'PENDING' as const, paymentAction: null };
+    expect(isRecoverableTopup(createdOrder)).toBe(true);
+    expect(isRecoverableTopup(pendingOrder)).toBe(true);
   });
 
-  it('keeps paid but unfulfilled top-ups recoverable without a payment action', () => {
-    expect(
-      isRecoverableTopup({
-        status: 'SUCCEEDED',
-        fulfillmentStatus: 'PENDING',
-        paymentAction: null,
-      }),
-    ).toBe(true);
-    expect(
-      isRecoverableTopup({
-        status: 'SUCCEEDED',
-        fulfillmentStatus: 'SUCCEEDED',
-        paymentAction: null,
-      }),
-    ).toBe(false);
+  it('never treats successful top-ups as recoverable', () => {
+    const base = {
+      orderId: 'order_paid',
+      productCode: 'credit_topup',
+      offerCode: 'credit_topup_20',
+      amount: '20',
+      currency: 'cny',
+      status: 'SUCCEEDED' as const,
+      paymentAction: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    };
+    for (const fulfillmentStatus of [undefined, 'PENDING', 'FAILED', 'SUCCEEDED'] as const) {
+      const order = fulfillmentStatus ? { ...base, fulfillmentStatus } : base;
+      expect(isRecoverableTopup(order)).toBe(false);
+    }
   });
 
-  it('keeps the checkout intent until paid top-up fulfillment succeeds', async () => {
+  it('completes a successful top-up immediately and clears its checkout intent', async () => {
     const paidOrder = {
       orderId: 'order_paid',
       productCode: 'credit_topup',
@@ -143,16 +138,12 @@ describe('billing checkout phase projection', () => {
       amount: '20',
       currency: 'cny',
       status: 'SUCCEEDED' as const,
-      fulfillmentStatus: 'PENDING' as const,
       paymentAction: null,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
     };
     api.createTopup.mockResolvedValue(paidOrder);
-    api.getOrder.mockResolvedValue({
-      ...paidOrder,
-      fulfillmentStatus: 'SUCCEEDED',
-    });
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
     const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
     await waitFor(() => expect(result.current.recovering).toBe(false));
 
@@ -163,14 +154,11 @@ describe('billing checkout phase projection', () => {
       }),
     );
 
-    expect(result.current.state.phase).toBe('FULFILLING');
-    expect(readBillingCheckoutIntent(ACCOUNT_ID)).not.toBeNull();
-
-    await act(() => result.current.refreshActive());
-
-    expect(api.getOrder).toHaveBeenCalledWith('order_paid');
     expect(result.current.state.phase).toBe('COMPLETED');
+    expect(result.current.recoverables.topups).toEqual([]);
     expect(readBillingCheckoutIntent(ACCOUNT_ID)).toBeNull();
+    expect(api.getOrder).not.toHaveBeenCalled();
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 3_000);
   });
 
   it('replays an unresolved persisted purchase in the background without opening it', async () => {
@@ -237,7 +225,7 @@ describe('billing checkout phase projection', () => {
     expect(result.current.state.subscription).toEqual(pending);
   });
 
-  it('keeps polling a restored paid top-up in the background until fulfillment succeeds', async () => {
+  it('completes a restored successful top-up in the background without polling', async () => {
     const paidOrder = {
       orderId: 'order_paid',
       productCode: 'credit_topup',
@@ -262,23 +250,20 @@ describe('billing checkout phase projection', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
     });
     api.listOrders.mockResolvedValue({ orders: [paidOrder], nextCursor: null });
-    api.getOrder.mockResolvedValue({
-      ...paidOrder,
-      fulfillmentStatus: 'SUCCEEDED',
-    });
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
 
     const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
     await waitFor(() => expect(result.current.recovering).toBe(false));
     expect(result.current.state).toMatchObject({
       open: false,
-      phase: 'FULFILLING',
+      phase: 'COMPLETED',
       order: paidOrder,
     });
 
     act(() => window.dispatchEvent(new Event('focus')));
 
-    await waitFor(() => expect(result.current.state.phase).toBe('COMPLETED'));
-    expect(api.getOrder).toHaveBeenCalledWith(paidOrder.orderId);
+    expect(api.getOrder).not.toHaveBeenCalled();
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 3_000);
     expect(result.current.state.open).toBe(false);
     expect(result.current.recoverables.topups).toEqual([]);
     expect(readBillingCheckoutIntent(ACCOUNT_ID)).toBeNull();
@@ -457,7 +442,19 @@ describe('billing checkout phase projection', () => {
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:01:00.000Z',
     };
-    api.listOrders.mockResolvedValue({ orders: [pendingOrder], nextCursor: null });
+    const succeededOrder = {
+      ...pendingOrder,
+      orderId: 'order_succeeded',
+      status: 'SUCCEEDED' as const,
+    };
+    api.listOrders.mockResolvedValue({
+      orders: [
+        succeededOrder,
+        { ...succeededOrder, orderId: 'order_succeeded_legacy', fulfillmentStatus: 'FAILED' },
+        pendingOrder,
+      ],
+      nextCursor: null,
+    });
 
     const { result } = renderHook(() => useBillingCheckout(ACCOUNT_ID));
     await waitFor(() => expect(result.current.recovering).toBe(false));

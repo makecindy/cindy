@@ -14,6 +14,8 @@ import {
 import { AuthApiError, isValidEmail } from '@cindy/auth-client';
 import { authErrorText, getAuthLocale, loginText } from '@/auth/loginMessages';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from '@/auth/consentGate';
+import { acceptPrivacyConsent } from '@/analytics/analyticsConsentStore';
+import { initMobileTapdb } from '@/analytics/mobileTapdb';
 import { isNativeSocialProviderSupported } from '@/auth/nativeSocial';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -125,8 +127,22 @@ export default function LoginScreen() {
     action: () => void;
     stamp: ConsentStamp;
   } | null>(null);
+  /* 把「用户明示同意《隐私政策》」这个事实落到本机。它是 TapDB 采集的前置条件
+     (见 src/analytics/analyticsConsentStore.ts):没有这条记录,统计 SDK 根本不会
+     初始化。写在**放行时刻**而不是勾 radio 时刻——勾了又取消不算同意,同意并继续
+     使用才算。幂等,失败不阻断登录(闸保持关闭)。 */
+  const persistPrivacyConsent = () => {
+    void acceptPrivacyConsent()
+      // 同意即可开始统计,不必等到登录成功——「未登录用户的启动与留存」本来就是
+      // 这份埋点要回答的问题。冷启动那次 initMobileTapdb 当时被同意闸挡住了,
+      // 这里补一次。
+      .then(() => initMobileTapdb())
+      .catch(() => undefined);
+  };
+
   const requireConsent = (action: () => void) => {
     if (consentAccepted) {
+      persistPrivacyConsent();
       action();
       return;
     }
@@ -143,6 +159,8 @@ export default function LoginScreen() {
     // 同意 = 自动勾选 radio + 续接用户刚才点的那条登录链路(产品拍板)
     setConsentAccepted(true);
     setConsentDialogOpen(false);
+    // 点了弹窗上的「同意」即为明示同意,与下面 pending 是否还能续接无关。
+    persistPrivacyConsent();
     const pending = pendingConsentAction.current;
     pendingConsentAction.current = null;
     if (!pending) return;

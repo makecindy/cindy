@@ -84,9 +84,16 @@
   "legal": {
     "sectionTitle": "法的情報",
     "privacyPolicy": "プライバシーポリシー",
+    "userAgreement": "利用規約",
     "view": "表示",
     "openPrivacyPolicy": "プライバシーポリシーを開く",
-    "appFilingNumber": "アプリ届出番号"
+    "openUserAgreement": "利用規約を開く",
+    "appFilingNumber": "アプリ届出番号",
+    "analytics": "利用統計",
+    "analyticsHint": "Cindy の起動状況や継続利用状況の把握に使います。送信するのはデバイスの機種名、OS バージョン、アプリバージョン、デバイス識別子などのデバイス・利用環境情報と、ログイン後はアカウント ID で、会話内容・ファイル・プロンプトは一切含みません。",
+    "analyticsSaveFailed": "設定を保存できませんでした。再起動すると元に戻る場合があります。",
+    "analyticsReset": "デフォルトに戻す",
+    "analyticsResetAction": "戻す"
   },
   "account": {
     "logoutHint": "ログアウトすると、このスマートフォン上のログイン状態とローカルのリモートミラーだけが削除されます。パソコン側のセッションには影響しません。",

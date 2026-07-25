@@ -131,8 +131,47 @@ const DO_NOT_REBUILD_REASONS: ReadonlySet<string> = new Set([
  */
 let powerReleaseGeneration = 0;
 
+/**
+ * Engines capturing outside the keep-alive session (fast activation off, or a
+ * cold fallback). A power release only tears down the module-level keep-alive
+ * session, so without this registry those streams would keep the microphone —
+ * and the privacy indicator — open until the user comes back.
+ */
+const liveDirectCaptureEngines = new Set<WebMicAudioEngine>();
+
+function releaseDirectCaptureEngines(reason: string): void {
+  for (const engine of [...liveDirectCaptureEngines]) {
+    engine.releaseForPowerEvent(reason);
+  }
+}
+
 export function currentPowerReleaseGeneration(): number {
   return powerReleaseGeneration;
+}
+
+/**
+ * Tear down everything this module instance owns, for the HMR swap.
+ *
+ * Bumping the generation first is what covers acquisitions that are still
+ * awaiting enumeration or getUserMedia: they have not reached
+ * liveDirectCaptureEngines yet, so releasing the registry alone would let them
+ * resolve afterwards and register into this *disposed* module's set — where the
+ * replacement module's power listener can never reach them, leaving the
+ * microphone open across a later suspend.
+ *
+ * Exported for the tests; the dev-only `import.meta.hot` block below is the
+ * real caller.
+ */
+export function disposeVoiceInputAudioModuleForHmr(): Promise<void> {
+  powerReleaseGeneration += 1;
+  keepAlivePowerReleaseUnsubscribe?.();
+  keepAlivePowerReleaseUnsubscribe = undefined;
+  keepAlivePowerReleaseListening = false;
+  // React Fast Refresh can keep the component and its engine ref alive across
+  // the swap, and the new module instance has an empty registry — so without
+  // this the old direct stream stays live with nothing able to reach it.
+  releaseDirectCaptureEngines('hmr');
+  return disposeKeepAliveVoiceInputMicrophone('hmr');
 }
 
 export function isPowerReleaseCancellation(error: unknown): boolean {
@@ -372,8 +411,9 @@ function ensureKeepAliveDeviceChangeListener(): void {
  * Both mean the user walked away, so holding the capture device buys no
  * latency while still lighting the OS privacy indicator and holding an
  * idle-sleep assertion through coreaudiod. Mirrors the devicechange listener
- * above: one process-wide subscription, installed lazily with the first
- * keep-alive session, never torn down.
+ * above: one process-wide subscription, never torn down. Installed lazily by
+ * whichever capture starts first — the keep-alive session *or* a direct
+ * (keepAlive: false) capture, which relies on it just as much.
  */
 function ensureKeepAlivePowerReleaseListener(): void {
   if (keepAlivePowerReleaseListening) return;
@@ -385,6 +425,7 @@ function ensureKeepAlivePowerReleaseListener(): void {
   // so one lock event would fan out to N stale callbacks.
   keepAlivePowerReleaseUnsubscribe = subscribe((payload) => {
     powerReleaseGeneration += 1;
+    releaseDirectCaptureEngines(payload.reason);
     void disposeKeepAliveVoiceInputMicrophone(payload.reason);
   });
 }
@@ -1036,6 +1077,14 @@ export class WebMicAudioEngine {
     this.interrupted = false;
     this.ready = false;
     this.lastAudioFrameAt = Date.now();
+    // Also needed on this path: with fast activation off no keep-alive session
+    // is ever created, so this would otherwise be the only capture in the
+    // renderer and nothing would subscribe to power releases.
+    ensureKeepAlivePowerReleaseListener();
+    // The registry below only covers engines that finished starting. A release
+    // landing mid-startup would not see this one, so snapshot the generation
+    // and re-check at each point where a live device could survive.
+    const powerGenerationAtStart = currentPowerReleaseGeneration();
 
     const audio = buildMediaConstraints({
       deviceId: this.deviceId,
@@ -1051,63 +1100,106 @@ export class WebMicAudioEngine {
     const benchmarkFixturePromise = BENCHMARK_FIXTURE_ENABLED
       ? prewarmVoiceInputBenchmarkFixture().catch(() => null)
       : Promise.resolve(null);
-    await assertSelectedMicrophoneAvailable(this.deviceId);
-    const streamPromise = navigator.mediaDevices.getUserMedia({
-      audio,
-      video: false,
-    }).catch((error) => {
+    await this.awaitDirectStartupStep(
+      assertSelectedMicrophoneAvailable(this.deviceId),
+      powerGenerationAtStart,
+    );
+    // The enumeration above passed its own check, but a release can land in the
+    // gap before we ask for the device. Without this the request would be made
+    // after the one-shot event and only be closed once it resolves.
+    this.assertNoPowerReleaseDuringStartup(powerGenerationAtStart);
+    const streamPromise = this.awaitDirectStartupStep(
+      navigator.mediaDevices.getUserMedia({
+        audio,
+        video: false,
+      }),
+      powerGenerationAtStart,
+      (stream) => stream.getTracks().forEach((track) => track.stop()),
+    ).catch((error) => {
+      // A release that won this race takes priority: suspend routinely makes
+      // the pending request reject (AbortError / NotReadableError), and
+      // reporting that as a device failure would make captureSession show an
+      // error instead of following its silent power-cancellation path.
+      if (isPowerReleaseCancellation(error)) throw error;
       throw normalizeMicrophoneStartError(error, this.deviceId);
     });
 
-    this.stream = await streamPromise;
-    this.stream.getAudioTracks().forEach((track) => this.watchTrack(track));
-    this.onStateChange?.('stream_started', {
-      tracks: this.stream.getAudioTracks().map((track) => ({
-        label: track.label,
-        enabled: track.enabled,
-        muted: track.muted,
-        readyState: track.readyState,
-        settings: track.getSettings(),
-      })),
-    });
+    const directStream = await streamPromise;
+    // Assigned before the guarded section so the cleanup below can reach it.
+    this.stream = directStream;
+    // Registered immediately, not at the end of startup: every await below
+    // (context warmup, worklet module, resume) can stay pending for the whole
+    // suspend, and the power callback can only traverse this registry. Failure
+    // paths remove it again through stop().
+    liveDirectCaptureEngines.add(this);
+    try {
+      this.assertNoPowerReleaseDuringStartup(powerGenerationAtStart);
+      this.stream.getAudioTracks().forEach((track) => this.watchTrack(track));
+      this.onStateChange?.('stream_started', {
+        tracks: this.stream.getAudioTracks().map((track) => ({
+          label: track.label,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+          settings: track.getSettings(),
+        })),
+      });
 
-    const sharedState = await sharedContextPromise;
-    if (sharedState) {
-      this.context = sharedState.context;
-      this.usingSharedContext = true;
-      this.onStateChange?.('shared_audio_context_used', {
+      const sharedState = await sharedContextPromise;
+      if (sharedState) {
+        this.context = sharedState.context;
+        this.usingSharedContext = true;
+        this.onStateChange?.('shared_audio_context_used', {
+          state: this.context.state,
+          sampleRate: this.context.sampleRate,
+        });
+      } else {
+        this.context = new AudioContext();
+        this.usingSharedContext = false;
+      }
+      this.context.onstatechange = () => {
+        this.onStateChange?.('context_state_changed', {
+          state: this.context?.state,
+          sampleRate: this.context?.sampleRate,
+        });
+        if (this.ready && !this.stopped && this.context?.state !== 'running') {
+          this.interrupt(`Microphone audio context stopped (${this.context?.state ?? 'unknown'}). Please try again.`);
+        }
+      };
+      this.onStateChange?.('context_created', {
         state: this.context.state,
         sampleRate: this.context.sampleRate,
       });
-    } else {
-      this.context = new AudioContext();
-      this.usingSharedContext = false;
-    }
-    this.context.onstatechange = () => {
-      this.onStateChange?.('context_state_changed', {
-        state: this.context?.state,
-        sampleRate: this.context?.sampleRate,
-      });
-      if (this.ready && !this.stopped && this.context?.state !== 'running') {
-        this.interrupt(`Microphone audio context stopped (${this.context?.state ?? 'unknown'}). Please try again.`);
-      }
-    };
-    this.onStateChange?.('context_created', {
-      state: this.context.state,
-      sampleRate: this.context.sampleRate,
-    });
 
-    // Benchmark mode still starts the real MediaStream above so the measurement
-    // includes OS microphone permission/device startup. Only the bytes sent to
-    // ASR are replaced with deterministic fixture audio, keeping latency A/B
-    // runs comparable without asking a human to repeat the exact same phrase.
-    const benchmarkFixture = await benchmarkFixturePromise;
-    if (benchmarkFixture) {
-      this.onStateChange?.('benchmark_fixture_ready', {
-        path: benchmarkFixture.path,
-        sourceSampleRate: benchmarkFixture.sampleRate,
-        durationMs: Math.round(benchmarkFixture.durationMs),
-      });
+      // Benchmark mode still starts the real MediaStream above so the measurement
+      // includes OS microphone permission/device startup. Only the bytes sent to
+      // ASR are replaced with deterministic fixture audio, keeping latency A/B
+      // runs comparable without asking a human to repeat the exact same phrase.
+      const benchmarkFixture = await benchmarkFixturePromise;
+      if (benchmarkFixture) {
+        this.onStateChange?.('benchmark_fixture_ready', {
+          path: benchmarkFixture.path,
+          sourceSampleRate: benchmarkFixture.sampleRate,
+          durationMs: Math.round(benchmarkFixture.durationMs),
+        });
+        if (this.context.state !== 'running') {
+          await this.context.resume();
+        }
+        this.onStateChange?.('context_ready', {
+          state: this.context.state,
+          sampleRate: this.context.sampleRate,
+        });
+        this.assertNoPowerReleaseDuringStartup(powerGenerationAtStart);
+        this.ready = true;
+        this.startWatchdog();
+        void this.playBenchmarkFixture(benchmarkFixture);
+        return;
+      }
+
+      this.sink = this.context.createGain();
+      this.sink.gain.value = 0;
+      this.source = this.context.createMediaStreamSource(this.stream);
+      await this.connectProcessor();
       if (this.context.state !== 'running') {
         await this.context.resume();
       }
@@ -1115,28 +1207,93 @@ export class WebMicAudioEngine {
         state: this.context.state,
         sampleRate: this.context.sampleRate,
       });
+      this.assertNoPowerReleaseDuringStartup(powerGenerationAtStart);
       this.ready = true;
       this.startWatchdog();
-      void this.playBenchmarkFixture(benchmarkFixture);
-      return;
+    } catch (error) {
+      // Callers treat a power cancellation as silent, so they will never call
+      // stop() themselves. Do it here: it closes the device and the non-shared
+      // AudioContext, clears the track listeners, and removes this engine from
+      // liveDirectCaptureEngines (which it joined right after acquisition).
+      await this.stop().catch(() => undefined);
+      if (currentPowerReleaseGeneration() !== powerGenerationAtStart) {
+        throw powerReleaseCancellation();
+      }
+      throw error;
     }
+  }
 
-    this.sink = this.context.createGain();
-    this.sink.gain.value = 0;
-    this.source = this.context.createMediaStreamSource(this.stream);
-    await this.connectProcessor();
-    if (this.context.state !== 'running') {
-      await this.context.resume();
+  /**
+   * Await one direct-startup step, letting an in-flight power release win.
+   *
+   * Mirrors KeepAliveMicSession.awaitStartupStep: the raw error would send the
+   * caller down its device-failure paths (error surface, or automatic fallback
+   * to the default microphone) after the one-shot event has already passed.
+   */
+  private async awaitDirectStartupStep<T>(
+    step: Promise<T>,
+    generationAtStart: number,
+    disposeValue?: (value: T) => void,
+  ): Promise<T> {
+    try {
+      const value = await step;
+      // Fulfilled awaits matter as much as rejected ones: a successful device
+      // enumeration would otherwise let us call getUserMedia *after* the
+      // one-shot release, reopening the microphone while the user is away.
+      if (currentPowerReleaseGeneration() !== generationAtStart) {
+        disposeValue?.(value);
+        throw powerReleaseCancellation();
+      }
+      return value;
+    } catch (error) {
+      if (
+        currentPowerReleaseGeneration() !== generationAtStart &&
+        !isPowerReleaseCancellation(error)
+      ) {
+        throw powerReleaseCancellation();
+      }
+      throw error;
     }
-    this.onStateChange?.('context_ready', {
-      state: this.context.state,
-      sampleRate: this.context.sampleRate,
+  }
+
+  /**
+   * Check for a release at the synchronous points no await can cover: right
+   * before opening the device, and right before flipping `ready` (which is what
+   * makes the release path treat this engine as an interruptible recording).
+   */
+  private assertNoPowerReleaseDuringStartup(generationAtStart: number): void {
+    if (currentPowerReleaseGeneration() === generationAtStart) return;
+    throw powerReleaseCancellation();
+  }
+
+  /**
+   * Suspend / lock reached us while capturing outside the keep-alive session.
+   * Interrupt the caller so it cancels its ASR run, then close the stream —
+   * the keep-alive release path cannot see this one.
+   */
+  releaseForPowerEvent(reason: string): void {
+    this.onStateChange?.('direct_capture_power_release', { reason });
+    // Only a capture that actually reached `ready` is a live recording worth
+    // interrupting. One still starting up is registered (so its device can be
+    // closed here) but must surface as a *silent* cancellation through
+    // start()'s generation check — both UIs wire onInterrupted to their
+    // active-recording failure path, and that visible error cannot be undone
+    // by the cancellation that follows.
+    if (this.ready) {
+      this.interrupt('Microphone input stopped unexpectedly. Please try again.');
+    }
+    void this.stop().catch((error: unknown) => {
+      // Detached on purpose (the power callback must not await teardown), so an
+      // AudioContext.close() failure here would otherwise surface as an
+      // unhandled rejection.
+      this.onStateChange?.('direct_capture_power_release_stop_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
-    this.ready = true;
-    this.startWatchdog();
   }
 
   async stop(): Promise<void> {
+    liveDirectCaptureEngines.delete(this);
     this.stopped = true;
     this.ready = false;
     this.clearWatchdog();
@@ -1510,9 +1667,6 @@ function flushWorkletBufferedAudio(worklet?: AudioWorkletNode): Promise<void> {
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    keepAlivePowerReleaseUnsubscribe?.();
-    keepAlivePowerReleaseUnsubscribe = undefined;
-    keepAlivePowerReleaseListening = false;
-    void disposeKeepAliveVoiceInputMicrophone('hmr');
+    void disposeVoiceInputAudioModuleForHmr();
   });
 }

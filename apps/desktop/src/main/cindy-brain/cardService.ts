@@ -251,6 +251,18 @@ export class GhostCardService {
   }
 
   /**
+   * 严格在途查询(workspace 槽的上下文凭证用):仅当该单已登记、未交卷
+   * (settledAt 为 null)且非重开态时返回归属。宽限窗/重开窗/working 窗都是
+   * 卡片供片语义,不能让 callId 在工具调用结束后继续充当"目录授权上下文"
+   * ——否则插件记住一个旧 callId 就能跨调用复用当时会话的 workdir 自动放行。
+   */
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null } | null {
+    const e = this.calls.get(callId);
+    if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
+    return { ghostId: e.ghostId, sessionId: e.sessionId };
+  }
+
+  /**
    * 交互卡按钮被点后重开卡片更新窗口(card-action 派发前调,由 dispatcher 接线)。
    * 让意识在卡片结算很久后 / 重启后仍能 card-update 换新卡:
    * - 条目还在(内存命中):归 in-flight(settledAt=null),盖上重开时刻;

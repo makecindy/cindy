@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { Maximize2, Minimize2, PictureInPicture2 } from 'lucide-react';
+import { Maximize2, Minimize2, Minus, PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
@@ -19,6 +19,8 @@ import { usePanelMaximize } from '../layout/panelMaximize';
  *
  * 右端系统按钮(一批,由引擎统一长出,面板作者无感;身份卡
  * panel.systemButtons 可逐个关闭):
+ *  - 「最小化为浮动气泡」(minimize):传 onMinimize 即得,点击把面板收成
+ *    可拖动的圆形气泡(状态在 renderer/lib/ghostPanelBubbleState.ts);
  *  - 「独立窗口」(detach):传 onDetach 即得,点击把面板抽进自己的 OS 窗口
  *    (状态机在 main 的 ghost-panel-window/controller.ts);
  *  - 「撑满内容区」(maximize):传 panelKind 即得,状态在 LayoutRoot 的
@@ -40,9 +42,17 @@ export interface PanelChromeProps {
   panelKind?: string;
   /** 传入即长出「独立窗口」系统按钮(排在撑满按钮左侧),点击回调归调用方。 */
   onDetach?: () => void;
+  /** 传入即长出「最小化为浮动气泡」系统按钮(排在独立窗口按钮左侧)。 */
+  onMinimize?: () => void;
 }
 
-export function PanelChrome({ title, actions, panelKind, onDetach }: PanelChromeProps): ReactNode {
+export function PanelChrome({
+  title,
+  actions,
+  panelKind,
+  onDetach,
+  onMinimize,
+}: PanelChromeProps): ReactNode {
   const { t } = useTranslation();
   const maximize = usePanelMaximize();
   const showMaximize = panelKind !== undefined && maximize !== null;
@@ -91,9 +101,19 @@ export function PanelChrome({ title, actions, panelKind, onDetach }: PanelChrome
         <div className="min-w-0 truncate text-[12px] font-medium text-[var(--text-secondary)]">
           {title}
         </div>
-        {(actions || showMaximize || onDetach) && (
+        {(actions || showMaximize || onDetach || onMinimize) && (
           <div className="flex shrink-0 items-center gap-0.5">
             {actions}
+            {onMinimize && (
+              <button
+                type="button"
+                aria-label={t('panelChrome.minimizeAria')}
+                onClick={onMinimize}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                <Minus size={14} />
+              </button>
+            )}
             {onDetach && (
               <button
                 type="button"

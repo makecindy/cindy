@@ -144,6 +144,9 @@ servers.
 Contributions go through pull requests into `main`. Read
 [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) first, then use
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md).
+Every commit needs a [Developer Certificate of Origin](DCO) sign-off
+(`git commit -s`); a DCO check on each pull request enforces it, and no CLA is
+required.
 Please also follow [`CODE_OF_CONDUCT.en.md`](CODE_OF_CONDUCT.en.md). For ordinary
 usage questions, see [`SUPPORT.en.md`](SUPPORT.en.md); report security issues
 privately through [`SECURITY.en.md`](SECURITY.en.md).

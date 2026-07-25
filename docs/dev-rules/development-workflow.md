@@ -44,6 +44,19 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   design-rules 文档，或「不涉及：<理由>」豁免；判定逻辑见
   `scripts/check-pr-design-basis.mjs`），但通过 CI 不代表内容合格，质量仍由
   review 把关。Reviewer 只看 Title + Description 决定要不要 review，写不清直接退回。
+- **DCO 签名门禁（硬性要求）**：每个 commit 都必须带 `Signed-off-by` trailer，其中的名字
+  与邮箱都要与 commit 的 author（或 committer）一致——`git commit -s`，或先跑一次
+  `pnpm dco:install-hook` 装上 hook 让后续提交自动补签（正本 `.githooks/prepare-commit-msg`；
+  `git commit` 本身没有自动签名的配置项，`format.signOff` 只作用于 `git format-patch` /
+  `git am`）。这条对 agent 自动提交、worktree 会话内的收尾 commit 一律适用。
+  - PR 上的权威门禁是 **DCO GitHub App** 的 check：它校验该 PR 的每个 commit，豁免
+    merge 与 bot，不追溯历史；`.github/dco.yml` 开了 remediation commit，因此漏签也可以
+    不改写历史（格式见 `CONTRIBUTING.md`）。
+  - 提交前自查用 `pnpm check:dco`（`scripts/check-dco.mjs`，范围 `merge-base..head`）。
+    它的判定刻意对齐 App 但**不识别 remediation commit**：本地通过则 App 必过，反之不然。
+    改这个脚本时不要放宽 name／邮箱比对，否则会出现「本地绿、PR 红」。
+  - 漏签不要重新造一份提交：用 `git commit --amend -s --no-edit` 或
+    `git rebase --signoff <base>` 补签后 `git push --force-with-lease`。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
   仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在

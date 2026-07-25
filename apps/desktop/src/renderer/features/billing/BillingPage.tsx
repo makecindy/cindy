@@ -7,7 +7,6 @@ import {
   CreditCard,
   PackageOpen,
   RefreshCcw,
-  ShieldCheck,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -33,6 +32,7 @@ import type {
   ModelAccessCreditUsage,
   ModelAccessPromotionalGrantState,
 } from '../../../shared/modelAccess';
+import { AlipayIcon } from './AlipayIcon';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
 import { formatBillingAmount as formatMoney } from './money';
@@ -124,11 +124,11 @@ function usagePercent(pool: ModelAccessCreditPoolUsage): number | null {
   return Number(tenths > 1_000n ? 1_000n : tenths) / 10;
 }
 
-function formatLedgerTimestamp(value: string): string {
+function formatLedgerTimestamp(value: string, locale: string): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return value;
   try {
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(locale, {
       dateStyle: 'medium',
       timeStyle: 'short',
     }).format(timestamp);
@@ -408,12 +408,12 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       maxComparison > 0
     ) {
       return t('billing.amount.rangeError', {
-        min: formatMoney(min, selected.offer.currency),
-        max: formatMoney(max, selected.offer.currency),
+        min: formatMoney(min, selected.offer.currency, billingLocale),
+        max: formatMoney(max, selected.offer.currency, billingLocale),
       });
     }
     return null;
-  }, [customAmount, selected, t]);
+  }, [billingLocale, customAmount, selected, t]);
 
   const subscriptionPurchaseBlocked =
     currentSubscription !== null &&
@@ -436,11 +436,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     [catalog],
   );
 
-  const currentPlanName = useMemo(
-    () => planNameOf(currentSubscription?.effectivePlan?.product.code),
-    [planNameOf, currentSubscription],
-  );
-
   const currentPlan = currentSubscription?.effectivePlan ?? null;
   const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
   const planChangeable =
@@ -453,7 +448,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     return {
       name: planNameOf(plan?.product.code) ?? t('billing.settings.subscriptionCard.unnamedPlan'),
       status: currentSubscription.status,
-      price: plan ? formatMoney(plan.terms.amount, plan.terms.currency) : null,
+      price: plan ? formatMoney(plan.terms.amount, plan.terms.currency, billingLocale) : null,
       interval: plan?.offer.interval ?? null,
       includedCredits: plan?.terms.creditAmount ?? null,
       periodEndAt: formatBillingDate(currentSubscription.currentPeriodEndAt, billingLocale),
@@ -502,7 +497,10 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     const entry = offers.find(({ offer }) => offer.code === offerCode);
     if (!entry || !isCatalogOfferPurchasable(entry)) return;
     setSelectedOfferCode(offerCode);
-    setSelectedPurchaseOptionId(null);
+    // 只有一种支付方式时默认选中,免去一次多余点击。
+    setSelectedPurchaseOptionId(
+      entry.purchaseOptions.length === 1 ? entry.purchaseOptions[0].id : null,
+    );
     setCustomAmount('');
   };
 
@@ -569,14 +567,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     <>
       <div>
         <div className="flex items-start justify-between gap-6">
-          <div>
-            <h2 className="text-20 font-medium tracking-[-0.01em] text-[var(--settings-section-title)]">
-              {t('billing.settings.title')}
-            </h2>
-            <p className="mt-1.5 max-w-[620px] text-13 leading-5 text-[var(--settings-section-desc)]">
-              {t('billing.settings.subtitle')}
-            </p>
-          </div>
+          <h2 className="text-20 font-medium tracking-[-0.01em] text-[var(--settings-section-title)]">
+            {t('billing.settings.title')}
+          </h2>
           <button
             type="button"
             onClick={() => void loadBillingState()}
@@ -606,36 +599,72 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             />
           )}
 
-        <div className="mt-5 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-          <BillingUsageSummary
-            usage={creditUsage}
-            balance={balance}
-            issue={balanceError}
-            loading={loadingBalance}
-            detailsUnavailable={usageDetailsUnavailable}
-          />
+        <div className="mt-6 flex flex-col gap-8">
+          <BillingGroup title={t('billing.settings.subscriptionCard.title')}>
+            <SubscriptionOverviewCard
+              facts={currentPlanFacts}
+              loading={loadingSubscription}
+              error={subscriptionError}
+              planChangeable={planChangeable}
+              actionDisabled={loadingSubscription || subscriptionError}
+              pendingPlanChange={pendingPlanChange}
+              pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
+              onChangePlan={openPlanChange}
+              onPurchase={() => openPurchaseDialog('SUBSCRIPTION')}
+              onResumePending={() => {
+                if (pendingPlanChange) planChange.resumePending(pendingPlanChange);
+              }}
+              onCancelPending={() => {
+                if (pendingPlanChange)
+                  void planChange.cancelChange(pendingPlanChange.planChangeId);
+              }}
+            />
+          </BillingGroup>
+
+          <BillingGroup titleId="billing-balance-title" title={t('billing.balance.title')}>
+            <BalanceOverviewCard
+              usage={creditUsage}
+              balance={balance}
+              issue={balanceError}
+              loading={loadingBalance}
+              onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')}
+            />
+          </BillingGroup>
+
+          {(creditUsage || balance) && (
+            <BillingGroup
+              title={t('billing.usage.title')}
+              description={
+                usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
+              }
+            >
+              <UsageBreakdownCard usage={creditUsage} balance={balance} />
+            </BillingGroup>
+          )}
+
+          {creditUsage && (
+            <BillingGroup
+              title={t('billing.usage.promotionalDetails.title')}
+              badge={
+                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                  {t('billing.usage.promotionalDetails.count', {
+                    count: creditUsage.promotionalGrants.length,
+                  })}
+                </span>
+              }
+            >
+              <PromotionalGrantsCard usage={creditUsage} />
+            </BillingGroup>
+          )}
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <SubscriptionOverviewCard
-            facts={currentPlanFacts}
-            loading={loadingSubscription}
-            error={subscriptionError}
-            planChangeable={planChangeable}
-            actionDisabled={loadingSubscription || subscriptionError}
-            pendingPlanChange={pendingPlanChange}
-            pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
-            onChangePlan={openPlanChange}
-            onPurchase={() => openPurchaseDialog('SUBSCRIPTION')}
-            onResumePending={() => {
-              if (pendingPlanChange) planChange.resumePending(pendingPlanChange);
-            }}
-            onCancelPending={() => {
-              if (pendingPlanChange) void planChange.cancelChange(pendingPlanChange.planChangeId);
-            }}
-          />
-          <TopupOverviewCard onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')} />
-        </div>
+        <p className="mt-8 text-12 leading-5 text-[var(--text-tertiary)]">
+          {t(
+            BILLING_CURRENCY === 'usd'
+              ? 'billing.balance.creditParityUsd'
+              : 'billing.balance.creditParityCny',
+          )}
+        </p>
       </div>
 
       <BillingOfferDialog
@@ -689,7 +718,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       <PlanChangeTargetDialog
         open={planChangeTargetOpen}
         candidates={planChangeCandidates}
-        currentPlanName={currentPlanName}
         onClose={() => setPlanChangeTargetOpen(false)}
         onSelect={selectPlanChangeTarget}
       />
@@ -724,7 +752,8 @@ function BillingRecoveryNotice({
   onResumeSubscription: (subscription: BillingSubscription) => void;
   onResumeFailed: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   return (
     <section className="mt-5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-4">
       <p className="text-sm font-medium text-[var(--text-primary)]">
@@ -742,7 +771,7 @@ function BillingRecoveryNotice({
             className="select-none rounded-full border border-[var(--border-default)] px-3 py-1.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover-soft)]"
           >
             {t('billing.recovery.continueTopup', {
-              amount: formatMoney(order.amount, order.currency),
+              amount: formatMoney(order.amount, order.currency, billingLocale),
             })}
           </button>
         ))}
@@ -800,70 +829,72 @@ function SubscriptionOverviewCard({
     (facts.cancelAtPeriodEnd || facts.status === 'ACTIVE' || facts.status === 'TRIALING');
 
   return (
-    <section className="flex min-h-[220px] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-      <p className="text-11 font-medium text-[var(--text-tertiary)]">
-        {t('billing.settings.subscriptionCard.title')}
-      </p>
-      <div className="mt-3 min-h-0 flex-1">
-        {loading ? (
-          <Spinner size={15} />
-        ) : error ? (
-          <p className="text-12 leading-5 text-[var(--text-secondary)]">
-            {t('billing.settings.subscriptionCard.unavailable')}
-          </p>
-        ) : facts ? (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-16 font-medium text-[var(--text-primary)]">{facts.name}</h3>
-              <span className="select-none rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                {t(`billing.subscriptionStatus.${facts.status}`)}
-              </span>
-            </div>
-            {facts.price && facts.interval && (
-              <p className="mt-3 text-13 text-[var(--text-primary)]">
-                {t('billing.settings.subscriptionCard.priceInterval', {
-                  price: facts.price,
-                  interval: t(`billing.intervals.${facts.interval}`),
-                })}
-              </p>
-            )}
-            {facts.includedCredits && facts.interval && (
-              <p className="mt-1 text-12 text-[var(--text-secondary)]">
-                {t('billing.settings.subscriptionCard.includedCredits', {
-                  amount: facts.includedCredits,
-                  interval: t(`billing.intervals.${facts.interval}`),
-                })}
-              </p>
-            )}
-            {showPeriodDate && (
-              <p className="mt-3 text-12 text-[var(--text-secondary)]">
-                {facts.cancelAtPeriodEnd
-                  ? t('billing.settings.subscriptionCard.endsAt', {
-                      date: facts.periodEndAt,
-                    })
-                  : t('billing.settings.subscriptionCard.renewsAt', {
-                      date: facts.periodEndAt,
-                    })}
-              </p>
-            )}
-          </>
-        ) : (
-          <>
-            <h3 className="text-16 font-medium text-[var(--text-primary)]">
-              {t('billing.settings.subscriptionCard.emptyTitle')}
-            </h3>
-            <p className="mt-2 text-12 leading-5 text-[var(--text-secondary)]">
-              {t('billing.settings.subscriptionCard.empty')}
+    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      <div className="flex min-h-[72px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-4">
+        <div className="min-w-0 flex-1">
+          {loading ? (
+            <Spinner size={15} />
+          ) : error ? (
+            <p className="text-12 leading-5 text-[var(--text-secondary)]">
+              {t('billing.settings.subscriptionCard.unavailable')}
             </p>
-          </>
-        )}
-      </div>
-      <div className="mt-5 flex flex-wrap gap-2">
+          ) : facts ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-14 font-medium text-[var(--text-primary)]">{facts.name}</h4>
+                <span className="select-none rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                  {t(`billing.subscriptionStatus.${facts.status}`)}
+                </span>
+              </div>
+              {(facts.price || facts.includedCredits) && facts.interval && (
+                <p className="mt-1.5 text-12 text-[var(--text-secondary)]">
+                  {facts.price && (
+                    <span>
+                      {t('billing.settings.subscriptionCard.priceInterval', {
+                        price: facts.price,
+                        interval: t(`billing.intervals.${facts.interval}`),
+                      })}
+                    </span>
+                  )}
+                  {facts.price && facts.includedCredits && <span aria-hidden> · </span>}
+                  {facts.includedCredits && (
+                    <span>
+                      {t('billing.settings.subscriptionCard.includedCredits', {
+                        amount: facts.includedCredits,
+                        interval: t(`billing.intervals.${facts.interval}`),
+                      })}
+                    </span>
+                  )}
+                </p>
+              )}
+              {showPeriodDate && (
+                <p className="mt-1 text-12 text-[var(--text-tertiary)]">
+                  {facts.cancelAtPeriodEnd
+                    ? t('billing.settings.subscriptionCard.endsAt', {
+                        date: facts.periodEndAt,
+                      })
+                    : t('billing.settings.subscriptionCard.renewsAt', {
+                        date: facts.periodEndAt,
+                      })}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <h4 className="text-14 font-medium text-[var(--text-primary)]">
+                {t('billing.settings.subscriptionCard.emptyTitle')}
+              </h4>
+              <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                {t('billing.settings.subscriptionCard.empty')}
+              </p>
+            </>
+          )}
+        </div>
         <button
           type="button"
           onClick={planChangeable ? onChangePlan : onPurchase}
           disabled={actionDisabled}
-          className="h-8 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {planChangeable
             ? t('billing.settings.subscriptionCard.changeAction')
@@ -882,32 +913,6 @@ function SubscriptionOverviewCard({
   );
 }
 
-function TopupOverviewCard({ onPurchase }: { onPurchase: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <section className="flex min-h-[220px] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-      <p className="text-11 font-medium text-[var(--text-tertiary)]">
-        {t('billing.settings.topupCard.title')}
-      </p>
-      <div className="mt-3 flex-1">
-        <h3 className="text-16 font-medium text-[var(--text-primary)]">
-          {t('billing.settings.topupCard.cardTitle')}
-        </h3>
-        <p className="mt-2 max-w-[420px] text-12 leading-5 text-[var(--text-secondary)]">
-          {t('billing.settings.topupCard.cardDescription')}
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onPurchase}
-        className="mt-5 h-8 w-fit select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
-      >
-        {t('billing.settings.topupCard.action')}
-      </button>
-    </section>
-  );
-}
-
 function PendingPlanChangeBanner({
   pending,
   targetName,
@@ -919,16 +924,12 @@ function PendingPlanChangeBanner({
   onResume: () => void;
   onUndo: () => void;
 }) {
-  const { t } = useTranslation();
-  const effectiveDate = useMemo(() => {
-    const timestamp = Date.parse(pending.effectiveAt);
-    if (!Number.isFinite(timestamp)) return pending.effectiveAt;
-    try {
-      return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(timestamp);
-    } catch {
-      return pending.effectiveAt;
-    }
-  }, [pending.effectiveAt]);
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const effectiveDate = useMemo(
+    () => formatBillingDate(pending.effectiveAt, billingLocale) ?? pending.effectiveAt,
+    [billingLocale, pending.effectiveAt],
+  );
   const label =
     pending.status === 'SCHEDULED'
       ? t('billing.planChange.pendingDowngrade', {
@@ -943,7 +944,7 @@ function PendingPlanChangeBanner({
             name: targetName ?? t('billing.settings.subscriptionCard.unnamedPlan'),
           });
   return (
-    <div className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3">
+    <div className="flex flex-wrap items-center gap-3 border-t border-[var(--border-default)] px-5 py-3">
       <p className="min-w-0 flex-1 text-12 leading-5 text-[var(--text-secondary)]">{label}</p>
       {pending.status === 'SCHEDULED' ? (
         <button
@@ -966,43 +967,56 @@ function PendingPlanChangeBanner({
   );
 }
 
-function BillingUsageSummary({
+const BILLING_CURRENCY = CURRENT_CINDY_REGION === 'global' ? 'usd' : 'cny';
+
+function BillingGroup({
+  title,
+  titleId,
+  description,
+  badge,
+  children,
+}: {
+  title: string;
+  titleId?: string;
+  description?: string;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-labelledby={titleId}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <h3 id={titleId} className="text-14 font-medium text-[var(--text-primary)]">
+          {title}
+        </h3>
+        {badge}
+      </div>
+      {description && (
+        <p className="mt-1 max-w-[620px] text-12 leading-5 text-[var(--text-secondary)]">
+          {description}
+        </p>
+      )}
+      <div className="mt-3">{children}</div>
+    </section>
+  );
+}
+
+function BalanceOverviewCard({
   usage,
   balance,
   issue,
   loading,
-  detailsUnavailable,
+  onPurchase,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
   issue: BalanceIssue;
   loading: boolean;
-  detailsUnavailable: boolean;
+  onPurchase: () => void;
 }) {
-  const { t } = useTranslation();
-  const currency = CURRENT_CINDY_REGION === 'global' ? 'usd' : 'cny';
-  const legacyPools = balance
-    ? [
-        { key: 'plan', label: t('billing.balance.plan'), amount: balance.planCredits },
-        {
-          key: 'purchased',
-          label: t('billing.balance.purchased'),
-          amount: balance.purchasedCredits,
-        },
-        {
-          key: 'promotional',
-          label: t('billing.balance.promotional'),
-          amount: balance.promotionalCredits,
-        },
-      ]
-    : [];
-  const usagePools = usage
-    ? [
-        { key: 'plan', label: t('billing.balance.plan'), pool: usage.plan },
-        { key: 'purchased', label: t('billing.balance.purchased'), pool: usage.purchased },
-        { key: 'promotional', label: t('billing.balance.promotional'), pool: usage.promotional },
-      ]
-    : [];
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const available = usage?.available ?? balance?.available ?? null;
+  const observedAt = usage?.observedAt ?? balance?.observedAt ?? null;
   const issueDescription =
     issue === 'NOT_PROVISIONED'
       ? t('billing.balance.notProvisioned')
@@ -1011,190 +1025,165 @@ function BillingUsageSummary({
         : t('billing.balance.unavailable');
 
   return (
-    <section aria-labelledby="billing-balance-title" aria-live="polite" aria-busy={loading}>
-      {loading ? (
-        <div className="flex h-[118px] items-center px-5 py-5">
-          <Spinner size={15} />
-        </div>
-      ) : usage ? (
-        <>
-          <div className="px-5 py-5">
-            <p
-              id="billing-balance-title"
-              className="text-11 font-medium text-[var(--text-tertiary)]"
-            >
-              {t('billing.balance.title')}
-            </p>
-            <p className="mt-1 text-[28px] font-medium leading-9 tracking-[-0.03em] tabular-nums text-[var(--text-primary)]">
-              {formatMoney(usage.available, currency)}
-            </p>
-            <p className="mt-1 text-11 text-[var(--text-tertiary)]">
-              {t('billing.usage.observedAt', {
-                date: formatLedgerTimestamp(usage.observedAt),
-              })}
-            </p>
-          </div>
-          <div className="border-t border-[var(--border-default)] px-5 py-5">
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-              {usagePools.map(({ key, label, pool }) => (
-                <CreditPoolCard key={key} label={label} pool={pool} currency={currency} />
-              ))}
-            </div>
-          </div>
-          <PromotionalGrantLedger usage={usage} currency={currency} />
-        </>
-      ) : balance ? (
-        <div className="px-5 py-5">
-          <p id="billing-balance-title" className="text-11 font-medium text-[var(--text-tertiary)]">
-            {t('billing.balance.title')}
-          </p>
-          <p className="mt-1 text-[28px] font-medium leading-9 tracking-[-0.03em] tabular-nums text-[var(--text-primary)]">
-            {formatMoney(balance.available, currency)}
-          </p>
-          <div className="mt-4 grid grid-cols-3 divide-x divide-[var(--border-default)] rounded-xl bg-[var(--surface-chip)] px-1 py-2.5">
-            {legacyPools.map(({ key, label, amount }) => (
-              <div key={key} className="min-w-0 px-3">
-                <p className="truncate text-11 text-[var(--text-tertiary)]">{label}</p>
-                <p className="mt-1 truncate text-13 font-medium tabular-nums text-[var(--text-primary)]">
-                  {formatMoney(amount, currency)}
+    <section
+      aria-live="polite"
+      aria-busy={loading}
+      className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]"
+    >
+      <div className="flex min-h-[72px] flex-wrap items-center justify-between gap-x-6 gap-y-3 px-5 py-4">
+        <div className="min-w-0 flex-1">
+          {loading ? (
+            <Spinner size={15} />
+          ) : available !== null ? (
+            <>
+              <p className="text-20 font-medium leading-7 tracking-[-0.02em] tabular-nums text-[var(--text-primary)]">
+                {formatMoney(available, BILLING_CURRENCY, billingLocale)}
+              </p>
+              {observedAt && (
+                <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+                  {t('billing.usage.observedAt', {
+                    date: formatLedgerTimestamp(observedAt, billingLocale),
+                  })}
                 </p>
-              </div>
-            ))}
-          </div>
-          {detailsUnavailable && (
-            <p className="mt-3 text-11 leading-4 text-[var(--text-secondary)]">
-              {t('billing.usage.detailsUnavailable')}
+              )}
+            </>
+          ) : (
+            <p role="status" className="text-12 leading-5 text-[var(--text-secondary)]">
+              {issueDescription}
             </p>
           )}
         </div>
-      ) : (
-        <div
-          role="status"
-          className="flex min-h-[118px] items-center px-5 text-12 leading-5 text-[var(--text-secondary)]"
+        <button
+          type="button"
+          onClick={onPurchase}
+          className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
         >
-          {issueDescription}
-        </div>
-      )}
+          {t('billing.settings.topupCard.action')}
+        </button>
+      </div>
     </section>
   );
 }
 
-function CreditPoolCard({
-  label,
-  pool,
-  currency,
+function UsageBreakdownCard({
+  usage,
+  balance,
 }: {
-  label: string;
-  pool: ModelAccessCreditPoolUsage;
-  currency: string;
+  usage: ModelAccessCreditUsage | null;
+  balance: ModelAccessBalance | null;
 }) {
-  const { t } = useTranslation();
-  const percent = usagePercent(pool);
-  const stats = [
-    { key: 'used', label: t('billing.usage.used'), amount: pool.used },
-    { key: 'total', label: t('billing.usage.total'), amount: pool.total },
-    { key: 'remaining', label: t('billing.usage.remaining'), amount: pool.remaining },
-  ];
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const poolLabels = {
+    plan: t('billing.balance.plan'),
+    purchased: t('billing.balance.purchased'),
+    promotional: t('billing.balance.promotional'),
+  };
   return (
-    <article className="min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-4">
-      <p className="truncate text-12 font-medium text-[var(--text-primary)]">{label}</p>
-      <p className="mt-3 text-11 text-[var(--text-tertiary)]">{t('billing.usage.remaining')}</p>
-      <p className="mt-0.5 truncate text-lg font-medium tracking-[-0.02em] tabular-nums text-[var(--text-primary)]">
-        {formatMoney(pool.remaining, currency)}
-      </p>
-      <div
-        className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--surface-chip)]"
-        role={percent === null ? undefined : 'progressbar'}
-        aria-label={t('billing.usage.progressLabel', { label })}
-        aria-valuemin={percent === null ? undefined : 0}
-        aria-valuemax={percent === null ? undefined : 100}
-        aria-valuenow={percent ?? undefined}
-      >
-        {percent !== null && (
-          <div
-            className="h-full rounded-full bg-[var(--text-primary)]"
-            style={{ width: `${percent}%` }}
-          />
-        )}
-      </div>
-      {percent === null ? (
-        <p className="mt-2 min-h-8 text-10 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.usage.historyUnavailable')}
-        </p>
-      ) : (
-        <p className="mt-2 min-h-8 text-10 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.usage.percentUsed', {
-            percent: new Intl.NumberFormat(undefined, {
-              maximumFractionDigits: 1,
-            }).format(percent),
-          })}
-        </p>
-      )}
-      <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-[var(--border-default)] pt-3">
-        {stats.map(({ key, label: statLabel, amount }) => (
-          <div key={key} className="min-w-0">
-            <dt className="truncate text-10 text-[var(--text-tertiary)]">{statLabel}</dt>
-            <dd className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
-              {amount === null ? '—' : formatMoney(amount, currency)}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </article>
+    <section className="divide-y divide-[var(--border-default)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      {usage
+        ? (
+            [
+              ['plan', usage.plan],
+              ['purchased', usage.purchased],
+              ['promotional', usage.promotional],
+            ] as const
+          ).map(([key, pool]) => (
+            <CreditPoolRow key={key} label={poolLabels[key]} pool={pool} />
+          ))
+        : balance
+          ? (
+              [
+                ['plan', balance.planCredits],
+                ['purchased', balance.purchasedCredits],
+                ['promotional', balance.promotionalCredits],
+              ] as const
+            ).map(([key, amount]) => (
+              <div
+                key={key}
+                className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-3.5"
+              >
+                <p className="text-13 font-medium text-[var(--text-primary)]">{poolLabels[key]}</p>
+                <p className="text-13 font-medium tabular-nums text-[var(--text-primary)]">
+                  {formatMoney(amount, BILLING_CURRENCY, billingLocale)}
+                </p>
+              </div>
+            ))
+          : null}
+    </section>
   );
 }
 
-function PromotionalGrantLedger({
-  usage,
-  currency,
-}: {
-  usage: ModelAccessCreditUsage;
-  currency: string;
-}) {
-  const { t } = useTranslation();
+function CreditPoolRow({ label, pool }: { label: string; pool: ModelAccessCreditPoolUsage }) {
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  const percent = usagePercent(pool);
+  const detail =
+    pool.used !== null && pool.total !== null
+      ? t('billing.usage.poolDetail', {
+          used: formatMoney(pool.used, BILLING_CURRENCY, billingLocale),
+          total: formatMoney(pool.total, BILLING_CURRENCY, billingLocale),
+        })
+      : t('billing.usage.historyUnavailable');
   return (
-    <div className="border-t border-[var(--border-default)] px-5 py-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="text-13 font-medium text-[var(--text-primary)]">
-            {t('billing.usage.promotionalDetails.title')}
-          </h3>
-          <p className="mt-1 max-w-[620px] text-11 leading-4 text-[var(--text-secondary)]">
-            {t('billing.usage.promotionalDetails.description')}
-          </p>
-        </div>
-        <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-          {t('billing.usage.promotionalDetails.count', {
-            count: usage.promotionalGrants.length,
-          })}
-        </span>
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-3.5">
+      <div className="min-w-0">
+        <p className="truncate text-13 font-medium text-[var(--text-primary)]">{label}</p>
+        <p className="mt-1 text-11 leading-4 text-[var(--text-tertiary)]">{detail}</p>
       </div>
+      <div className="flex shrink-0 items-center gap-3">
+        <div
+          className="h-1 w-40 overflow-hidden rounded-full bg-[var(--surface-chip)]"
+          role={percent === null ? undefined : 'progressbar'}
+          aria-label={t('billing.usage.progressLabel', { label })}
+          aria-valuemin={percent === null ? undefined : 0}
+          aria-valuemax={percent === null ? undefined : 100}
+          aria-valuenow={percent ?? undefined}
+        >
+          {percent !== null && (
+            <div
+              className="h-full rounded-full bg-[var(--text-primary)]"
+              style={{ width: `${percent}%` }}
+            />
+          )}
+        </div>
+        <p className="text-11 text-[var(--text-tertiary)]">
+          {t('billing.usage.remaining')}
+          <span className="ml-1.5 text-13 font-medium tabular-nums text-[var(--text-primary)]">
+            {formatMoney(pool.remaining, BILLING_CURRENCY, billingLocale)}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
 
+function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
+  return (
+    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
       {!usage.promotionalGrantsComplete && (
-        <p className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-4 text-[var(--text-secondary)]">
+        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
           {t('billing.usage.promotionalDetails.incomplete', {
             count: usage.promotionalGrants.length,
           })}
         </p>
       )}
-
       {usage.promotionalGrants.length === 0 ? (
-        <p className="mt-4 rounded-xl border border-[var(--border-default)] px-4 py-5 text-12 text-[var(--text-secondary)]">
+        <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
           {t('billing.usage.promotionalDetails.empty')}
         </p>
       ) : (
         <div
-          className="mt-4 max-h-[360px] overflow-y-auto rounded-xl border border-[var(--border-default)] [scrollbar-gutter:stable]"
+          className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto [scrollbar-gutter:stable]"
           role="list"
         >
-          {usage.promotionalGrants.map((grant, index) => (
+          {usage.promotionalGrants.map((grant) => (
             <div
               key={grant.grantId}
               role="listitem"
-              className={cn(
-                'grid grid-cols-3 gap-x-3 gap-y-2 px-4 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
-                index > 0 && 'border-t border-[var(--border-default)]',
-              )}
+              className="grid grid-cols-3 gap-x-3 gap-y-2 px-5 py-3 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center"
             >
               <div className="col-span-3 min-w-0 lg:col-span-1">
                 <div className="flex min-w-0 items-center gap-2">
@@ -1205,30 +1194,27 @@ function PromotionalGrantLedger({
                 </div>
                 <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
                   {t('billing.usage.promotionalDetails.expiresAt', {
-                    date: formatLedgerTimestamp(grant.expiresAt),
+                    date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
                   })}
                 </p>
               </div>
               <GrantAmount
                 label={t('billing.usage.promotionalDetails.original')}
                 amount={grant.originalAmount}
-                currency={currency}
               />
               <GrantAmount
                 label={t('billing.usage.promotionalDetails.used')}
                 amount={grant.usedAmount}
-                currency={currency}
               />
               <GrantAmount
                 label={t('billing.usage.promotionalDetails.remaining')}
                 amount={grant.remainingAmount}
-                currency={currency}
               />
             </div>
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -1241,20 +1227,14 @@ function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantS
   );
 }
 
-function GrantAmount({
-  label,
-  amount,
-  currency,
-}: {
-  label: string;
-  amount: string;
-  currency: string;
-}) {
+function GrantAmount({ label, amount }: { label: string; amount: string }) {
+  const { i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   return (
     <div className="min-w-0 text-right">
       <p className="truncate text-10 text-[var(--text-tertiary)]">{label}</p>
       <p className="mt-0.5 truncate text-11 font-medium tabular-nums text-[var(--text-primary)]">
-        {formatMoney(amount, currency)}
+        {formatMoney(amount, BILLING_CURRENCY, billingLocale)}
       </p>
     </div>
   );
@@ -1297,21 +1277,19 @@ function BillingOfferDialog({
   onCustomAmountChange: (amount: string) => void;
   onSubmit: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const title =
     kind === 'SUBSCRIPTION'
       ? t('billing.dialogs.subscription.title')
       : t('billing.dialogs.topup.title');
-  const description =
-    kind === 'SUBSCRIPTION'
-      ? t('billing.dialogs.subscription.description')
-      : t('billing.dialogs.topup.description');
 
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[9990] bg-[var(--overlay-modal)]" />
         <Dialog.Content
+          aria-describedby={undefined}
           className={cn(
             'fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(720px,calc(100vh-48px))]',
             'w-[calc(100vw-48px)] max-w-[680px] -translate-x-1/2 -translate-y-1/2 flex-col',
@@ -1319,15 +1297,8 @@ function BillingOfferDialog({
             'bg-[var(--surface-elevated)] text-[var(--text-primary)] focus:outline-none',
           )}
         >
-          <div className="flex items-start justify-between gap-4 px-6 pb-4 pt-5">
-            <div>
-              <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">
-                {title}
-              </Dialog.Title>
-              <Dialog.Description className="mt-1.5 max-w-[520px] text-12 leading-5 text-[var(--text-secondary)]">
-                {description}
-              </Dialog.Description>
-            </div>
+          <div className="flex items-center justify-between gap-4 px-6 pb-4 pt-5">
+            <Dialog.Title className="text-16 font-medium tracking-[-0.01em]">{title}</Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -1365,7 +1336,7 @@ function BillingOfferDialog({
               />
             ) : (
               <>
-                <div className="space-y-2.5">
+                <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
                   {offers.map((entry) => {
                     const { product, offer } = entry;
                     const active = selected?.offer.code === offer.code;
@@ -1378,26 +1349,20 @@ function BillingOfferDialog({
                         disabled={unavailableReason !== null}
                         aria-pressed={active}
                         className={cn(
-                          'group relative flex min-h-[88px] w-full items-center gap-5 rounded-xl border px-4 py-3.5 text-left',
-                          'transition-[background-color,border-color,box-shadow] focus-visible:outline-none',
-                          'focus-visible:ring-2 focus-visible:ring-[var(--text-primary)] focus-visible:ring-offset-2',
-                          'focus-visible:ring-offset-[var(--surface-elevated)]',
-                          'disabled:cursor-not-allowed disabled:bg-[var(--surface)] disabled:hover:bg-[var(--surface)]',
+                          'flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                          'focus-visible:ring-[var(--text-primary)]',
+                          'disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent',
                           active
-                            ? 'border-[var(--text-primary)] bg-[var(--surface)] shadow-[inset_3px_0_0_var(--text-primary)]'
-                            : 'border-[var(--border-default)] hover:bg-[var(--surface-hover-soft)]',
+                            ? 'bg-[var(--surface-chip)]'
+                            : 'hover:bg-[var(--surface-hover-soft)]',
                         )}
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-[var(--text-primary)]">
-                            {product.name}
-                          </p>
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <span className="text-11 text-[var(--text-tertiary)]">
-                              {kind === 'SUBSCRIPTION'
-                                ? t('billing.offerKinds.subscription')
-                                : t('billing.offerKinds.topup')}
-                            </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                              {product.name}
+                            </p>
                             {unavailableReason && (
                               <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
                                 {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
@@ -1405,11 +1370,11 @@ function BillingOfferDialog({
                             )}
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-4">
+                        <div className="flex shrink-0 items-center gap-3">
                           <div className="text-right">
-                            <p className="text-lg font-medium tracking-[-0.02em]">
+                            <p className="text-13 font-medium tabular-nums text-[var(--text-primary)]">
                               {offer.amount
-                                ? formatMoney(offer.amount, offer.currency)
+                                ? formatMoney(offer.amount, offer.currency, billingLocale)
                                 : t('billing.amount.custom')}
                               {offer.interval && (
                                 <span className="ml-1 text-11 font-normal text-[var(--text-tertiary)]">
@@ -1418,7 +1383,7 @@ function BillingOfferDialog({
                               )}
                             </p>
                             {offer.creditAmount && (
-                              <p className="mt-1 text-11 text-[var(--text-secondary)]">
+                              <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
                                 {t('billing.credits', { amount: offer.creditAmount })}
                               </p>
                             )}
@@ -1431,14 +1396,13 @@ function BillingOfferDialog({
                 </div>
 
                 {selected && (
-                  <div className="mt-5 border-t border-[var(--border-default)] pt-4">
-                    <h3 className="text-13 font-medium">{t('billing.steps.channel.title')}</h3>
-                    <p className="mt-1 text-12 text-[var(--text-secondary)]">
-                      {t('billing.steps.channel.description')}
-                    </p>
-                    <div className="mt-3 space-y-2">
+                  <div className="mt-5">
+                    <h3 className="text-13 font-medium text-[var(--text-primary)]">
+                      {t('billing.steps.channel.title')}
+                    </h3>
+                    <div className="mt-3 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
                       {selected.purchaseOptions.map((option) => (
-                        <PaymentOptionCard
+                        <PaymentOptionRow
                           key={option.id}
                           option={option}
                           active={selectedPurchaseOptionId === option.id}
@@ -1449,11 +1413,11 @@ function BillingOfferDialog({
 
                     {kind === 'CREDIT_TOPUP' && isCustomTopup(selected.offer) && (
                       <label className="mt-5 block">
-                        <span className="text-12 font-medium text-[var(--text-secondary)]">
+                        <span className="text-13 font-medium text-[var(--text-primary)]">
                           {t('billing.amount.label')}
                         </span>
-                        <div className="mt-2 flex h-11 items-center rounded-xl border border-[var(--border-default)] bg-[var(--surface)] px-4 focus-within:border-[var(--text-primary)]">
-                          <span className="mr-2 text-sm text-[var(--text-tertiary)]">
+                        <div className="mt-2 flex h-10 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-4 focus-within:border-[var(--text-primary)]">
+                          <span className="mr-2 text-13 text-[var(--text-tertiary)]">
                             {selected.offer.currency.toUpperCase()}
                           </span>
                           <input
@@ -1461,7 +1425,7 @@ function BillingOfferDialog({
                             onChange={(event) => onCustomAmountChange(event.target.value)}
                             inputMode="decimal"
                             placeholder={t('billing.amount.placeholder')}
-                            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--text-tertiary)]"
+                            className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
                           />
                         </div>
                         <p
@@ -1474,15 +1438,23 @@ function BillingOfferDialog({
                         >
                           {amountError ??
                             t('billing.amount.rangeHint', {
-                              min: formatMoney(selected.offer.minAmount!, selected.offer.currency),
-                              max: formatMoney(selected.offer.maxAmount!, selected.offer.currency),
+                              min: formatMoney(
+                                selected.offer.minAmount!,
+                                selected.offer.currency,
+                                billingLocale,
+                              ),
+                              max: formatMoney(
+                                selected.offer.maxAmount!,
+                                selected.offer.currency,
+                                billingLocale,
+                              ),
                             })}
                         </p>
                       </label>
                     )}
 
                     {kind === 'SUBSCRIPTION' && subscriptionPurchaseBlocked && (
-                      <p className="mt-5 rounded-lg bg-[var(--surface-chip)] px-4 py-3 text-12 leading-5 text-[var(--text-secondary)]">
+                      <p className="mt-4 text-12 leading-5 text-[var(--text-secondary)]">
                         {t('billing.currentSubscription.purchaseBlocked')}
                       </p>
                     )}
@@ -1492,11 +1464,7 @@ function BillingOfferDialog({
             )}
           </div>
 
-          <div className="flex min-h-16 items-center justify-between gap-4 border-t border-[var(--border-default)] px-6 py-3">
-            <div className="flex min-w-0 max-w-[380px] items-start gap-2 text-11 leading-4 text-[var(--text-tertiary)]">
-              <ShieldCheck size={13} className="shrink-0" />
-              <span>{t('billing.securityNotice')}</span>
-            </div>
+          <div className="flex min-h-16 items-center justify-end gap-4 border-t border-[var(--border-default)] px-6 py-3">
             <button
               type="button"
               onClick={onSubmit}
@@ -1515,11 +1483,14 @@ function BillingOfferDialog({
 
 function CatalogSkeleton() {
   return (
-    <div className="space-y-2.5" aria-hidden>
+    <div
+      className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]"
+      aria-hidden
+    >
       {[0, 1, 2].map((item) => (
         <div
           key={item}
-          className="h-[88px] animate-pulse rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] motion-reduce:animate-none"
+          className="h-[52px] animate-pulse bg-[var(--surface-chip)] motion-reduce:animate-none"
         />
       ))}
     </div>
@@ -1549,7 +1520,7 @@ function StateCard({
   );
 }
 
-function PaymentOptionCard({
+function PaymentOptionRow({
   option,
   active,
   onSelect,
@@ -1566,21 +1537,22 @@ function PaymentOptionCard({
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        'flex min-h-[64px] w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left',
-        'transition-colors focus-visible:outline-none focus-visible:ring-2',
-        'focus-visible:ring-[var(--text-primary)] focus-visible:ring-offset-2',
-        'focus-visible:ring-offset-[var(--surface-elevated)]',
-        active
-          ? 'border-[var(--text-primary)] bg-[var(--surface)]'
-          : 'border-[var(--border-default)] hover:bg-[var(--surface-hover-soft)]',
+        'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+        'focus-visible:ring-[var(--text-primary)]',
+        active ? 'bg-[var(--surface-chip)]' : 'hover:bg-[var(--surface-hover-soft)]',
       )}
     >
-      <div className="grid size-9 shrink-0 place-items-center rounded-full bg-[var(--surface-chip)]">
-        <Icon size={16} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{providerLabel(option.provider, t)}</p>
-        <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+      {option.provider === 'alipay' ? (
+        <AlipayIcon className="size-4 shrink-0 text-[var(--text-secondary)]" />
+      ) : (
+        <Icon size={16} className="shrink-0 text-[var(--text-secondary)]" />
+      )}
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+          {providerLabel(option.provider, t)}
+        </p>
+        <p className="truncate text-11 text-[var(--text-tertiary)]">
           {option.paymentAction === 'QR_CODE'
             ? t('billing.paymentActions.QR_CODE')
             : t('billing.paymentActions.REDIRECT')}

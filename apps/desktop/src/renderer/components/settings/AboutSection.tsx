@@ -18,6 +18,7 @@ import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
 import { useAutoUpdateSettings } from '@/hooks/useAutoUpdateSettings';
+import { useAnalyticsSettings } from '@/hooks/useAnalyticsSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { StorageManagementCard } from './StorageManagementCard';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -122,6 +123,8 @@ export function AboutSection() {
           </>
         )}
         <AutoUpdateToggleRow />
+        <Divider />
+        <AnalyticsToggleRow />
         <Divider />
         <InfoRow
           label={t('settings.about.claudeCodeVersionLabel')}
@@ -302,6 +305,82 @@ function AutoUpdateToggleRow() {
             disabled={disabled}
             onCheckedChange={handleToggle}
             aria-label={t('settings.about.autoUpdateLabel')}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 使用统计(TapDB)开关。
+ *
+ * 语义是 opt-out:用户在登录页同意《隐私政策》后默认开启,这里可以随时关掉。
+ * 关掉即时生效(main 广播 → tapdbClient 走 SDK optOutTracking,连 autoTrack 的
+ * 自动事件也会停),不需要重启。
+ *
+ * 「恢复默认」只删掉开关这条 override,让它重新跟随版本默认值;同意状态是事实记录、
+ * 不是配置项,不会被它清掉(configuration-and-overrides §4)。没有这个入口的话,
+ * 用户把开关拨回当前默认值写入的是一个显式 true,此后再也跟不上默认值的变化。
+ */
+function AnalyticsToggleRow() {
+  const { t } = useTranslation();
+  const { state, setAnalyticsEnabled, resetAnalyticsEnabled } = useAnalyticsSettings();
+  const [saving, setSaving] = useState(false);
+
+  const handleToggle = async (next: boolean) => {
+    setSaving(true);
+    try {
+      await setAnalyticsEnabled(next);
+      toast.success(
+        next
+          ? t('settings.about.analyticsEnabledToast')
+          : t('settings.about.analyticsDisabledToast'),
+      );
+    } catch {
+      // 不透传 err.message:main 侧的 IPC 错误串是英文技术串(`[INTERNAL] ...`),
+      // 直接 toast 出去会让非中文用户看到不可读的内部信息。错误码只用于分支,
+      // 展示一律走本地化文案。
+      toast.error(t('settings.about.analyticsSaveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setSaving(true);
+    try {
+      await resetAnalyticsEnabled();
+      toast.success(t('settings.defaults.restored'));
+    } catch {
+      toast.error(t('settings.defaults.restoreFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 px-[18px] py-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-13 text-[var(--settings-section-sublabel)]">
+            {t('settings.about.analyticsLabel')}
+          </span>
+          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            {t('settings.about.analyticsDescription')}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <DefaultOverrideControls
+            isCustomized={state.analyticsEnabledCustomized}
+            disabled={state.loading || saving}
+            onReset={handleReset}
+          />
+          <Switch
+            checked={state.analyticsEnabled}
+            disabled={state.loading || saving}
+            onCheckedChange={handleToggle}
+            aria-label={t('settings.about.analyticsLabel')}
           />
         </div>
       </div>

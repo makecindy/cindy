@@ -27,7 +27,9 @@ import { randomUUID } from 'node:crypto';
 import {
   GHOST_CINDY_JOB_TTL_MS,
   GHOST_CINDY_MAX_ASYNC_JOBS,
+  GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
+  type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
   type InstalledGhost,
@@ -42,8 +44,13 @@ export interface CindyMediaConfig {
 
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
-  /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。 */
-  generateImage(params: { prompt: string; model: string }): Promise<{ buffer: Uint8Array; mimeType: string }>;
+  /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。
+   *  aspectRatio 是意识的画幅意图,注入实现负责翻译成后端具体尺寸。 */
+  generateImage(params: {
+    prompt: string;
+    model: string;
+    aspectRatio?: GhostImageAspectRatio;
+  }): Promise<{ buffer: Uint8Array; mimeType: string }>;
   /** 主机统一图片通道·改图;源图以磁盘路径喂给网关(意识摸不到路径)。 */
   editImage(params: {
     prompt: string;
@@ -216,6 +223,7 @@ export class GhostCindySlot {
       prompt?: unknown;
       tier?: unknown;
       model?: unknown;
+      aspectRatio?: unknown;
       hashes?: unknown;
       callId?: unknown;
       mode?: unknown;
@@ -255,6 +263,22 @@ export class GhostCindySlot {
       return { ok: false, message: 'callId 不合法(1–128 字符的字符串,或不传)' };
     }
     const callId = (p.callId as string | undefined) ?? 'unattributed';
+
+    // 画幅意图(可选,仅生图):意识声明比例,注入实现翻译成后端具体尺寸。
+    // 改图跟随源图画幅、视频画幅由 provider 层自治——带了就是用错协议,
+    // 明拒好过静默忽略(将来放开支持是向后兼容的放宽)。
+    if (p.aspectRatio !== undefined) {
+      if (kind !== 'gen_image') {
+        return { ok: false, message: 'aspectRatio 仅支持 gen_image(改图跟随源图画幅,视频不收比例)' };
+      }
+      if (
+        typeof p.aspectRatio !== 'string' ||
+        !(GHOST_IMAGE_ASPECT_RATIOS as readonly string[]).includes(p.aspectRatio)
+      ) {
+        return { ok: false, message: `未知画幅比例(可用:${GHOST_IMAGE_ASPECT_RATIOS.join(' / ')})` };
+      }
+    }
+    const aspectRatio = p.aspectRatio as GhostImageAspectRatio | undefined;
 
     // 选型优先级(低 → 高逐层覆盖):出厂默认 → 档位(意识意图,主机翻译)
     // → 意识专属覆盖(用户在详情页钉的)→ 调用显式点名(用户当场说的)。
@@ -368,7 +392,12 @@ export class GhostCindySlot {
         if (kind === 'edit_image') {
           generated = await this.deps.editImage({ prompt, model, imagePaths });
         } else if (kind === 'gen_image') {
-          generated = await this.deps.generateImage({ prompt, model });
+          // 画幅意图条件展开:不传时载荷里连键都没有,与老协议逐字节同形。
+          generated = await this.deps.generateImage({
+            prompt,
+            model,
+            ...(aspectRatio !== undefined ? { aspectRatio } : {}),
+          });
         } else if (kind === 'edit_video') {
           generated = await this.deps.editVideo({ prompt, model, imagePaths });
         } else {

@@ -48,9 +48,9 @@ function formatMinorUnits(
     .join('');
 }
 
-export function formatBillingAmount(amount: string, currency: string): string {
+export function formatBillingAmount(amount: string, currency: string, locale?: string): string {
   try {
-    const fmt = new Intl.NumberFormat(undefined, {
+    const fmt = new Intl.NumberFormat(locale, {
       style: 'currency',
       currency: currency.toUpperCase(),
     });
@@ -64,10 +64,14 @@ export function formatBillingAmount(amount: string, currency: string): string {
   }
 }
 
-export function formatBillingMinorAmount(minor: number, currency: string): string {
+export function formatBillingMinorAmount(
+  minor: number,
+  currency: string,
+  locale?: string,
+): string {
   try {
     if (!Number.isSafeInteger(minor)) return `${minor} ${currency.toUpperCase()}`;
-    const fmt = new Intl.NumberFormat(undefined, {
+    const fmt = new Intl.NumberFormat(locale, {
       style: 'currency',
       currency: currency.toUpperCase(),
     });

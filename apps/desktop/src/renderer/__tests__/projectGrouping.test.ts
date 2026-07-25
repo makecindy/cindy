@@ -46,6 +46,7 @@ function s(partial: Partial<Session>): Session {
     userSendAt,
     status: partial.status ?? 'active',
     agentKind: partial.agentKind ?? 'cc',
+    source: partial.source,
     remoteHostId: partial.remoteHostId ?? null,
     deviceLinkDeviceId: partial.deviceLinkDeviceId,
     deviceLinkDeviceName: partial.deviceLinkDeviceName,
@@ -491,6 +492,18 @@ describe('groupSessions', () => {
     expect(r.unclassified).toHaveLength(0);
     expect(r.projects).toHaveLength(1);
     expect(r.projects[0].sessions[0]).toBe(orphan);
+  });
+
+  // scheduler / plugin 来源豁免草稿判定:零消息也落项目分组。scheduler 由
+  // 自动化任务显式绑定目录;plugin 是 workspace 槽建的空会话入口——零消息
+  // 落在项目分组正是功能本身,掉未分类则功能不成立。
+  it('keeps zero-message scheduler/plugin sessions in their project group (draft exemption)', () => {
+    const scheduler = s({ workingDir: '/p/auto', userSendAt: null, source: 'scheduler' });
+    const plugin = s({ workingDir: '/p/auto', userSendAt: null, source: 'plugin' });
+    const r = groupSessions([scheduler, plugin]);
+    expect(r.unclassified).toHaveLength(0);
+    expect(r.projects).toHaveLength(1);
+    expect(r.projects[0].sessions).toHaveLength(2);
   });
 
   it('allows manually imported external sessions to create standalone projects', () => {

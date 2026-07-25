@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, params?: Record<string, string>) =>
       params ? `${key}:${JSON.stringify(params)}` : key,
   }),

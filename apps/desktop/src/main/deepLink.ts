@@ -310,6 +310,14 @@ export function openMainWindowVoiceSettings(tab: 'voice-input' | 'providers'): v
   dispatchDeepLink({ type: 'settings', tab });
 }
 
+/**
+ * 主进程内部发起的会话聚焦(workspace 槽 focus:true)。复用 deep link 的
+ * 前台 + renderer dispatch 通道,行为与用户点 cindy://session/<id> 一致。
+ */
+export function openMainWindowSession(sessionId: string): void {
+  dispatchDeepLink({ type: 'session', id: sessionId });
+}
+
 function dispatchDeepLink(payload: DeepLinkPayload): void {
   // 纯前台意图:main 进程内消化。冷启动时窗口还没建,app 启动流程本身会前台,直接丢弃。
   if (payload.type === 'focus') {

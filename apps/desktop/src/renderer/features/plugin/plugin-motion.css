@@ -95,21 +95,115 @@
   animation: plugin-selection-settle var(--plugin-motion-state) var(--plugin-motion-ease-enter);
 }
 
-/* The detail hero collapses from the actual page column width, not the window width. */
-.plugin-detail-frame {
-  container-type: inline-size;
+/* Catalog chrome responds to the actual main pane, including when the sidebar stays open. */
+.plugin-management-layout-root {
+  container: plugin-management / inline-size;
 }
 
-@container (max-width: 759px) {
-  .plugin-detail-hero {
-    grid-template-columns: 64px minmax(0, 1fr);
+.plugin-detail-frame {
+  container: plugin-detail / inline-size;
+}
+
+.cindy-capability-prefs {
+  container: cindy-capability / inline-size;
+}
+
+@container cindy-capability (max-width: 520px) {
+  .cindy-capability-prefs .cindy-capability-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
-  .plugin-detail-actions {
-    grid-column: 1 / -1;
-    justify-content: space-between;
-    margin-top: 1rem;
+  .cindy-capability-prefs .cindy-capability-select {
     width: 100%;
+    max-width: none;
+  }
+}
+
+@container plugin-detail (max-width: 420px) {
+  .plugin-detail-frame .plugin-detail-metadata {
+    display: none;
+  }
+}
+
+@container plugin-detail (min-width: 600px) {
+  .plugin-detail-frame .plugin-detail-hero {
+    gap: 1.25rem;
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    gap: 0.75rem;
+  }
+
+  .plugin-detail-frame .plugin-detail-primary-action {
+    padding-inline: 1.25rem;
+  }
+}
+
+@container plugin-management (max-width: 720px) {
+  .plugin-management-layout-root .plugin-catalog-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .plugin-management-layout-root .plugin-catalog-filters {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.125rem;
+  }
+
+  .plugin-management-layout-root .plugin-catalog-filters > button {
+    padding-inline: 0.5rem;
+  }
+
+  .plugin-management-layout-root .plugin-management-header {
+    height: 7rem;
+  }
+
+  .plugin-management-layout-root .plugin-management-header-frame {
+    display: grid;
+    grid-template-areas:
+      'tools'
+      'tabs';
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 2.25rem 2.25rem;
+    align-content: center;
+    column-gap: 0;
+    row-gap: 0.5rem;
+  }
+
+  .plugin-management-layout-root .plugin-motion-tabs {
+    grid-area: tabs;
+    width: 100%;
+  }
+
+  .plugin-management-layout-root .plugin-management-tab {
+    min-width: 0;
+    flex: 1 1 0%;
+  }
+
+  .plugin-management-layout-root .plugin-management-tools {
+    grid-area: tools;
+    width: 100%;
+  }
+
+  .plugin-management-layout-root .plugin-management-search-control {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 auto;
+  }
+
+  .plugin-management-layout-root .plugin-management-action-trigger {
+    width: 2.25rem;
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .plugin-management-layout-root
+    :is(.plugin-management-action-label, .plugin-management-action-chevron) {
+    display: none;
   }
 }
 

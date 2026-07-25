@@ -13,8 +13,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Minus, Plus } from 'lucide-react';
 
+import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
 
@@ -124,8 +124,8 @@ export function AskUserQuestionPrompt({
         try {
           const parsed = JSON.parse(ans);
           if (Array.isArray(parsed)) {
-            const optionLabels = new Set(opts.map(o => o.label));
-            const customItem = (parsed as string[]).find(l => !optionLabels.has(l));
+            const optionLabels = new Set(opts.map((o) => o.label));
+            const customItem = (parsed as string[]).find((l) => !optionLabels.has(l));
             return {
               labels: new Set(parsed as string[]),
               custom: customItem ?? '',
@@ -137,7 +137,7 @@ export function AskUserQuestionPrompt({
         }
         return { labels: new Set<string>(), custom: '', showCustom: false };
       } else if (!isMulti && ans) {
-        const optionLabels = new Set(opts.map(o => o.label));
+        const optionLabels = new Set(opts.map((o) => o.label));
         if (!optionLabels.has(ans) && ans !== '') {
           return { labels: new Set<string>(), custom: ans, showCustom: true };
         }
@@ -174,24 +174,34 @@ export function AskUserQuestionPrompt({
     // Capture a static copy of the current button bar's DOM via a frozen JSX snapshot.
     // This uses the current values at call time, not reactive state.
     const btnClass = 'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium pointer-events-none';
-    const skipClass = cn(btnClass, 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]');
-    const showNext = isMultiSelect || (existingAnswer !== undefined && !isMultiSelect) || isLastQuestion;
+    const skipClass = cn(
+      btnClass,
+      'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
+    );
+    const showNext =
+      isMultiSelect || (existingAnswer !== undefined && !isMultiSelect) || isLastQuestion;
     const nextDisabled = isMultiSelect
       ? selectedLabels.size === 0 && !customInput.trim()
       : existingAnswer === undefined;
-    const nextClass = cn(btnClass, nextDisabled ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50' : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]');
+    const nextClass = cn(
+      btnClass,
+      nextDisabled
+        ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50'
+        : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
+    );
 
     buttonsSnapshotRef.current = (
       <>
         {currentIndex > 0 && (
           <div className={skipClass}>
-            <span className="flex items-center gap-[6px]"><span>&#8592;</span><span>Back</span></span>
+            <span className="flex items-center gap-[6px]">
+              <span>&#8592;</span>
+              <span>Back</span>
+            </span>
           </div>
         )}
         <div className={skipClass}>Skip</div>
-        {showNext && (
-          <div className={nextClass}>{isLastQuestion ? 'Submit' : 'Next'}</div>
-        )}
+        {showNext && <div className={nextClass}>{isLastQuestion ? 'Submit' : 'Next'}</div>}
       </>
     );
   }, [currentIndex, isMultiSelect, isLastQuestion, existingAnswer, selectedLabels, customInput]);
@@ -224,7 +234,16 @@ export function AskUserQuestionPrompt({
         }, 200);
       }
     },
-    [answers, currentIndex, currentQ, totalQuestions, requestId, onAnswer, computeSelectionForIndex, snapshotButtons],
+    [
+      answers,
+      currentIndex,
+      currentQ,
+      totalQuestions,
+      requestId,
+      onAnswer,
+      computeSelectionForIndex,
+      snapshotButtons,
+    ],
   );
 
   // ── Single-select: click option -> advance ──
@@ -249,7 +268,7 @@ export function AskUserQuestionPrompt({
   const handleNext = useCallback(() => {
     if (selectedLabels.size === 0 && !customInput.trim()) return;
     // Maintain UI visual order: filter options by selected state, then append custom text
-    const parts: string[] = options.filter(o => selectedLabels.has(o.label)).map(o => o.label);
+    const parts: string[] = options.filter((o) => selectedLabels.has(o.label)).map((o) => o.label);
     if (customInput.trim()) {
       // Custom text is an additional selected item
       parts.push(customInput.trim());
@@ -356,7 +375,16 @@ export function AskUserQuestionPrompt({
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [viewerState, options, showCustomInput, isMultiSelect, handleSingleSelect, handleToggle, handleCustomOptionClick, handleSkip]);
+  }, [
+    viewerState,
+    options,
+    showCustomInput,
+    isMultiSelect,
+    handleSingleSelect,
+    handleToggle,
+    handleCustomOptionClick,
+    handleSkip,
+  ]);
 
   // ── Animation classes ──
   const slideClass = isAnimating
@@ -365,352 +393,316 @@ export function AskUserQuestionPrompt({
       : 'translate-x-[20px] opacity-0'
     : 'translate-x-0 opacity-100';
 
-  // ── F-AUQ-MIN-3: Minimized bar early-return ──
-  // We branch INSIDE the same component so all wizard useState (currentIndex /
-  // answers / selectedLabels / customInput / showCustomInput) survives the
-  // fold/restore round-trip — React keeps the instance mounted because the
-  // parent only swaps the inner subtree, not the component itself.
-  // F-AUQ-MIN-4 verbatim: 还原后 currentIndex / 已选选项 / customInput / userAnswers
-  // 全部保留。
-  if (viewerState === 'minimized') {
-    return (
-      <button
-        type="button"
-        onClick={() => onViewerStateChange('expanded')}
-        aria-label="Restore question prompt"
-        className={cn(
-          'w-full max-w-[880px] rounded-[12px] border',
-          'border-[var(--plan-card-border)] bg-[var(--plan-card-bg)]',
-          'flex h-[44px] items-center justify-between pl-[20px] pr-[10px]',
-          'cursor-pointer text-left transition-colors',
-          'hover:bg-[var(--plan-toolbar-btn-hover-bg)]',
-        )}
-      >
-        <div className="flex items-center gap-[12px]">
-          <span className="text-14 font-semibold text-[var(--plan-min-title)]">
-            Question pending
-          </span>
-          {totalQuestions > 1 && (
-            <span className="text-13 font-normal text-[var(--plan-min-icon)]">
-              {currentIndex + 1} / {totalQuestions}
-            </span>
+  const footerActions = (
+    <div className="flex gap-[10px]">
+      {isAnimating ? (
+        buttonsSnapshotRef.current
+      ) : (
+        <>
+          {currentIndex > 0 && (
+            <button
+              type="button"
+              onClick={handleBack}
+              className={cn(
+                'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
+                'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
+              )}
+            >
+              <span className="flex items-center gap-[6px]">
+                <span>&#8592;</span>
+                <span>Back</span>
+              </span>
+            </button>
           )}
-        </div>
-        <span
-          aria-hidden="true"
-          className="flex h-[28px] w-[28px] items-center justify-center rounded-[6px]"
-        >
-          <Plus size={16} className="text-[var(--plan-min-icon)]" />
-        </span>
-      </button>
-    );
-  }
+
+          <button
+            type="button"
+            onClick={handleSkip}
+            className={cn(
+              'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
+              'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
+            )}
+          >
+            Skip
+          </button>
+
+          {(isMultiSelect ||
+            (existingAnswer !== undefined && !isMultiSelect) ||
+            isLastQuestion) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (isMultiSelect) {
+                  handleNext();
+                } else {
+                  advance(existingAnswer ?? '');
+                }
+              }}
+              disabled={
+                isMultiSelect
+                  ? selectedLabels.size === 0 && !customInput.trim()
+                  : existingAnswer === undefined
+              }
+              className={cn(
+                'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
+                (
+                  isMultiSelect
+                    ? selectedLabels.size === 0 && !customInput.trim()
+                    : existingAnswer === undefined
+                )
+                  ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50'
+                  : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
+              )}
+            >
+              {isLastQuestion ? 'Submit' : 'Next'}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
 
   // ── Render ──
   return (
-    <div
-      className={cn(
-        'w-full max-w-[914px] rounded-[12px] border p-[20px]',
-        'border-[var(--ask-card-border)] bg-[var(--ask-card-bg)]',
-      )}
+    <InteractionPromptCardShell
+      viewerState={viewerState}
+      onViewerStateChange={onViewerStateChange}
+      minimizedTitle="Question pending"
+      minimizedMeta={totalQuestions > 1 ? `${currentIndex + 1} / ${totalQuestions}` : undefined}
+      restoreAriaLabel="Restore question prompt"
+      minimizeAriaLabel="Minimize question prompt"
+      minimizeDisabled={isAnimating}
+      headerLeading={
+        currentQ?.header ? (
+          <span className="inline-block rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-[12px] font-medium text-[var(--ask-badge-text)]">
+            {currentQ.header}
+          </span>
+        ) : null
+      }
+      footer={footerActions}
     >
-      <div className="flex flex-col gap-[16px]">
-        {/*
-         * F-AUQ-MIN-2: Top header bar — ALWAYS rendered (32px tall) so the
-         * Minimize button is always reachable, even when the question payload
-         * carries no `header` chip text. Header chip (if any) goes on the left,
-         * Minimize button always on the right. Spec verbatim:
-         *   payload 不含 header 文本时：仍需新增一行 32px 高 header 区，
-         *   左侧空，右侧渲染 Minimize 按钮（保证按钮始终可见）。
-         */}
-        <div className="flex h-[32px] items-center justify-between">
-          <div className="flex items-center">
-            {currentQ?.header && (
-              <span className="inline-block rounded-[6px] bg-[var(--ask-header-chip-bg)] px-[8px] py-[2px] text-[12px] font-medium text-[var(--ask-badge-text)]">
-                {currentQ.header}
+      {/* Content area — participates in slide animation */}
+      <div
+        className={cn(
+          'flex flex-col gap-[16px] transition-all duration-200 ease-in-out',
+          slideClass,
+        )}
+      >
+        {/* Question Row (header chip moved to top header bar above) */}
+        <div className="flex flex-col gap-[8px]">
+          <div className="flex items-center justify-between">
+            <span className="text-15 font-medium text-[var(--ask-header-text)]">
+              {currentQ?.question}
+            </span>
+            {pageIndicator && (
+              <span className="ml-4 shrink-0 text-13 text-[var(--ask-page-text)]">
+                {pageIndicator}
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => onViewerStateChange('minimized')}
-            disabled={isAnimating}
-            aria-label="Minimize question prompt"
-            className={cn(
-              'flex h-[28px] w-[28px] cursor-pointer items-center justify-center rounded-[6px]',
-              // 线框图标钮(2026-07-23 用户拍板): 与 Skip/Submit 同描边族,静默透明底
-              'border border-[var(--confirm-btn-secondary-border)] bg-transparent',
-              'text-[var(--confirm-btn-secondary-text)] transition-colors',
-              'hover:bg-[var(--confirm-btn-secondary-hover)]',
-              isAnimating && 'cursor-not-allowed opacity-40 hover:bg-transparent',
-            )}
-          >
-            <Minus size={16} />
-          </button>
         </div>
 
-        {/* Content area — participates in slide animation */}
-        <div className={cn('flex flex-col gap-[16px] transition-all duration-200 ease-in-out', slideClass)}>
-          {/* Question Row (header chip moved to top header bar above) */}
-          <div className="flex flex-col gap-[8px]">
-            <div className="flex items-center justify-between">
-              <span className="text-15 font-medium text-[var(--ask-header-text)]">
-                {currentQ?.question}
-              </span>
-              {pageIndicator && (
-                <span className="ml-4 shrink-0 text-13 text-[var(--ask-page-text)]">
-                  {pageIndicator}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Options Container */}
-          {options.length > 0 && (
-            <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
-              {options.map((opt, idx) => (
-                <div key={opt.label}>
-                  {idx > 0 && (
-                    <div className="h-px bg-[var(--ask-option-divider)]" />
-                  )}
-                  <button
-                    type="button"
-                    className={cn(
-                      'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
-                      'transition-colors hover:bg-[var(--ask-option-hover)]',
-                      // Highlight selected option when revisiting single-select via Back
-                      !isMultiSelect && existingAnswer === opt.label && 'bg-[var(--ask-option-hover)]',
-                    )}
-                    onClick={() =>
-                      isMultiSelect
-                        ? handleToggle(opt.label)
-                        : handleSingleSelect(opt.label)
-                    }
-                  >
-                    <div className="flex items-center gap-3">
-                      {/* Checkbox for multi-select */}
-                      {isMultiSelect && (
-                        <div
-                          className={cn(
-                            'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
-                            selectedLabels.has(opt.label)
-                              ? 'bg-[var(--ask-checkbox-checked-bg)]'
-                              : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
-                          )}
-                        >
-                          {selectedLabels.has(opt.label) && (
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ask-checkbox-checked-icon)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12" />
-                            </svg>
-                          )}
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="text-14 font-medium text-[var(--ask-option-label)]">
-                          {opt.label}
-                        </div>
-                        {opt.description && (
-                          <div className="mt-1 text-13 text-[var(--ask-option-desc)]">
-                            {opt.description}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-[13px] font-medium text-[var(--ask-badge-text)]">
-                      {idx + 1}
-                    </div>
-                  </button>
-                </div>
-              ))}
-
-              {/* "Type something else..." row */}
-              <div className="h-px bg-[var(--ask-option-divider)]" />
-              {showCustomInput ? (
-                <div className="flex items-center gap-2 px-[16px] py-[14px]">
-                  {isMultiSelect && (
-                    <div
-                      className={cn(
-                        'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
-                        customInput.trim()
-                          ? 'bg-[var(--ask-checkbox-checked-bg)]'
-                          : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
-                      )}
-                    >
-                      {customInput.trim() && (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ask-checkbox-checked-icon)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </div>
-                  )}
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={customInput}
-                    onChange={(e) => setCustomInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.nativeEvent.isComposing && !isMultiSelect) {
-                        e.preventDefault();
-                        handleCustomSubmit();
-                      }
-                      if (e.key === 'Escape') {
-                        e.preventDefault();
-                        setShowCustomInput(false);
-                        setCustomInput('');
-                      }
-                    }}
-                    placeholder="Type your answer..."
-                    className={cn(
-                      'flex-1 bg-transparent text-14 font-normal outline-none',
-                      'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
-                      'select-text',
-                    )}
-                  />
-                  {!isMultiSelect && (
-                    <button
-                      type="button"
-                      onClick={handleCustomSubmit}
-                      disabled={!customInput.trim()}
-                      className={cn(
-                        'shrink-0 rounded-[9999px] px-[16px] py-[6px]',
-                        'text-13 font-medium',
-                        customInput.trim()
-                          ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
-                          : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
-                      )}
-                    >
-                      Send
-                    </button>
-                  )}
-                </div>
-              ) : (
+        {/* Options Container */}
+        {options.length > 0 && (
+          <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
+            {options.map((opt, idx) => (
+              <div key={opt.label}>
+                {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
                 <button
                   type="button"
                   className={cn(
                     'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
                     'transition-colors hover:bg-[var(--ask-option-hover)]',
+                    // Highlight selected option when revisiting single-select via Back
+                    !isMultiSelect &&
+                      existingAnswer === opt.label &&
+                      'bg-[var(--ask-option-hover)]',
                   )}
-                  onClick={handleCustomOptionClick}
+                  onClick={() =>
+                    isMultiSelect ? handleToggle(opt.label) : handleSingleSelect(opt.label)
+                  }
                 >
                   <div className="flex items-center gap-3">
+                    {/* Checkbox for multi-select */}
                     {isMultiSelect && (
-                      <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
+                      <div
+                        className={cn(
+                          'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
+                          selectedLabels.has(opt.label)
+                            ? 'bg-[var(--ask-checkbox-checked-bg)]'
+                            : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
+                        )}
+                      >
+                        {selectedLabels.has(opt.label) && (
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="var(--ask-checkbox-checked-icon)"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </div>
                     )}
-                    <span className="text-14 italic text-[var(--ask-option-custom)]">
-                      Type something else...
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-14 font-medium text-[var(--ask-option-label)]">
+                        {opt.label}
+                      </div>
+                      {opt.description && (
+                        <div className="mt-1 text-13 text-[var(--ask-option-desc)]">
+                          {opt.description}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-[13px] font-medium text-[var(--ask-badge-text)]">
-                    {options.length + 1}
+                    {idx + 1}
                   </div>
                 </button>
-              )}
-            </div>
-          )}
+              </div>
+            ))}
 
-          {/* Free-text input when no options */}
-          {options.length === 0 && (
-            <div className="flex gap-2">
-              <input
-                ref={inputRef}
-                type="text"
-                value={customInput}
-                onChange={(e) => setCustomInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                    e.preventDefault();
-                    if (customInput.trim()) advance(customInput.trim());
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    handleSkip();
-                  }
-                }}
-                placeholder="Type your answer..."
-                autoFocus
-                className={cn(
-                  'h-10 flex-1 rounded-[12px] border px-3 text-14 outline-none',
-                  'border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] text-[var(--ask-input-text)]',
-                  'placeholder:text-[var(--ask-input-placeholder)]',
+            {/* "Type something else..." row */}
+            <div className="h-px bg-[var(--ask-option-divider)]" />
+            {showCustomInput ? (
+              <div className="flex items-center gap-2 px-[16px] py-[14px]">
+                {isMultiSelect && (
+                  <div
+                    className={cn(
+                      'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
+                      customInput.trim()
+                        ? 'bg-[var(--ask-checkbox-checked-bg)]'
+                        : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
+                    )}
+                  >
+                    {customInput.trim() && (
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--ask-checkbox-checked-icon)"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </div>
                 )}
-              />
-              <button
-                type="button"
-                onClick={() => customInput.trim() && advance(customInput.trim())}
-                disabled={!customInput.trim()}
-                className={cn(
-                  'rounded-[9999px] px-4 text-14 font-medium transition-colors',
-                  customInput.trim()
-                    ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
-                    : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
-                )}
-              >
-                Send
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Bottom buttons row — frozen during animation via ref snapshot */}
-        <div className="flex gap-[10px]">
-          {isAnimating ? buttonsSnapshotRef.current : (
-            <>
-              {currentIndex > 0 && (
-                <button
-                  type="button"
-                  onClick={handleBack}
-                  className={cn(
-                    'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                    'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                  )}
-                >
-                  <span className="flex items-center gap-[6px]">
-                    <span>&#8592;</span>
-                    <span>Back</span>
-                  </span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={handleSkip}
-                className={cn(
-                  'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                  'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                )}
-              >
-                Skip
-              </button>
-
-              {(isMultiSelect || (existingAnswer !== undefined && !isMultiSelect) || isLastQuestion) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isMultiSelect) {
-                      handleNext();
-                    } else {
-                      advance(existingAnswer ?? '');
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={customInput}
+                  onChange={(e) => setCustomInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing && !isMultiSelect) {
+                      e.preventDefault();
+                      handleCustomSubmit();
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setShowCustomInput(false);
+                      setCustomInput('');
                     }
                   }}
-                  disabled={
-                    isMultiSelect
-                      ? selectedLabels.size === 0 && !customInput.trim()
-                      : existingAnswer === undefined
-                  }
+                  placeholder="Type your answer..."
                   className={cn(
-                    'rounded-[9999px] px-[20px] py-[8px] text-13 font-medium',
-                    (isMultiSelect ? (selectedLabels.size === 0 && !customInput.trim()) : existingAnswer === undefined)
-                      ? 'cursor-not-allowed border border-[var(--border-default)] bg-transparent text-[var(--text-disabled-tertiary)] opacity-50'
-                      : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
+                    'flex-1 bg-transparent text-14 font-normal outline-none',
+                    'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
+                    'select-text',
                   )}
-                >
-                  {isLastQuestion ? 'Submit' : 'Next'}
-                </button>
+                />
+                {!isMultiSelect && (
+                  <button
+                    type="button"
+                    onClick={handleCustomSubmit}
+                    disabled={!customInput.trim()}
+                    className={cn(
+                      'shrink-0 rounded-[9999px] px-[16px] py-[6px]',
+                      'text-13 font-medium',
+                      customInput.trim()
+                        ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
+                        : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+                    )}
+                  >
+                    Send
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={cn(
+                  'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
+                  'transition-colors hover:bg-[var(--ask-option-hover)]',
+                )}
+                onClick={handleCustomOptionClick}
+              >
+                <div className="flex items-center gap-3">
+                  {isMultiSelect && (
+                    <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
+                  )}
+                  <span className="text-14 italic text-[var(--ask-option-custom)]">
+                    Type something else...
+                  </span>
+                </div>
+                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-[13px] font-medium text-[var(--ask-badge-text)]">
+                  {options.length + 1}
+                </div>
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Free-text input when no options */}
+        {options.length === 0 && (
+          <div className="flex gap-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={customInput}
+              onChange={(e) => setCustomInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  if (customInput.trim()) advance(customInput.trim());
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  handleSkip();
+                }
+              }}
+              placeholder="Type your answer..."
+              autoFocus
+              className={cn(
+                'h-10 flex-1 rounded-[12px] border px-3 text-14 outline-none',
+                'border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] text-[var(--ask-input-text)]',
+                'placeholder:text-[var(--ask-input-placeholder)]',
               )}
-            </>
-          )}
-        </div>
+            />
+            <button
+              type="button"
+              onClick={() => customInput.trim() && advance(customInput.trim())}
+              disabled={!customInput.trim()}
+              className={cn(
+                'rounded-[9999px] px-4 text-14 font-medium transition-colors',
+                customInput.trim()
+                  ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
+                  : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+              )}
+            >
+              Send
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </InteractionPromptCardShell>
   );
 }

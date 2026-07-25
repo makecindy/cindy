@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetGhostSettingsSnapshotCacheForTest,
+  GHOST_SETTINGS_LAYOUT_REVISION,
   loadGhostSettingsSnapshot,
   pruneGhostSettingsSnapshots,
   saveGhostSettingsSnapshot,
@@ -24,6 +25,7 @@ function makeSnapshot(overrides: Partial<GhostSettingsSnapshot> = {}): GhostSett
     dpr: 2,
     themeCss: ':root { --surface: #111; }',
     version: '1.1.1',
+    layoutRevision: GHOST_SETTINGS_LAYOUT_REVISION,
     capturedAt: Date.now(),
     ...overrides,
   };
@@ -86,6 +88,12 @@ describe('容错', () => {
     const legacy: Partial<GhostSettingsSnapshot> = { ...makeSnapshot() };
     delete legacy.capturedAt;
     localStorage.setItem('ghostSettings.snapshot.g1', JSON.stringify(legacy));
+    expect(loadGhostSettingsSnapshot('g1')).toBeNull();
+
+    __resetGhostSettingsSnapshotCacheForTest();
+    const preLayoutRevision: Partial<GhostSettingsSnapshot> = { ...makeSnapshot() };
+    delete preLayoutRevision.layoutRevision;
+    localStorage.setItem('ghostSettings.snapshot.g1', JSON.stringify(preLayoutRevision));
     expect(loadGhostSettingsSnapshot('g1')).toBeNull();
   });
 
@@ -153,10 +161,13 @@ describe('存储预算', () => {
 describe('匹配判定', () => {
   const ctx = { version: '1.1.1', themeCss: ':root { --surface: #111; }', dpr: 2 };
 
-  it('版本 / 主题 / DPR 全等才命中', () => {
+  it('插件版本 / 宿主布局版本 / 主题 / DPR 全等才命中', () => {
     expect(snapshotMatchesContext(makeSnapshot(), ctx)).toBe(true);
     expect(snapshotMatchesContext(makeSnapshot({ version: '1.1.2' }), ctx)).toBe(false);
-    expect(snapshotMatchesContext(makeSnapshot({ themeCss: ':root { --surface: #eee; }' }), ctx)).toBe(false);
+    expect(snapshotMatchesContext(makeSnapshot({ layoutRevision: 2 }), ctx)).toBe(false);
+    expect(
+      snapshotMatchesContext(makeSnapshot({ themeCss: ':root { --surface: #eee; }' }), ctx),
+    ).toBe(false);
     expect(snapshotMatchesContext(makeSnapshot({ dpr: 1 }), ctx)).toBe(false);
   });
 

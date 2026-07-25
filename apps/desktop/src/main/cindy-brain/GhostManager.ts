@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 import {
   GHOST_MANIFEST_FILE,
   GHOST_LOCALE_MAX_BYTES,
+  GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
   ghostIconMimeType,
   isValidGhostId,
@@ -24,6 +25,7 @@ import {
   type GhostTrustRegistry,
 } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
+import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -522,6 +524,41 @@ export class GhostManager {
         };
       }
       iconDataUrl = buildIconDataUrl(v.manifest.icon, iconData) ?? undefined;
+    }
+
+    // 5) skill 槽:声明的每个技能目录必须真有 SKILL.md,且 frontmatter 与清单
+    //    声明逐字一致——确认框展示的必须就是 Agent 实际读到的,装入前把账算清。
+    //    对未本地化的 v.manifest 校验即可:skill 字段不在本地化白名单
+    //    (GhostManifestLocaleResource)内,localizedManifest 与之恒等。
+    for (const skillItem of v.manifest.skill?.items ?? []) {
+      const relPath = `${skillItem.dir}/SKILL.md`;
+      const skillEntry = zip.file(`${prefix}${relPath}`);
+      if (!skillEntry) {
+        return {
+          rejection: { code: 'file-invalid', reason: `skill 条目声明了 ${skillItem.dir},但压缩包内缺少 ${relPath}` },
+        };
+      }
+      let skillMd: Buffer;
+      try {
+        skillMd = await readZipEntryBufferWithLimit(
+          skillEntry,
+          GHOST_SKILL_MD_MAX_BYTES,
+          `skill ${relPath}`,
+        );
+      } catch {
+        return {
+          rejection: {
+            code: 'file-invalid',
+            reason: `${relPath} 过大(上限 ${GHOST_SKILL_MD_MAX_BYTES} 字节)`,
+          },
+        };
+      }
+      const consistencyError = checkSkillMdConsistency(skillMd.toString('utf8'), skillItem);
+      if (consistencyError) {
+        return {
+          rejection: { code: 'file-invalid', reason: `skill 条目 ${skillItem.dir}:${consistencyError}` },
+        };
+      }
     }
 
     return {

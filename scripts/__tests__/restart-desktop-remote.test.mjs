@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +6,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+	applyDesktopStartupConfigForPhase,
+	defaultIsolatedUserDataDir,
 	devEnvPrefix,
 	isRepositoryDesktopDevProcess,
 	formatDesktopStartupFailure,
@@ -24,6 +25,36 @@ import {
 	buildDesktopRestartSteps,
 	runDesktopRestart,
 } from "../desktop-restart-runner.mjs";
+
+test("isolated userData uses an absolute OS config root when env vars are absent", () => {
+	assert.equal(
+		defaultIsolatedUserDataDir("feature", {
+			env: {},
+			platform: "linux",
+			homedir: () => "/home/dev",
+		}),
+		"/home/dev/.config/Cindy-dev-feature",
+	);
+	assert.equal(
+		defaultIsolatedUserDataDir("feature", {
+			env: {},
+			platform: "win32",
+			homedir: () => String.raw`C:\Users\dev`,
+		}),
+		String.raw`C:\Users\dev\AppData\Roaming\Cindy-dev-feature`,
+	);
+	for (const platform of ["linux", "win32"]) {
+		assert.throws(
+			() =>
+				defaultIsolatedUserDataDir("feature", {
+					env: {},
+					platform,
+					homedir: () => "",
+				}),
+			/cannot resolve an absolute OS userData root/,
+		);
+	}
+});
 
 function appleScriptLines(args) {
 	const lines = [];
@@ -95,33 +126,54 @@ test("desktop restart runner keeps the kill-before-deps order by default", () =>
 	]);
 });
 
-test("desktop restart rejects an unmerged migration before the kill step", () => {
-	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-restart-policy-"));
-	const calls = [];
-	try {
-		fs.mkdirSync(path.join(repo, "apps", "desktop", "drizzle"), { recursive: true });
-		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0000_init.sql"), "SELECT 0;\n");
-		const git = (...args) => {
-			const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
-			assert.equal(result.status, 0, result.stderr);
-		};
-		git("init", "-b", "main");
-		git("config", "user.name", "Restart Policy Test");
-		git("config", "user.email", "restart-policy@example.invalid");
-		git("add", ".");
-		git("commit", "-m", "base");
-		git("update-ref", "refs/remotes/origin/main", "HEAD");
-		git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
-		git("switch", "-c", "feature");
-		fs.writeFileSync(path.join(repo, "apps", "desktop", "drizzle", "0001_feature.sql"), "SELECT 1;\n");
+test("desktop restart process-control phase does not initialize startup configuration", () => {
+	const processControlEnv = {};
+	assert.equal(
+		applyDesktopStartupConfigForPhase({
+			argv: ["--kill-only", "--region=global", "--endpoints-cdn"],
+			env: processControlEnv,
+			mode: "remote",
+		}),
+		null,
+	);
+	assert.deepEqual(processControlEnv, {});
 
-		assert.throws(
-			() => runDesktopRestart(["--wait-ready"], repo, (step) => calls.push(step)),
-			/Shared Cindy userData cannot run migration artifacts/,
+	const startupEnv = {};
+	assert.deepEqual(
+		applyDesktopStartupConfigForPhase({
+			argv: ["--region=global"],
+			env: startupEnv,
+			mode: "remote",
+		}),
+		{
+			region: "global",
+			endpointsCdn: false,
+			endpointManifestFile: "config/endpoint.global.json",
+		},
+	);
+	assert.deepEqual(startupEnv, {
+		CINDY_AUTH_REGION: "global",
+		XDT_ENDPOINT_MANIFEST_FILE: "config/endpoint.global.json",
+	});
+});
+
+test("desktop restart blocks shared primary dev before the kill step", () => {
+	const calls = [];
+	assert.throws(
+		() => runDesktopRestart(["--wait-ready"], "/repo/cindy", (step) => calls.push(step)),
+		/may upgrade the release database and prevent an older release from opening/,
+	);
+	assert.deepEqual(calls, []);
+});
+
+test("desktop restart allows isolated and passive dev modes", () => {
+	const root = "/repo/cindy";
+	for (const modeArg of ["--isolated=feature", "--passive", "--preserve-running"]) {
+		const calls = [];
+		assert.doesNotThrow(() =>
+			runDesktopRestart(["--wait-ready", modeArg], root, (step) => calls.push(step)),
 		);
-		assert.deepEqual(calls, []);
-	} finally {
-		fs.rmSync(repo, { recursive: true, force: true });
+		assert.ok(calls.length > 0, `${modeArg} should reach the restart pipeline`);
 	}
 });
 

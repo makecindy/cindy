@@ -912,7 +912,7 @@ export function GhostToolCard({
           参数(审计透明层,与旧 bar 同一承诺)。chip 以下整块交给意识画布。 */}
       <button
         type="button"
-        className="mb-2 flex cursor-pointer items-center gap-1.5 self-start rounded-full border px-2 py-0.5 text-left"
+        className="mb-2 flex max-w-full cursor-pointer items-center gap-1.5 self-start rounded-full border px-2 py-0.5 text-left"
         style={{ backgroundColor: 'var(--surface-chip)', borderColor: 'var(--border-default)' }}
         onClick={(e) => {
           // 展开是"就地看详情":先通知消息流跳过本次高度变化的贴底跟随
@@ -930,7 +930,7 @@ export function GhostToolCard({
             <Ghost size={11} style={{ color: 'var(--text-secondary)' }} />
           )}
         </span>
-        <span className="truncate text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+        <span className="min-w-0 truncate text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
           {name}
         </span>
         <span className="flex h-3.5 w-3.5 items-center justify-center">
@@ -1006,7 +1006,7 @@ export function GhostToolCard({
         return (
           <div key={s.callId} className="mt-2.5 flex flex-col">
             <div
-              className="mb-2 flex items-center gap-1.5 self-start rounded-full border px-2 py-0.5"
+              className="mb-2 flex max-w-full items-center gap-1.5 self-start rounded-full border px-2 py-0.5"
               style={{ backgroundColor: 'var(--surface-chip)', borderColor: 'var(--border-default)' }}
             >
               <span className="flex h-[14px] w-[14px] shrink-0 items-center justify-center overflow-hidden rounded-full">
@@ -1016,7 +1016,7 @@ export function GhostToolCard({
                   <Ghost size={11} style={{ color: 'var(--text-secondary)' }} />
                 )}
               </span>
-              <span className="truncate text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              <span className="min-w-0 truncate text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
                 {name}
               </span>
               <span className="flex h-3.5 w-3.5 items-center justify-center">

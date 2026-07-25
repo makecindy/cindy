@@ -96,7 +96,9 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
 beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin' },
+    // acceptPrivacyConsent:协议门放行时记录「已同意」(TapDB 采集的前置条件)。
+    // fire-and-forget,不参与登录派发时序。
+    value: { platform: 'darwin', acceptPrivacyConsent: async () => ({ allowed: true }) },
   });
 });
 

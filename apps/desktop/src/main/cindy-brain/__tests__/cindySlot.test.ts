@@ -164,6 +164,43 @@ describe('载荷校验', () => {
     expect(bad).toMatchObject({ ok: false });
     expect((bad as { message: string }).message).toContain('档位');
   });
+
+  it('画幅意图:合法比例透传;不传时载荷无 aspectRatio 键;未知比例拒', async () => {
+    const { slot, generateImage } = makeSlot();
+    const ok = await slot.handleModelRequest('art', { ...REQ, aspectRatio: '3:2' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateImage).toHaveBeenLastCalledWith({
+      prompt: '一只猫',
+      model: 'gpt-image-2',
+      aspectRatio: '3:2',
+    });
+
+    // 不传 = 与老协议同形(连键都没有),后端走缺省 auto。
+    await slot.handleModelRequest('art', REQ);
+    expect(generateImage).toHaveBeenLastCalledWith({ prompt: '一只猫', model: 'gpt-image-2' });
+
+    const bad = await slot.handleModelRequest('art', { ...REQ, aspectRatio: '21:9' });
+    expect(bad).toMatchObject({ ok: false });
+    expect((bad as { message: string }).message).toContain('画幅');
+    expect(generateImage).toHaveBeenCalledTimes(2);
+  });
+
+  it('画幅意图仅生图收:改图/视频带 aspectRatio → 明拒且不触发生成', async () => {
+    const { slot, editImage, generateVideo } = makeSlot();
+    const editBad = await slot.handleModelRequest('art', { ...EDIT_REQ, aspectRatio: '1:1' });
+    expect(editBad).toMatchObject({ ok: false });
+    expect((editBad as { message: string }).message).toContain('gen_image');
+    expect(editImage).not.toHaveBeenCalled();
+
+    const videoBad = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: '一只猫奔跑',
+      aspectRatio: '2:3',
+    });
+    expect(videoBad).toMatchObject({ ok: false });
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
 });
 
 describe('意识专属后端覆盖(解析表第②层)', () => {

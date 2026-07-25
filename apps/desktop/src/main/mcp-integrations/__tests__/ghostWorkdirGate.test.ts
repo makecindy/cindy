@@ -14,9 +14,15 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type {
+  GhostSetupEnsureRequest,
+  GhostSetupEnsureResult,
+} from '../../cindy-brain/ghostSetupCoordinator';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
 const prefsFile = () => path.join(tmpUserData, 'ghost-workdir-prefs.json');
+const logWarnMock = vi.fn();
+const grantAttachmentsMock = vi.fn();
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
 vi.mock('../../appSessionState.js', () => ({
@@ -26,23 +32,47 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
+  createLogger: () => ({ info: () => {}, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // ALS 语境:恒缺省 → resolveSessionContext 走建线闭包 ctx(claude 路径同款)。
 vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => undefined }));
 
+const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
+const setupAssessmentMock = vi.fn((_ghostId: string) => ({
+  state: 'ready' as const,
+  revision: 0,
+  groups: [],
+}));
+const ensureReadyMock = vi.fn(
+  async (_request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> => ({
+    ok: true as const,
+    assessment: { state: 'ready' as const, revision: 0, groups: [] },
+  }),
+);
+const sessionSnapshotMock = vi.fn(async () => ({
+  workingDir: WORKDIR,
+  permissionMode: 'auto',
+  planModeEnabled: false,
+  remoteHostId: null,
+}));
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: listMock }),
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
+  getGhostSetupAssessment: setupAssessmentMock,
   isGhostAvailableForActiveSession: () => true,
+}));
+vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
+  getGhostSetupCoordinator: () => ({
+    ensureReady: ensureReadyMock,
+  }),
 }));
 // 以下依赖在本测试路径上不会被触达,但 import 副作用重,一律断开。
 vi.mock('../../cindy-brain/attachmentGrant.js', () => ({
   GrantPolicyError: class extends Error {},
-  grantAttachmentsToGhost: vi.fn(),
+  grantAttachmentsToGhost: grantAttachmentsMock,
   MAX_GRANT_ATTACHMENTS: 4,
   MAX_GRANT_ONLY_ATTACHMENTS: 32,
 }));
@@ -57,6 +87,9 @@ vi.mock('../../cindy-brain/ghostLocalPathGrant.js', () => ({ classifyLocalAttach
 vi.mock('../../cindy-brain/cardService.js', () => ({ withCardToken: (r: unknown) => r }));
 vi.mock('../../cindy-brain/forge.js', () => ({ FORGE_GUIDE: 'guide', packGhostDir: vi.fn() }));
 vi.mock('../../cindy-brain/openFileInstall.js', () => ({ handleIncomingCindyFile: vi.fn() }));
+vi.mock('../../localDb/ipc/sessions.js', () => ({
+  getSessionFsSnapshot: sessionSnapshotMock,
+}));
 vi.mock('../../cindy-media/blobStore.js', () => ({}));
 vi.mock('../../cindy-media/ledger.js', () => ({}));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
@@ -67,12 +100,16 @@ const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisab
   await import('../../cindy-brain/ghostWorkdirPrefs');
 import type { LiziMcpSessionContext } from '@cindy/mcps';
 
-const WORKDIR = '/proj/alpha';
-
-function chipGhost(id: string): unknown {
+function chipGhost(id: string, slots: string[] = ['tool']): unknown {
   return {
     enabled: true,
-    manifest: { id, name: `Ghost ${id}`, kind: 'chip', tools: [{ name: 'run', description: 'd' }] },
+    manifest: {
+      id,
+      name: `Ghost ${id}`,
+      kind: 'chip',
+      slots,
+      tools: [{ name: 'run', description: 'd' }],
+    },
   };
 }
 
@@ -97,6 +134,22 @@ beforeEach(() => {
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   dispatchMock.mockClear();
+  setupAssessmentMock.mockReset();
+  setupAssessmentMock.mockReturnValue({ state: 'ready', revision: 0, groups: [] });
+  ensureReadyMock.mockReset();
+  ensureReadyMock.mockResolvedValue({
+    ok: true,
+    assessment: { state: 'ready', revision: 0, groups: [] },
+  });
+  grantAttachmentsMock.mockReset();
+  logWarnMock.mockClear();
+  sessionSnapshotMock.mockReset();
+  sessionSnapshotMock.mockResolvedValue({
+    workingDir: WORKDIR,
+    permissionMode: 'auto',
+    planModeEnabled: false,
+    remoteHostId: null,
+  });
   clearAllPrefs();
 });
 
@@ -139,6 +192,24 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((deps.getRosterItems?.() ?? []).map((r) => r.id)).toEqual(['art', 'other']);
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
+
+  it('单插件 setup assessment 失败只省略该 setup，不拖垮健康清单', async () => {
+    setupAssessmentMock.mockImplementation((ghostId) => {
+      if (ghostId === 'art') throw new SyntaxError('malformed setup storage');
+      return { state: 'ready', revision: 0, groups: [] };
+    });
+
+    const ghosts = await makeDeps().listAwakeGhosts();
+
+    expect(ghosts.map((ghost) => ghost.id)).toEqual(['art', 'other']);
+    expect(ghosts[0]?.setup).toBeUndefined();
+    expect(ghosts[1]?.setup).toEqual({ state: 'ready', revision: 0, groups: [] });
+    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment omitted from roster', {
+      ghostId: 'art',
+      errorType: 'SyntaxError',
+    });
+    expect(JSON.stringify(ghosts)).not.toContain('malformed setup storage');
+  });
 });
 
 describe('ghost_call 兜底拒绝', () => {
@@ -156,5 +227,98 @@ describe('ghost_call 兜底拒绝', () => {
     const r = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
     expect(r).toMatchObject({ ok: true, result: 'done' });
     expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('清单 assessment 隔离不放宽 ghost_call 的 strict setup gate', async () => {
+    ensureReadyMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: '插件配置状态读取失败',
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: '插件配置状态读取失败',
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('grant_only 在任何附件授权副作用前完成 setup gate，且忽略 tool', async () => {
+    ensureReadyMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'SETUP_REQUIRED',
+      message: '插件尚未完成设置',
+      setup: {
+        state: 'required',
+        revision: 1,
+        groups: [],
+      },
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'not-a-real-tool',
+      args: {},
+      attachments: ['/tmp/unconfigured.png'],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 's1',
+        ghostId: 'art',
+        workingDir: WORKDIR,
+      }),
+    );
+    expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('session-context 宿主铸造', () => {
+  it('剥除上游伪造值，并按会话权限注入可信只读状态', async () => {
+    listMock.mockReturnValue([chipGhost('art', ['tool', 'session-context'])]);
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: WORKDIR,
+      permissionMode: 'auto',
+      planModeEnabled: true,
+      remoteHostId: null,
+    });
+
+    const deps = makeDeps();
+    await deps.callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {
+        session_context: {
+          session_id: 'forged',
+          workdir: '/tmp/forged',
+          workdir_is_local: true,
+          workdir_is_read_only: false,
+        },
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: {
+          session_context: {
+            session_id: 's1',
+            workdir: WORKDIR,
+            workdir_is_local: true,
+            workdir_is_read_only: true,
+          },
+        },
+      }),
+    );
   });
 });

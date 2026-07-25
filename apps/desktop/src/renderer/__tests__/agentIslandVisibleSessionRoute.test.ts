@@ -30,6 +30,10 @@ const workdirBrowseRouteSource = readTextLf(
   resolve(__dirname, '..', 'features', 'cc-agent', 'workdir-browse', 'WorkdirBrowseRoute.tsx'),
   'utf8',
 );
+const ccAgentSessionViewSource = readTextLf(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
+  'utf8',
+);
 
 describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
   it('returns the session id only for routes that visibly show a session', () => {
@@ -114,5 +118,16 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(mainLayoutSource).toContain(`if (isAgentIslandSupported()) {
           void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSession);
         }`);
+  });
+
+  it('routes plugin setup navigation through the owning session view', () => {
+    expect(mainLayoutSource).not.toContain('ghosts.onSetupNavigate');
+    expect(ccAgentSessionViewSource).toContain(
+      'if (!viewVisible || !sessionId || payload.sessionId !== sessionId) return;',
+    );
+    expect(ccAgentSessionViewSource).toContain(
+      "navigate(`/plugins?ghost=${encodeURIComponent(payload.ghostId)}`);",
+    );
+    expect(ccAgentSessionViewSource).toContain("navigate('/settings?tab=providers');");
   });
 });

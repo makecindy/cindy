@@ -149,6 +149,11 @@ export const MAKER_INVOKE = {
   LIST_CUSTOMIZATIONS: 'maker:list-customizations',
   /** Resolve a pending interaction (permission / ask_user_question / plan_review) */
   RESOLVE_INTERACTION: 'maker:resolve-interaction',
+  /**
+   * Cindy 自有顶层 Renderer 专用的插件 Secret 提交窄桥。
+   * 不进入通用 interaction/device-link transport。
+   */
+  PLUGIN_SETUP_SUBMIT_INLINE: 'maker:plugin-setup:submit-inline',
   /** Snapshot the session's currently-pending interactions (rebuild panel on open/reconnect/refresh) */
   GET_PENDING_INTERACTIONS: 'maker:get-pending-interactions',
   // 运行时切换 (Phase B)
@@ -513,6 +518,10 @@ export const MAKER_INVOKE = {
   COMPUTER_GRANT_PERMISSIONS: 'maker:computer:grant-permissions',
   // macOS: CuaDriver.app 的真实安装图标(授权引导弹窗里给用户当识别参照)。
   COMPUTER_DRIVER_ICON: 'maker:computer:driver-icon',
+  // macOS: 当前授权引导生命周期持有的预检快照（不触发新的权限探测）。
+  COMPUTER_PERMISSION_GUIDE_STATUS: 'maker:computer:permission-guide-status',
+  // macOS:结束原生 app 拖拽，并等待 Main 通过实时 System Settings 行确认结果。
+  COMPUTER_PERMISSION_APP_DRAG_END: 'maker:computer:permission-app-drag-end',
   // macOS: 取消在途的 CuaDriver 授权流程(引导弹窗「取消」时收割 grant 子进程)。
   COMPUTER_CANCEL_PERMISSION_GRANT: 'maker:computer:cancel-permission-grant',
   /**
@@ -574,6 +583,13 @@ export const MAKER_INVOKE = {
  */
 export const MAKER_SEND = {
   /**
+   * macOS permission coach: begin a native drag of the real Computer Use app
+   * bundle into System Settings. Main validates that the sender is the
+   * dedicated guide window before acting. Drag completion is an invoke above
+   * because the renderer must wait for Main's live-row confirmation.
+   */
+  COMPUTER_PERMISSION_APP_DRAG_START: 'maker:computer:permission-app-drag-start',
+  /**
    * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / fastModeByModel /
    * effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
    * worker (enableOrcaInternal / orca-bridge.create_worker) 读这份缓存决定 worker
@@ -608,11 +624,17 @@ export const MAKER_SEND = {
 export const MAKER_PUSH = {
   EVENT: 'maker:event',
   STATUS_CHANGED: 'maker:status-changed',
+  /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
+  COMPUTER_PERMISSION_GUIDE_CANCELLED: 'maker:computer:permission-guide-cancelled',
+  /** Native Computer Use onboarding status changed while System Settings is open. */
+  COMPUTER_PERMISSION_GUIDE_STATUS_CHANGED: 'maker:computer:permission-guide-status-changed',
   INPUT_PROJECTION: 'maker:input:projection',
   /** New interaction request (permission / ask_user_question / plan_review) */
   INTERACTION_REQUEST: 'maker:interaction-request',
   /** Pending interaction was auto-resolved (e.g. permission mode changed mid-session) */
   INTERACTION_DISMISSED: 'maker:interaction-dismissed',
+  /** Host-validated plugin setup action requests a trusted local settings route. */
+  PLUGIN_SETUP_NAVIGATE: 'maker:plugin-setup:navigate',
   /** Agent 鉴权状态变化 (login/logout 完成时, 替代老 codex:auth:state-changed) */
   AUTH_STATE_CHANGED: 'maker:auth:state-changed',
   /**

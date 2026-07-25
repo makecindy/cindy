@@ -646,6 +646,11 @@
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
+      "analyticsLabel": "Usage statistics",
+      "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
+      "analyticsEnabledToast": "Usage statistics enabled",
+      "analyticsDisabledToast": "Usage statistics disabled",
+      "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
       "social": {
@@ -936,8 +941,6 @@
     "sessionImport": {
       "title": "Local Session Import",
       "description": "Read-only scan of local Claude Code and Codex history. Only checked sessions in the list will be imported; skipped internal sessions are hidden and cannot be imported.",
-      "linkedTitle": "Local Session Links",
-      "linkedDescription": "Read-only scan of local Claude Code and Codex history. Codex sessions are linked to the original thread and resumed without replaying history; Claude sessions are imported as local history.",
       "scan": "Scan",
       "scanning": "Scanning",
       "emptyTitle": "Scan local history first",
@@ -949,9 +952,7 @@
       "sessions": "sessions",
       "selected": "{{count}} selected",
       "importSelected": "Import selected",
-      "linkSelected": "Link selected",
       "importing": "Importing",
-      "linked": "Linked",
       "archived": "Archived",
       "untitled": "Untitled Session",
       "noWorkingDir": "No working directory",
@@ -978,7 +979,9 @@
         "scanFailed": "Scan failed",
         "importFailed": "Import failed",
         "imported": "Import complete: {{inserted}} inserted, {{updated}} updated"
-      }
+      },
+      "selectAll": "Select all in current filter ({{count}})",
+      "selectedOutsideFilter": "({{count}} of them outside the current filter)"
     },
     "connections": {
       "codex": {
@@ -1732,6 +1735,15 @@
       "directControl": {
         "title": "Computer automation",
         "description": "Let agents inspect windows, read UI, click, and type",
+        "status": {
+          "ready": "Ready to use",
+          "needsPermission": "Needs system access",
+          "notInstalled": "Driver not installed",
+          "disabled": "Turned off",
+          "checking": "Checking access…",
+          "setup": "Set up access",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "Toggle direct computer control",
         "driverInfo": "Computer automation is powered by the open-source CUA Driver. It runs locally to read the screen and perform actions such as clicking and typing.",
         "openSourceProject": "View open-source project",
@@ -1749,14 +1761,25 @@
           "cancel": "Not now"
         },
         "permissionGuide": {
-          "title": "Waiting for system permissions",
-          "description": "In System Settings, grant the permissions below to CuaDriver (look for the app matching the icon on the left). This will continue automatically once everything is granted.",
-          "waiting": "Pending"
+          "waiting": "Waiting for you",
+          "step": "Open computer automation",
+          "completeEyebrow": "Permissions complete",
+          "dragTitle": "Drag CuaDriver into {{permission}}",
+          "turnOnAppTitle": "Turn on CuaDriver in {{permission}}",
+          "dragHint": "Drag",
+          "draggingTitle": "Dragging CuaDriver",
+          "draggingHint": "Drop into {{permission}}",
+          "appName": "CuaDriver",
+          "turnOnTitle": "Turn on {{permission}}",
+          "turnOnDescription": "Turn on this permission in System Settings. Cindy will continue automatically.",
+          "readyTitle": "Computer Use is ready",
+          "readyDescription": "Cindy can now operate this computer when you ask."
         },
         "permissions": {
-          "macosHint": "macOS requires core Accessibility and Screen Recording permissions for Cua Driver. During actual use, the system may still show additional confirmations for a target app or a specific action.",
-          "accessibilityLabel": "CuaDriver Accessibility",
-          "screenRecordingLabel": "CuaDriver Screen Recording",
+          "title": "System access",
+          "macosHint": "Computer Use needs Accessibility and Screen Recording. During actual use, macOS may still show additional confirmations for a target app or action.",
+          "accessibilityLabel": "Accessibility",
+          "screenRecordingLabel": "Screen Recording",
           "grant": "Grant",
           "accessibility": "Accessibility: {{status}}",
           "screenRecording": "Screen Recording: {{status}}",
@@ -1768,6 +1791,8 @@
           "openAccessibility": "Open Accessibility settings",
           "openScreenRecording": "Open Screen Recording settings",
           "recheck": "Recheck",
+          "moreDetails": "More details",
+          "hideDetails": "Hide details",
           "windowsHint": "Windows does not require extra system permissions. Keep the target app visible on the active desktop while the agent works.",
           "linuxHint": "Linux does not use macOS TCC permissions; make sure the current desktop session allows window inspection and input automation."
         },
@@ -1790,9 +1815,10 @@
           "disabled": "Direct computer control disabled",
           "toggleFailed": "Failed to toggle direct computer control",
           "installFailed": "Failed to install cua-driver",
-          "permissionFailed": "cua-driver permissions are not complete",
-          "permissionPending": "Finish Cua Driver system permissions and this will enable automatically",
+          "permissionFailed": "Computer Use permissions are not complete",
+          "permissionPending": "Finish the two system permissions, then return here and click Recheck",
           "permissionSettingsOpened": "System permission settings opened. After granting, come back and click \"Recheck\".",
+          "permissionSettingsMonitoring": "System permission settings opened. Finish the permissions and the status will update automatically.",
           "openPermissionSettingsFailed": "Failed to open system permission settings"
         }
       }
@@ -2251,6 +2277,10 @@
         "install": "Install",
         "details": "Details",
         "update": "Update from market",
+        "updateAvailable": "Update available",
+        "updateAction": "Update",
+        "updateAria": "Update {{name}}",
+        "updateTo": "Update to v{{version}}",
         "installed": "Installed",
         "conflict": "Plugin ID conflict",
         "unavailable": "The plugin market is temporarily unavailable. Installed plugins remain available.",
@@ -2399,12 +2429,16 @@
         "noChange": "No permission changes.",
         "pick": "Can ask you to pick a folder for it",
         "pickDetail": "When it asks, Cindy shows the system folder picker; you decide what to share, and cancelling gives it nothing.",
+        "workspace": "Can ask to create a session entry for a project folder in the sidebar",
+        "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
         "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
-        "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits."
+        "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
+        "skill": "Adds the skill \"{{name}}\" to your AI assistants",
+        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust."
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -2491,7 +2525,9 @@
         "slotCard": "Message cards",
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
-        "slotFs": "File writing"
+        "slotFs": "File writing",
+        "slotSkill": "Agent skills",
+        "slotWorkspace": "Workspace sessions"
       },
       "commandPaletteTag": "Plugin command",
       "updateConfirm": {
@@ -2503,6 +2539,10 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "workspace": {
+        "dialogTitle": "Choose a project folder",
+        "dialogMessage": "Plugin “{{name}}” is asking you to choose a project folder to create a session in the sidebar"
       }
     },
     "mcp": {
@@ -3087,11 +3127,15 @@
   "panelChrome": {
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
-    "detachAria": "Open in a new window"
+    "detachAria": "Open in a new window",
+    "minimizeAria": "Minimize to floating bubble"
   },
   "ghostPanelWindow": {
     "mergeBack": "Merge back into main window",
     "unavailable": "This plugin panel is currently unavailable"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "Restore {{name}} panel"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -3197,7 +3241,15 @@
         "unresponsiveDesc": "The page has not responded for a while. Reload or wait a moment.",
         "navigationLoopTitle": "Repeated Navigation Stopped",
         "navigationLoopDesc": "The page navigated repeatedly in a short time. Reload the page to try again.",
+        "resourceKilledTitle": "Page used too much memory",
+        "resourceKilledDesc": "This page was using too much memory and was stopped to keep the app running. You can reload it.",
+        "forceKill": "Force stop",
         "reload": "Reload"
+      },
+      "resourceAlert": {
+        "cpuHint": "This page is using significant system resources",
+        "terminate": "Stop page",
+        "dismiss": "Dismiss"
       }
     },
     "terminal": {
@@ -3634,6 +3686,75 @@
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
       "stop": "Stop generating"
     },
+    "pluginSetup": {
+      "title": "{{name}} Settings",
+      "assessmentReadFailed": "Couldn't read the plugin setup status.",
+      "setupIncomplete": "Plugin setup is not complete.",
+      "setupChangedDuringResume": "Plugin setup changed while the call was resuming. Please complete setup and try again.",
+      "chooseOne": "Choose one setup method",
+      "restoreAria": "Restore {{name}} settings",
+      "minimizeAria": "Minimize {{name}} settings",
+      "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling…",
+      "retry": "Retry",
+      "saveConfiguration": "Save Configuration",
+      "saving": "Saving…",
+      "error": {
+        "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
+        "ACTION_STALE": "This setup changed. Choose the setup action again.",
+        "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
+        "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
+        "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
+        "SAVE_FAILED": "Couldn't save this configuration. Try again.",
+        "WINDOW_CLOSED": "The window that started setup was closed. Return to the session and try again.",
+        "TARGET_UNAVAILABLE": "This plugin is disabled, uninstalled, or unavailable. Check the plugin and try again.",
+        "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
+        "TIMEOUT": "Setup timed out. Try again."
+      },
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI Model Service",
+          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
+        }
+      },
+      "form": {
+        "placeholder": "Enter {{label}}",
+        "required": "Enter {{label}}",
+        "tooLong": "Must be {{maxLength}} characters or fewer",
+        "openLink": "Get {{label}}",
+        "openLinkFailed": "Couldn't open this page. Please try again."
+      },
+      "action": {
+        "oauth_connect": "Authorize",
+        "open_plugin_settings": "Open settings",
+        "manage_connection": "Manage connections",
+        "open_client_settings": "Open model settings"
+      },
+      "phase": {
+        "pending": "Pending",
+        "action_running": "In progress…",
+        "waiting_external": "Waiting for authorization…",
+        "verifying": "Verifying…",
+        "satisfied": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "timeout": "Setup timed out",
+      "oauthCancelled": "Authorization was cancelled",
+      "oauthFailed": "Authorization failed: {{detail}}",
+      "pluginUninstalledDuringOauth": "The target plugin was uninstalled or is unavailable",
+      "inlineSecretInvalid": "Credential value is invalid",
+      "pluginUnavailable": "The target plugin was uninstalled or is unavailable",
+      "inlineActionExpired": "This setup action has expired; please try again",
+      "inlineSecretDeclChanged": "Credential declaration has changed; please try again",
+      "inlineSecretStoreFailed": "Failed to save credential",
+      "targetNotFound": "The target plugin was uninstalled or is currently unavailable",
+      "targetDisabled": "The target plugin has been disabled",
+      "targetDisabledInWorkdir": "The user has disabled this plugin in the current working directory; do not retry.",
+      "targetToolNotFound": "The target plugin no longer provides this tool"
+    },
     "createAgent": {
       "quickStart": "Quick start",
       "quickStarts": {
@@ -3699,6 +3820,8 @@
         "output": "Output",
         "cacheRead": "Cache read",
         "cacheCreate": "Cache write",
+        "free": "Limited-time free",
+        "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
         "subscriptionEstimate": "Value estimate, not an actual bill"
@@ -4851,7 +4974,8 @@
       "card": {
         "awaitingPermission": "Awaiting permission",
         "awaitingQuestion": "Awaiting your reply",
-        "awaitingPlan": "Awaiting plan review"
+        "awaitingPlan": "Awaiting plan review",
+        "awaitingPluginSetup": "Awaiting plugin setup"
       },
       "showAllSessions": "Show all {{count}}",
       "dialogues": "Dialogues",
@@ -6078,6 +6202,7 @@
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
+      "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "dirMeta": "{{count}} files · {{size}}",
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",
@@ -7009,7 +7134,6 @@
     "sidebar": "Credits & plans",
     "settings": {
       "title": "Usage and billing",
-      "subtitle": "Review your available credits and current plan, or buy more credits as needed.",
       "subscriptionCard": {
         "title": "Current plan",
         "empty": "No active subscription",
@@ -7024,15 +7148,13 @@
         "endsAt": "Plan ends {{date}}"
       },
       "topupCard": {
-        "title": "Credits",
-        "description": "Purchase credits for usage-based models and features.",
-        "cardTitle": "Buy credits as needed",
-        "cardDescription": "Add to your available credits as needed. The checkout page shows the final amount.",
         "action": "Buy credits"
       }
     },
     "balance": {
       "title": "Available balance",
+      "creditParityCny": "1 credit = 1 CNY. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
+      "creditParityUsd": "1 credit = 1 USD. Credits pay for Cindy AI usage; payments are processed by third-party providers.",
       "plan": "Plan credits",
       "purchased": "Purchased credits",
       "promotional": "Promotional credits",
@@ -7041,17 +7163,15 @@
       "unavailable": "Balance is temporarily unavailable. Refresh to try again."
     },
     "usage": {
+      "title": "Credit usage",
       "observedAt": "Balance updated {{date}}",
-      "used": "Used",
-      "total": "Total",
+      "poolDetail": "Used {{used}} · Total {{total}}",
       "remaining": "Remaining",
       "progressLabel": "{{label}} usage",
       "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
-      "percentUsed": "{{percent}}% used",
       "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
       "promotionalDetails": {
         "title": "Promotional Credit Details",
-        "description": "Current grants and the total balance use the same credit snapshot. Used amounts include model consumption only.",
         "count": "{{count}} grants",
         "empty": "No promotional credit grants are available.",
         "incomplete": "There are many grant records. Only the latest {{count}} are shown.",
@@ -7070,31 +7190,15 @@
     },
     "dialogs": {
       "subscription": {
-        "title": "Choose a subscription plan",
-        "description": "Server-published subscription plans are shown. Plans that cannot be purchased yet include a status."
+        "title": "Choose a subscription plan"
       },
       "topup": {
-        "title": "Buy credits",
-        "description": "Server-published credit products are shown. Products that cannot be purchased yet include a status."
+        "title": "Buy credits"
       }
     },
-    "eyebrow": "Account & usage",
-    "title": "Choose the plan that fits",
-    "subtitle": "Plans and payment methods are delivered by the server. Choose a plan first to see its currently supported payment methods.",
     "steps": {
-      "offer": {
-        "title": "Choose a plan",
-        "description": "Server-published credit and subscription offers are shown."
-      },
       "channel": {
-        "title": "Choose a payment method",
-        "description": "Supported payment methods can differ by plan.",
-        "selectOfferFirst": "Choose a plan to see its supported payment methods"
-      },
-      "confirm": {
-        "title": "Review and pay",
-        "description": "Review the plan and payment method before creating payment.",
-        "selectChannelFirst": "Choose a payment method to continue"
+        "title": "Choose a payment method"
       }
     },
     "actions": {
@@ -7114,10 +7218,6 @@
         "OFFER_COMING_SOON": "Coming Soon",
         "NO_AVAILABLE_PAYMENT_CHANNEL": "No Payment Method Available"
       }
-    },
-    "offerKinds": {
-      "topup": "Credit top-up",
-      "subscription": "Subscription"
     },
     "amount": {
       "custom": "Custom amount",
@@ -7143,7 +7243,6 @@
       "alipay": "Alipay",
       "stripe": "Card"
     },
-    "securityNotice": "Payments are securely handled by the selected provider; Cindy does not store payment credentials",
     "currentSubscription": {
       "title": "Current subscription",
       "purchaseBlocked": "You already have an unfinished subscription. Manage it before purchasing another plan."
@@ -7168,7 +7267,6 @@
     "checkout": {
       "creatingTitle": "Creating payment",
       "awaitingTitle": "Awaiting payment",
-      "fulfillingTitle": "Crediting your account",
       "completedTitle": "Payment successful",
       "failedTitle": "Unable to complete",
       "expiredTitle": "Payment expired",
@@ -7183,7 +7281,6 @@
       "redirectHint": "Complete payment on the provider page, then return to Cindy.",
       "openPayment": "Open payment page",
       "refreshingAction": "Loading payment instructions…",
-      "creditingBody": "Payment succeeded. Waiting for the credits to be applied…",
       "paymentCompleted": "Your payment was completed.",
       "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
       "expiredBody": "This payment link expired. Create a new payment to continue.",
@@ -7192,8 +7289,6 @@
     },
     "planChange": {
       "targetTitle": "Change subscription plan",
-      "targetDescription": "Plan changes keep your current payment method. The final price and effective time are confirmed on the next step.",
-      "targetDescriptionWithCurrent": "Current plan: {{plan}}. Plan changes keep your current payment method; the final price and effective time are confirmed on the next step.",
       "upgradeBadge": "Upgrade",
       "downgradeBadge": "Downgrade",
       "emptyTitle": "No plans available to switch to",

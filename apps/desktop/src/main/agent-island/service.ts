@@ -901,6 +901,32 @@ export class AgentIslandService {
     this.publish();
   }
 
+  handlePluginSetupInteraction(
+    sessionId: string,
+    requestId: string,
+    detail: string,
+  ): void {
+    const hydrated = this.hydrateMeta({ sessionId });
+    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    // If the requestId is already pending (revision update from the coordinator),
+    // only update the detail string without resetting the dismissal state.
+    const existing = this.state.sessions.get(hydrated.sessionId);
+    if (existing?.pendingInteractionIds.has(requestId)) {
+      existing.pendingInteractionDetails.set(requestId, detail);
+      this.publish();
+      return;
+    }
+    applyAgentIslandInteractionRequest(
+      this.state,
+      hydrated,
+      { kind: 'plugin_setup', requestId, detail },
+      Date.now(),
+    );
+    this.ensureMetadata(hydrated.sessionId);
+    this.syncSessionAttention(hydrated.sessionId);
+    this.publish();
+  }
+
   handleInteractionDismissedByRequestId(requestId: string): boolean {
     const entry = this.permissionRequests.get(requestId);
     if (!entry) return false;

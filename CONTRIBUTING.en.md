@@ -77,11 +77,70 @@ license, any contribution you intentionally submit for inclusion is accepted
 under the Apache-2.0 terms — no separate CLA is required.
 
 We do require every commit to carry a
-[Developer Certificate of Origin](https://developercertificate.org/) sign-off:
+[Developer Certificate of Origin](https://developercertificate.org/) sign-off
+(DCO 1.1; the full text is in the [`DCO`](DCO) file at the repository root):
 commit with `git commit -s`, which appends a
 `Signed-off-by: Your Name <your@email>` trailer stating that you have the right
-to submit the contribution under these terms. Do not submit code you are not
-entitled to license (for example proprietary code copied without permission).
+to submit the contribution under these terms. Both the name and the address in
+the trailer must match the commit's author (or committer) — the trailer is a
+statement about yourself and cannot be made on someone else's behalf. Do not
+submit code you are not entitled to license (for example proprietary code copied
+without permission).
+
+The **DCO check** on every pull request (the
+[DCO GitHub App](https://github.com/apps/dco)) validates each commit in the pull
+request; merge commits and bot commits are exempt, and history from before the
+DCO requirement is never examined. Check yourself locally with `pnpm check:dco`.
+If a commit is missing its sign-off:
+
+```bash
+# only the most recent commit is missing a sign-off
+git commit --amend -s --no-edit
+
+# several commits are missing sign-offs (<base> is the pull request base commit)
+git rebase --signoff <base>
+
+# update the pull request afterwards
+git push --force-with-lease
+```
+
+If you would rather not rewrite history — say the pull request already carries
+review discussion worth keeping — push a **remediation commit** instead. Its
+message must contain the following line verbatim, where the sha is the full
+40-character sha of the commit being signed off, and the remediation commit
+itself must also carry your sign-off:
+
+```text
+I, Your Name <your@email>, hereby add my Signed-off-by to this commit: <full 40-char sha>
+
+Signed-off-by: Your Name <your@email>
+```
+
+The author of both commits, and the name and address on that line, all have to
+match exactly. To sign off on someone else's commit:
+
+```text
+On behalf of Author Name <author@email>, I, Your Name <your@email>, hereby add my Signed-off-by to this commit: <full 40-char sha>
+
+Signed-off-by: Your Name <your@email>
+```
+
+Note that `pnpm check:dco` is deliberately more conservative than the gate on the
+pull request: it only recognises direct sign-offs (not remediation commits) and it
+does not exempt bot commits, since bot status depends on the GitHub account type
+and cannot be determined offline. Passing locally therefore implies passing on the
+pull request, but not the other way round — when using remediation, or when the
+range contains bot commits, the DCO check on the pull request is the authority.
+
+Git has no configuration option that signs commits off automatically
+(`format.signOff` only affects `git format-patch` / `git am`). To set it up once,
+install the prepare-commit-msg hook shipped with this repository. The hook itself
+is [`.githooks/prepare-commit-msg`](.githooks/prepare-commit-msg) — an ordinary
+shell script, so read it before installing. `pnpm dco:install-hook` copies it into
+your local hooks directory; nothing is changed on the remote, and deleting the
+installed copy uninstalls it. You can also point Git at the directory yourself
+with `git config core.hooksPath .githooks` (that takes over the whole hooks
+directory).
 
 ## Security issues
 

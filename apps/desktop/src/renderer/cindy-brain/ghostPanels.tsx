@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../shared/ghost';
+import { minimizeGhostPanel, reconcileGhostPanelBubbles } from '../lib/ghostPanelBubbleState';
 import { usePanelMaximize } from '../layout/panelMaximize';
 import { usePanelWidth } from '../layout/paneWidths';
 import { PanelChrome } from '../panels/PanelChrome';
@@ -30,6 +31,19 @@ import { useGhostRuntimeState } from './runtimeStates';
 // 兼容既有导入点(测试等):粗筛纯函数随面板体一起搬家,原路径继续可用。
 export { pickGhostPanelMediaUri } from './ghostPanelBody';
 
+/**
+ * 停靠面板入场动画的"启动首屏豁免窗":凡是这个时刻之后才挂载的 GhostPanel
+ * (点气泡展开、独立窗合并回来、装入、启用)都播宽度展开(ghost-panel-enter,
+ * 见 globals.css),不再"先占宽再出现"(2026-07-25 Lizi:出现要丝滑);
+ * 启动首屏全家同帧就位,不各展各的——本模块在 LayoutRoot 首帧前装载
+ * (ensureGhostPanelsRegistered 走 sendSync),首屏挂载与模块装载几乎同刻,
+ * 1.5s 窗口足够宽;极端慢启动多播一次展开也无害。
+ */
+const PANEL_ENTER_ARMED_AT = Date.now() + 1500;
+/** 最小化折叠动画时长:与 globals.css 的 ghost-panel-collapse 对齐,
+ *  到点才真正提交 minimized(随后气泡侧再等 300ms 入场,接力不抢戏)。 */
+const PANEL_EXIT_MS = 180;
+
 /** 意识面板宿主:标准头(PanelChrome)+ 沙箱自绘面板体(崩溃时错误接管)。 */
 function GhostPanel({
   manifest,
@@ -44,6 +58,7 @@ function GhostPanel({
   // 关闭 = 不把对应入参交给标准头,按钮不长出(标题条本体恒在)。
   const maximizeEnabled = manifest.panel?.systemButtons?.maximize !== false;
   const detachEnabled = manifest.panel?.systemButtons?.detach !== false;
+  const minimizeEnabled = manifest.panel?.systemButtons?.minimize !== false;
   // 换版更新把按钮关掉时,若面板正撑满,自动还原 —— 否则按钮没了、态出不去。
   useEffect(() => {
     if (!maximizeEnabled && isMaximized) maximize?.toggle(kind);
@@ -51,32 +66,64 @@ function GhostPanel({
   // 沙箱崩了 → 面板原地进入错误接管态。
   const runtimeState = useGhostRuntimeState(manifest.id);
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
+  // 挂载即定(useState 初始化跑一次):启动首屏后出现的面板播宽度展开。
+  const [enter] = useState(() => Date.now() >= PANEL_ENTER_ARMED_AT);
+  // 点最小化 → 先播宽度折叠(closing),计时器到点才真正提交 minimized;
+  // 减弱动效直接提交;撑满态是 flex-1(宽度动画不生效),也直接提交,
+  // LayoutRoot 的可见性 effect 会顺手清撑满。
+  const [closing, setClosing] = useState(false);
+  const closeTimerRef = useRef(0);
+  useEffect(() => () => window.clearTimeout(closeTimerRef.current), []);
+  const beginMinimize = (): void => {
+    if (closing) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    if (reduced || isMaximized) {
+      minimizeGhostPanel(manifest.id);
+      return;
+    }
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => minimizeGhostPanel(manifest.id), PANEL_EXIT_MS);
+  };
   return (
-    <section
-      data-panel-drag-root={kind}
-      // 侧边分割线由布局引擎统一绘制(LayoutRoot layout-divider),面板不自画。
+    // 外层壳管布局占宽(出现/收起的宽度动画只动这层),内层 section 恒为
+    // 实宽被裁切——展开像"拉开抽屉"露出成形的面板,webview 不逐帧改宽。
+    <div
       className={
         isMaximized
-          ? 'flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]'
-          : 'flex h-full shrink-0 flex-col overflow-hidden bg-[var(--panel-bg)]'
+          ? 'flex h-full min-w-0 flex-1'
+          : `h-full shrink-0 overflow-hidden${enter ? ' ghost-panel-enter' : ''}${
+              closing ? ' ghost-panel-exit' : ''
+            }`
       }
       style={isMaximized ? undefined : { width }}
     >
-      <PanelChrome
-        title={manifest.panel?.title ?? manifest.name}
-        panelKind={maximizeEnabled ? kind : undefined}
-        onDetach={
-          detachEnabled
-            ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(manifest.id, true)
-            : undefined
+      <section
+        data-panel-drag-root={kind}
+        // 侧边分割线由布局引擎统一绘制(LayoutRoot layout-divider),面板不自画。
+        className={
+          isMaximized
+            ? 'flex h-full w-full min-w-0 flex-col overflow-hidden bg-[var(--panel-bg)]'
+            : 'flex h-full shrink-0 flex-col overflow-hidden bg-[var(--panel-bg)]'
         }
-      />
-      {broken ? (
-        <GhostPanelError manifest={manifest} state={runtimeState} />
-      ) : (
-        <GhostChipPanelBody manifest={manifest} />
-      )}
-    </section>
+        style={isMaximized ? undefined : { width }}
+      >
+        <PanelChrome
+          title={manifest.panel?.title ?? manifest.name}
+          panelKind={maximizeEnabled ? kind : undefined}
+          onMinimize={minimizeEnabled ? beginMinimize : undefined}
+          onDetach={
+            detachEnabled
+              ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(manifest.id, true)
+              : undefined
+          }
+        />
+        {broken ? (
+          <GhostPanelError manifest={manifest} state={runtimeState} />
+        ) : (
+          <GhostChipPanelBody manifest={manifest} />
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -95,6 +142,9 @@ export function syncGhostPanelRegistrations(ghosts: InstalledGhost[]): void {
   // 本函数是"已装清单"的唯一同步点(启动 + ghosts:changed),挂这里最省。
   // 注意用全量清单(含沉睡)——沉睡只是不注册面板,快照仍然有效。
   pruneGhostSettingsSnapshots(ghosts.map((g) => g.manifest.id));
+  // 气泡状态对齐(与快照 prune 不同:停用/失格的要强制还原,不只清卸载)——
+  // 气泡是"面板不可见 + 唯一恢复入口",失格后必须回停靠,不留死角。
+  reconcileGhostPanelBubbles(ghosts);
   // 页签形态与停靠形态同源同步:一次广播喂两个注册表,不各自订阅。
   syncGhostTabRegistrations(ghosts);
   const seen = new Set<string>();
