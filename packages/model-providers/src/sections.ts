@@ -95,7 +95,9 @@ export function resolveModelIconKind(icon: string | undefined): ModelIconKind | 
  *   - 按供应商序 + 目录序,同 id **首见胜出**去重(与 renderer providerModels /
  *     main deriveAvailableModels 的顺序契约一致):某供应商下被隐藏、另一供应商下
  *     可见的模型仍会出现(取可见那家的元数据)。
- * 返回 CatalogModel 引用(含 group / efforts / defaultEffort 等全部元数据),纯函数可单测。
+ * 返回 CatalogModel 形状的**拷贝**(含 group / efforts / defaultEffort 等全部元数据;
+ * 不是 catalog 对象引用 —— 按引用 memo/相等比较会失配,详见函数体内的物理差异警告),
+ * 纯函数可单测。
  */
 export function visibleModelUnion(
   providers: readonly ProviderView[],
