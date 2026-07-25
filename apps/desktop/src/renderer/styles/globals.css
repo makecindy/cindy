@@ -57,6 +57,9 @@
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
+    /* 移动端下载品牌卡的缓慢边缘折射周期。产品要求它常驻流动；实现只旋转
+       HTML wrapper，避免逐帧改背景或触发 React render。 */
+    --mobile-download-edge-cycle: 20s;
   }
 
   body {
@@ -192,6 +195,44 @@
   html[data-computer-permission-overlay='true'] body,
   html[data-computer-permission-overlay='true'] #root {
     background: transparent;
+  }
+}
+
+/* 移动端下载卡：官方 App icon 在 1px 裁切边缘内缓慢旋转，形成与卡片一体的
+   红蓝折射。常驻动画仅触碰 HTML wrapper 的 transform；鼠标跟随直接写同一
+   外卡 transform，不进入 React render loop。 */
+@keyframes mobile-download-edge-turn {
+  from {
+    transform: rotate(0deg) scale(1.45);
+  }
+  to {
+    transform: rotate(360deg) scale(1.45);
+  }
+}
+
+.mobile-download-qr-card {
+  transform: perspective(760px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1);
+  transform-style: preserve-3d;
+  transition: transform var(--motion-base) var(--motion-ease-move);
+}
+
+.mobile-download-qr-card[data-pointer-active='true'] {
+  transition: none;
+}
+
+.mobile-download-qr-edge {
+  animation: mobile-download-edge-turn var(--mobile-download-edge-cycle) linear infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-download-qr-card {
+    transform: none !important;
+  }
+
+  .mobile-download-qr-edge {
+    animation: none;
+    transform: rotate(18deg) scale(1.45);
   }
 }
 

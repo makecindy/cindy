@@ -3592,7 +3592,29 @@
       "settingsLink": "设置, 当前用户: {{name}}",
       "canaryBadge": "灰度用户",
       "viewReleaseNotes": "查看版本日志",
-      "reopenUpdateBanner": "有更新待重启,点击查看"
+      "reopenUpdateBanner": "有更新待重启,点击查看",
+      "downloadMobile": "下载 Cindy 移动端"
+    },
+    "mobileDownload": {
+      "title": "远程控制 Cindy",
+      "subtitle": "移动端连接桌面端",
+      "qrAlt": "Cindy 移动端下载二维码",
+      "preparing": "正在生成二维码…",
+      "error": "二维码生成失败，请稍后重试",
+      "platformHint": "支持 iOS 与 Android，扫码后自动识别",
+      "openPage": "打开下载页面",
+      "enableRemote": "开启远程控制",
+      "openRemoteSettings": "远程控制设置",
+      "remoteStatus": {
+        "loading": "正在读取远程控制状态…",
+        "error": "暂时无法读取远程控制状态，请前往设置检查连接",
+        "disabled": "尚未开启远程控制",
+        "connecting": "正在连接远程服务…",
+        "ready": "已就绪，请在移动端登录同一账号",
+        "linked": "已关联 {{name}}",
+        "deviceId": "本机设备号"
+      },
+      "close": "关闭"
     },
     "vendorReadiness": {
       "loading": "加载中"

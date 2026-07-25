@@ -3593,7 +3593,29 @@
       "settingsLink": "Settings, current user: {{name}}",
       "canaryBadge": "Canary user",
       "viewReleaseNotes": "View release notes",
-      "reopenUpdateBanner": "Update ready — click to review"
+      "reopenUpdateBanner": "Update ready — click to review",
+      "downloadMobile": "Download Cindy Mobile"
+    },
+    "mobileDownload": {
+      "title": "Control Cindy Remotely",
+      "subtitle": "Mobile connected to desktop",
+      "qrAlt": "QR code to download Cindy mobile",
+      "preparing": "Preparing QR code…",
+      "error": "Couldn’t create the QR code. Try again later.",
+      "platformHint": "Supports iOS and Android with automatic detection",
+      "openPage": "Open Download Page",
+      "enableRemote": "Enable Remote Control",
+      "openRemoteSettings": "Open Remote Settings",
+      "remoteStatus": {
+        "loading": "Checking remote control status…",
+        "error": "Remote control status is unavailable — check the connection in Settings",
+        "disabled": "Remote control is not enabled",
+        "connecting": "Connecting to the remote service…",
+        "ready": "Ready — sign in on mobile with the same account",
+        "linked": "Linked to {{name}}",
+        "deviceId": "This device ID"
+      },
+      "close": "Close Download Dialog"
     },
     "vendorReadiness": {
       "loading": "loading"

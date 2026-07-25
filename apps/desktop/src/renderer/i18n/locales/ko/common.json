@@ -3592,7 +3592,29 @@
       "settingsLink": "설정, 현재 사용자: {{name}}",
       "canaryBadge": "Canary 사용자",
       "viewReleaseNotes": "릴리즈 노트 보기",
-      "reopenUpdateBanner": "업데이트 준비됨 — 클릭하여 확인"
+      "reopenUpdateBanner": "업데이트 준비됨 — 클릭하여 확인",
+      "downloadMobile": "Cindy 모바일 다운로드"
+    },
+    "mobileDownload": {
+      "title": "Cindy 원격 제어",
+      "subtitle": "모바일에서 데스크톱으로 연결",
+      "qrAlt": "Cindy 모바일 다운로드 QR 코드",
+      "preparing": "QR 코드 준비 중…",
+      "error": "QR 코드를 만들 수 없습니다. 잠시 후 다시 시도해 주세요.",
+      "platformHint": "iOS 및 Android 지원, 스캔 후 자동 감지",
+      "openPage": "다운로드 페이지 열기",
+      "enableRemote": "원격 제어 켜기",
+      "openRemoteSettings": "원격 설정 열기",
+      "remoteStatus": {
+        "loading": "원격 제어 상태 확인 중…",
+        "error": "원격 제어 상태를 확인할 수 없습니다. 설정에서 연결을 확인하세요",
+        "disabled": "원격 제어가 켜져 있지 않습니다",
+        "connecting": "원격 서비스에 연결 중…",
+        "ready": "준비 완료 — 모바일에서 같은 계정으로 로그인하세요",
+        "linked": "{{name}} 연결됨",
+        "deviceId": "이 기기 ID"
+      },
+      "close": "다운로드 화면 닫기"
     },
     "vendorReadiness": {
       "loading": "로딩 중"
