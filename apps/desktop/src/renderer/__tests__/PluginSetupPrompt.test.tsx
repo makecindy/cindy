@@ -157,7 +157,7 @@ describe('PluginSetupPrompt', () => {
     expect(
       parsePendingPluginSetup({
         ...pending,
-        steps: Array.from({ length: 73 }, (_, index) => ({
+        steps: Array.from({ length: 89 }, (_, index) => ({
           ...pending.steps[0],
           id: `oversized-step-${index}`,
         })),
