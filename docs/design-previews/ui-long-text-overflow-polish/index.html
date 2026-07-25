@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UI 超长文本溢出修复 + 会话导入批量选择 · 预览(fix/ui-long-text-overflow-polish)</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#111; color:#ddd; font-family:-apple-system,'PingFang SC','HarmonyOS Sans SC',sans-serif; padding-bottom:60px; }
+  header { padding:20px 28px 6px; }
+  header h1 { font-size:17px; font-weight:700; color:#eee; }
+  header p { font-size:12px; color:#888; margin-top:6px; line-height:1.7; max-width:820px; }
+  .tabs { display:flex; gap:8px; padding:14px 28px; }
+  .tab { padding:7px 22px; border-radius:9999px; border:1px solid #3a3a3a; background:#1c1c1c; color:#aaa; font-size:13px; cursor:pointer; }
+  .tab.active { background:#eee; color:#111; border-color:#eee; font-weight:700; }
+  .hidden { display:none !important; }
+
+  h2.sec-title { font-size:14px; color:#bbb; padding:26px 28px 10px; font-weight:600; }
+  .pair { display:flex; gap:24px; padding:0 28px; flex-wrap:wrap; align-items:flex-start; }
+  .col { display:flex; flex-direction:column; gap:8px; }
+  .tag { font-size:11px; font-weight:600; width:fit-content; padding:2px 10px; border-radius:9999px; }
+  .tag.before { background:#3d1b1f; color:#e5808d; }
+  .tag.after  { background:#16321f; color:#6fcf8e; }
+  .note { font-size:11px; color:#777; max-width:400px; line-height:1.7; }
+
+  /* ── 主题 frame:light/dark 用 Cindy 层色 token 的字面值 ── */
+  .frame { border-radius:12px; padding:16px; overflow:hidden; }
+  .light.frame { background:#f8f8f6; color:#262626; }
+  .dark.frame  { background:#1f1f1e; color:#e5e5e3; }
+  .light .card { background:#ffffff; border:1px solid #d7d7d4; }
+  .dark  .card { background:#2c2c2a; border:1px solid #3c3c3a; }
+  .light .desc { color:#6f6f6c; }
+  .dark  .desc { color:#a3a3a0; }
+  .light .tertiary { color:#8a8a87; }
+  .dark  .tertiary { color:#7c7c79; }
+  .mono { font-family:ui-monospace,Menlo,monospace; }
+
+  /* 1. 会话导入:全选表头 + 筛选外提示 */
+  .import-list { width:430px; border-radius:8px; overflow:hidden; font-size:13px; }
+  .import-head { display:flex; align-items:center; gap:8px; padding:9px 14px; font-size:12px; font-weight:500; }
+  .light .import-head { border-bottom:1px solid #d7d7d4; }
+  .dark  .import-head { border-bottom:1px solid #3c3c3a; }
+  .import-row { display:flex; align-items:flex-start; gap:10px; padding:10px 14px; }
+  .light .import-row + .import-row { border-top:1px solid #eceae6; }
+  .dark  .import-row + .import-row { border-top:1px solid #343432; }
+  .import-row .meta { min-width:0; flex:1; }
+  .import-row .title { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .import-row .cwd { font-size:11px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .badge { font-size:10px; border-radius:4px; padding:1px 6px; text-transform:uppercase; }
+  .light .badge { border:1px solid #d7d7d4; color:#8a8a87; }
+  .dark  .badge { border:1px solid #3c3c3a; color:#8f8f8c; }
+  .import-foot { display:flex; justify-content:space-between; align-items:center; padding-top:10px; font-size:12px; width:430px; }
+  .btn-primary { border-radius:6px; padding:7px 12px; font-size:13px; font-weight:500; }
+  .light .btn-primary { background:#e5e5e5; color:#262626; border:1px solid #d7d7d4; }
+  .dark  .btn-primary { background:#3a3a38; color:#e5e5e3; border:1px solid #4a4a48; }
+
+  /* 2. 分享导入向导 */
+  .dialog { width:400px; border-radius:12px; padding:16px; }
+  .light .dialog { background:#ffffff; box-shadow:0 8px 30px rgba(0,0,0,.12); }
+  .dark  .dialog { background:#2c2c2a; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  .dialog h3 { font-size:15px; font-weight:500; margin-bottom:10px; }
+  .hint { font-size:13px; line-height:1.6; }
+  .hint.overflow-broken { white-space:normal; }
+  .hint.overflow-broken .path { white-space:nowrap; }
+  .hint.fixed { overflow-wrap:break-word; }
+
+  /* 3. scope 下拉 */
+  .menu { width:fit-content; max-width:360px; border-radius:12px; padding:6px; font-size:13px; }
+  .light .menu { background:#ffffff; border:1px solid #d7d7d4; }
+  .dark  .menu { background:#2c2c2a; border:1px solid #3c3c3a; }
+  .menu-row { display:grid; grid-template-columns:14px max-content; align-items:center; column-gap:10px; padding:7px 16px 7px 10px; border-radius:8px; }
+  .menu-row.fixed { grid-template-columns:14px minmax(0,max-content); }
+  .menu-row .check { width:14px; }
+  .menu-row .lines { display:flex; flex-direction:column; gap:2px; }
+  .menu-row.fixed .lines { min-width:0; }
+  .menu-row .name { font-weight:500; white-space:nowrap; }
+  .menu-row .dir { font-size:11px; white-space:nowrap; }
+  .menu-row.fixed .name, .menu-row.fixed .dir { overflow:hidden; text-overflow:ellipsis; }
+
+  /* 4. 权限清单 */
+  .perm { width:400px; }
+  .perm-row { display:flex; gap:8px; padding:4px 0; font-size:13px; line-height:1.5; }
+  .perm-row .ico { flex-shrink:0; margin-top:2px; }
+  .perm-row .body-col { min-width:0; flex:1; }
+  .perm-row .label.broken { }
+  .perm-row .label.fixed { overflow-wrap:break-word; }
+
+  /* 5. 胶囊 */
+  .ghost-card { width:340px; }
+  .pill { display:flex; align-items:center; gap:6px; width:fit-content; border-radius:9999px; padding:3px 10px; font-size:11px; font-weight:500; }
+  .light .pill { background:#efeeeb; border:1px solid #d7d7d4; color:#6f6f6c; }
+  .dark  .pill { background:#383836; border:1px solid #4a4a48; color:#a3a3a0; }
+  .pill .dot { width:8px; height:8px; border-radius:50%; background:#6fcf8e; flex-shrink:0; }
+  .pill.fixed { max-width:100%; }
+  .pill.fixed .pill-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pill .pill-name { white-space:nowrap; }
+
+  /* 6. 模型胶囊行 */
+  .switch-row { display:flex; align-items:center; gap:12px; width:360px; }
+  .switch-row .line { height:1px; flex:1; background:#d7d7d4; }
+  .dark .switch-row .line { background:#3c3c3a; }
+  .switch-pill { display:flex; align-items:center; gap:6px; border-radius:9999px; padding:4px 10px; font-size:11px; }
+  .light .switch-pill { border:1px solid #d7d7d4; color:#6f6f6c; background:rgba(255,255,255,.5); }
+  .dark  .switch-pill { border:1px solid #3c3c3a; color:#a3a3a0; background:rgba(44,44,42,.5); }
+  .switch-pill.broken { flex-shrink:0; }
+  .switch-pill.fixed { min-width:0; }
+  .switch-pill.fixed .model { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .switch-pill .model { white-space:nowrap; }
+  input[type=checkbox] { accent-color:#525250; }
+</style>
+</head>
+<body>
+<header>
+  <h1>UI 超长文本溢出修复 + 会话导入批量选择 · HTML 预览</h1>
+  <p>分支 fix/ui-long-text-overflow-polish(PR #360)。本页为静态复现:用与实现相同的 CSS 约束语义
+  (break-words / truncate / min-w-0 / max-w-full / minmax(0,max-content))逐项重现「修复前 → 修复后」,
+  颜色取 DESIGN.md 层色 token 字面值,Light / Dark 双模式可切换。所有「修复前」块即当前 main 上可复现的破版行为。</p>
+</header>
+<div class="tabs">
+  <div class="tab active" data-mode="light">Light</div>
+  <div class="tab" data-mode="dark">Dark</div>
+</div>
+
+<div id="stage"></div>
+
+<template id="tpl">
+  <h2 class="sec-title">1 · 会话导入设置页:新增「全选当前筛选结果」表头 + 筛选外已选提示(新交互,展示修复后)</h2>
+  <div class="pair">
+    <div class="col">
+      <span class="tag after">新增</span>
+      <div class="frame MODE">
+        <div class="card import-list">
+          <label class="import-head"><input type="checkbox" checked> 全选当前筛选结果(37 条)</label>
+          <div class="import-row"><input type="checkbox" checked>
+            <div class="meta"><div><span class="badge">Codex</span> <span class="title">帮我把 mobile 的推送权限弹窗改成首次发送前再请求,并补齐双端埋点……</span></div>
+            <div class="cwd tertiary">/Users/chris/Code/Github/very-long-monorepo-name/apps/mobile/features/notifications</div></div>
+          </div>
+          <div class="import-row"><input type="checkbox">
+            <div class="meta"><div><span class="badge">Claude</span> <span class="title">重构 settings 布局</span></div>
+            <div class="cwd tertiary">/Users/chris/Code/Github/cindy</div></div>
+          </div>
+        </div>
+        <div class="import-foot">
+          <span class="desc">已选择 12 条 (其中 4 条在当前筛选之外)</span>
+          <span class="btn-primary">导入选中</span>
+        </div>
+      </div>
+      <p class="note">表头 checkbox 固定在列表顶部(不随滚动滚走),含半选态,只作用于当前筛选可见候选;底部提示被筛选隐藏的已选数量,避免导入看不见的条目。标题/路径截断处均有悬停 title 可看全。</p>
+    </div>
+  </div>
+
+  <h2 class="sec-title">2 · 分享导入向导:他机原始路径顶破弹窗</h2>
+  <div class="pair">
+    <div class="col">
+      <span class="tag before">修复前</span>
+      <div class="frame MODE"><div class="dialog">
+        <h3>导入分享的会话</h3>
+        <p class="hint desc overflow-broken">原会话目录:<span class="path mono">C:\Users\extraordinarily-long-username\Development\company-projects\frontend-monorepo-workspace\packages\desktop-client</span>,请选择本机对应目录。</p>
+      </div></div>
+      <p class="note">无空格长串不换行,横向顶出 480px 弹窗(此处弹窗已裁切,实际会撑出可视区)。</p>
+    </div>
+    <div class="col">
+      <span class="tag after">修复后</span>
+      <div class="frame MODE"><div class="dialog">
+        <h3>导入分享的会话</h3>
+        <p class="hint desc fixed">原会话目录:<span class="mono">C:\Users\extraordinarily-long-username\Development\company-projects\frontend-monorepo-workspace\packages\desktop-client</span>,请选择本机对应目录。</p>
+      </div></div>
+      <p class="note">break-words:长串按需断行,弹窗宽度稳定。</p>
+    </div>
+  </div>
+
+  <h2 class="sec-title">3 · 目录 scope 下拉(设置·内置工具 / 插件共两处):路径水平溢出菜单</h2>
+  <div class="pair">
+    <div class="col">
+      <span class="tag before">修复前</span>
+      <div class="frame MODE"><div class="menu">
+        <div class="menu-row"><span class="check">✓</span><div class="lines"><span class="name">desktop-client</span><span class="dir tertiary mono">/Users/chris/Development/company-projects/frontend-monorepo-workspace/packages/desktop-client</span></div></div>
+        <div class="menu-row"><span class="check"></span><div class="lines"><span class="name">cindy</span><span class="dir tertiary mono">/Users/chris/Code/Github/cindy</span></div></div>
+      </div></div>
+      <p class="note">列宽 max-content + nowrap:路径超过菜单 max-w 上限后横向溢出,整个菜单破相(此处按实际表现让文本冲出容器)。</p>
+    </div>
+    <div class="col">
+      <span class="tag after">修复后</span>
+      <div class="frame MODE"><div class="menu">
+        <div class="menu-row fixed"><span class="check">✓</span><div class="lines"><span class="name">desktop-client</span><span class="dir tertiary mono">/Users/chris/Development/company-projects/frontend-monorepo-workspace/packages/desktop-client</span></div></div>
+        <div class="menu-row fixed"><span class="check"></span><div class="lines"><span class="name">cindy</span><span class="dir tertiary mono">/Users/chris/Code/Github/cindy</span></div></div>
+      </div></div>
+      <p class="note">minmax(0,max-content) + truncate + 悬停 title:短路径下菜单仍按内容自适应,超长路径省略号收尾。</p>
+    </div>
+  </div>
+
+  <h2 class="sec-title">4 · 插件安装确认弹窗:权限主标签(作者可控域名/工具名)不断行</h2>
+  <div class="pair">
+    <div class="col">
+      <span class="tag before">修复前</span>
+      <div class="frame MODE"><div class="dialog perm">
+        <div class="perm-row"><span class="ico">🌐</span><div class="body-col">
+          <div class="label broken mono">访问网络域名 extremely-long-api-gateway-subdomain.internal-services.example-corporation.com</div>
+          <div class="desc" style="font-size:12px">出站请求仅限声明域名</div>
+        </div></div>
+      </div></div>
+      <p class="note">域名是无空格长串(点号不是 CSS 断行点),主标签行顶破固定宽度弹窗;相邻两行 detail 早有 break-words,唯独主标签漏了。</p>
+    </div>
+    <div class="col">
+      <span class="tag after">修复后</span>
+      <div class="frame MODE"><div class="dialog perm">
+        <div class="perm-row"><span class="ico">🌐</span><div class="body-col">
+          <div class="label fixed mono">访问网络域名 extremely-long-api-gateway-subdomain.internal-services.example-corporation.com</div>
+          <div class="desc" style="font-size:12px">出站请求仅限声明域名</div>
+        </div></div>
+      </div></div>
+      <p class="note">break-words 与相邻行对齐;签名发布者名同批修复。</p>
+    </div>
+  </div>
+
+  <h2 class="sec-title">5 · 聊天插件卡归属胶囊:超长插件名撑出卡片</h2>
+  <div class="pair">
+    <div class="col">
+      <span class="tag before">修复前</span>
+      <div class="frame MODE"><div class="ghost-card">
+        <span class="pill"><span class="dot"></span><span class="pill-name">Extraordinarily Comprehensive Web Automation &amp; Data Extraction Suite Pro Max</span></span>
+        <div class="card" style="margin-top:8px;height:56px;border-radius:12px"></div>
+      </div></div>
+      <p class="note">胶囊 self-start 且无宽度上限,超长插件名把胶囊撑出卡片宽度(340px 卡内,胶囊冲出右缘)。</p>
+    </div>
+    <div class="col">
+      <span class="tag after">修复后</span>
+      <div class="frame MODE"><div class="ghost-card">
+        <span class="pill fixed"><span class="dot"></span><span class="pill-name">Extraordinarily Comprehensive Web Automation &amp; Data Extraction Suite Pro Max</span></span>
+        <div class="card" style="margin-top:8px;height:56px;border-radius:12px"></div>
+      </div></div>
+      <p class="note">max-w-full:胶囊封顶于卡片宽度,插件名省略号收尾。</p>
+    </div>
+  </div>
+
+  <h2 class="sec-title">6 · Agent 切换系统卡:超长模型 id 顶出整行</h2>
+  <div class="pair">
+    <div class="col">
+      <span class="tag before">修复前</span>
+      <div class="frame MODE"><div class="switch-row">
+        <div class="line"></div>
+        <span class="switch-pill broken">⇄ 切换到 Codex <span style="opacity:.5">·</span> <span class="model mono">us.anthropic.claude-sonnet-4-5-20250929-v1:0-custom-gateway</span></span>
+        <div class="line"></div>
+      </div></div>
+      <p class="note">胶囊 shrink-0:自定义供应商长模型 id 直接把整行顶出卡片宽度(360px 行内,胶囊冲出右缘)。</p>
+    </div>
+    <div class="col">
+      <span class="tag after">修复后</span>
+      <div class="frame MODE"><div class="switch-row">
+        <div class="line"></div>
+        <span class="switch-pill fixed">⇄ 切换到 Codex <span style="opacity:.5">·</span> <span class="model mono">us.anthropic.claude-sonnet-4-5-20250929-v1:0-custom-gateway</span></span>
+        <div class="line"></div>
+      </div></div>
+      <p class="note">min-w-0 + 模型名 truncate + 悬停 title:胶囊收缩让位,行宽稳定。</p>
+    </div>
+  </div>
+</template>
+
+<script>
+  const stage = document.getElementById('stage');
+  const tpl = document.getElementById('tpl').innerHTML;
+  function render(mode) {
+    stage.innerHTML = tpl.replaceAll('frame MODE', 'frame ' + mode);
+  }
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+      tab.classList.add('active');
+      render(tab.dataset.mode);
+    });
+  });
+  render('light');
+</script>
+</body>
+</html>
