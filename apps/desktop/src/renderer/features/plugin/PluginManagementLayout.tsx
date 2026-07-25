@@ -6,7 +6,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Search, X } from 'lucide-react';
@@ -90,12 +90,7 @@ export function PluginManagementHeader({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const searchable = query !== undefined && onQueryChange !== undefined;
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const searchInputId = `plugin-management-${activeTab}-search`;
-
-  const focusSearch = () => {
-    window.requestAnimationFrame(() => searchInputRef.current?.focus());
-  };
 
   // Catalog scroll surfaces reserve a 12px gutter on both edges; mirror it here.
   return (
@@ -144,18 +139,13 @@ export function PluginManagementHeader({
                     'inset 0 1px 0 color-mix(in srgb, var(--surface-elevated) 24%, transparent)',
                 }}
               >
-                <span
-                  aria-hidden="true"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    focusSearch();
-                  }}
+                <label
+                  htmlFor={searchInputId}
                   className="plugin-management-search-trigger grid size-6 shrink-0 cursor-text place-items-center text-[var(--text-tertiary)]"
                 >
                   <Search size={15} strokeWidth={1.75} aria-hidden="true" />
-                </span>
+                </label>
                 <input
-                  ref={searchInputRef}
                   id={searchInputId}
                   type="text"
                   inputMode="search"

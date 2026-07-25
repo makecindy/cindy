@@ -149,8 +149,12 @@ describe('PluginManagementLayout', () => {
 
     const searchInput = screen.getByRole('textbox', { name: 'Search skills' });
     const searchControl = searchInput.parentElement;
+    const searchLabel = searchControl?.querySelector(
+      'label[for="plugin-management-skills-search"]',
+    );
 
     expect(searchControl?.getAttribute('data-expanded')).toBeNull();
+    expect(searchLabel).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Search skills' })).toBeNull();
     searchInput.focus();
     await waitFor(() => expect(document.activeElement).toBe(searchInput));

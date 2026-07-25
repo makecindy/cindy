@@ -141,7 +141,7 @@
   }
 }
 
-@container plugin-management (max-width: 620px) {
+@container plugin-management (max-width: 720px) {
   .plugin-management-layout-root .plugin-catalog-toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -152,7 +152,6 @@
     width: 100%;
     justify-content: space-between;
     gap: 0.125rem;
-    overflow: visible;
   }
 
   .plugin-management-layout-root .plugin-catalog-filters > button {
