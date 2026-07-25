@@ -137,38 +137,33 @@ afterEach(() => {
 });
 
 describe('resolveMobileDownloadUrl', () => {
-  it('builds the all-versions page from the regional website endpoint', () => {
-    expect(resolveMobileDownloadUrl('https://cindy.cn')).toBe(
-      'https://cindy.cn/download/#all-versions',
-    );
-    expect(resolveMobileDownloadUrl('https://cindy.app')).toBe(
-      'https://cindy.app/download/#all-versions',
-    );
+  it('builds the download page from the regional website endpoint', () => {
+    expect(resolveMobileDownloadUrl('https://cindy.cn')).toBe('https://cindy.cn/download/');
+    expect(resolveMobileDownloadUrl('https://cindy.app')).toBe('https://cindy.app/download/');
   });
 
-  it('keeps the shipped endpoint hosts intact', () => {
-    // 打包配置里的真实取值:CN 是 config/endpoint.json 的 cindy.com.cn(官网 302 到
-    // cindy.cn/download/),Global 是 cindy.app。这里不做域名改写,区域来源只有
-    // clientEndpoints 一处。
-    for (const configPath of [
-      '../../../../../config/endpoint.json',
-      '../../../../../config/endpoint.global.json',
-    ]) {
-      const websiteUrl = JSON.parse(
-        readFileSync(resolve(__dirname, configPath), 'utf8'),
-      ).websiteUrl;
-      expect(resolveMobileDownloadUrl(websiteUrl)).toBe(`${websiteUrl}/download/#all-versions`);
-    }
+  it('maps the shipped endpoint hosts onto the canonical download pages', () => {
+    // 打包配置的真实取值:CN 是 config/endpoint.json 的 cindy.com.cn(官网 302 到
+    // cindy.cn),Global 是 cindy.app。二维码直接给最终地址,手机上少一跳。
+    const shipped = (configPath: string) =>
+      JSON.parse(readFileSync(resolve(__dirname, configPath), 'utf8')).websiteUrl as string;
+
+    expect(resolveMobileDownloadUrl(shipped('../../../../../config/endpoint.json'))).toBe(
+      'https://cindy.cn/download/',
+    );
+    expect(resolveMobileDownloadUrl(shipped('../../../../../config/endpoint.global.json'))).toBe(
+      'https://cindy.app/download/',
+    );
   });
 
   it('accepts the loopback http endpoint used by the dev manifest', () => {
     // config/endpoint.dev.json.example 的 websiteUrl 是 http://localhost:3000,
     // 开发机不该看到一个禁用的二维码。
     expect(resolveMobileDownloadUrl('http://localhost:3000')).toBe(
-      'http://localhost:3000/download/#all-versions',
+      'http://localhost:3000/download/',
     );
     expect(resolveMobileDownloadUrl('http://127.0.0.1:5173')).toBe(
-      'http://127.0.0.1:5173/download/#all-versions',
+      'http://127.0.0.1:5173/download/',
     );
   });
 
@@ -322,7 +317,7 @@ describe('MobileDownloadDialog', () => {
     });
     await waitFor(() => expect(document.activeElement).toBe(openButton));
     fireEvent.click(openButton);
-    expect(openExternal).toHaveBeenCalledWith('https://cindy.cn/download/#all-versions');
+    expect(openExternal).toHaveBeenCalledWith('https://cindy.cn/download/');
   });
 
   it('reports a failed handoff to the system browser', async () => {

@@ -104,9 +104,25 @@ function parseWebsiteUrl(value: string): URL | null {
   }
 }
 
+/**
+ * 官网 CN 主站是 `cindy.cn`,打包配置里的 `cindy.com.cn` 只是会 302 过去的别名。
+ * 二维码是给手机扫的,直接给最终地址少一跳,也避免手机上先闪一下跳转页。
+ */
+const WEBSITE_HOST_ALIASES: Record<string, string> = {
+  'cindy.com.cn': 'cindy.cn',
+  'www.cindy.com.cn': 'cindy.cn',
+  'www.cindy.cn': 'cindy.cn',
+  'www.cindy.app': 'cindy.app',
+};
+
 export function resolveMobileDownloadUrl(websiteUrl: string): string | null {
   const website = parseWebsiteUrl(websiteUrl);
-  return website ? new URL('/download/#all-versions', website).toString() : null;
+  if (!website) return null;
+
+  const downloadUrl = new URL('/download/', website);
+  const canonicalHost = WEBSITE_HOST_ALIASES[downloadUrl.hostname];
+  if (canonicalHost) downloadUrl.hostname = canonicalHost;
+  return downloadUrl.toString();
 }
 
 function getQrDataUrl(downloadUrl: string): Promise<string> {
@@ -178,10 +194,8 @@ export function MobileDownloadDialog({
   const refreshRemoteRef = useRef<(() => void) | null>(null);
   const skipNextOpenRefreshRef = useRef(false);
   const openHandledRef = useRef(false);
-  const downloadUrl = useMemo(
-    () => resolveMobileDownloadUrl(window.electronAPI.clientEndpoints.websiteUrl),
-    [],
-  );
+  const websiteUrl = window.electronAPI.clientEndpoints.websiteUrl;
+  const downloadUrl = useMemo(() => resolveMobileDownloadUrl(websiteUrl), [websiteUrl]);
 
   // Prepare the QR before the first click so opening the dialog never waits on
   // canvas encoding. The module-level cache keeps this a once-per-endpoint cost.
