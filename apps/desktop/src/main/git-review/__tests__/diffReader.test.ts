@@ -144,7 +144,8 @@ describe('git-review diffReader', () => {
         isTooLarge: false,
       });
       expect(diff?.size).toBe(outsidePath.length);
-      expect(diff?.rawPatch).toContain(`+${outsidePath}`);
+      // git 把 symlink 目标以 POSIX 分隔符写入 blob,Windows 路径按同规则规范化后比较。
+      expect(diff?.rawPatch).toContain(`+${outsidePath.split(path.sep).join('/')}`);
     } finally {
       await fs.rm(outsidePath, { force: true });
     }
