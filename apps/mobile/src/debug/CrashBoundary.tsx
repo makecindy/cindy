@@ -60,9 +60,15 @@ function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message || error.name || 'Error';
   if (typeof error === 'string') return error;
   try {
-    return JSON.stringify(error) ?? String(error);
+    const json = JSON.stringify(error);
+    if (typeof json === 'string') return json;
   } catch {
+    /* ignore */
+  }
+  try {
     return String(error);
+  } catch {
+    return '(unserializable error)';
   }
 }
 
