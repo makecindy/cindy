@@ -270,7 +270,7 @@ Three tiers — **these three only**:
 
 ### Don't
 
-- Don't introduce any chromatic color — no brand blue, no accent green, no warm tones
+- Don't introduce any chromatic color outside the sanctioned semantic set in §2 — no brand blue, no accent green, no warm tones beyond the registered exceptions
 - Don't invent arbitrary radii — only three values exist: 8px (inner controls), 12px (containers), 9999px (pill). Nothing in between, nothing else.
 - Don't add shadows to any element — the flat aesthetic is intentional
 - Don't use font weights above 500 — no bold, no black weight
@@ -286,7 +286,7 @@ Cindy Desktop is an Electron app: layout responds to window resizing, not page b
 
 ### Desktop Window
 
-- Minimum window size: **800 × 600** (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts`; secondary windows share the same floor)
+- Minimum window size: **800 × 600** for the main window and secondary session windows (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts` / `secondary-windows.ts`). The detached right-sidebar window has its own smaller floor of **360 × 480** (`right-sidebar-window/window.ts`) — layouts hosted there must stay legible down to that width
 - The sidebar is collapsible; region dividers and paddings hold as the window narrows, and content reflows fluidly
 - Chat stream and composer reflow with the window; code blocks keep horizontal scroll instead of wrapping
 - Control sizes and paddings follow §4 at every window size — targets never shrink below their specified geometry
