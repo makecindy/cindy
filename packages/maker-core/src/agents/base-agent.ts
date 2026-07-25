@@ -122,7 +122,11 @@ export interface CodexLocalCredentialModeSwitchContext {
 }
 
 export interface RefreshLocalModelsOptions {
-  /** Bind control-plane model discovery to a specific local credential route. */
+  /**
+   * Bind model discovery to a specific local credential route.
+   * Codex serves explicit routes from an isolated control-plane host so live
+   * session hosts never need a credential-mode switch.
+   */
   credentialMode?: AgentCredentialMode;
 }
 

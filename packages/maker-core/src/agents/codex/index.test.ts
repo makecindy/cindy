@@ -632,8 +632,9 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
-  it('replaces a provider-oauth utility host with an OpenAI-bound host for explicit refreshes', async () => {
+  it('uses an isolated OpenAI control-plane host without closing provider-oauth sessions', async () => {
     const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
+    const prepareCodexLocalCredentialModeSwitch = vi.fn(async () => {});
     const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
       extraArgs: [],
       extraEnv: {},
@@ -641,6 +642,7 @@ describe('CodexAgent.refreshLocalModels', () => {
     }));
     const agent = new CodexAgent(createDeps({}, {
       onCodexLocalModelsListed,
+      prepareCodexLocalCredentialModeSwitch,
       prepareCodexExtraSpawnConfig,
     }));
     const xaiHandle = await agent.startSession({
@@ -649,14 +651,14 @@ describe('CodexAgent.refreshLocalModels', () => {
       model: 'xai/grok-4.3',
       workingDir: '/repo-xai',
     });
-    await xaiHandle.close();
 
     await expect(
       agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
     ).resolves.toBe(true);
 
     expect(createdTransports).toHaveLength(2);
-    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[0].closed).toBe(false);
+    expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
     expect(createdTransports[0].lines.some((line) => (
       (JSON.parse(line) as { method?: string }).method === Method.ModelList
     ))).toBe(false);
@@ -672,6 +674,15 @@ describe('CodexAgent.refreshLocalModels', () => {
       credentialMode: 'oauth-bearer',
     });
     expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
+    expect(Array.from(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+    )).toEqual(['local', 'local-control:oauth-bearer']);
+    await xaiHandle.close();
+    await agent.forceDisposeLocalHostForAuthChange('test account boundary');
+    expect(createdTransports.every((transport) => transport.closed)).toBe(true);
+    expect(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.size,
+    ).toBe(0);
     await agent.dispose();
   });
 

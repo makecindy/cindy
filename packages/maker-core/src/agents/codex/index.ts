@@ -276,6 +276,16 @@ export function hostKey(remoteHostId?: string | null): string {
   return remoteHostId ? `remote:${remoteHostId}` : 'local';
 }
 
+const LOCAL_CONTROL_PLANE_HOST_PREFIX = 'local-control:';
+
+function localControlPlaneHostKey(credentialMode: AgentCredentialMode): string {
+  return `${LOCAL_CONTROL_PLANE_HOST_PREFIX}${credentialMode}`;
+}
+
+function isLocalControlPlaneHostKey(key: string): boolean {
+  return key.startsWith(LOCAL_CONTROL_PLANE_HOST_PREFIX);
+}
+
 /**
  * maker permissionMode → app-server { approvalPolicy, approvalsReviewer, sandbox }。
  *
@@ -1334,9 +1344,9 @@ export class CodexAgent extends BaseAgent {
   private async getHost(
     remoteHostId?: string,
     credentialMode?: AgentCredentialMode,
-    opts: { ignoreBindingLeases?: number } = {},
+    opts: { ignoreBindingLeases?: number; keyOverride?: string } = {},
   ): Promise<AppServerHost> {
-    const key = hostKey(remoteHostId);
+    const key = opts.keyOverride ?? hostKey(remoteHostId);
     // spawnMode = 调用方原始诉求(undefined 保持 adapter fallback,spawn 行为不变)。
     // 复用判定分两级(review P2:归一化解析走 getState、含 reconcile/fs,不允许进
     // 无条件路径):
@@ -1509,9 +1519,14 @@ export class CodexAgent extends BaseAgent {
    * 同时也是 cache ready barrier；分页全部读完后才一次性交给宿主，避免 UI 看到半份目录。
    */
   override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
-    const key = hostKey();
-    const host = options?.credentialMode
-      ? await this.getHost(undefined, options.credentialMode)
+    const credentialMode = options?.credentialMode;
+    // 显式 provider 刷新使用独立 control-plane app-server。不能为了发一次 model/list
+    // 切换共享 local host 的凭证形态：切换协调器会关闭空闲会话，忙碌会话则直接拒绝。
+    const key = credentialMode
+      ? localControlPlaneHostKey(credentialMode)
+      : hostKey();
+    const host = credentialMode
+      ? await this.getHost(undefined, credentialMode, { keyOverride: key })
       : (await this.getUtilityHost()).host;
     const init = await host.ensureStarted();
     if (init.codexHome) this.codexHome = init.codexHome;
@@ -1732,14 +1747,15 @@ export class CodexAgent extends BaseAgent {
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
       // 防止在 JSON-RPC response 分发回调里同步收割自己。远端也走同一结构化协议路径。
       onAuthInvalidated: (reason) => {
+        const usesLocalAuth = !remoteHostId;
         this.deps.logger.warn('codex auth invalidated', {
           reason,
           key,
-          localAuthWillInvalidate: key === hostKey(),
+          localAuthWillInvalidate: usesLocalAuth,
         });
         Promise.resolve()
           .then(async () => {
-            if (key === hostKey()) {
+            if (usesLocalAuth) {
               try {
                 await this.deps.auth.invalidate?.(reason);
               } catch (e) {
@@ -4780,16 +4796,24 @@ export class CodexAgent extends BaseAgent {
   }
 
   /**
-   * 本地 Codex OAuth/logout 失效时强制收掉 local host。
+   * 本地 Codex OAuth/logout 失效时强制收掉共享 local host 与独立 control-plane hosts。
    *
-   * 这条路径说明当前 local host 持有的凭证已经不可用，不能因为仍有订阅就继续保留；
-   * 但仍然只处理 local key，不能扩散到 remote host。
+   * 这些 host 都持有本机凭证，账号边界变化后不能继续复用；remote hosts 使用远端
+   * 用户配置，不在本次清理范围内。
    */
   async forceDisposeLocalHostForAuthChange(reason = 'CodexAgent local auth changed'): Promise<void> {
-    await this.retireHostKey(hostKey(), reason, {
-      failIfActive: false,
-      logPrefix: 'codex local auth restart',
-    });
+    const keys = new Set<string>([hostKey()]);
+    for (const key of this.hosts.keys()) {
+      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+    }
+    for (const key of this.hostPromises.keys()) {
+      if (isLocalControlPlaneHostKey(key)) keys.add(key);
+    }
+    await Promise.all(Array.from(keys, (key) =>
+      this.retireHostKey(key, reason, {
+        failIfActive: false,
+        logPrefix: 'codex local auth restart',
+      })));
   }
 
   private async disposeLocalHostForCredentialChangeUnlocked(key: string, reason: string): Promise<void> {
@@ -4909,13 +4933,16 @@ export class CodexAgent extends BaseAgent {
     this.memoryOverride = enabled;
     // 立即 push, 让所有 live thread 通过 server 端 reload_user_config 拿到新值
     try {
-      if (this.hosts.size === 0) {
+      const localSessionHosts = Array.from(this.hosts.entries()).filter(
+        ([key]) => !key.startsWith('remote:') && !isLocalControlPlaneHostKey(key),
+      );
+      if (localSessionHosts.length === 0) {
         log.info('setMemory ◀ no live app-server, will apply on next session');
         return { effective: 'next-session' };
       }
-      await Promise.all(Array.from(this.hosts.entries()).filter(([key]) => !key.startsWith('remote:')).map(async ([key, host]) => {
-        // Remote hosts do not receive Maker Memory, so their native setting is
-        // owned by the target rather than this local manager.
+      await Promise.all(localSessionHosts.map(async ([key, host]) => {
+        // Only thread-serving local hosts receive Maker Memory. Remote hosts own
+        // their native setting; model-list control-plane hosts have no live threads.
         await host.request(Method.ExperimentalFeatureEnablementSet, {
           enablement: { memories: enabled },
         });
