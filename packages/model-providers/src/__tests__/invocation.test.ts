@@ -584,3 +584,61 @@ describe('resolveModelInvocation — codex review 三轮:回落保真度', () =>
     expect(r.fallbacksApplied).toContain('model:first-available');
   });
 });
+
+describe('resolveModelInvocation — codex review 四轮:无点名路径与 provider 偏好作废', () => {
+  it('无点名 + native 源上模型被隐藏、他源可见 → 显式收敛到可见源(null 会被下游路由进隐藏源)', () => {
+    // claude-code 的 native 默认源是 xd;(xd, claude-opus-5) 被隐藏,anthropic 可见。
+    // 下游 effectiveSourceIdForModel(null) 不看可见性会选回 xd —— 必须显式定到 anthropic。
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5' },
+      SCENARIO,
+      ctx({ isVisible: (pid, m) => !(pid === 'xd' && m.id === 'claude-opus-5') }),
+    );
+    expect(r.model).toBe('claude-opus-5');
+    expect(r.providerId).toBe('anthropic');
+    expect(r.fallbacksApplied).toContain('provider:visible-fallback');
+  });
+
+  it('无点名 + 下游默认落点本就可见 → 维持 null(「null=默认路由」契约不变)', () => {
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5' },
+      SCENARIO,
+      ctx({ isVisible: (pid, m) => !(pid === 'anthropic' && m.id === 'claude-sonnet-4-6') }),
+    );
+    expect(r.providerId).toBeNull();
+    expect(r.fallbacksApplied).not.toContain('provider:visible-fallback');
+  });
+
+  it('无点名 + 未注入可见性 → 维持 null(既有契约)', () => {
+    const r = resolveModelInvocation({ model: 'claude-opus-5' }, SCENARIO, ctx());
+    expect(r.providerId).toBeNull();
+  });
+
+  it('agent 回落时 providerId 偏好一并作废,不把原 agent 的路由强加给回落 agent', () => {
+    const provs = [
+      {
+        id: 'pa',
+        name: 'pa',
+        agents: ['codex'],
+        models: { codex: [] },
+        connected: true,
+      },
+      {
+        id: 'pb',
+        name: 'pb',
+        agents: ['claude-code'],
+        models: { 'claude-code': [model('claude-sonnet-4-6')] },
+        connected: true,
+      },
+    ] as unknown as ProviderView[];
+    const r = resolveModelInvocation(
+      { agentKind: 'codex', providerId: 'pb' },
+      SCENARIO,
+      { providers: provs, getPermissionModes: PERM_MODES },
+    );
+    expect(r.agentKind).toBe('claude-code');
+    expect(r.fallbacksApplied).toContain('agent:model-less-fallback');
+    // 原 agent 的 providerId 偏好作废;无 scenario.providerIdFor → null 默认路由
+    expect(r.providerId).toBeNull();
+  });
+});
