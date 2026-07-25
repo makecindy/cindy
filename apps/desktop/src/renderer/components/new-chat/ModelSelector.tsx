@@ -1479,10 +1479,13 @@ export function ModelSelector({
   // 占位符 —— 对会话是对的(没选过),但对「展示一条已持久化偏好」的调用方是信息丢失:
   // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
   // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
+  // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
+  const unknownLabel =
+    modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
     : (currentModel?.displayName ??
-      (modelId && unknownModelLabel ? unknownModelLabel(modelId) : null) ??
+      (unknownLabel !== '' ? unknownLabel : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
   const efforts = currentModel?.efforts ?? [];
 
