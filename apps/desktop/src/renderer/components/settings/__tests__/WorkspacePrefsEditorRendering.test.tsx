@@ -259,6 +259,61 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     expect(screen.getByTestId('permission-selector').getAttribute('data-disabled')).toBe('true');
   });
 
+  it('继承态(agentKind=null)下点当前 agent 段也写入显式偏好(reselectEmitsChange)', () => {
+    render(
+      <WorkspacePrefsEditor
+        alias="cindy"
+        state={stateWith({
+          prefsFor: () => ({
+            workspace: 'cindy',
+            model: null,
+            effort: null,
+            agentKind: null, // 跟随默认(claude-code)
+            permissionMode: null,
+          }),
+        })}
+      />,
+    );
+
+    // 点当前显示的 Claude 段 = 把继承值钉成显式,否则 IM 默认一变这条目录被静默改掉
+    screen.getByRole('tab', { name: 'Claude' }).click();
+    expect(applyPatch).toHaveBeenCalledWith('cindy', {
+      agentKind: 'claude-code',
+      model: null,
+      effort: null,
+    });
+  });
+
+  it('未知/过期 agentKind 归一到默认 agent,分段控件不禁死', () => {
+    render(
+      <WorkspacePrefsEditor
+        alias="cindy"
+        state={stateWith({
+          prefsFor: () => ({
+            workspace: 'cindy',
+            model: null,
+            effort: null,
+            agentKind: 'future-agent', // server 快照里的过期值
+            permissionMode: null,
+          }),
+        })}
+      />,
+    );
+
+    // 显示为默认 agent(claude-code)而非裸值;caps 可解析 → 整行不因 null caps 禁死
+    expect(screen.getByRole('tab', { name: 'Claude' }).getAttribute('aria-selected')).toBe('true');
+    for (const tab of screen.getAllByRole('tab')) {
+      expect((tab as HTMLButtonElement).disabled).toBe(false);
+    }
+    // 用户可以点 Codex 纠正过期值
+    screen.getByRole('tab', { name: 'Codex' }).click();
+    expect(applyPatch).toHaveBeenCalledWith('cindy', {
+      agentKind: 'codex',
+      model: null,
+      effort: null,
+    });
+  });
+
   it('切换 agent 分段写入配对 patch(清掉旧模型/档位)', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
 

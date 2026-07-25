@@ -55,6 +55,43 @@ describe('patchForAgentChange', () => {
   });
 });
 
+describe('resolveEffectiveRow — 过期存量值归一化(与派发侧 defaults.ts 同口径)', () => {
+  const IM_DEFAULTS = {
+    agentKind: 'claude-code',
+    agents: { 'claude-code': { model: 'claude-opus-4-8', effort: 'high' } },
+  };
+  const capsFor = (k: string) => (k === 'claude-code' ? CLAUDE_CAPS : k === 'codex' ? CODEX_CAPS : null);
+
+  it('未知/未来 agentKind 按无显式偏好处理,归一到默认 agent(不显示成 Claude 也不禁死整行)', () => {
+    const row = resolveEffectiveRow(
+      { agentKind: 'future-agent', model: null, effort: null, permissionMode: null },
+      IM_DEFAULTS,
+      capsFor,
+    );
+    expect(row.agentKind.id).toBe('claude-code');
+    expect(row.agentKind.isDefault).toBe(true); // 视为跟随默认,分段控件保持可用
+  });
+
+  it('显式 effort 不被生效模型支持 → 落 defaultEffort 链,不裸透传', () => {
+    const row = resolveEffectiveRow(
+      { agentKind: 'claude-code', model: 'claude-opus-4-8', effort: 'ultra', permissionMode: null },
+      IM_DEFAULTS,
+      capsFor,
+    );
+    // CLAUDE_CAPS 的 opus 不支持 ultra → 草稿 'high' 支持 → 显示 high(= 派发实际用的)
+    expect(row.effort.id).toBe('high');
+  });
+
+  it('显式 effort 合法时原样保留', () => {
+    const row = resolveEffectiveRow(
+      { agentKind: 'claude-code', model: 'claude-opus-4-8', effort: 'low', permissionMode: null },
+      IM_DEFAULTS,
+      capsFor,
+    );
+    expect(row.effort.id).toBe('low');
+  });
+});
+
 describe('resolveEffectivePermissionMode', () => {
   it('显式档且当前 agent 支持 → 原样', () => {
     expect(resolveEffectivePermissionMode('acceptEdits', CLAUDE_CAPS)).toBe('acceptEdits');

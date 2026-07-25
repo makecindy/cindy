@@ -125,7 +125,13 @@ export function resolveEffectiveRow(
   capsFor: (agentKind: string) => PrefsAgentCaps | null,
 ): EffectiveRow {
   const defaultAgent = imDefaults?.agentKind ?? 'claude-code';
-  const effAgent = prefs.agentKind ?? defaultAgent;
+  // 未知/未来的 agentKind(server 快照可能存过期值)按「无显式偏好」处理,归一到默认
+  // agent —— 与派发侧 defaults.ts 的 AGENT_KINDS 合法性校验同口径。不做这一步的后果
+  // (2026-07 review): 未知值被裸透传,UI 显示成 Claude 且 caps 恒 null 把整行禁死,
+  // 用户永远无法纠正那个过期值。
+  const explicitAgent =
+    prefs.agentKind === 'claude-code' || prefs.agentKind === 'codex' ? prefs.agentKind : null;
+  const effAgent = explicitAgent ?? defaultAgent;
   const caps = capsFor(effAgent);
   const draft = imDefaults?.agents[effAgent];
 
@@ -148,11 +154,19 @@ export function resolveEffectiveRow(
         : (entry.defaultEffort ?? entry.efforts[0]);
   }
 
+  // effort: 显式档必须仍被生效模型支持才算数(目录变更/外部编辑可能留下失效值),
+  // 否则按派发侧 defaults.ts 的同一条链落 defaultEffort(草稿>模型默认>首档)——
+  // 不归一化的后果(2026-07 review): 失效显式档被裸透传,ModelSelector 的 trigger
+  // 因 efforts.includes(effort) 不成立而**整个不显示档位**,存的值和实际会用的值
+  // 都看不见。模型未知(entry null)时不猜,沿用显式值(派发侧该场景不传 effort)。
+  const effortValid =
+    prefs.effort === null || entry === null || entry.efforts.includes(prefs.effort);
+
   return {
-    agentKind: { id: effAgent, isDefault: prefs.agentKind === null, defaultId: defaultAgent },
+    agentKind: { id: effAgent, isDefault: explicitAgent === null, defaultId: defaultAgent },
     model: { id: effModel, isDefault: prefs.model === null, defaultId: defaultModel },
     effort: {
-      id: prefs.effort ?? defaultEffort,
+      id: effortValid ? (prefs.effort ?? defaultEffort) : defaultEffort,
       isDefault: prefs.effort === null,
       defaultId: defaultEffort,
     },

@@ -147,11 +147,11 @@ describe('PermissionSelector triggerVariant', () => {
     expect(getTrigger().className).toContain('h-9');
   });
 
-  // MorphPopover 按「请求侧的可用空间」钳高、不做碰撞翻转,选侧责任在调用方:
-  // composer chip 在底部工具栏 → 恒向上(历史行为);field 按 trigger 位置**动态**选
-  // 空间大的一侧 —— 恒定任一侧都会在某个位置截断(2026-07 Light 实测:恒 bottom 时
-  // 页面末行的菜单被视口底钳得只剩 2 个选项)。
-  it('chip 恒向上;field 动态选侧(上方空间大时向上开)', async () => {
+  // 弹层原语按形态分叉(权限语义共用一份):chip = MorphPopover(容器形变是 composer
+  // 专属类目,§14.4,恒向上);field = **Radix Popover**(锚点随设置页滚动跟随、collision
+  // 自动翻转)。此前两版尝试(恒 bottom / morph 动态选侧)都被实测打回:morph 只在打开时
+  // 测一次 fixed 几何,恒定侧在页面首/末行截断,且滚动时面板脱锚 —— 设置页一律走 Radix。
+  it('chip 走 morph(向上);field 走 Radix Popover,不再是 morph', async () => {
     const { unmount } = renderSelector();
     fireEvent.click(getTrigger());
     const chipPanel = await screen.findByRole('listbox');
@@ -161,24 +161,13 @@ describe('PermissionSelector triggerVariant', () => {
     unmount();
     cleanup();
 
-    // jsdom 无布局(rect 全 0): 下方空间 = innerHeight - 0 ≥ 上方 0 → 'bottom'
     renderSelector({ triggerVariant: 'field' });
     fireEvent.click(getTrigger());
     const fieldPanel = await screen.findByRole('listbox');
-    expect(fieldPanel.closest('[data-morph-side]')?.getAttribute('data-morph-side')).toBe('bottom');
-    fireEvent.keyDown(document, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull(), { timeout: 1500 });
-    cleanup();
-
-    // trigger 贴近视口底(下方空间 < 上方)→ 向上开
-    renderSelector({ triggerVariant: 'field' });
-    const trigger = getTrigger();
-    trigger.getBoundingClientRect = () =>
-      ({ top: 700, bottom: 740, left: 0, right: 200, width: 200, height: 40, x: 0, y: 700 }) as DOMRect;
-    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
-    fireEvent.click(trigger);
-    const abovePanel = await screen.findByRole('listbox');
-    expect(abovePanel.closest('[data-morph-side]')?.getAttribute('data-morph-side')).toBe('top');
+    // Radix PopoverContent 而非 morph 面板:无 data-morph-side 祖先,有 Radix 定位包装
+    expect(fieldPanel.closest('[data-morph-side]')).toBeNull();
+    expect(fieldPanel.closest('[data-radix-popper-content-wrapper]')).not.toBeNull();
+    expect(screen.getAllByRole('option')).toHaveLength(4);
   });
 
   it('field 形态仍走同一份选项列表与危险档配色', async () => {

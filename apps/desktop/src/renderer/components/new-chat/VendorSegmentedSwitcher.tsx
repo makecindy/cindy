@@ -38,6 +38,13 @@ interface VendorSegmentedSwitcherProps {
    * 该变体把 active 段换成黑白反转强 CTA(--accent-cta-bg),当前 Agent 一眼可辨。
    */
   visualVariant?: 'default' | 'create-agent' | 'dropdown';
+  /**
+   * 点击**当前选中段**时也回调 onChange(默认 false = 无操作)。
+   * 供「当前值是解析出的继承值、重选 = 钉成显式值」的调用方(IM 工作目录偏好)使用;
+   * 普通调用点不要开 —— 那里 value 本就是显式状态,重选自己是纯无操作。
+   * 调用方需自行对「显式同值」去重(如 handler 里 next === persisted 时 return)。
+   */
+  reselectEmitsChange?: boolean;
 }
 
 interface SegmentOption {
@@ -61,6 +68,7 @@ export function VendorSegmentedSwitcher({
   dense = false,
   iconOnly = false,
   visualVariant = 'default',
+  reselectEmitsChange = false,
 }: VendorSegmentedSwitcherProps) {
   const isCreateAgentVariant = visualVariant === 'create-agent';
   return (
@@ -102,7 +110,7 @@ export function VendorSegmentedSwitcher({
             // 只阻断鼠标路径），无障碍不受影响。
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
-              if (isActive) return;
+              if (isActive && !reselectEmitsChange) return;
               onChange(opt.vendor);
             }}
             aria-label={opt.label}

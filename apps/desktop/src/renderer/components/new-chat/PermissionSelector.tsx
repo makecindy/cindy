@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   Hand,
   CodeXml,
@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import {
   useAgentCapabilities,
@@ -76,9 +77,12 @@ function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null 
  * 弹层不再是 Radix Popover 浮层,而是从 trigger chip 原位生长(docs/design-rules/cindy-design-system.md §14.4
  * 容器形变类目);trigger 视觉与旧版逐像素一致,变化只在开合方式。
  *
- * 两种 trigger 形态共用同一份选项列表与权限语义:
- *   - `chip`(默认)= composer 胶囊,唯一历史形态;
- *   - `field`  = 设置页表单字段,供「IM 机器人 → 工作目录映射」等设置卡片与
+ * 两种 trigger 形态共用同一份选项列表与权限语义,分叉的只有弹层原语:
+ *   - `chip`(默认)= composer 胶囊 + MorphPopover(容器形变是 composer 专属类目,
+ *     design-rules §14.4),唯一历史形态;
+ *   - `field`  = 设置页表单字段 + **Radix Popover**(锚点随滚动跟随、collision 自动
+ *     翻转 —— 与 ModelSelector 的 field 形态同一原语;morph 只在打开时测一次 fixed
+ *     几何,设置页的滚动列里会脱锚),供「IM 机器人 → 工作目录映射」等设置卡片与
  *     ModelSelector 的 field trigger 并排成套。权限模式的可选项、Codex 归一化、
  *     危险档配色只此一份,设置页不得再私搭一套下拉。
  */
@@ -95,22 +99,6 @@ export function PermissionSelector({
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  // field 形态的停靠侧按 trigger 当前位置**动态**选空间大的一侧(MorphPopover 按请求侧
-  // 钳高、不做碰撞翻转,选侧责任在调用方)。恒定任一侧都会在某个位置截断 —— 设置页的
-  // 目录卡片列表可长可短,同一个字段既可能贴视口顶也可能贴底(2026-07 Light 实测:
-  // 恒 bottom 时页面末行的菜单被底部钳得只剩 2 个选项)。chip 形态仍恒向上(composer
-  // 底部工具栏,历史行为)。
-  const triggerElRef = useRef<HTMLButtonElement | null>(null);
-  const [fieldSide, setFieldSide] = useState<'top' | 'bottom'>('bottom');
-  const pickFieldSide = (): 'top' | 'bottom' => {
-    const rect = triggerElRef.current?.getBoundingClientRect();
-    if (!rect) return 'bottom';
-    return window.innerHeight - rect.bottom >= rect.top ? 'bottom' : 'top';
-  };
-  const openWithSidePick = (next: boolean) => {
-    if (next && triggerVariant === 'field') setFieldSide(pickFieldSide());
-    setOpen(next);
-  };
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
@@ -172,31 +160,19 @@ export function PermissionSelector({
     </>
   );
 
-  return (
-    <MorphPopover
-      open={open && !disabled}
-      onOpenChange={(next) => openWithSidePick(disabled ? false : next)}
-      panelWidth={300}
-      panelClassName="p-2"
-      panelAriaLabel={t('newChat.permissionSelector.listAria')}
-      // 停靠侧:composer chip 恒向上(底部工具栏,历史行为);field 按 trigger 位置
-      // 动态选空间大的一侧(见 pickFieldSide 注释)。
-      side={isFieldTrigger ? fieldSide : 'top'}
-      // field 形态从设置页输入面生长(chip 形态仍从 composer 胶囊面生长)。
-      startBg={isFieldTrigger ? 'var(--settings-input-bg)' : 'var(--composer-pill-bg)'}
-      startBorderColor="var(--border-default)"
-      wrapperClassName={isFieldTrigger ? 'w-full min-w-0' : 'min-w-0 shrink'}
-      trigger={
+  // trigger 与选项列表在 chip(Morph)/ field(Radix)两个弹层原语间共用 —— 权限语义、
+  // 归一化、危险档配色只此一份,分叉的只有弹层壳。
+  const triggerButton = (
         <Tip
           text={triggerDescription}
           side="top"
           contentClassName="max-w-[280px] whitespace-normal break-words text-left"
         >
           <button
-            ref={triggerElRef}
             type="button"
             disabled={disabled}
-            onClick={() => openWithSidePick(disabled ? false : !open)}
+            // field 走 Radix Popover,开合交给 PopoverTrigger;chip 的 morph 自管点击。
+            onClick={isFieldTrigger ? undefined : () => setOpen(disabled ? false : !open)}
             aria-expanded={open && !disabled}
             aria-haspopup="listbox"
             className={cn(
@@ -228,8 +204,9 @@ export function PermissionSelector({
             {triggerContent}
           </button>
         </Tip>
-      }
-    >
+  );
+
+  const optionsList = (
       <div role="listbox" aria-label={t('newChat.permissionSelector.listAria')}>
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
@@ -292,6 +269,47 @@ export function PermissionSelector({
           );
         })}
       </div>
+  );
+
+  // field(设置页表单字段)→ Radix Popover:锚点随滚动跟随、collision 自动翻转 ——
+  // 与 ModelSelector 的 field 形态同一原语。容器形变(MorphPopover)是 composer 专属
+  // 类目(design-rules §14.4),且它只在打开时测一次 fixed 几何,设置页的 overflow-y
+  // 滚动列里面板会脱锚(2026-07 review 实锤),settings 一律走 Radix。
+  if (isFieldTrigger) {
+    return (
+      <Popover open={open && !disabled} onOpenChange={(next) => setOpen(disabled ? false : next)}>
+        <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
+        <PopoverContent
+          side="bottom"
+          align="end"
+          sideOffset={4}
+          collisionPadding={8}
+          className={cn(
+            'w-[300px] rounded-[12px] p-2',
+            'bg-[var(--model-dropdown-bg)]',
+            'border border-[var(--model-dropdown-border)]',
+          )}
+        >
+          {optionsList}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  // chip(composer)→ 容器形变,历史行为逐字不变。
+  return (
+    <MorphPopover
+      open={open && !disabled}
+      onOpenChange={(next) => setOpen(disabled ? false : next)}
+      panelWidth={300}
+      panelClassName="p-2"
+      panelAriaLabel={t('newChat.permissionSelector.listAria')}
+      startBg="var(--composer-pill-bg)"
+      startBorderColor="var(--border-default)"
+      wrapperClassName="min-w-0 shrink"
+      trigger={triggerButton}
+    >
+      {optionsList}
     </MorphPopover>
   );
 }

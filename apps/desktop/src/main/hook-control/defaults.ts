@@ -152,10 +152,16 @@ export function resolveHookSessionConfig(
     const supported = deps.getPermissionModes(agentKind);
     if (supported.includes(overrides.permissionMode)) {
       permissionMode = overrides.permissionMode;
-    } else {
-      permissionMode = supported[0] ?? 'bypassPermissions';
+    } else if (supported.length > 0) {
+      permissionMode = supported[0];
       deps.log.warn(
         `hook override permissionMode '${overrides.permissionMode}' not supported by ${agentKind}, falling back to strictest supported '${permissionMode}'`,
+      );
+    } else {
+      // agent 未声明任何档位(异常/测试桩)—— 与「有档位但不含显式值」是两种情况,
+      // 日志分开写,免得排障时把「无档位声明」误读成「已收紧到最严档」。
+      deps.log.warn(
+        `hook override permissionMode '${overrides.permissionMode}' rejected: ${agentKind} declares no permission modes; using legacy default 'bypassPermissions'`,
       );
     }
   }
