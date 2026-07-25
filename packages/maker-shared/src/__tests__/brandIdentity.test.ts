@@ -51,12 +51,14 @@ describe('BRAND_IDENTITY invariants', () => {
     }
   });
 
-  it('双装身份区域字段两区互不相同(同机并存的硬前提)', () => {
-    // exe / userData 目录 / appId 任何一组撞名,同机双装都会互相覆盖
-    // (安装目录、数据库、系统身份)。cdnPrefix 两区共用是 owner 决策:
+  it('系统身份与数据目录两区互不相同;exe 名两区同值(显示名统一决策)', () => {
+    // userData 目录 / appId 撞名会让两区共库、共系统身份,必须保持分离。
+    // exe 名(安装目录 / .app / 快捷方式)2026-07-26 起 cn/global 同值
+    // 'Cindy':owner 决策显示名统一,放弃文件层双装隔离(见
+    // executableNameByRegion doc)。cdnPrefix 两区共用是 owner 决策:
     // 发布渠道靠不同 OSS bucket 区分,不靠路径前缀。
     expect(BRAND_IDENTITY.executableNameByRegion.cn)
-      .not.toBe(BRAND_IDENTITY.executableNameByRegion.global);
+      .toBe(BRAND_IDENTITY.executableNameByRegion.global);
     expect(BRAND_IDENTITY.userDataDirNameByRegion.cn)
       .not.toBe(BRAND_IDENTITY.userDataDirNameByRegion.global);
   });
@@ -130,7 +132,9 @@ describe('区域解析与派生', () => {
 
   it('brandExecutableName / brandUserDataDirName 按区域取值,默认 cn', () => {
     expect(brandExecutableName()).toBe('Cindy');
-    expect(brandExecutableName('global')).toBe('CindyGlobal');
+    // global 与 cn 同值(2026-07-26 显示名统一决策);dev 仍独立。
+    expect(brandExecutableName('global')).toBe('Cindy');
+    expect(brandExecutableName('dev')).toBe('CindyDev');
     expect(brandUserDataDirName()).toBe('Cindy');
     expect(brandUserDataDirName('global')).toBe('CindyGlobal');
   });

@@ -70,15 +70,15 @@ export const RELEASE_DIR = path.join(DESKTOP_ROOT, 'release');
 export const PACKAGED_APP_NAME = 'Cindy';
 
 /**
- * 按区域取打包产物基名(2026-07-18 同机双装:cn 'Cindy' / global 'CindyGlobal',
- * exe / .app / 安装目录 / 快捷方式全部跟随)。镜像
- * brandIdentity.ts 的 executableNameByRegion,一致性同样由
+ * 按区域取打包产物基名(exe / .app / 安装目录 / 快捷方式全部跟随)。
+ * cn/global 同值 'Cindy'(2026-07-26 显示名统一决策,放弃文件层双装隔离),
+ * dev 独立。镜像 brandIdentity.ts 的 executableNameByRegion,一致性由
  * scripts/__tests__/brand-identity-sync.test.mjs 断言兜底。
  * PACKAGED_APP_NAME 保留为 cn 基线值,供未传 region 的 legacy 脚本使用。
  */
 export const PACKAGED_APP_NAME_BY_REGION = Object.freeze({
   cn: 'Cindy',
-  global: 'CindyGlobal',
+  global: 'Cindy',
   dev: 'CindyDev',
 });
 
@@ -745,7 +745,7 @@ export function createMacDMG(appPath, dmgPath, volumeName, identity) {
     throw new Error(`DMG background missing: ${backgroundPath}`);
   }
 
-  const appName = path.basename(appPath); // Cindy.app / CindyGlobal.app(global 线)
+  const appName = path.basename(appPath); // Cindy.app(cn/global)/ CindyDev.app(dev 线)
   // JSON.stringify 产出合法 Python 字符串字面量(转义引号/反斜杠语义一致)
   const py = (s) => JSON.stringify(s);
   const settings = [
@@ -790,7 +790,7 @@ export function runSmokeTest(platform, arch, region = 'cn') {
       'scripts/smoke-packaged.mjs',
       `--platform=${platform}`,
       `--arch=${arch}`,
-      // 产物基名按区域派生(global 的 out 目录 / exe / .app 是 CindyGlobal)。
+      // 产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev')。
       `--app-name=${packagedAppName(region)}`,
     ],
     { stdio: 'inherit', cwd: DESKTOP_ROOT, shell: false },

@@ -39,7 +39,7 @@ const DESKTOP_ROOT = path.resolve(__dirname, '..');
  * BRAND_IDENTITY.executableName 及 ci/lib.mjs 的 PACKAGED_APP_NAME 一致
  * (本脚本刻意零外部依赖,不 import lib.mjs;一致性由
  * scripts/__tests__/brand-identity-sync.test.mjs 断言兜底)。
- * 区域化(同机双装):global 产物基名是 CindyGlobal,由调用方
+ * 区域化:产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev'),由调用方
  * (ci/lib.mjs runSmokeTest)经 --app-name= 传入覆盖,本默认值只服务 cn / 手跑。
  */
 const PACKAGED_APP_NAME = 'Cindy';

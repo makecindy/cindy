@@ -354,8 +354,8 @@ async function finishDarwin({ artifactDir, baseName, appName, arch, versionless,
 
     const dmgPath = path.join(artifactDir, `${baseName}-${arch}.dmg`);
     console.log('==> Creating DMG...');
-    // DMG 卷名 = 安装窗口标题,走 '<appName> Installer'(cn 'Cindy Installer',
-    // global 'CindyGlobal Installer',双装机器仍可区分挂载卷);版本号不进卷名,
+    // DMG 卷名 = 安装窗口标题,走 '<appName> Installer'(cn/global
+    // 'Cindy Installer' / dev 'CindyDev Installer');版本号不进卷名,
     // 安装包文件名里已有。
     createMacDMG(appPath, dmgPath, `${appName} Installer`, identity);
     files.push(fileEntry('installer', dmgPath));
@@ -448,7 +448,7 @@ async function main() {
   // 版本号临时写入 package.json(asar 内 app.getVersion() 的来源),退出自动恢复。
   writePackageVersion(version);
 
-  // 产物基名按区域派生(cn 'Cindy' / global 'CindyGlobal',out 目录 / exe /
+  // 产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev',out 目录 / exe /
   // .app 同名;forge.config 的 packagerConfig.name 同源)。
   const appName = packagedAppName(region);
   const baseName = artifactBaseName({ version, versionless });
