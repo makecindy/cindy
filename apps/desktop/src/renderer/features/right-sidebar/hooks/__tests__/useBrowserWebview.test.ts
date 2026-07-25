@@ -38,6 +38,8 @@ vi.mock('../../lib/browserWebviewPool', () => ({
 
 vi.mock('../../lib/rsbBrowserBridge', () => ({
   reportRsbBrowserTab: vi.fn(),
+  subscribeTabResourceEvent: vi.fn(() => () => undefined),
+  consumePendingKillCause: vi.fn(() => null),
 }));
 
 function makeMockWebview(initialUrl: string): MockWebview {

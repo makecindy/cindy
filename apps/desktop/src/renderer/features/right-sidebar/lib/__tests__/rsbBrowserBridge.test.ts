@@ -19,10 +19,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserWebviewPool } from '../browserWebviewPool';
 import {
   _resetRsbBrowserBridgeForTests,
+  consumePendingKillCause,
+  forceKillBrowserTab,
   initRsbBrowserBridge,
   releaseRsbBrowserTab,
   reportRsbBrowserTab,
+  setForegroundBrowserTab,
   snapshotRsbBrowserTabs,
+  subscribeTabResourceEvent,
 } from '../rsbBrowserBridge';
 
 interface FakeIpcApi {
@@ -33,10 +37,15 @@ interface FakeIpcApi {
   onUnpin: ReturnType<typeof vi.fn>;
   onTabOpRequest: ReturnType<typeof vi.fn>;
   tabOpResult: ReturnType<typeof vi.fn>;
-  // Captured callbacks the bridge registered via onPin / onUnpin / onTabOpRequest.
+  setForeground: ReturnType<typeof vi.fn>;
+  forceKill: ReturnType<typeof vi.fn>;
+  onResourceEvent: ReturnType<typeof vi.fn>;
+  // Captured callbacks the bridge registered via onPin / onUnpin / onTabOpRequest /
+  // onResourceEvent.
   pinCb: ((p: { tabId: string }) => void) | null;
   unpinCb: ((p: { tabId: string }) => void) | null;
   tabOpCb: ((req: unknown) => void) | null;
+  resourceCb: ((event: unknown) => void) | null;
 }
 
 function installFakeIpc(): FakeIpcApi {
@@ -48,9 +57,13 @@ function installFakeIpc(): FakeIpcApi {
     onUnpin: vi.fn(),
     onTabOpRequest: vi.fn(),
     tabOpResult: vi.fn(async () => ({ ok: true })),
+    setForeground: vi.fn(async () => ({ ok: true })),
+    forceKill: vi.fn(async () => ({ ok: true })),
+    onResourceEvent: vi.fn(),
     pinCb: null,
     unpinCb: null,
     tabOpCb: null,
+    resourceCb: null,
   };
   api.onPin.mockImplementation((cb: (p: { tabId: string }) => void) => {
     api.pinCb = cb;
@@ -68,6 +81,12 @@ function installFakeIpc(): FakeIpcApi {
     api.tabOpCb = cb;
     return () => {
       api.tabOpCb = null;
+    };
+  });
+  api.onResourceEvent.mockImplementation((cb: (event: unknown) => void) => {
+    api.resourceCb = cb;
+    return () => {
+      api.resourceCb = null;
     };
   });
   (window as unknown as { electronAPI?: { rsbBrowserBridge: FakeIpcApi } }).electronAPI = {
@@ -358,5 +377,75 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(browserWebviewPool.isPinnedForAutomation('t-from-main')).toBe(true);
+  });
+});
+
+describe('rsbBrowserBridge — resource watchdog events', () => {
+  it('evict-request releases the pool entry (and syncs main via release)', () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+
+    browserWebviewPool.acquire('tab-r');
+    api.resourceCb?.({ tabId: 'tab-r', kind: 'evict-request' });
+
+    expect(browserWebviewPool.inspectTabIds()).not.toContain('tab-r');
+    expect(api.release).toHaveBeenCalledWith({ tabId: 'tab-r' });
+  });
+
+  it('kill-notice records a pending cause consumable exactly once', () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+
+    api.resourceCb?.({ tabId: 'tab-k', kind: 'kill-notice', cause: 'memory' });
+
+    expect(consumePendingKillCause('tab-k')).toBe('memory');
+    // 第二次取应为空 —— cause 只对紧随其后的那次 render-process-gone 生效。
+    expect(consumePendingKillCause('tab-k')).toBeNull();
+  });
+
+  it('fans kill-notice / cpu-alert out to per-tab subscribers only', () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+
+    const onTabA = vi.fn();
+    const onTabB = vi.fn();
+    const unsubA = subscribeTabResourceEvent('tab-a', onTabA);
+    subscribeTabResourceEvent('tab-b', onTabB);
+
+    api.resourceCb?.({ tabId: 'tab-a', kind: 'cpu-alert', cpuPercent: 95 });
+    expect(onTabA).toHaveBeenCalledWith({ tabId: 'tab-a', kind: 'cpu-alert', cpuPercent: 95 });
+    expect(onTabB).not.toHaveBeenCalled();
+
+    unsubA();
+    api.resourceCb?.({ tabId: 'tab-a', kind: 'cpu-alert', cpuPercent: 96 });
+    expect(onTabA).toHaveBeenCalledTimes(1);
+  });
+
+  it('setForegroundBrowserTab tracks a single claimant — stale deactivation is ignored', () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+
+    setForegroundBrowserTab('tab-a', true);
+    expect(api.setForeground).toHaveBeenLastCalledWith({ tabId: 'tab-a' });
+
+    // tab-b 接管前台后,tab-a 的 unmount(false)不能把 tab-b 的声明冲掉。
+    setForegroundBrowserTab('tab-b', true);
+    expect(api.setForeground).toHaveBeenLastCalledWith({ tabId: 'tab-b' });
+    api.setForeground.mockClear();
+    setForegroundBrowserTab('tab-a', false);
+    expect(api.setForeground).not.toHaveBeenCalled();
+
+    // 当前 claimant 自己退场才发 null。
+    setForegroundBrowserTab('tab-b', false);
+    expect(api.setForeground).toHaveBeenLastCalledWith({ tabId: null });
+  });
+
+  it('forceKillBrowserTab forwards to ipc and swallows failures', async () => {
+    const api = installFakeIpc();
+    await forceKillBrowserTab('tab-x');
+    expect(api.forceKill).toHaveBeenCalledWith({ tabId: 'tab-x' });
+
+    api.forceKill.mockRejectedValueOnce(new Error('boom'));
+    await expect(forceKillBrowserTab('tab-x')).resolves.toBeUndefined();
   });
 });

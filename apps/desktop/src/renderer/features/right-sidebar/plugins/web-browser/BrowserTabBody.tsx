@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import { AlertTriangle, RotateCw } from 'lucide-react';
+import { AlertTriangle, Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -38,6 +38,10 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
+import {
+  forceKillBrowserTab,
+  setForegroundBrowserTab,
+} from '../../lib/rsbBrowserBridge';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../types';
@@ -261,6 +265,15 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
     { enabled: active },
   );
 
+  // 前台上报:资源看门狗据此区分前台 / 后台 guest(前台只在内存超硬阈值时才
+  // 强杀,后台可激进淘汰)。active 翻转 / tab 切换 / 组件卸载都要同步。
+  useEffect(() => {
+    setForegroundBrowserTab(tabId, active === true);
+    return () => {
+      setForegroundBrowserTab(tabId, false);
+    };
+  }, [active, tabId]);
+
   // webview guest 内 Cmd/Ctrl+L:main 推送过来,只有 active tab 响应。
   useEffect(() => {
     if (!active) return;
@@ -411,7 +424,48 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
         data-browser-tab-slot={tabId}
       >
         {browser.crash && (
-          <BrowserCrashBanner reason={browser.crash.reason} onRecover={handleRecover} />
+          <BrowserCrashBanner
+            reason={browser.crash.reason}
+            cause={browser.crash.cause}
+            onRecover={handleRecover}
+            onForceKill={
+              browser.crash.reason === 'unresponsive'
+                ? () => void forceKillBrowserTab(tabId)
+                : undefined
+            }
+          />
+        )}
+        {/* 资源看门狗 cpu-alert 提示条:非阻断,固定在 slot 顶部居中。用户可
+            「强制终止」失控页面,或「忽略」继续(可能是正经的重页面)。 */}
+        {!browser.crash && browser.resourceAlert && (
+          <div
+            className={cn(
+              'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
+              'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+              'py-1 pl-3 pr-1 text-[11px] text-[var(--text-secondary)] shadow-sm',
+            )}
+          >
+            <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
+            <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
+            <button
+              type="button"
+              onClick={() => {
+                browser.dismissResourceAlert();
+                void forceKillBrowserTab(tabId);
+              }}
+              className="rounded-full px-2 py-0.5 text-[11px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('rightSidebar.browser.resourceAlert.terminate')}
+            </button>
+            <button
+              type="button"
+              aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
+              onClick={browser.dismissResourceAlert}
+              className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
+          </div>
         )}
         {/* 评论模式提示条:点选中显示操作说明,固定在 slot 顶部居中,不挡 chrome。 */}
         {comment.mode === 'selecting' && (
@@ -447,25 +501,38 @@ export function BrowserTabBody({ state, ctx, active }: BrowserTabBodyProps) {
  * 崩溃 banner —— absolute 覆盖整个 webview slot,半透明黑底 + 中心一个卡片。
  * Codex 也对崩溃做 UI 反馈(`render-process-gone` 事件链),Chrome 在 tab 内显示
  * "Aw, Snap!" 页。我们做精简版:图标 + 原因 + 重载按钮。
+ *
+ * `cause === 'resource-memory'`:资源看门狗因内存超限主动终止(不是页面自己崩),
+ * 换专属文案让用户明白"是保护机制在工作"。`onForceKill` 只在 unresponsive 时传:
+ * 卡死的 guest 进程还在烧 CPU,「强制终止」给用户一个立即止损的出口(终止后
+ * 走 render-process-gone → 本 banner 切到 crashed 文案 → 重新加载恢复)。
  */
 function BrowserCrashBanner({
   reason,
+  cause,
   onRecover,
+  onForceKill,
 }: {
   reason: string;
+  cause?: 'resource-memory';
   onRecover: () => void;
+  onForceKill?: () => void;
 }) {
   const { t } = useTranslation();
-  // 区分导航熔断、unresponsive 与进程崩溃。沿用同一个克制的恢复 banner,
-  // 不新增布局或视觉分支。
+  // 区分资源终止、导航熔断、unresponsive 与进程崩溃。沿用同一个克制的恢复
+  // banner,不新增布局或视觉分支。
   const titleKey =
-    reason === 'navigation-loop'
+    cause === 'resource-memory'
+      ? 'rightSidebar.browser.crash.resourceKilledTitle'
+      : reason === 'navigation-loop'
       ? 'rightSidebar.browser.crash.navigationLoopTitle'
       : reason === 'unresponsive'
       ? 'rightSidebar.browser.crash.unresponsiveTitle'
       : 'rightSidebar.browser.crash.crashedTitle';
   const descKey =
-    reason === 'navigation-loop'
+    cause === 'resource-memory'
+      ? 'rightSidebar.browser.crash.resourceKilledDesc'
+      : reason === 'navigation-loop'
       ? 'rightSidebar.browser.crash.navigationLoopDesc'
       : reason === 'unresponsive'
       ? 'rightSidebar.browser.crash.unresponsiveDesc'
@@ -476,14 +543,25 @@ function BrowserCrashBanner({
         <AlertTriangle size={28} strokeWidth={1.5} className="text-[var(--error-fg)]" />
         <div className="text-[13px] font-medium text-[var(--text-primary)]">{t(titleKey)}</div>
         <div className="text-[12px] text-[var(--text-secondary)]">{t(descKey)}</div>
-        <button
-          type="button"
-          onClick={onRecover}
-          className="mt-1 flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-[12px] font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
-        >
-          <RotateCw size={12} strokeWidth={2.5} />
-          {t('rightSidebar.browser.crash.reload')}
-        </button>
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onRecover}
+            className="flex h-7 items-center gap-1.5 rounded-md bg-[var(--accent-cta-bg)] px-3 text-[12px] font-medium text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]"
+          >
+            <RotateCw size={12} strokeWidth={2.5} />
+            {t('rightSidebar.browser.crash.reload')}
+          </button>
+          {onForceKill && (
+            <button
+              type="button"
+              onClick={onForceKill}
+              className="flex h-7 items-center rounded-md border border-[var(--border-default)] px-3 text-[12px] font-medium text-[var(--error-fg)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('rightSidebar.browser.crash.forceKill')}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

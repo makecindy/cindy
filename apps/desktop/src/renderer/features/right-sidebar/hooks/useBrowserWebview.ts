@@ -30,7 +30,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WebviewTag } from 'electron';
 
 import { browserWebviewPool } from '../lib/browserWebviewPool';
-import { reportRsbBrowserTab } from '../lib/rsbBrowserBridge';
+import {
+  consumePendingKillCause,
+  reportRsbBrowserTab,
+  subscribeTabResourceEvent,
+} from '../lib/rsbBrowserBridge';
 
 /** 2 秒内最多允许 12 次 renderer 主动导航;网页自身导航不计入。 */
 export const BROWSER_NAVIGATION_FUSE_LIMIT = 12;
@@ -68,8 +72,12 @@ export interface UseBrowserWebviewResult {
   isAudible: boolean;
   /** guest renderer 进程已崩溃 / 卡死(`render-process-gone` / `unresponsive`),
    *  BrowserTabBody 据此渲染 crash banner。null = 正常,非 null 是崩溃原因码。
-   *  reload 后清回 null(由 did-start-loading 触发)。 */
-  crash: { reason: string } | null;
+   *  `cause === 'resource-memory'` 表示是资源看门狗因内存超限主动终止的,banner
+   *  显示资源文案而不是笼统的"页面崩溃"。reload 后清回 null(did-start-loading)。 */
+  crash: { reason: string; cause?: 'resource-memory' } | null;
+  /** 资源看门狗 cpu-alert:前台页面持续高 CPU。BrowserTabBody 显示非阻断提示条
+   *  (带「强制终止」按钮),null = 无告警。导航 / reload / 用户关闭时清除。 */
+  resourceAlert: { cpuPercent: number } | null;
 
   /** 加载新 URL(URL bar 输入或外部跳转入口)。 */
   navigate: (url: string) => void;
@@ -81,6 +89,8 @@ export interface UseBrowserWebviewResult {
   goForward: () => void;
   /** 停止当前加载(loading 时给 abort 按钮用)。 */
   stop: () => void;
+  /** 关闭资源提示条(用户点「忽略」)。 */
+  dismissResourceAlert: () => void;
 }
 
 export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowserWebviewResult {
@@ -93,7 +103,10 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [isAudible, setIsAudible] = useState(false);
-  const [crash, setCrash] = useState<{ reason: string } | null>(null);
+  const [crash, setCrash] = useState<{ reason: string; cause?: 'resource-memory' } | null>(
+    null,
+  );
+  const [resourceAlert, setResourceAlert] = useState<{ cpuPercent: number } | null>(null);
   // webview ref —— actions 用,避免 stale closure。
   const webviewRef = useRef<WebviewTag | null>(null);
   const urlRef = useRef('');
@@ -149,6 +162,8 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
       // 任何主动导航 / reload 都视为崩溃后的恢复 — 清掉 crash banner。
       // navigation-loop 是主动熔断,必须等用户点 banner 的重新加载才解除。
       setCrash((prev) => (prev?.reason === 'navigation-loop' ? prev : null));
+      // 换页 / reload 后旧页面的高 CPU 告警不再成立。
+      setResourceAlert(null);
     };
     const onStopLoading = () => {
       setIsLoading(false);
@@ -214,10 +229,17 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
     };
     // render-process-gone:guest renderer 进程崩 / 杀掉。details.reason 给原因码
     // (crashed / killed / oom / launch-failed 等)。UI 据此显示 crash banner。
+    // 资源看门狗强杀前会先发 kill-notice(cause 记在 bridge 模块),这里取走
+    // 并挂到 crash state 上,banner 显示"内存过高被终止"。
     const onRenderProcessGone = (e: Electron.RenderProcessGoneEvent) => {
       setIsLoading(false);
       setIsAudible(false);
-      setCrash({ reason: e.details.reason });
+      setResourceAlert(null);
+      const cause = consumePendingKillCause(tabId);
+      setCrash({
+        reason: e.details.reason,
+        ...(cause === 'memory' ? { cause: 'resource-memory' as const } : {}),
+      });
     };
     // unresponsive:guest renderer 卡死(主线程长时间不响应)。当成软崩处理 ——
     // 也显示 crash banner,但 reason='unresponsive'(UI 可分支显示"卡死"vs"崩溃")。
@@ -242,6 +264,16 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
     entry.webview.addEventListener('unresponsive', onUnresponsive);
     entry.webview.addEventListener('responsive', onResponsive);
 
+    // 资源看门狗事件(bridge 转发):cpu-alert → 提示条;kill-notice → 若 crash
+    // 事件先到、notice 后到,把已有 crash state 升级成资源原因(反序兜底)。
+    const unsubResourceEvent = subscribeTabResourceEvent(tabId, (event) => {
+      if (event.kind === 'cpu-alert') {
+        setResourceAlert({ cpuPercent: event.cpuPercent });
+      } else if (event.kind === 'kill-notice') {
+        setCrash((prev) => (prev ? { ...prev, cause: 'resource-memory' } : prev));
+      }
+    });
+
     // 初次挂上来 —— 如果 webview 已经载过(切回旧 tab),把当前 URL 同步进 state。
     try {
       const currentUrl = entry.webview.getURL?.();
@@ -265,6 +297,7 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
       entry.webview.removeEventListener('render-process-gone', onRenderProcessGone);
       entry.webview.removeEventListener('unresponsive', onUnresponsive);
       entry.webview.removeEventListener('responsive', onResponsive);
+      unsubResourceEvent();
       // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
       // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
     };
@@ -324,6 +357,7 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
   const goBack = useCallback(() => webviewRef.current?.goBack(), []);
   const goForward = useCallback(() => webviewRef.current?.goForward(), []);
   const stop = useCallback(() => webviewRef.current?.stop(), []);
+  const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
 
   return {
     wrapper,
@@ -335,10 +369,12 @@ export function useBrowserWebview(tabId: string, sessionId?: string): UseBrowser
     canGoForward,
     isAudible,
     crash,
+    resourceAlert,
     navigate,
     reload,
     goBack,
     goForward,
     stop,
+    dismissResourceAlert,
   };
 }

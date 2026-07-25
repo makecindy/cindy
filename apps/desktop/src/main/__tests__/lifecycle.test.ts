@@ -159,6 +159,79 @@ describe('runQuitDisposers', () => {
   });
 });
 
+describe('installQuitHandler render-process-gone', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  type RenderGoneHandler = (
+    event: unknown,
+    webContents: { id: number; getType(): string },
+    details: { reason: string; exitCode: number },
+  ) => void;
+
+  /** 装好 handler 后把 app.on 捕到的 render-process-gone 回调挖出来。 */
+  async function installAndGrabHandler() {
+    const snapshot = snapshotProcessListeners([
+      'SIGINT',
+      'SIGTERM',
+      'exit',
+      'uncaughtException',
+      'unhandledRejection',
+    ]);
+    const { installQuitHandler } = await freshLifecycle();
+    installQuitHandler(50);
+    const { app } = await import('electron');
+    const onMock = vi.mocked(app.on);
+    // app.on 的类型是重载联合,TS 会把 event 收窄到第一个重载的字面量;按数据看待。
+    const call = (onMock.mock.calls as unknown as Array<[string, unknown]>).find(
+      ([event]) => event === 'render-process-gone',
+    );
+    expect(call).toBeDefined();
+    return {
+      handler: call![1] as unknown as RenderGoneHandler,
+      app,
+      restore: () => snapshot.restore(),
+    };
+  }
+
+  it('webview guest crash (e.g. OOM) does NOT shut the app down', async () => {
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(
+        undefined,
+        { id: 42, getType: () => 'webview' },
+        { reason: 'oom', exitCode: 1 },
+      );
+      // beginShutdown 是异步链;等一拍再断言"什么都没发生"。
+      await new Promise((r) => setTimeout(r, 20));
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('webview guest render-process-gone'),
+      );
+      expect(mocks.logger.error).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('main window renderer crash still shuts the app down with exit(1)', async () => {
+    const { handler, app, restore } = await installAndGrabHandler();
+    try {
+      handler(
+        undefined,
+        { id: 1, getType: () => 'window' },
+        { reason: 'crashed', exitCode: 5 },
+      );
+      await vi.waitFor(() => {
+        expect(app.exit).toHaveBeenCalledWith(1);
+      });
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe('installQuitHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();

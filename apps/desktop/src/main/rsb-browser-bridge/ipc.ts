@@ -13,17 +13,27 @@
  * All `invoke` handlers validate inputs and throw via `throwIpcError` (rule 13).
  */
 
-import { clipboard, ipcMain, webContents as electronWebContents, type WebContents } from 'electron';
+import {
+  app,
+  clipboard,
+  ipcMain,
+  webContents as electronWebContents,
+  type WebContents,
+} from 'electron';
 
 import {
   RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_CHANNEL,
   RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_DATA_CHANNEL,
+  RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL,
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
   RSB_BROWSER_BRIDGE_REPORT_CHANNEL,
+  RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL,
+  RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL,
   RSB_BROWSER_BRIDGE_SNAPSHOT_CHANNEL,
   RSB_BROWSER_BRIDGE_UNPIN_CHANNEL,
   type RsbBrowserBridgeReportPayload,
+  type RsbBrowserBridgeResourceEvent,
 } from '../../shared/rsbBrowserBridge.js';
 import {
   requireNonNegativeInt,
@@ -32,6 +42,11 @@ import {
   throwIpcError,
 } from '../utils/ipcValidate.js';
 import type { TabRegistry } from './registry.js';
+import {
+  BrowserGuestResourceWatchdog,
+  ForegroundTabTracker,
+  type GuestWebContentsLike,
+} from './resource-watchdog.js';
 
 interface IpcLogger {
   info(message: string, ...args: unknown[]): void;
@@ -55,6 +70,8 @@ export interface RegisterRsbBrowserBridgeOptions {
  * calls are no-ops.
  */
 let registered = false;
+/** 当前活跃的看门狗实例 —— 测试 reset 时必须 stop,否则 interval 泄漏到后续用例。 */
+let activeWatchdog: BrowserGuestResourceWatchdog | null = null;
 
 export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOptions): () => void {
   if (registered) {
@@ -210,6 +227,71 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     },
   );
 
+  // ── 资源看门狗(前台/后台阶梯处置,策略见 resource-watchdog.ts) ─────────
+  const foregroundTracker = new ForegroundTabTracker();
+  // senderId → 是否已挂 destroyed 清理。renderer 销毁(窗口关 / 崩溃)时槽位
+  // 必须清掉,否则残留的"前台 tab"会永远享受前台豁免。
+  const foregroundCleanupAttached = new Set<number>();
+
+  ipcMain.handle(RSB_BROWSER_BRIDGE_SET_FOREGROUND_CHANNEL, (event, payload: unknown) => {
+    const obj = requireObject(payload, 'set-foreground payload');
+    if (obj.tabId !== null && (typeof obj.tabId !== 'string' || obj.tabId === '')) {
+      throwIpcError('INVALID_PARAMS', 'tabId must be a non-empty string or null');
+    }
+    foregroundTracker.set(event.sender.id, obj.tabId as string | null);
+    if (!foregroundCleanupAttached.has(event.sender.id)) {
+      foregroundCleanupAttached.add(event.sender.id);
+      const senderId = event.sender.id;
+      event.sender.once('destroyed', () => {
+        foregroundTracker.drop(senderId);
+        foregroundCleanupAttached.delete(senderId);
+      });
+    }
+    return { ok: true };
+  });
+
+  // 用户主动终止 guest 进程(unresponsive banner / cpu-alert 提示条的按钮)。
+  // 归属校验与截图相同:tabId → registry → 该 guest 必须挂在发起请求的 renderer
+  // 下,防止拿别的窗口的 webContents 强杀。
+  ipcMain.handle(RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL, (event, payload: unknown) => {
+    const obj = requireObject(payload, 'force-kill payload');
+    const tabId = requireString(obj.tabId, 'tabId');
+    const target = registry.getWebContentsByTabId(tabId);
+    if (!target) {
+      throwIpcError('NOT_FOUND', `no live webContents for tab ${tabId}`);
+    }
+    const host = (target as unknown as { hostWebContents?: WebContents }).hostWebContents;
+    if (!host || host.id !== event.sender.id) {
+      throwIpcError('INVALID_PARAMS', `tab ${tabId} is not hosted by the sender`);
+    }
+    logger.info('RSB browser guest force-killed by user', { tabId });
+    target.forcefullyCrashRenderer();
+    return { ok: true };
+  });
+
+  const sendResourceEvent = (event: RsbBrowserBridgeResourceEvent) => {
+    const wc = getHostWebContents();
+    if (!wc || wc.isDestroyed()) return;
+    wc.send(RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL, event);
+  };
+
+  const watchdog = new BrowserGuestResourceWatchdog({
+    listTabs: () =>
+      registry.listAll().map((r) => ({ tabId: r.tabId, webContentsId: r.webContentsId })),
+    isPinned: (tabId) => registry.isPinned(tabId),
+    isForeground: (tabId) => foregroundTracker.isForeground(tabId),
+    lookupWebContents: (id) =>
+      (electronWebContents.fromId(id) as GuestWebContentsLike | undefined) ?? null,
+    getMetrics: () => app.getAppMetrics(),
+    notifyEvict: (tabId) => sendResourceEvent({ tabId, kind: 'evict-request' }),
+    notifyKillNotice: (tabId) => sendResourceEvent({ tabId, kind: 'kill-notice', cause: 'memory' }),
+    notifyCpuAlert: (tabId, cpuPercent) =>
+      sendResourceEvent({ tabId, kind: 'cpu-alert', cpuPercent }),
+    logger,
+  });
+  watchdog.start();
+  activeWatchdog = watchdog;
+
   // Pin broadcast wiring: when the registry's pin set changes, push a `pin` /
   // `unpin` message to the host renderer so the pool can suppress LRU eviction.
   // The host might be unavailable during early boot or app quit — `getHostWebContents`
@@ -230,6 +312,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
 
   return () => {
     unsubscribe();
+    watchdog.stop();
     // Note: ipcMain.removeHandler is intentionally NOT called here. Handlers
     // are process-lifetime (registered once during boot); on app quit the
     // process tears down. Tests use `_resetRsbBrowserBridgeIpcForTests` below.
@@ -242,4 +325,6 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
  */
 export function _resetRsbBrowserBridgeIpcForTests(): void {
   registered = false;
+  activeWatchdog?.stop();
+  activeWatchdog = null;
 }

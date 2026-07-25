@@ -3231,7 +3231,15 @@
         "unresponsiveDesc": "페이지가 한동안 응답하지 않습니다. 다시 로드하거나 잠시 기다리세요.",
         "navigationLoopTitle": "반복 탐색을 중지했습니다",
         "navigationLoopDesc": "페이지가 짧은 시간에 반복해서 이동하여 탐색을 중지했습니다. 페이지를 다시 로드한 후 재시도하세요.",
+        "resourceKilledTitle": "페이지의 메모리 사용량이 너무 많습니다",
+        "resourceKilledDesc": "이 페이지가 메모리를 과도하게 사용하여 앱 보호를 위해 종료되었습니다. 다시 로드할 수 있습니다.",
+        "forceKill": "강제 종료",
         "reload": "다시 로드"
+      },
+      "resourceAlert": {
+        "cpuHint": "이 페이지가 시스템 리소스를 많이 사용하고 있습니다",
+        "terminate": "페이지 종료",
+        "dismiss": "무시"
       }
     },
     "terminal": {

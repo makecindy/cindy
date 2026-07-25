@@ -3231,7 +3231,15 @@
         "unresponsiveDesc": "页面长时间未响应,可重新加载或稍候等待",
         "navigationLoopTitle": "已停止重复跳转",
         "navigationLoopDesc": "页面在短时间内反复跳转,已暂停导航。请重新加载页面后重试",
+        "resourceKilledTitle": "页面占用内存过高",
+        "resourceKilledDesc": "该页面占用内存过高,已被终止以保护应用运行。可重新加载",
+        "forceKill": "强制终止",
         "reload": "重新加载"
+      },
+      "resourceAlert": {
+        "cpuHint": "此页面占用大量系统资源",
+        "terminate": "终止页面",
+        "dismiss": "忽略"
       }
     },
     "terminal": {

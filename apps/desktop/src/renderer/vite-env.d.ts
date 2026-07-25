@@ -3369,6 +3369,16 @@ interface ElectronAPI {
     ) => Promise<{ ok: true } | { ok: false; error: string }>;
     /** 推送 renderer 当前 focused 的 RSB sessionId(Phase 5)。 */
     setActiveSession: (input: { sessionId: string | null }) => Promise<{ ok: true }>;
+    /** 资源看门狗:上报本 renderer 当前展示的浏览器 tab(null = 无)。 */
+    setForeground: (input: { tabId: string | null }) => Promise<{ ok: true }>;
+    /** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条按钮)。 */
+    forceKill: (input: { tabId: string }) => Promise<{ ok: true }>;
+    /** main → renderer:资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
+    onResourceEvent: (
+      cb: (
+        event: import('../shared/rsbBrowserBridge').RsbBrowserBridgeResourceEvent,
+      ) => void,
+    ) => () => void;
   };
 
   /**

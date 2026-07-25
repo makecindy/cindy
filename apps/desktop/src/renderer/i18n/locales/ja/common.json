@@ -3231,7 +3231,15 @@
         "unresponsiveDesc": "ページがしばらく応答していません。再読み込みするか、少し待ってください。",
         "navigationLoopTitle": "繰り返しナビゲーションを停止しました",
         "navigationLoopDesc": "短時間にページ遷移が繰り返されたため、ナビゲーションを停止しました。ページを再読み込みして再試行してください。",
+        "resourceKilledTitle": "ページのメモリ使用量が多すぎます",
+        "resourceKilledDesc": "このページはメモリを大量に使用していたため、アプリを保護するために終了しました。再読み込みできます。",
+        "forceKill": "強制終了",
         "reload": "再読み込み"
+      },
+      "resourceAlert": {
+        "cpuHint": "このページはシステムリソースを大量に使用しています",
+        "terminate": "ページを終了",
+        "dismiss": "無視"
       }
     },
     "terminal": {

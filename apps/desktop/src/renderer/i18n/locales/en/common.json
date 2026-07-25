@@ -3232,7 +3232,15 @@
         "unresponsiveDesc": "The page has not responded for a while. Reload or wait a moment.",
         "navigationLoopTitle": "Repeated Navigation Stopped",
         "navigationLoopDesc": "The page navigated repeatedly in a short time. Reload the page to try again.",
+        "resourceKilledTitle": "Page used too much memory",
+        "resourceKilledDesc": "This page was using too much memory and was stopped to keep the app running. You can reload it.",
+        "forceKill": "Force stop",
         "reload": "Reload"
+      },
+      "resourceAlert": {
+        "cpuHint": "This page is using significant system resources",
+        "terminate": "Stop page",
+        "dismiss": "Dismiss"
       }
     },
     "terminal": {

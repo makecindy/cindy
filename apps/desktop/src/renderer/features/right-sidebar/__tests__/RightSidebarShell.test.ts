@@ -64,6 +64,9 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub, fullscreen = false
           onUnpin: ReturnType<typeof vi.fn>;
           onTabOpRequest: ReturnType<typeof vi.fn>;
           tabOpResult: ReturnType<typeof vi.fn>;
+          setForeground: ReturnType<typeof vi.fn>;
+          forceKill: ReturnType<typeof vi.fn>;
+          onResourceEvent: ReturnType<typeof vi.fn>;
         };
         gitReview: { summary: ReturnType<typeof vi.fn> };
         onRsbBrowserPopup: ReturnType<typeof vi.fn>;
@@ -89,6 +92,9 @@ function installElectronApi(tabsIpc: RightSidebarTabsIpcStub, fullscreen = false
       onUnpin: vi.fn(() => () => undefined),
       onTabOpRequest: vi.fn(() => () => undefined),
       tabOpResult: vi.fn(async () => undefined),
+      setForeground: vi.fn(async () => undefined),
+      forceKill: vi.fn(async () => undefined),
+      onResourceEvent: vi.fn(() => () => undefined),
     },
     gitReview: {
       summary: vi.fn(async () => ({

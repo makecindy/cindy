@@ -315,6 +315,7 @@ const fanOutRsbBrowserCommand = createIpcFanOut('rsb:browser-command');
 // LRU 据此跳过 pinned tab,避免 automation 操作期间 webContents 被销毁。
 const fanOutRsbBrowserBridgePin = createIpcFanOut('rsb-browser-bridge:pin');
 const fanOutRsbBrowserBridgeUnpin = createIpcFanOut('rsb-browser-bridge:unpin');
+const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:resource-event');
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
 const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
 // session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
@@ -3493,6 +3494,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** Push renderer's currently-focused RSB sessionId to main (Phase 5). */
     setActiveSession: (input: { sessionId: string | null }): Promise<unknown> =>
       ipcRenderer.invoke('rsb-browser-bridge:set-active-session', input),
+    /** 资源看门狗:上报本 renderer 当前展示的浏览器 tab(null = 无)。 */
+    setForeground: (input: { tabId: string | null }): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:set-foreground', input),
+    /** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条的「强制终止」)。 */
+    forceKill: (input: { tabId: string }): Promise<unknown> =>
+      ipcRenderer.invoke('rsb-browser-bridge:force-kill', input),
+    /** main → renderer 资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
+    onResourceEvent: (cb: (event: unknown) => void) =>
+      fanOutRsbBrowserBridgeResourceEvent(cb as IpcCallback),
   },
 
   // ── Browser backend toggle (Phase 5) ─────────────────────────────────────

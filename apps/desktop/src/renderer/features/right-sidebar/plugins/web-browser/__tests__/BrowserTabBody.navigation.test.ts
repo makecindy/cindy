@@ -43,11 +43,13 @@ function makeBrowserState(
     canGoForward: false,
     isAudible: false,
     crash: null,
+    resourceAlert: null,
     navigate: browserNavigate,
     reload: vi.fn(),
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
+    dismissResourceAlert: vi.fn(),
     ...patch,
   };
 }
