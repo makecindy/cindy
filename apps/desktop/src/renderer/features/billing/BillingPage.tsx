@@ -292,7 +292,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
   }, []);
 
-  const loadSubscription = useCallback(async () => {
+  const loadSubscription = useCallback(async (fallback: BillingSubscription | null = null) => {
     setLoadingSubscription(true);
     setSubscriptionError(false);
     try {
@@ -303,8 +303,12 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
           : null,
       );
     } catch {
-      setCurrentSubscription(null);
-      setSubscriptionError(true);
+      const completedFallback =
+        fallback && SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(fallback.status)
+          ? fallback
+          : null;
+      setCurrentSubscription(completedFallback);
+      setSubscriptionError(completedFallback === null);
     } finally {
       setLoadingSubscription(false);
     }
@@ -344,9 +348,17 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     previousCheckoutPhaseRef.current = checkout.state.phase;
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
-      if (checkout.state.kind === 'SUBSCRIPTION') void loadSubscription();
+      if (checkout.state.kind === 'SUBSCRIPTION') {
+        void loadSubscription(checkout.state.subscription);
+      }
     }
-  }, [checkout.state.kind, checkout.state.phase, loadBalance, loadSubscription]);
+  }, [
+    checkout.state.kind,
+    checkout.state.phase,
+    checkout.state.subscription,
+    loadBalance,
+    loadSubscription,
+  ]);
 
   const handlePlanChangeSettled = useCallback(
     (kind: PlanChangeSettledKind) => {
@@ -482,15 +494,33 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       : null;
   const currentPlanCandidate = useMemo<PlanChangeCandidate | null>(() => {
     if (!currentPlan) return null;
-    const entry = subscriptionOffers.find(({ offer }) => offer.code === currentPlan.offer.code);
-    if (!entry) return null;
+    const catalogProduct = catalog?.products.find(
+      (product) => product.code === currentPlan.product.code,
+    );
     return {
-      product: entry.product,
-      offer: entry.offer,
+      product: {
+        code: currentPlan.product.code,
+        name: catalogProduct?.name ?? currentPlan.product.code,
+        kind: 'SUBSCRIPTION',
+        level: currentPlan.product.level,
+        sortOrder: catalogProduct?.sortOrder ?? 0,
+        offers: [],
+      },
+      offer: {
+        code: currentPlan.offer.code,
+        interval: currentPlan.offer.interval,
+        currency: currentPlan.terms.currency,
+        amount: currentPlan.terms.amount,
+        minAmount: null,
+        maxAmount: null,
+        creditAmount: currentPlan.terms.creditAmount,
+        rolloverCap: currentPlan.terms.rolloverCap,
+        purchaseOptions: [],
+      },
       providers: currentProvider ? [currentProvider] : [],
       direction: null,
     };
-  }, [currentPlan, currentProvider, subscriptionOffers]);
+  }, [catalog, currentPlan, currentProvider]);
   const showPlanChangeEntry =
     currentPlan !== null &&
     currentSubscription !== null &&

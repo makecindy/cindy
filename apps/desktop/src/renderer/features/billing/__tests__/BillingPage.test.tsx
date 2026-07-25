@@ -1367,6 +1367,35 @@ describe('BillingPage plan change', () => {
     expect(screen.queryByText('Max plan')).toBeNull();
   });
 
+  it('keeps the completed checkout subscription when the canonical reload temporarily fails', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription
+      .mockResolvedValueOnce({ subscription: null })
+      .mockRejectedValueOnce(new Error('temporarily unavailable'));
+    install(billing);
+    const completed = { ...activeSubscription(), provider: 'alipay' };
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'SUBSCRIPTION',
+      phase: 'AWAITING_PAYMENT',
+      subscription: { ...completed, status: 'INCOMPLETE' },
+    });
+
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(1));
+
+    Object.assign(checkout.state, {
+      phase: 'COMPLETED',
+      subscription: completed,
+    });
+    view.rerender(<BillingPage />);
+
+    await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('billing.subscriptionStatus.ACTIVE')).toBeTruthy();
+    expect(screen.queryByText('billing.settings.subscriptionCard.unavailable')).toBeNull();
+    expect(screen.getByText('billing.settings.subscriptionCard.changeAction')).toBeTruthy();
+  });
+
   it('locks cancellation before confirmation resolves', async () => {
     const billing = install(billingMocks());
     let resolveConfirm!: (confirmed: boolean) => void;
@@ -1541,6 +1570,36 @@ describe('BillingPage plan change', () => {
     // APPLIED refreshes subscription, catalog, and balance exactly once more.
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders a grandfathered current plan from the captured subscription terms', async () => {
+    const billing = billingMocks();
+    const grandfathered = activeSubscription();
+    grandfathered.effectivePlan = {
+      ...grandfathered.effectivePlan!,
+      offer: { code: 'plus_legacy', interval: 'MONTH' },
+      terms: {
+        amount: '7',
+        currency: 'usd',
+        creditAmount: '80',
+        rolloverCap: '0',
+      },
+    };
+    billing.getCurrentSubscription = vi.fn(async () => ({ subscription: grandfathered }));
+    install(billing);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+
+    const dialog = await screen.findByRole('dialog');
+    const currentButton = within(dialog)
+      .getByText('billing.catalog.currentPlan')
+      .closest('button')!;
+    expect(within(currentButton).getByText('Plus plan')).toBeTruthy();
+    expect(within(currentButton).getByText('$7.00')).toBeTruthy();
+    expect(
+      within(currentButton).getByText('billing.credits:{"amount":"80"}'),
+    ).toBeTruthy();
   });
 
   it('does not expose plan change for yearly subscriptions while server v1 is monthly-only', async () => {
