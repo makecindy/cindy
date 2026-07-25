@@ -199,7 +199,13 @@ export function resolveModelInvocation(
       fallbacks.push('model:first-available');
     } else {
       model = scenarioModel;
-      fallbacks.push('model:scenario-default-unverified');
+      // 诊断标记区分两种「硬发场景默认裸值」:available === null 是数据不可用未经校验;
+      // 空数组是数据可用但**确认零可选**(Copilot review:混用 unverified 会误导排查)。
+      fallbacks.push(
+        available === null
+          ? 'model:scenario-default-unverified'
+          : 'model:no-available-models',
+      );
     }
   }
 

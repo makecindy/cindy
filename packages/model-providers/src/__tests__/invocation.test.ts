@@ -509,3 +509,12 @@ describe('resolveModelInvocation — providerId 校验含 per-provider 可见性
     expect(r.providerId).toBe('xd');
   });
 });
+
+describe('resolveModelInvocation — 诊断标记区分 unverified 与零可选(Copilot review)', () => {
+  it('清单可用但为空 → model:no-available-models,不再误标 unverified', () => {
+    const r = resolveModelInvocation({}, SCENARIO, ctx({ isVisible: () => false }));
+    expect(r.model).toBe('claude-sonnet-4-6');
+    expect(r.fallbacksApplied).toContain('model:no-available-models');
+    expect(r.fallbacksApplied).not.toContain('model:scenario-default-unverified');
+  });
+});

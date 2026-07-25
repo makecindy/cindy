@@ -164,7 +164,10 @@ export function modelBadges(
   model: { id: string; group?: string } & Partial<Pick<ModelSourceMeta, 'sourceAccess'>>,
   provider?: { access?: ProviderAccess } | null,
 ): ModelBadges {
-  const access = provider?.access ?? model.sourceAccess;
+  // 传了 provider(分段模式)就**只看**该段的 access —— 段供应商无 access 元数据时不得
+  // 回读 model.sourceAccess:溯源可能来自另一家供应商(flat 首见者),混用会给当前段的行
+  // 打上别家的订阅徽章(Copilot review)。仅 provider 缺席(flat)才读溯源。
+  const access = provider != null ? provider.access : model.sourceAccess;
   return {
     subscription: access?.kind === 'subscription',
     budget: isBudgetModel(model),

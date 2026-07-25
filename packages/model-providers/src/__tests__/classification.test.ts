@@ -149,6 +149,17 @@ describe('modelBadges — 徽章唯一口径', () => {
     });
   });
 
+  // 2026-07 Copilot review: 分段模式下段供应商无 access 元数据时,不得回读条目的
+  // sourceAccess(那可能是 flat 首见的**另一家**供应商)——否则当前段的行会挂上别家的订阅徽章。
+  it('分段模式: provider 无 access 时不回读 sourceAccess,徽章按当前段诚实为空', () => {
+    expect(
+      modelBadges(
+        { id: 'claude-opus-5', sourceAccess: { kind: 'subscription', product: 'Claude.ai' } },
+        {},
+      ),
+    ).toEqual({ subscription: false, budget: false });
+  });
+
   it('骨折徽章与订阅徽章独立判定', () => {
     expect(modelBadges({ id: 'codex/gpt-5.5' }, { access: { kind: 'managed' } })).toEqual({
       subscription: false,
