@@ -206,11 +206,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       getPool: async () => (await import('../remote-ssh/index.js')).getRemoteSshPoolHydrated(),
       ensureReady: async (id: string) =>
         (await import('../remote-ssh/index.js')).ensureRemoteHostReady(id),
-      // 运行时门控(tool-call 时刻):Codex 共享 bridge 构建期 workingDir 为空,
-      // 下方 provider isEnabled wrap 的构建期检查覆盖不到项目级禁用,ssh_exec
-      // 这种远端执行工具必须在调用时刻按真实会话 workdir 再查一次 registry;
-      // workingDir undefined = 无会话上下文,回落全局开关判定。
-      isEnabledForWorkdir: (workingDir) => pluginRegistry.isEnabled('ssh', workingDir),
+      // 普通工具策略在 Claude runtime / Codex thread 创建时冻结。不要在 tool-call
+      // 时重新读取 registry，否则运行中的工具清单与执行权限会随 Settings 分叉。
       logger: createLogger('mcp/cindy_ssh'),
     },
     memory: {

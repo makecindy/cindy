@@ -337,19 +337,12 @@ export interface SshPoolLike {
  *  - ensureReady(id)：不存在 / 连接失败时抛错；错误 message 以 `[CODE] ...`
  *    前缀编码（desktop throwIpcError 协议），tool 层用 classifySshError
  *    best-effort 提取。
+ *  - 插件启用策略由 host 在 Agent runtime / Codex thread 创建时冻结；这里不得
+ *    注入调用时读取设置的门控，否则工具暴露状态与执行权限会在运行中分叉。
  */
 export interface SshMcpDeps {
   getPool(): Promise<SshPoolLike>;
   ensureReady(id: string): Promise<void>;
-  /**
-   * 运行时插件门控（tool-call 时刻，按当前会话 workingDir 判定）。
-   * 为什么不能只靠 host 层构建期的 provider isEnabled wrap：Codex 共享 bridge
-   * 用空 workingDir 构建 server，真实会话 ctx 由 AsyncLocalStorage 在工具调用
-   * 时才恢复——构建期检查会跳过项目级禁用，导致关掉 ssh 插件的项目在 Codex
-   * 会话里仍能调 ssh_exec（PR #874 review）。workingDir 为 undefined 时 host
-   * 应回落到全局开关判定。缺省 = 不做运行时门控（仅依赖构建期检查）。
-   */
-  isEnabledForWorkdir?: (workingDir: string | undefined) => boolean;
   logger?: LiziMcpLogger;
 }
 
