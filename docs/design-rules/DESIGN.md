@@ -590,7 +590,7 @@ Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`;
 
 > This section records the CINDY skin family; it does **not** rewrite the §1–7 default-skin rules. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the theme files (`cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.
 >
-> Subsection numbers are **stable identifiers** (referenced by §16, code comments, and other documents; 15.9 was never assigned) — do not renumber. Decision history for this section is archived in [`design-decision-log.md`](./design-decision-log.md).
+> Subsection numbers are **stable identifiers** (referenced by §16, code comments, frozen tests, and other documents; 15.9 was never assigned) — do not renumber. Decision history for this section is archived in [`design-decision-log.md`](./design-decision-log.md).
 
 ### 15.1 Palette (extracted from Figma text nodes)
 
@@ -737,7 +737,7 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Process gates
 
 - New or changed colors go through tokens — desktop via ColorRegistry / CSS variables, mobile via `ThemeColors` / `useTheme`; no hex/rgba in components.
-- `hardcoded-color-audit` must be fully green to merge. Genuine exceptions (asset-intrinsic or platform-semantic) must be whitelisted with reasons.
+- `hardcoded-color-audit` (`scripts/hardcoded-color-audit.mjs`) must pass before merging. ⚠ Not yet wired into CI as a required check — run it manually for now; CI enforcement is tracked as a follow-up (modularization plan P6-3'). Genuine exceptions (asset-intrinsic or platform-semantic) must be whitelisted with reasons.
 - When a design mock conflicts with existing tokens, list it as "pending ruling" in the spec / PR and request a decision — never self-adjudicate or substitute a near color.
 - Shared-component restyles default to variant / prop isolation. Pages, states, and platforms not covered by the mock keep the status quo.
 
