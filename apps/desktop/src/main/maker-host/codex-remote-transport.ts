@@ -178,6 +178,17 @@ export function isManagedCodexDaemonVersion(output: DaemonVersionOutput): boolea
   return version === PINNED_CODEX_RELEASE_VERSION;
 }
 
+export type CodexDaemonVersionAction = 'reuse' | 'restart' | 'reject';
+
+/** Decide whether a discovered daemon may be reused or managed by this caller. */
+export function decideCodexDaemonVersionAction(
+  output: DaemonVersionOutput,
+  autoStartDaemon: boolean,
+): CodexDaemonVersionAction {
+  if (isManagedCodexDaemonVersion(output)) return 'reuse';
+  return autoStartDaemon ? 'restart' : 'reject';
+}
+
 /**
  * Build a transport synchronously; the heavy lifting (daemon probe, ssh exec,
  * ws handshake) runs in the background and either flips state to 'open' or
@@ -383,7 +394,16 @@ exec "$CODEX" "$@"
     if (!socketPath) {
       try {
         let discovery = await discoverDaemon();
-        if (!isManagedCodexDaemonVersion(discovery.version)) {
+        const versionAction = decideCodexDaemonVersionAction(
+          discovery.version,
+          autoStartDaemon,
+        );
+        if (versionAction === 'reject') {
+          throw new Error(
+            `daemon version is stale and autoStartDaemon=false; managed Codex ${PINNED_CODEX_RELEASE_VERSION} is required`,
+          );
+        }
+        if (versionAction === 'restart') {
           logger.info('daemon version is stale; restarting with managed Codex', {
             managedVersion: PINNED_CODEX_RELEASE_VERSION,
             cliVersion: discovery.version.cliVersion ?? discovery.version.cli_version ?? null,

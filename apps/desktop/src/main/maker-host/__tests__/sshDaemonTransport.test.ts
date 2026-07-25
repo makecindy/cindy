@@ -33,6 +33,7 @@ import path from 'node:path';
 import {
   WS_GUID,
   computeWsAccept,
+  decideCodexDaemonVersionAction,
   isManagedCodexDaemonVersion,
   shellQuote,
 } from '../codex-remote-transport';
@@ -73,6 +74,22 @@ describe('isManagedCodexDaemonVersion', () => {
   it('rejects stale or unversioned daemon output', () => {
     expect(isManagedCodexDaemonVersion({ cli_version: 'codex-cli 0.144.0' })).toBe(false);
     expect(isManagedCodexDaemonVersion({ socketPath: '/tmp/codex.sock' })).toBe(false);
+  });
+});
+
+describe('decideCodexDaemonVersionAction', () => {
+  it('reuses the managed daemon regardless of auto-start policy', () => {
+    expect(decideCodexDaemonVersionAction({ cliVersion: 'codex-cli 0.145.0' }, true))
+      .toBe('reuse');
+    expect(decideCodexDaemonVersionAction({ cliVersion: 'codex-cli 0.145.0' }, false))
+      .toBe('reuse');
+  });
+
+  it('restarts a stale daemon only when auto-start is enabled', () => {
+    const stale = { cliVersion: 'codex-cli 0.144.0' };
+
+    expect(decideCodexDaemonVersionAction(stale, true)).toBe('restart');
+    expect(decideCodexDaemonVersionAction(stale, false)).toBe('reject');
   });
 });
 
