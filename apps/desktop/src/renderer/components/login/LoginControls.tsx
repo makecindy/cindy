@@ -11,7 +11,6 @@ import {
   CONTROL,
   ERROR_TEXT,
   GLOBAL_PILL,
-  GLOBAL_TITLE_SPAN,
   LOADING_RING,
   LOGIN_COLORS,
   METHOD_ROW,
@@ -96,19 +95,19 @@ export function LoginTitleBlock({
         }}
       >
         {globalPill ? (
-          <>
-            <span
-              className="absolute"
-              style={{ left: GLOBAL_TITLE_SPAN.left, width: GLOBAL_TITLE_SPAN.width }}
-            >
-              {title}
-            </span>
+          // inline 组(用户裁定 2026-07-25):标题 shrink-to-fit 单行 + 徽标紧随
+          // gap 2 设计px,组整体随外层 text-center 相对面板水平居中;徽标垂直
+          // 居中于 38 行框(等价旧 top:4)。align-top 抵消 inline-flex 默认
+          // baseline 对齐带来的行框偏移。
+          <span
+            className="inline-flex max-w-full items-center justify-center whitespace-nowrap align-top"
+            style={{ gap: GLOBAL_PILL.gap, height: TITLE.height }}
+          >
+            <span className="whitespace-nowrap">{title}</span>
             <span
               data-testid="login-global-pill"
-              className="absolute text-center font-bold"
+              className="shrink-0 text-center font-bold"
               style={{
-                left: GLOBAL_PILL.left,
-                top: GLOBAL_PILL.top,
                 width: GLOBAL_PILL.width,
                 height: GLOBAL_PILL.height,
                 borderRadius: GLOBAL_PILL.radius,
@@ -120,7 +119,7 @@ export function LoginTitleBlock({
             >
               {globalPill}
             </span>
-          </>
+          </span>
         ) : (
           title
         )}
