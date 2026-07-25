@@ -34,6 +34,12 @@ interface PermissionSelectorProps {
   iconOnly?: boolean;
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
+  /**
+   * Trigger 形态:chip = composer 胶囊(默认,唯一历史形态);field = 设置页表单字段,
+   * 与 ModelSelector 的 `triggerVariant="field"` 逐字对齐(同 radius / 同边框 / 同
+   * 输入面 token / 同 hover),让设置卡片里的「模型」「权限模式」两个字段等高成套。
+   */
+  triggerVariant?: 'chip' | 'field';
 }
 
 /**
@@ -69,6 +75,12 @@ function getModeTone(mode: PermissionMode): 'auto' | 'bypassPermissions' | null 
  * 权限模式选择器 —— 容器形变(MorphPopover)试点组件。
  * 弹层不再是 Radix Popover 浮层,而是从 trigger chip 原位生长(docs/design-rules/cindy-design-system.md §14.4
  * 容器形变类目);trigger 视觉与旧版逐像素一致,变化只在开合方式。
+ *
+ * 两种 trigger 形态共用同一份选项列表与权限语义:
+ *   - `chip`(默认)= composer 胶囊,唯一历史形态;
+ *   - `field`  = 设置页表单字段,供「IM 机器人 → 工作目录映射」等设置卡片与
+ *     ModelSelector 的 field trigger 并排成套。权限模式的可选项、Codex 归一化、
+ *     危险档配色只此一份,设置页不得再私搭一套下拉。
  */
 export function PermissionSelector({
   permissionMode,
@@ -79,6 +91,7 @@ export function PermissionSelector({
   dense = false,
   iconOnly = false,
   visualVariant = 'default',
+  triggerVariant = 'chip',
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -107,6 +120,7 @@ export function PermissionSelector({
   const triggerLabel = labelOf(current, effectiveMode);
   const triggerDescription = descriptionOf(current, effectiveMode);
   const isCreateAgentVariant = visualVariant === 'create-agent';
+  const isFieldTrigger = triggerVariant === 'field';
   // 窄态工具条(#562):新建对话框空间不足时权限入口图标化,防与语音/发送重叠。
   const isIconOnly = iconOnly && isCreateAgentVariant;
 
@@ -130,7 +144,9 @@ export function PermissionSelector({
         </span>
       )}
       {!isIconOnly && (
-        <div className="pt-[2px]">
+        // field 形态:chevron 靠右贴边(与 ModelSelector 的 field trigger 同规则),
+        // chip 形态维持紧跟文字的历史排布。
+        <div className={cn('pt-[2px]', isFieldTrigger && 'ml-auto')}>
           <ChevronDown
             size={isCreateAgentVariant ? 8 : dense ? 13 : 14}
             className="shrink-0 text-current"
@@ -147,9 +163,10 @@ export function PermissionSelector({
       panelWidth={300}
       panelClassName="p-2"
       panelAriaLabel={t('newChat.permissionSelector.listAria')}
-      startBg="var(--composer-pill-bg)"
+      // field 形态从设置页输入面生长(chip 形态仍从 composer 胶囊面生长)。
+      startBg={isFieldTrigger ? 'var(--settings-input-bg)' : 'var(--composer-pill-bg)'}
       startBorderColor="var(--border-default)"
-      wrapperClassName="min-w-0 shrink"
+      wrapperClassName={isFieldTrigger ? 'w-full min-w-0' : 'min-w-0 shrink'}
       trigger={
         <Tip
           text={triggerDescription}
@@ -163,14 +180,25 @@ export function PermissionSelector({
             aria-expanded={open && !disabled}
             aria-haspopup="listbox"
             className={cn(
-              'flex min-w-0 items-center gap-1 overflow-hidden rounded-full transition-colors',
-              // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
-              // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-              isIconOnly
-                ? 'h-[30px] w-[34px] min-w-[34px] justify-center px-0'
-                : 'h-[30px] min-w-[72px] max-w-full shrink px-2.5',
-              'border border-transparent bg-transparent text-[var(--text-primary)]',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'flex min-w-0 items-center gap-1 overflow-hidden transition-colors',
+              isFieldTrigger
+                ? cn(
+                    // 与 ModelSelector 的 field trigger 逐字对齐,两个字段才能等高成套。
+                    'w-full rounded-lg border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
+                    dense ? 'h-9' : 'h-10',
+                    'text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]',
+                  )
+                : cn(
+                    'rounded-full',
+                    // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
+                    // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
+                    isIconOnly
+                      ? 'h-[30px] w-[34px] min-w-[34px] justify-center px-0'
+                      : 'h-[30px] min-w-[72px] max-w-full shrink px-2.5',
+                    'border border-transparent bg-transparent text-[var(--text-primary)]',
+                    'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)] dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+                  ),
+              // 危险档只染文字,不改底色 —— field / chip 两形态同规则。
               triggerTone === 'auto' && 'text-[var(--perm-auto-selected-text)]',
               triggerTone === 'bypassPermissions' && 'text-[var(--perm-bypass-selected-text)]',
               disabled && 'pointer-events-none opacity-50',

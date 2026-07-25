@@ -2019,11 +2019,9 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "Model",
-        "effortLabel": "Effort",
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
-        "none": "None",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",

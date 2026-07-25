@@ -2018,11 +2018,9 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "모델",
-        "effortLabel": "사고 강도",
         "permissionLabel": "권한 모드",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
-        "none": "없음",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
         "serverUnsupported": "서버 버전이 오래되었거나 응답이 없어 설정을 불러올 수 없습니다.",

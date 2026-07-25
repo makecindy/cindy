@@ -2,7 +2,18 @@
  * HookWorkspacePrefsEditor —— 工作目录卡片内嵌的会话偏好编辑行。
  *
  * 由 HookConnectionsSection 在每个目录卡片下渲染(用户反馈: 偏好属于目录
- * 条目本身, 不该是独立区块): agent / 模型 / 思考强度 / 权限模式四个下拉。
+ * 条目本身, 不该是独立区块): agent / 模型(含思考强度) / 权限模式三个字段。
+ *
+ * **三个控件一律复用应用标准选择器,本文件不自建任何选择 UI**(2026-07 用户
+ * 定稿: 这里曾私搭一套裸下拉, 露出 'claude-code' 原始 id、自己拼一遍可选模型
+ * 清单、effort 直接显示未经 i18n 的 low/medium/high):
+ *   - agent   -> VendorSegmentedSwitcher(品牌分段 pill, 与首页新建对话同一个)
+ *   - 模型    -> ModelSelector 的 field trigger(单栏 flat, 不开供应商分段 —— 偏好表
+ *                没有 providerId 字段, 分段会造成「选 A 落 B」, 详见组件内注释);
+ *                可选清单、骨折版区分、effort 档位与显示名全部由它内部给出
+ *   - 权限    -> PermissionSelector 的 field trigger
+ * 思考强度不再是独立控件 —— 它并进模型 trigger 显示成「模型名 · 档位」, 与
+ * 隔壁 ImDefaultSettingsSection(IM 新会话默认)和会话输入框成一套。
  *
  * 未显式设置的字段**解析出当前真正会生效的默认值**直接展示, 界面上不暴露
  * 「默认」概念(无后缀 / 无弱化色 / 无「恢复默认」菜单项 —— 用户反馈: 不要
@@ -11,43 +22,30 @@
  * imDefaultSettingsGet('slack')(桌面新会话默认)+ 本机 capabilities; 权限默认恒
  * bypassPermissions(完全访问)。
  *
- * 模型显示名带分组区分: 骨折版(group='gpt-budget')与官方版 displayName
- * 故意同名, 下拉里给骨折版加「(骨折GPT)」后缀(复用桌面模型选择器的分组
- * 文案), 否则出现两个一模一样的 GPT-5.5(线上实撞)。
- *
  * 数据正本在 IM hook server 的 provider prefs 表：Slack 与 Telegram 按
  * provider 隔离；每个 provider 内与其 /model 卡使用同一份数据。hook 经
  * provider 对应的 IPC 走 WS 往返读写，命令卡改动经 provider 状态推送实时
- * 同步。**可选模型清单与会话内模型选择器同一套规则**(visibleModelUnion:
- * live providers -> 已连接供应商 -> 用户可见性开关过滤), 与 Slack /model 卡
- * 的清单(main 侧同函数派生后经 query.response 上报)逐模型一致; effort /
- * 权限档等元数据仍取本机 capabilities; 联动校准逻辑在 hookWorkspacePrefsLogic.ts。
+ * 同步。写入的联动校准(换 agent 清模型、换模型校准 effort)仍走
+ * hookWorkspacePrefsLogic.ts 的纯函数, 与 Slack /model 卡逐字段同语义。
  *
  * 状态模型(禁用整体置灰而非增删行, 规则 7):
  *   - 连接未就绪 -> 禁用(提示行由宿主渲染一次, 不逐卡重复)
  *   - 已连接但未绑定 -> 禁用 + 「先完成绑定」
  *   - HOOK_PREFS_TIMEOUT -> 禁用 + 「服务器版本过旧」+ 重试
- * 偏好值不在本机能力清单时显示裸 id(派发侧 defaults 已兜底)。
  * 颜色一律走主题 token(规则 16)。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown } from 'lucide-react';
 
-import { visibleModelUnion, type AgentKind, type CatalogModel } from '@cindy/model-providers';
-
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
-import { useProviders } from '@/hooks/useProviders';
-import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
+import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
+import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import type { MakerVendor } from '@/lib/ccAgent.types';
 import type {
   HookPrefsPatch,
   HookPrefsView,
@@ -57,6 +55,7 @@ import type {
 } from '../../../shared/hookControlIpc';
 import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import {
+  HOOK_DEFAULT_PERMISSION_MODE,
   patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
@@ -361,48 +360,36 @@ export function useHookWorkspacePrefs(
   };
 }
 
-/**
- * 单个下拉。triggerLabel 恒显示当前生效值 —— 未显式设置时就是解析出的
- * 桌面默认值, 界面上不区分「默认/自选」(用户要求不暴露默认概念);
- * 选中任一项即写显式偏好。
- */
-function PrefsSelect({
+/** 字段外框:标题 + 控件,三个字段共用,保证 label 排版一致。 */
+function PrefsField({
   label,
-  triggerLabel,
-  options,
-  disabled,
-  onPick,
+  className,
+  children,
 }: {
   label: string;
-  triggerLabel: string;
-  options: Array<{ id: string; label: string }>;
-  disabled: boolean;
-  onPick: (id: string) => void;
+  className?: string;
+  children: ReactNode;
 }) {
   return (
-    <label className="flex min-w-0 flex-1 flex-col gap-1">
+    <div className={cn('flex min-w-0 flex-col gap-1', className)}>
       <span className="text-11 text-[var(--text-tertiary)]">{label}</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          disabled={disabled}
-          className="flex items-center justify-between gap-1 rounded-lg border border-[var(--border-default)] bg-transparent px-2 py-1.5 text-12 text-[var(--settings-input-text)] outline-none disabled:opacity-50"
-        >
-          <span className="truncate">{triggerLabel}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start">
-          {options.map((opt) => (
-            <DropdownMenuItem key={opt.id} onClick={() => onPick(opt.id)}>
-              {opt.label}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </label>
+      {children}
+    </div>
   );
 }
 
-/** 目录卡片内的偏好编辑行(四下拉)。alias 为该行当前生效别名。 */
+/** hook prefs 的 agentKind('claude-code' | 'codex')→ 选择器的 vendor key。 */
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
+  return agentKind === 'codex' ? 'codex' : 'cc';
+}
+
+/** 选择器的 vendor key → hook prefs 的 agentKind。 */
+function toAgentKind(vendor: MakerVendor): KnownAgent {
+  return vendor === 'codex' ? 'codex' : 'claude-code';
+}
+
+
+/** 目录卡片内的偏好编辑行(agent / 模型 / 权限三字段)。alias 为该行当前生效别名。 */
 export function WorkspacePrefsEditor({
   alias,
   state,
@@ -431,101 +418,82 @@ export function WorkspacePrefsEditor({
   const eff = resolveEffectiveRow(prefs, state.imDefaults, (k) => toPrefsCaps(capsOf(k)));
   const effAgentCaps = capsOf(eff.agentKind.id ?? '');
   const disabled = !state.editable || state.pendingWs === alias;
+  const vendorKey = toVendorKey(eff.agentKind.id);
 
-  // 可选模型清单: 与会话内模型选择器**同一套规则**(live providers -> 已连接
-  // 供应商 -> 用户可见性开关过滤, 拍平 first-wins 去重)。visVersion 让用户在
-  // 「设置 -> 模型供应商」开关模型后本下拉实时重算。
-  const { providers } = useProviders();
-  const visVersion = useModelVisibilityVersion();
-  const visibleModels = useMemo((): CatalogModel[] => {
-    void visVersion; // 仅作重算依赖
-    const agent = eff.agentKind.id;
-    if (agent === null || !AGENT_KINDS.includes(agent as KnownAgent)) return [];
-    return visibleModelUnion(providers, agent as AgentKind, (providerId, m) =>
-      isModelEnabled(agent as AgentKind, providerId, m),
+  /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
+  const applyModel = (next: string) => {
+    if (next === prefs.model || eff.agentKind.id === null) return;
+    state.applyPatch(
+      alias,
+      patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps)),
     );
-  }, [providers, eff.agentKind.id, visVersion]);
+  };
 
-  // effort 选项的元数据: 优先 capabilities(生效模型可能被用户隐藏, 不在
-  // visibleModels 里), 自定义供应商独有模型再回落 union 条目。
-  const entry =
-    eff.model.id !== null
-      ? (effAgentCaps?.availableModels.find((m) => m.id === eff.model.id) ??
-        visibleModels.find((m) => m.id === eff.model.id) ??
-        null)
-      : null;
-
-  /** 模型显示名(骨折版加分组后缀区分同名官方版); 不在清单显示裸 id。 */
-  const modelLabel = useCallback(
-    (id: string | null): string => {
-      if (id === null) return t('settings.tina.prefs.none');
-      const u = visibleModels.find((x) => x.id === id);
-      const c =
-        u === undefined ? effAgentCaps?.availableModels.find((x) => x.id === id) : undefined;
-      const name = u?.name ?? c?.displayName;
-      if (name === undefined) return id;
-      const group = u?.group ?? c?.group;
-      return group === 'gpt-budget'
-        ? `${name}(${t('newChat.modelSelector.category.budget')})`
-        : name;
-    },
-    [visibleModels, effAgentCaps, t],
-  );
-  const permLabel = useCallback(
-    (id: string | null): string => {
-      if (id === null) return t('settings.tina.prefs.none');
-      return effAgentCaps?.permissionModes.find((pm) => pm.id === id)?.displayName ?? id;
-    },
-    [effAgentCaps, t],
-  );
   return (
-    <div className="flex flex-wrap gap-2">
-      <PrefsSelect
-        label={t('settings.tina.prefs.agentLabel')}
-        triggerLabel={eff.agentKind.id ?? ''}
-        options={AGENT_KINDS.map((k) => ({ id: k, label: k }))}
-        disabled={disabled}
-        onPick={(next) => {
-          if (next === prefs.agentKind) return;
-          state.applyPatch(alias, patchForAgentChange(next, prefs, toPrefsCaps(capsOf(next))));
-        }}
-      />
-      <PrefsSelect
-        label={t('settings.tina.prefs.modelLabel')}
-        triggerLabel={modelLabel(eff.model.id)}
-        options={visibleModels.map((m) => ({ id: m.id, label: modelLabel(m.id) }))}
-        // 能力清单未就绪才禁用; agent 未显式设置时也可直接选模型(随手把
-        // agent 显式配对写入, 与 Slack 卡「选中模型即落 (agent, model)」同规则)
-        disabled={disabled || effAgentCaps === null || eff.agentKind.id === null}
-        onPick={(next) => {
-          if (next === prefs.model || eff.agentKind.id === null) return;
-          state.applyPatch(
-            alias,
-            patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps)),
-          );
-        }}
-      />
-      <PrefsSelect
-        label={t('settings.tina.prefs.effortLabel')}
-        triggerLabel={eff.effort.id ?? t('settings.tina.prefs.none')}
-        options={(entry?.efforts ?? []).map((e) => ({ id: e, label: e }))}
-        disabled={disabled || entry === null || entry.efforts.length === 0}
-        onPick={(next) => {
-          if (next !== prefs.effort) state.applyPatch(alias, { effort: next });
-        }}
-      />
-      <PrefsSelect
-        label={t('settings.tina.prefs.permissionLabel')}
-        triggerLabel={permLabel(eff.permissionMode.id)}
-        options={(effAgentCaps?.permissionModes ?? []).map((pm) => ({
-          id: pm.id,
-          label: pm.displayName,
-        }))}
-        disabled={disabled || effAgentCaps === null}
-        onPick={(next) => {
-          if (next !== prefs.permissionMode) state.applyPatch(alias, { permissionMode: next });
-        }}
-      />
+    <div className="flex flex-wrap items-end gap-2">
+      {/* agent 分段是固定 168px 的 pill,不参与压缩 —— 卡片变窄时整块换行,
+          而不是把 Claude / Codex 两段挤到溢出容器。 */}
+      <PrefsField label={t('settings.tina.prefs.agentLabel')} className="shrink-0">
+        <VendorSegmentedSwitcher
+          value={vendorKey}
+          width={168}
+          disabled={disabled}
+          onChange={(next) => {
+            const nextAgent = toAgentKind(next);
+            if (nextAgent === prefs.agentKind) return;
+            state.applyPatch(
+              alias,
+              patchForAgentChange(nextAgent, prefs, toPrefsCaps(capsOf(nextAgent))),
+            );
+          }}
+        />
+      </PrefsField>
+      {/* 模型 + 思考强度同一个控件: trigger 显示「模型名 · 档位」, 展开后行内改档。
+
+          **刻意不开供应商分段**(不传 currentProviderId / onProviderChange), 即单栏
+          flat 列表 —— 这是不做「兑现不了的承诺」, 不是偷懒:
+          IM hook 的偏好表(server 侧)只有 model id 字段, **没有 providerId**。开分段
+          会按 (供应商, 模型) 列出多行, 但选完只能落一个 model id, 来源仍由派发侧按
+          nativeDefaultSourceId 解析 —— claude-code 一律优先 'xd'(见
+          model-providers/registry.ts:84)。结果就是用户点「订阅版 Opus 5」, 当场被
+          重映射成「Cindy AI 的 Opus 5」, 订阅额度根本用不上却以为选中了
+          (2026-07 用户实测: 选 A 落 B)。列多行让人以为能选、选完静默改掉, 比列表短
+          恶劣得多。
+          等偏好表支持 providerId 后再开分段, 届时同步去掉本段说明。
+
+          同理不传 modelMemory: flat 行没有 providerId 上下文, ModelSelector 的
+          canConfigure 对非选中行要求 editingProviderId 非空, 传了也是死代码。
+          非选中行看不到档位菜单 —— 先点中模型再 hover 改档, 与改造前「改当前生效
+          模型的档位」功能等价。 */}
+      <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
+        <ModelSelector
+          modelId={eff.model.id ?? ''}
+          effort={eff.effort.id ?? ''}
+          vendorKey={vendorKey}
+          triggerVariant="field"
+          popoverSide="bottom"
+          dense
+          // 能力清单未就绪才禁用; agent 未显式设置时也可直接选模型(随手把
+          // agent 显式配对写入, 与 Slack 卡「选中模型即落 (agent, model)」同规则)
+          disabled={disabled || effAgentCaps === null || eff.agentKind.id === null}
+          onModelChange={applyModel}
+          onEffortChange={(next) => {
+            if (next !== prefs.effort) state.applyPatch(alias, { effort: next });
+          }}
+        />
+      </PrefsField>
+      <PrefsField label={t('settings.tina.prefs.permissionLabel')} className="basis-[160px]">
+        <PermissionSelector
+          permissionMode={eff.permissionMode.id ?? HOOK_DEFAULT_PERMISSION_MODE}
+          vendorKey={vendorKey}
+          triggerVariant="field"
+          dense
+          disabled={disabled || effAgentCaps === null}
+          onPermissionModeChange={(next) => {
+            if (next !== prefs.permissionMode) state.applyPatch(alias, { permissionMode: next });
+          }}
+        />
+      </PrefsField>
     </div>
   );
 }

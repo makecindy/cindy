@@ -2018,11 +2018,9 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "模型",
-        "effortLabel": "思考强度",
         "permissionLabel": "权限模式",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
-        "none": "无",
         "requireConnected": "连接 {{provider}} 后可编辑（先在上方开启对应开关并等待连接成功）。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
         "serverUnsupported": "服务器版本过旧或暂时无应答, 无法读取偏好。",

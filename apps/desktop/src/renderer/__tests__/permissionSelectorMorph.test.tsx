@@ -116,3 +116,52 @@ describe('PermissionSelector (MorphPopover pilot)', () => {
     expect(screen.queryByRole('listbox')).toBeNull();
   });
 });
+
+/**
+ * field 形态(设置页表单字段)—— 由「IM 机器人 → 工作目录映射」引入。trigger 换成
+ * 与 ModelSelector 的 field trigger 逐字对齐的输入面,选项列表与权限语义不分叉;
+ * chip 形态(composer)必须逐字不变。
+ */
+describe('PermissionSelector triggerVariant', () => {
+  it('默认 chip 形态:composer 胶囊,无输入面边框', () => {
+    renderSelector();
+    const cls = getTrigger().className;
+    expect(cls).toContain('rounded-full');
+    expect(cls).toContain('border-transparent');
+    expect(cls).not.toContain('settings-input-bg');
+  });
+
+  it('field 形态:输入面样式,与 ModelSelector 的 field trigger 同规格', () => {
+    renderSelector({ triggerVariant: 'field' });
+    const cls = getTrigger().className;
+    expect(cls).toContain('rounded-lg');
+    expect(cls).toContain('border-[var(--border-default)]');
+    expect(cls).toContain('bg-[var(--settings-input-bg)]');
+    expect(cls).toContain('hover:bg-[var(--surface-hover-soft)]');
+    expect(cls).toContain('w-full');
+    expect(cls).not.toContain('rounded-full');
+  });
+
+  it('field 形态 dense 压一档高度(与同排模型字段等高)', () => {
+    renderSelector({ triggerVariant: 'field', dense: true });
+    expect(getTrigger().className).toContain('h-9');
+  });
+
+  it('field 形态仍走同一份选项列表与危险档配色', async () => {
+    const { onChange } = renderSelector({ triggerVariant: 'field' });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+    expect(screen.getAllByRole('option')).toHaveLength(4);
+
+    fireEvent.click(screen.getByText('完全访问'));
+    expect(onChange).toHaveBeenCalledWith('bypassPermissions');
+  });
+
+  it('field 形态选中危险档时只染文字,不改底色', () => {
+    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
+    const cls = getTrigger().className;
+    expect(cls).toContain('text-[var(--perm-bypass-selected-text)]');
+    // 底仍是输入面,不因危险档换底色
+    expect(cls).toContain('bg-[var(--settings-input-bg)]');
+  });
+});
