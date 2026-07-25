@@ -71,7 +71,9 @@ export function formatCrashEntry(input: {
   const fatal = input.isFatal ? ' FATAL' : '';
   const lines = [
     `[${iso}] ${input.source}${fatal}: ${message}`,
-    stack ? stack.trimEnd() : '(no stack)',
+    // 防御:个别 Error 的 stack 可能被替换成非字符串(截断/伪造),直接 .trimEnd() 会抛,
+    // 而本函数在致命 handler 里被调用,抛错会连累「调用原 handler」的默认崩溃流程。
+    typeof stack === 'string' ? stack.trimEnd() : '(no stack)',
   ];
   if (input.extra && input.extra.trim()) {
     lines.push(`componentStack:${input.extra.trimEnd()}`);

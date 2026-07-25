@@ -61,6 +61,7 @@ import {
   hasCrashLog,
   hasPreviousAbnormalExit,
   installCrashCapture,
+  markBootPhase,
   readCrashLog,
   recordReactError,
   reloadWithMarker,
@@ -209,6 +210,38 @@ describe('IO 接线与启动面包屑', () => {
     expect(getCrashLogFile().uri).toContain('crash.log');
     clearCrashLog();
     expect(hasCrashLog()).toBe(false);
+  });
+
+  it('clearCrashLog 后再崩溃会重新补写 session 头(不丢运行环境信息)', () => {
+    stubErrorUtils();
+    installCrashCapture();
+    recordReactError(new Error('first'));
+    clearCrashLog();
+    recordReactError(new Error('second'));
+    const log = readCrashLog();
+    expect(log).toContain('=== session');
+    expect(log).toContain('second');
+  });
+
+  it('markBootPhase 顺序阶段只前进不回退(子 effect 写 auth 后父 effect 写 ota 无效)', () => {
+    stubErrorUtils();
+    installCrashCapture();
+    markBootPhase('auth');
+    markBootPhase('ota'); // 父层回写更早阶段,应被忽略
+    expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('auth');
+    markBootPhase('ready'); // 继续前进有效
+    expect(JSON.parse(store.get('boot.json') ?? '{}').phase).toBe('ready');
+  });
+
+  it('记录抛错场景(stack 非字符串)不吞默认 handler,仍记录并调用原 handler', () => {
+    const prev = vi.fn();
+    const state = stubErrorUtils(prev);
+    installCrashCapture();
+    const bad = new Error('weird-stack');
+    Object.defineProperty(bad, 'stack', { value: { not: 'a string' } });
+    expect(() => state.current?.(bad, true)).not.toThrow();
+    expect(prev).toHaveBeenCalledTimes(1);
+    expect(readCrashLog()).toContain('weird-stack');
   });
 });
 

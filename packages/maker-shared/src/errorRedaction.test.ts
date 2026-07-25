@@ -28,6 +28,16 @@ describe('redactSensitiveText', () => {
     expect(output).toContain('token=[REDACTED]');
   });
 
+  it('redacts URL userinfo credentials while keeping scheme and host', () => {
+    const output = redactSensitiveText(
+      'fetch failed for https://alice:s3cr3t@example.com/path?x=1',
+    );
+
+    expect(output).not.toContain('alice');
+    expect(output).not.toContain('s3cr3t');
+    expect(output).toContain('https://[REDACTED]@example.com/path');
+  });
+
   it('redacts complete non-Bearer Authorization values', () => {
     const output = redactSensitiveText('Authorization: Basic dXNlcjpwYXNz');
 

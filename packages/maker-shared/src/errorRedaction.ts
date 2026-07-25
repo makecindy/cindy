@@ -29,6 +29,13 @@ export function redactSensitiveText(input: string): string {
     /([?&](?:api[-_]?key|access[-_]?token|refresh[-_]?token|token)=)[^&#\s]+/gi,
     '$1[REDACTED]',
   );
+  // URL userinfo credentials, for example `https://alice:secret@example.com`.
+  // Redact the whole `user:pass` authority segment before `@`; keep the scheme
+  // and host so the diagnostic still shows which endpoint was involved.
+  output = output.replace(
+    /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^/\s@]+@/gi,
+    '$1[REDACTED]@',
+  );
   return output;
 }
 

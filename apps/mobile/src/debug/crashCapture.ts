@@ -7,6 +7,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { APP_BINARY_VERSION, AUTH_REGION, IS_OTA_SELFHOST } from '@/config/env';
 import {
   appendWithCap,
+  BOOT_PHASE_ORDER,
   formatCrashEntry,
   isAbnormalPreviousBoot,
   selectRejectionTracker,
@@ -155,11 +156,16 @@ function installGlobalHandler(): void {
   if (!errorUtils?.setGlobalHandler) return;
   const previous = errorUtils.getGlobalHandler?.();
   errorUtils.setGlobalHandler((error, isFatal) => {
-    recordCrash(formatCrashEntry({ source: 'uncaught', error, isFatal, at: Date.now() }));
-    // 致命异常:把 boot 终态标记为 'crashed',让下次启动的「上次退出异常」反映真实的
-    // 运行期崩溃(含 ready 之后崩溃),而非仅「启动没走到 ready」。同步写在默认 handler 前。
-    if (isFatal) writeBootMarker('crashed', Date.now());
-    // 保留默认行为(dev red box / 生产默认崩溃流程)。
+    // 日志设施绝不能吞掉默认崩溃流程:即使记录本身抛错,也必须把 error 交回原 handler。
+    try {
+      recordCrash(formatCrashEntry({ source: 'uncaught', error, isFatal, at: Date.now() }));
+      // 致命异常:把 boot 终态标记为 'crashed',让下次启动的「上次退出异常」反映真实的
+      // 运行期崩溃(含 ready 之后崩溃),而非仅「启动没走到 ready」。同步写在默认 handler 前。
+      if (isFatal) writeBootMarker('crashed', Date.now());
+    } catch {
+      /* ignore */
+    }
+    // 保留默认行为(dev red box / 生产默认崩溃流程)。始终执行。
     previous?.(error, isFatal);
   });
 }
@@ -242,8 +248,23 @@ export function installCrashCapture(): void {
   installPromiseRejectionTracking();
 }
 
-/** 记录一次启动阶段推进(由 _layout 的闸门处调用)。 */
+/**
+ * 记录一次启动阶段推进(由 _layout 的闸门处调用)。
+ * 顺序阶段(starting…ready)只前进不回退——React 的 effect 执行顺序是「子先于父」,
+ * auth 子树的 markBootPhase('auth') 会先于父层的 markBootPhase('ota') 执行,若不设防
+ * 父层会把已推进的 'auth' 写回 'ota',污染面包屑精度。终态('reloading'/'crashed')
+ * 不在顺序表内,总是写入(它们语义上就是要覆盖当前阶段)。
+ */
 export function markBootPhase(phase: BootPhase): void {
+  const order = BOOT_PHASE_ORDER.indexOf(phase);
+  if (order >= 0) {
+    const currentPhase = readBootMarker()?.phase;
+    const currentOrder =
+      typeof currentPhase === 'string'
+        ? (BOOT_PHASE_ORDER as readonly string[]).indexOf(currentPhase)
+        : -1;
+    if (currentOrder > order) return; // 不回退到更早的顺序阶段
+  }
   writeBootMarker(phase, Date.now());
 }
 
@@ -301,6 +322,9 @@ export function clearCrashLog(): void {
   } catch {
     /* ignore */
   }
+  // 重置惰性头标志:清空后若本会话再次崩溃,需重新补写运行环境头,否则导出的日志
+  // 会缺 App 版本 / 系统 / 机型 / runtime 等定位信息。
+  sessionHeaderPending = true;
 }
 
 /** 崩溃日志当前是否有内容(供设置页判断能否导出)。 */
