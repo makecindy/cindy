@@ -19,7 +19,9 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
   class MockCodexTransport {
     static threadSeq = 1;
     static failThreadStart = false;
+    static failThreadArchive = false;
     static dropThreadUnsubscribe = false;
+    static archivedThreadIds = new Set<string>();
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -82,6 +84,14 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'thread/resume') {
+        const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
+        if (typeof threadId === 'string' && MockCodexTransport.archivedThreadIds.has(threadId)) {
+          this.emitLine({
+            id: req.id,
+            error: { code: -32000, message: `session ${threadId} is archived. Run \`codex unarchive ${threadId}\` to unarchive it first.` },
+          });
+          return;
+        }
         this.emitLine({
           id: req.id,
           result: {
@@ -116,6 +126,22 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
       if (req.method === 'thread/unsubscribe') {
         if (MockCodexTransport.dropThreadUnsubscribe) return;
         this.emitLine({ id: req.id, result: { status: 'unsubscribed' } });
+        return;
+      }
+      if (req.method === 'thread/archive') {
+        if (MockCodexTransport.failThreadArchive) {
+          this.emitLine({ id: req.id, error: { code: -32000, message: 'thread archive boom' } });
+          return;
+        }
+        const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
+        if (typeof threadId === 'string') MockCodexTransport.archivedThreadIds.add(threadId);
+        this.emitLine({ id: req.id, result: {} });
+        return;
+      }
+      if (req.method === 'thread/unarchive') {
+        const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
+        if (typeof threadId === 'string') MockCodexTransport.archivedThreadIds.delete(threadId);
+        this.emitLine({ id: req.id, result: {} });
         return;
       }
       if (req.method === 'skills/list') {
@@ -227,7 +253,9 @@ beforeEach(() => {
   createdTransports.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
+  MockCodexTransport.failThreadArchive = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
+  MockCodexTransport.archivedThreadIds.clear();
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -351,6 +379,7 @@ function installFakeHost(
     if (method === Method.ThreadRollback) {
       return { thread: { id: 'rollback-thread-id' } };
     }
+    if (method === Method.ThreadArchive || method === Method.ThreadUnarchive) return {};
     throw new Error(`unexpected method: ${method}`);
   });
   const subscribeThread = vi.fn((_threadId: string, handlers: ThreadEventHandlers) => {
@@ -358,6 +387,8 @@ function installFakeHost(
     return { release: vi.fn() };
   });
   const unsubscribeThread = vi.fn(async (_threadId: string) => {});
+  const archiveThread = vi.fn(async (threadId: string) => request(Method.ThreadArchive, { threadId }));
+  const unarchiveThread = vi.fn(async (threadId: string) => request(Method.ThreadUnarchive, { threadId }));
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const host = {
@@ -365,6 +396,8 @@ function installFakeHost(
     request,
     subscribeThread,
     unsubscribeThread,
+    archiveThread,
+    unarchiveThread,
     isCodexProxyActive,
     getRemoteCompactionProviderId,
     getConnectionId: () => 'test-connection',
@@ -3170,7 +3203,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
   });
 
-  it('unsubscribes the app-server thread when closing a local session without stopping the shared host', async () => {
+  it('archives a Worker thread before unsubscribing its local session without stopping the shared host', async () => {
     const agent = new CodexAgent(createDeps());
     const handle = await agent.startSession({
       sessionId: 'session-codex-mcp-runtime-release',
@@ -3184,14 +3217,66 @@ describe('CodexAgent MCP thread context hooks', () => {
 
     await handle.close();
 
-    const unsubscribe = transport!.lines
-      .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
-      .find((request) => request.method === Method.ThreadUnsubscribe);
-    expect(unsubscribe).toMatchObject({
+    const requests = transport!.lines
+      .map((line) => JSON.parse(line) as { method?: string; params?: unknown });
+    const archiveIndex = requests.findIndex((request) => request.method === Method.ThreadArchive);
+    const unsubscribeIndex = requests.findIndex((request) => request.method === Method.ThreadUnsubscribe);
+    expect(requests[archiveIndex]).toMatchObject({
+      method: Method.ThreadArchive,
+      params: { threadId: 'thread-1' },
+    });
+    expect(requests[unsubscribeIndex]).toMatchObject({
       method: Method.ThreadUnsubscribe,
       params: { threadId: 'thread-1' },
     });
+    expect(archiveIndex).toBeGreaterThanOrEqual(0);
+    expect(unsubscribeIndex).toBeGreaterThan(archiveIndex);
     expect(transport!.closed).toBe(false);
+  });
+
+  it('keeps a Worker close retryable when thread/archive fails', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockRejectedValueOnce(new Error('thread archive boom'));
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-archive-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close()).rejects.toThrow('thread archive boom');
+    await expect(handle.close()).resolves.toBeUndefined();
+
+    expect(host.archiveThread).toHaveBeenCalledTimes(2);
+  });
+
+  it('unarchives an archived Worker before retrying thread/resume', async () => {
+    const agent = new CodexAgent(createDeps());
+    let resumeAttempts = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method !== Method.ThreadResume) return undefined;
+      resumeAttempts += 1;
+      if (resumeAttempts === 1) throw new Error('session archived-worker-id is archived');
+      return {
+        thread: { id: 'archived-worker-id' },
+        model: 'gpt-5.4',
+        modelProvider: 'openai',
+        cwd: '/repo',
+      };
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-archived',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    expect(host.unarchiveThread).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    await handle.close();
   });
 
   it('finishes closing when the app-server stays connected without answering thread/unsubscribe', async () => {

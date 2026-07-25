@@ -5701,7 +5701,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         .set({ updatedAt })
         .where(eq(orcaWorkers.id, workerId));
     },
-    closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSessionIfIdle: (sessionId) => maker.getSession(sessionId)?.closeIfIdle() ?? Promise.resolve(false),
     broadcastWorkerChanged: (leadSessionId) => {
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });
     },

@@ -52,4 +52,32 @@ describe('Session close lifecycle', () => {
     expect(session.getStatus()).toBe('closed');
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps an idle session active and retries after its runtime close fails', async () => {
+    const close = vi.fn()
+      .mockRejectedValueOnce(new Error('archive failed'))
+      .mockResolvedValueOnce(undefined);
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    await expect(session.closeIfIdle()).rejects.toThrow('archive failed');
+    expect(session.getStatus()).toBe('active');
+
+    await expect(session.closeIfIdle()).resolves.toBe(true);
+    expect(session.getStatus()).toBe('closed');
+    expect(close).toHaveBeenCalledTimes(2);
+  });
 });

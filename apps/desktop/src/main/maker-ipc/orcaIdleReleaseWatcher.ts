@@ -33,7 +33,8 @@ export interface OrcaIdleReleaseWatcherDeps {
   hasPendingInput(sessionId: string): Promise<boolean>;
   markReleased(candidate: OrcaIdleReleaseCandidate, releasedAt: number): Promise<boolean>;
   touchWorker(workerId: string, updatedAt: number): Promise<void>;
-  closeSession(sessionId: string): Promise<void>;
+  /** Atomically reserve and close an idle runtime; false means a send won the race. */
+  closeSessionIfIdle(sessionId: string): Promise<boolean>;
   broadcastWorkerChanged(leadSessionId: string): void;
   now(): number;
   timer: OrcaIdleReleaseTimer;
@@ -100,7 +101,11 @@ export function createOrcaIdleReleaseWatcher(
               return;
             }
 
-            await deps.closeSession(candidate.sessionId);
+            const closed = await deps.closeSessionIfIdle(candidate.sessionId);
+            if (!closed) {
+              await deps.touchWorker(candidate.id, deps.now());
+              return;
+            }
 
             const releasedAt = deps.now();
             const marked = await deps.markReleased(candidate, releasedAt);

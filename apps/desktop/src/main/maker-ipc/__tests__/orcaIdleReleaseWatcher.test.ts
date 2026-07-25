@@ -33,7 +33,7 @@ function createDeps(overrides: Partial<OrcaIdleReleaseWatcherDeps> = {}) {
     hasPendingInput: vi.fn(async () => false),
     markReleased: vi.fn(async () => true),
     touchWorker: vi.fn(async () => undefined),
-    closeSession: vi.fn(async () => undefined),
+    closeSessionIfIdle: vi.fn(async () => true),
     broadcastWorkerChanged: vi.fn(),
     now: vi.fn(() => 120_000),
     timer: { setInterval, clearInterval },
@@ -73,7 +73,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
       await watcher.scanNow();
 
       expect(deps.listCandidates).toHaveBeenCalledWith(60_000);
-      expect(deps.closeSession).toHaveBeenCalledWith(candidate.sessionId);
+      expect(deps.closeSessionIfIdle).toHaveBeenCalledWith(candidate.sessionId);
       expect(deps.markReleased).toHaveBeenCalledWith(candidate, 120_000);
       expect(deps.broadcastWorkerChanged).toHaveBeenCalledOnce();
       expect(deps.broadcastWorkerChanged).toHaveBeenCalledWith(candidate.leadSessionId);
@@ -92,7 +92,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
     expect(deps.touchWorker).toHaveBeenCalledWith('worker-1', 120_000);
     expect(deps.markReleased).not.toHaveBeenCalled();
-    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
@@ -104,7 +104,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
     await watcher.scanNow();
 
     expect(deps.withSessionLock).toHaveBeenCalledWith('worker-session-1', expect.any(Function));
-    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
     expect(deps.markReleased).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
@@ -119,7 +119,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
     await watcher.scanNow();
 
     expect(deps.touchWorker).toHaveBeenCalledWith(candidate.id, 120_000);
-    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
     expect(deps.markReleased).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
@@ -134,7 +134,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
     await watcher.scanNow();
 
     expect(deps.touchWorker).toHaveBeenCalledWith('worker-1', 120_000);
-    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
     expect(deps.markReleased).not.toHaveBeenCalled();
   });
 
@@ -146,7 +146,7 @@ describe('createOrcaIdleReleaseWatcher', () => {
     await watcher.scanNow();
 
     expect(deps.markReleased).not.toHaveBeenCalled();
-    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
@@ -157,13 +157,13 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
     await watcher.scanNow();
 
-    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.closeSessionIfIdle).toHaveBeenCalledOnce();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
   it('leaves the worker unmarked and retryable when closing the runtime fails', async () => {
     const { deps, watcher } = createDeps({
-      closeSession: vi.fn(async () => {
+      closeSessionIfIdle: vi.fn(async () => {
         throw new Error('close failed');
       }),
     });
@@ -176,6 +176,18 @@ describe('createOrcaIdleReleaseWatcher', () => {
       'idleWatcher: release worker failed',
       expect.objectContaining({ workerId: 'worker-1', err: 'close failed' }),
     );
+  });
+
+  it('delays a worker when closeIfIdle loses a send race', async () => {
+    const { deps, watcher } = createDeps({
+      closeSessionIfIdle: vi.fn(async () => false),
+    });
+
+    await watcher.scanNow();
+
+    expect(deps.touchWorker).toHaveBeenCalledWith('worker-1', 120_000);
+    expect(deps.markReleased).not.toHaveBeenCalled();
+    expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
   it('uses the injected interval and stops future scans', async () => {

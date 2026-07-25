@@ -472,7 +472,7 @@ export interface ThreadRollbackResponse {
   [k: string]: unknown;
 }
 
-/** Release the app-server's live state for a thread without archiving its history. */
+/** Remove this client's thread subscription without archiving its history or forcing runtime shutdown. */
 export interface ThreadUnsubscribeParams {
   threadId: string;
 }
@@ -481,6 +481,22 @@ export type ThreadUnsubscribeStatus = 'notLoaded' | 'notSubscribed' | 'unsubscri
 
 export interface ThreadUnsubscribeResponse {
   status: ThreadUnsubscribeStatus;
+}
+
+/** Archive a thread after its runtime has shut down, while preserving its history for a later resume. */
+export interface ThreadArchiveParams {
+  threadId: string;
+}
+
+export type ThreadArchiveResponse = Record<string, unknown>;
+
+/** Restore an archived thread so it can be resumed by the app-server. */
+export interface ThreadUnarchiveParams {
+  threadId: string;
+}
+
+export interface ThreadUnarchiveResponse {
+  thread: { id: string; [k: string]: unknown };
 }
 
 // ── ThreadSettingsUpdate (v2.rs ThreadSettingsUpdateParams) ──────────────────
@@ -1102,6 +1118,8 @@ export const Method = {
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
   ThreadUnsubscribe: 'thread/unsubscribe',
+  ThreadArchive: 'thread/archive',
+  ThreadUnarchive: 'thread/unarchive',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

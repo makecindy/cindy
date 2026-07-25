@@ -371,8 +371,7 @@ export class Session {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
-    this.closePromise = this.performClose();
-    return this.closePromise;
+    return this.startClose();
   }
 
   /**
@@ -384,22 +383,38 @@ export class Session {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
       return Promise.resolve(false);
     }
-    this.closePromise = this.performClose();
-    return this.closePromise.then(() => true);
+    return this.startClose().then(() => true);
+  }
+
+  private startClose(): Promise<void> {
+    const pending = this.performClose();
+    const tracked = pending.catch((error: unknown) => {
+      // A failed Worker archive must leave its runtime reachable so the idle
+      // watcher can retry instead of persisting a false "released" state.
+      if (this.closePromise === tracked) this.closePromise = null;
+      throw error;
+    });
+    this.closePromise = tracked;
+    return tracked;
   }
 
   private async performClose(): Promise<void> {
+    this.cancelSendReservation(this.sendReservation);
     try {
-      this.cancelSendReservation(this.sendReservation);
       await this.handle.close();
-    } finally {
+    } catch (error) {
+      // Do not transition to closed on a failed teardown: callers that rely on
+      // closeIfIdle() need the still-live Session for a safe retry.
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus('closed');
-      this.eventListeners.clear();
-      this.statusListeners.clear();
-      this.interactionListener = null;
+      throw error;
     }
+    this.sendReservation = null;
+    this.currentTurnOrigin = null;
+    this.setStatus('closed');
+    this.eventListeners.clear();
+    this.statusListeners.clear();
+    this.interactionListener = null;
   }
 
   async detach(): Promise<void> {

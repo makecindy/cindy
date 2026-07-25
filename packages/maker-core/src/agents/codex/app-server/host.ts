@@ -9,8 +9,9 @@
  * Lifecycle (用户明确要求, 比 refcount 模型更简单):
  *   - 懒启动: 第一个 acquire/subscribeThread 触发 spawn + initialize
  *   - server 一旦起来, 跟 CodexAgent (= app 进程) 同生命周期, **不随 session 数升降**
- *   - session.close → subscription.release(): 删除本地路由并发送 thread/unsubscribe,
- *     释放该 thread 的 live runtime；共享 app-server 继续服务其他 session
+ *   - session.close → subscription.release(): 删除本地路由并发送 thread/unsubscribe。
+ *     Worker 的 runtime 回收由 agent 在此之前显式调用 thread/archive；共享 app-server
+ *     继续服务其他 session
  *   - app.before-quit → 上层显式调 host.shutdown() (Windows 子进程不会随父进程死)
  *
  * 真值参考:
@@ -61,11 +62,13 @@ import {
   type ReasoningSummaryPartAddedNotification,
   type ReasoningTextDeltaNotification,
   type AccountRateLimitsUpdatedNotification,
+  type ThreadArchiveResponse,
   type ThreadStatusChangedNotification,
   type ThreadSettingsUpdatedNotification,
   type ItemGuardianApprovalReviewStartedNotification,
   type ItemGuardianApprovalReviewCompletedNotification,
   type GuardianWarningNotification,
+  type ThreadUnarchiveResponse,
 } from './protocol.js';
 
 /**
@@ -108,6 +111,8 @@ const NOTIFICATIONS_TO_OPT_OUT = [
 ];
 
 const DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
+// Codex waits up to ten seconds for the runtime shutdown that backs thread/archive.
+const DEFAULT_THREAD_ARCHIVE_TIMEOUT_MS = 15_000;
 
 /** thread/started 之外的 notification 都直接 params.threadId; thread/started 走 params.thread.id。 */
 function extractThreadId(method: string, params: unknown): string | null {
@@ -197,7 +202,7 @@ export interface ServerRequestMeta {
 }
 
 export interface ThreadSubscription {
-  /** 幂等地解除本地路由，并释放 app-server 内对应 thread 的 live runtime。 */
+  /** 幂等地解除本地路由，并向 app-server 取消该客户端订阅。 */
   release(): Promise<void>;
 }
 
@@ -499,6 +504,32 @@ export class AppServerHost {
       Method.ThreadUnsubscribe,
       { threadId },
       { timeoutMs: this.threadUnsubscribeTimeoutMs },
+    );
+  }
+
+  /**
+   * Shut down one thread's live runtime and retain its history for a later
+   * thread/unarchive + thread/resume. Unlike thread/unsubscribe, this is the
+   * lifecycle acknowledgement used before marking an idle Worker released.
+   */
+  async archiveThread(threadId: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error('AppServerHost: cannot archive thread without an active client');
+    await client.request<ThreadArchiveResponse>(
+      Method.ThreadArchive,
+      { threadId },
+      { timeoutMs: DEFAULT_THREAD_ARCHIVE_TIMEOUT_MS },
+    );
+  }
+
+  /** Restore an archived thread before its next thread/resume request. */
+  async unarchiveThread(threadId: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error('AppServerHost: cannot unarchive thread without an active client');
+    await client.request<ThreadUnarchiveResponse>(
+      Method.ThreadUnarchive,
+      { threadId },
+      { timeoutMs: DEFAULT_THREAD_ARCHIVE_TIMEOUT_MS },
     );
   }
 
