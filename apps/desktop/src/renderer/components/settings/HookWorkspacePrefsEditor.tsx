@@ -18,9 +18,11 @@
  * 未显式设置的字段**解析出当前真正会生效的默认值**直接展示, 界面上不暴露
  * 「默认」概念(无后缀 / 无弱化色 / 无「恢复默认」菜单项 —— 用户反馈: 不要
  * 有 xxx(默认)这种); 选中任一项即写显式偏好。解析链与 main 侧 defaults.ts
- * 逐字段对齐(resolveEffectiveRow, 纯函数有单测), 数据源是
- * imDefaultSettingsGet('slack')(桌面新会话默认)+ 本机 capabilities; 权限默认恒
- * bypassPermissions(完全访问)。
+ * 逐字段对齐(resolveEffectiveRow, 纯函数有单测), 数据源是 imDefaultSettingsGet
+ * (**频道随 provider**: Slack 读 channels.slack, Telegram 读 global, 与派发侧
+ * session-runner 同源)+ 本机 capabilities。权限档另经
+ * resolveEffectivePermissionMode 校准: 无显式偏好 → bypassPermissions(无人值守
+ * 历史默认), 显式档不被当前 agent 支持 → 该 agent 最严档(绝不放宽)。
  *
  * 数据正本在 IM hook server 的 provider prefs 表：Slack 与 Telegram 按
  * provider 隔离；每个 provider 内与其 /model 卡使用同一份数据。hook 经
@@ -214,9 +216,15 @@ export function useHookWorkspacePrefs(
     // The ready-edge effect below performs the initial prefs fetch (only when
     // reachable). The subscription set up here just needs to exist first so no
     // server push is missed before that fetch resolves.
-    // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可
+    // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可。
+    // **频道必须与派发侧同源**: session-runner 用
+    // `readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined)` —— Slack 读
+    // channels.slack, Telegram 读 global, 两者各自独立归一化互不继承
+    // (im/defaultSettingsStore.ts; IM_DEFAULT_SETTINGS_CHANNELS 里根本没有 telegram)。
+    // 这里原先两个 provider 都写死 'slack', 于是 Telegram 卡片下的目录行显示的是
+    // Slack 频道的 agent/模型, 派发实际用 global —— 显示与实际不符(2026-07 实审发现)。
     void window.electronAPI.maker
-      .imDefaultSettingsGet('slack')
+      .imDefaultSettingsGet(provider === 'slack' ? 'slack' : undefined)
       .then((state: ImDefaultSettingsState) => {
         if (active) setImDefaults({ agentKind: state.agentKind, agents: state.agents });
       })
@@ -432,19 +440,18 @@ export function WorkspacePrefsEditor({
   return (
     <div className="flex flex-wrap items-end gap-2">
       {/* agent 分段是固定 168px 的 pill,不参与压缩 —— 卡片变窄时整块换行,
-          而不是把 Claude / Codex 两段挤到溢出容器。 */}
+          而不是把 Claude / Codex 两段挤到溢出容器。
+          禁用条件与另两个字段对齐(含 effAgentCaps === null): 能力清单未就绪时换 agent,
+          联动校准拿不到目标 agent 的档位表, 只能盲写。 */}
       <PrefsField label={t('settings.tina.prefs.agentLabel')} className="shrink-0">
         <VendorSegmentedSwitcher
           value={vendorKey}
           width={168}
-          disabled={disabled}
+          disabled={disabled || effAgentCaps === null}
           onChange={(next) => {
             const nextAgent = toAgentKind(next);
             if (nextAgent === prefs.agentKind) return;
-            state.applyPatch(
-              alias,
-              patchForAgentChange(nextAgent, prefs, toPrefsCaps(capsOf(nextAgent))),
-            );
+            state.applyPatch(alias, patchForAgentChange(nextAgent));
           }}
         />
       </PrefsField>

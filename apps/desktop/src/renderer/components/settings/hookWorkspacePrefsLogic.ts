@@ -22,26 +22,21 @@ export interface PrefsAgentCaps {
   permissionModes: Array<{ id: string }>;
 }
 
-/** 换 agent 的联动 patch(next=null 即「跟随默认」)。 */
-export function patchForAgentChange(
-  next: string | null,
-  current: Pick<HookWorkspacePrefs, 'permissionMode'>,
-  nextCaps: PrefsAgentCaps | null,
-): HookPrefsPatch {
+/**
+ * 换 agent 的联动 patch(next=null 即「跟随默认」)。
+ *
+ * **权限档一律原样保留, 绝不因「新 agent 不支持」而清空**(2026-07 安全修正):
+ * 清空 = 回到「无显式偏好」= 派发侧的 bypassPermissions 历史默认, 于是用户选了
+ * acceptEdits 再切一下 agent 就被静默放宽成完全访问 —— 正是原注释声称要防的那件事。
+ * 保留原值后, 显示与派发都由同一个 resolveEffectivePermissionMode 校准到新 agent 的
+ * **最严**档; 切回原 agent 时用户的原始选择还在, 意图不丢。
+ */
+export function patchForAgentChange(next: string | null): HookPrefsPatch {
   if (next === null) {
-    // 跟随默认: agent/model/effort 整组清空; 权限档保留(它不依赖模型,
-    // desktop 派发侧会按实际 agent 校验, 不兼容自动回落并 warn)
+    // 跟随默认: agent/model/effort 整组清空(model/effort 与 agent 强绑定, 换组必失效)
     return { agentKind: null, model: null, effort: null };
   }
-  const permCompatible =
-    current.permissionMode === null ||
-    (nextCaps?.permissionModes.some((pm) => pm.id === current.permissionMode) ?? false);
-  return {
-    agentKind: next,
-    model: null,
-    effort: null,
-    ...(permCompatible ? {} : { permissionMode: null }),
-  };
+  return { agentKind: next, model: null, effort: null };
 }
 
 /** 换 model 的联动 patch(agentKind 随手配对写入 + effort 校准)。 */
@@ -89,6 +84,32 @@ export interface EffectiveRow {
 export const HOOK_DEFAULT_PERMISSION_MODE = 'bypassPermissions';
 
 /**
+ * 解析一行偏好**派发时真正会用的权限档** —— 与 main 侧 defaults.ts 第 5 步逐字对齐,
+ * 设置页必须显示这个值。
+ *
+ * 三档取值(顺序即优先级):
+ *   1. 显式档且当前 agent 支持 → 用它;
+ *   2. 显式档但当前 agent 不支持 → 该 agent 的**最严**档(capabilities 的 permissionModes
+ *      一律从严到宽声明, 取 [0]) —— 用户填过显式档就是表达过「不要默认的完全访问」,
+ *      不支持时只能更严不能更宽;
+ *   3. 从未填显式档 → bypassPermissions(hook 无人值守历史默认)。
+ *
+ * 不做这一步校准的后果(2026-07 实审发现): PermissionSelector 自己的 normalizeMode 会把
+ * 不支持的值显示成列表首项(最严的 ask), 而派发侧当时回落 bypass(最宽) —— 设置页显示
+ * 「询问权限」、bot 实际以完全访问跑, 方向完全相反。caps 未就绪(null)时不猜, 原样返回
+ * 显式值, 由派发侧兜底。
+ */
+export function resolveEffectivePermissionMode(
+  explicit: string | null,
+  caps: PrefsAgentCaps | null,
+): string {
+  if (explicit === null) return HOOK_DEFAULT_PERMISSION_MODE;
+  if (caps === null) return explicit;
+  if (caps.permissionModes.some((pm) => pm.id === explicit)) return explicit;
+  return caps.permissionModes[0]?.id ?? HOOK_DEFAULT_PERMISSION_MODE;
+}
+
+/**
  * 解析一行偏好的「当前生效值」—— 与 main 侧 defaults.ts 的取值链逐字段对齐
  * (显式偏好 > 桌面新会话默认 > 能力清单兜底; 权限无草稿层, 默认 bypass),
  * 让设置页直接显示派活时真正会用的值, 而不是一句「跟随默认」。
@@ -132,7 +153,9 @@ export function resolveEffectiveRow(
       defaultId: defaultEffort,
     },
     permissionMode: {
-      id: prefs.permissionMode ?? HOOK_DEFAULT_PERMISSION_MODE,
+      // 校准到派发时真正会用的档(见 resolveEffectivePermissionMode): 显式档不被当前
+      // agent 支持时是**最严**档, 不是裸显式值也不是 bypass。
+      id: resolveEffectivePermissionMode(prefs.permissionMode, caps),
       isDefault: prefs.permissionMode === null,
       defaultId: HOOK_DEFAULT_PERMISSION_MODE,
     },

@@ -128,14 +128,26 @@ export function resolveHookSessionConfig(
   const draftProviderId = defaults.agents[agentKind]?.providerId;
   const providerId = draftProviderId?.trim() ? draftProviderId.trim() : null;
 
-  // 5. permissionMode: 显式且该 agent 支持 > bypass(hook 无人值守历史默认)
+  // 5. permissionMode: 显式且该 agent 支持 > 显式但不支持时回落该 agent **最严**档
+  //    > 无显式偏好时 bypass(hook 无人值守历史默认)
+  //
+  //    「不支持时回落最严档」是安全方向的硬要求, 不能回落 bypass:
+  //    用户填过显式档 = 明确表达过「不要默认的完全访问」。换 agent 后原档不被支持
+  //    (如 Claude 的 acceptEdits / plan 在 Codex 上不存在)时若回落 bypassPermissions,
+  //    等于用户选了更严的档反而被静默放宽成完全访问 —— 而这是无人值守的 IM 派发链路,
+  //    没有人在旁边确认。capabilities 的 permissionModes 一律按**从严到宽**声明
+  //    (claude-code: ask/acceptEdits/auto/bypassPermissions; codex: ask/auto/
+  //    bypassPermissions), 故取 [0] 即最严档。
+  //    只有「从未填过显式档」才走 bypass 历史默认, 该行为保持不变。
   let permissionMode = 'bypassPermissions';
   if (overrides.permissionMode !== null) {
-    if (deps.getPermissionModes(agentKind).includes(overrides.permissionMode)) {
+    const supported = deps.getPermissionModes(agentKind);
+    if (supported.includes(overrides.permissionMode)) {
       permissionMode = overrides.permissionMode;
     } else {
+      permissionMode = supported[0] ?? 'bypassPermissions';
       deps.log.warn(
-        `hook override permissionMode '${overrides.permissionMode}' not supported by ${agentKind}, falling back to bypassPermissions`,
+        `hook override permissionMode '${overrides.permissionMode}' not supported by ${agentKind}, falling back to strictest supported '${permissionMode}'`,
       );
     }
   }
