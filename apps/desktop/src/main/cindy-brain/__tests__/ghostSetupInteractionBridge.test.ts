@@ -76,6 +76,27 @@ describe('GhostSetupInteractionBridge', () => {
     });
   });
 
+  it('fails closed when a pending setup command is malformed', () => {
+    const logger = { warn: vi.fn() };
+    const onCommand = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn(), logger });
+    bridge.open('session-1', snapshot(), onCommand);
+
+    expect(
+      bridge.resolve('request-1', {
+        kind: 'plugin_setup',
+        action: 'run_action',
+        actionId: '',
+        expectedRevision: 1,
+      }),
+    ).toBe(false);
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'plugin setup interaction received invalid command',
+      { requestId: 'request-1' },
+    );
+  });
+
   it('restores pending snapshots and dismisses only when Main closes it', () => {
     const broadcast = vi.fn();
     const bridge = new GhostSetupInteractionBridge({ broadcast });

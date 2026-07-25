@@ -314,9 +314,14 @@ export class GhostSetupCoordinator {
         activeActionId = action.id;
         publish(assessment, 'action_running');
         // OAuth is a Host-global flow and remains shared. Navigation actions
-        // target a concrete session view, so cross-session de-duplication
-        // would send the route only to the first waiter and strand the rest.
-        const flightScope = action.kind === 'oauth_connect' ? 'shared' : sessionId;
+        // target a concrete window, so de-duplicate only within that target;
+        // another window showing the same session must receive its own route.
+        const flightScope =
+          action.kind === 'oauth_connect'
+            ? 'shared'
+            : responseTarget
+              ? `target:${responseTarget.id}`
+              : `session:${sessionId}`;
         const flightKey = `${request.ghostId}\u0000${action.id}\u0000${flightScope}`;
         let flight = this.actionFlights.get(flightKey);
         if (!flight) {

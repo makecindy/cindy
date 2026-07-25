@@ -346,14 +346,14 @@ Main → Renderer：
 `ghost_call` 的顺序必须是：
 
 ```text
-校验 ghost / workdir policy / tool
-→ grant_only：沿用现有预授权路径并返回（不执行插件，不进入 setup gate）
+校验 ghost / workdir policy（普通调用同时校验 tool；grant_only 忽略 tool）
 → subscribe setup change
 → initial evaluate
 → ready：继续
 → required：挂起 coordinator + 展示卡片
 → ready / cancel / unavailable
-→ 再次校验 ghost / workdir policy / tool / setup
+→ 再次校验 ghost / workdir policy / setup（普通调用同时重验 tool）
+→ grant_only：建立附件预授权并返回（不执行插件）
 → 附件授权 / dir ticket / save ticket
 → sandbox spawn
 → card registration
@@ -362,7 +362,7 @@ Main → Renderer：
 
 禁止在 setup ready 前产生授权记忆、目录票据、沙箱副作用或插件调用。已经进入 dispatch 的调用不因后续配置变化自动重试。
 
-`grant_only` 只建立附件/目录的用户授权，不执行插件工具，因此保持现有语义，不要求插件已经配置完成。旧插件页 `GhostSetupStatus` 投影可保留兼容行为；真正的运行时 gate 遇到缺失声明或无法解析的 requirement 时不得 fail-open。
+`grant_only` 只建立附件用户授权，不执行插件工具，并保持忽略 `tool` 的调用语义；但它同样必须先通过 Host-authoritative setup gate，禁止未配置插件提前获得持久授权。旧插件页 `GhostSetupStatus` 投影可保留兼容行为；真正的运行时 gate 遇到缺失声明或无法解析的 requirement 时不得 fail-open。
 
 ### 5.2 Coordinator
 

@@ -150,7 +150,7 @@ export class GhostSetupInteractionBridge {
     const command = parseGhostSetupInteractionCommand(rawCommand);
     if (!command) {
       this.deps.logger?.warn('plugin setup interaction received invalid command', { requestId });
-      return true;
+      return false;
     }
     Promise.resolve(
       entry.onCommand(command, command.action === 'run_action' ? responseTarget : undefined),

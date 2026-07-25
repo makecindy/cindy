@@ -50,6 +50,7 @@ import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index
 import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import {
   initGhostSetupInteractionBridge,
+  parseGhostSetupInteractionCommand,
   parseGhostSetupInlineSubmitRequest,
   projectPendingInteractionsForRemote,
   type GhostSetupInteractionResponseTarget,
@@ -6773,6 +6774,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
 
   ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION, (event, requestId: unknown, decision: unknown) => {
     if (typeof requestId !== 'string') throwIpcError('INVALID_PARAMS', 'requestId required');
+    if (
+      isPluginSetupInteractionDecision(decision) &&
+      !parseGhostSetupInteractionCommand(decision)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid plugin setup decision');
+    }
     // permission / ask / plan and setup cancellation remain remotely
     // resolvable, but Host-owned setup side effects may only originate from
     // the trusted local Desktop.

@@ -453,6 +453,87 @@ describe('GhostSetupCoordinator', () => {
     await waiting;
   });
 
+  it('routes concurrent same-session navigation actions to each responding window', async () => {
+    const h = harness(requiredNavigation());
+    const firstWindow: GhostSetupInteractionResponseTarget = {
+      id: 101,
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+    const secondWindow: GhostSetupInteractionResponseTarget = {
+      id: 202,
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
+    const releases: Array<() => void> = [];
+    h.executeAction.mockImplementation(
+      ({ responseTarget }) =>
+        new Promise((resolve) => {
+          responseTarget?.send('maker:plugin-setup:navigate', {
+            sessionId: 'session-1',
+            target: 'plugin_settings',
+          });
+          releases.push(() => resolve({ ok: true, waitingExternal: true }));
+        }),
+    );
+
+    const waiting = h.coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'settings-ghost',
+      tool: 'run',
+    });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const initial = h.bridge.pendingSnapshots()[0].request;
+
+    h.bridge.resolve(
+      initial.requestId,
+      {
+        kind: 'plugin_setup',
+        action: 'run_action',
+        actionId: 'open_plugin_settings:plugin_config:settings',
+        expectedRevision: initial.revision,
+      },
+      firstWindow,
+    );
+    await vi.waitFor(() => expect(h.executeAction).toHaveBeenCalledTimes(1));
+
+    const running = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve(
+      running.requestId,
+      {
+        kind: 'plugin_setup',
+        action: 'run_action',
+        actionId: 'open_plugin_settings:plugin_config:settings',
+        expectedRevision: running.revision,
+      },
+      secondWindow,
+    );
+
+    await vi.waitFor(() => expect(h.executeAction).toHaveBeenCalledTimes(2));
+    expect(firstWindow.send).toHaveBeenCalledOnce();
+    expect(secondWindow.send).toHaveBeenCalledOnce();
+    expect(h.executeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ responseTarget: firstWindow }),
+    );
+    expect(h.executeAction).toHaveBeenCalledWith(
+      expect.objectContaining({ responseTarget: secondWindow }),
+    );
+
+    for (const release of releases) release();
+    await vi.waitFor(() =>
+      expect(h.bridge.pendingSnapshots()[0].request.steps[0]?.phase).toBe(
+        'waiting_external',
+      ),
+    );
+    const current = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve(current.requestId, {
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: current.revision,
+    });
+    await waiting;
+  });
+
   it('cancel settles the waiting call without executing an action', async () => {
     const h = harness(required());
     const waiting = h.coordinator.ensureReady({
