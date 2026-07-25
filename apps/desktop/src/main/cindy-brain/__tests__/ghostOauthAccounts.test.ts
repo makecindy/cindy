@@ -153,6 +153,37 @@ describe('connectAccount', () => {
     expect(fetchImpl.mock.calls.length).toBe(fetchCalls);
   });
 
+  it('授权回调后目标插件已卸载或声明已替换时不持久化凭证', async () => {
+    const vault = memoryVault({ [`${KEY}-client-id`]: 'cid' });
+    const isConnectTargetCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === DECL.tokenUrl) {
+        return jsonResponse({ access_token: 'at-stale', refresh_token: 'rt-stale', expires_in: 3600 });
+      }
+      if (url === DECL.identity?.url) {
+        return jsonResponse({ email: 'stale@example.com' });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      openExternal: autoBrowser(),
+      isConnectTargetCurrent,
+    });
+
+    await expect(mgr.connectAccount(GHOST, KEY, DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'INVALID_CONFIG',
+    });
+    expect(isConnectTargetCurrent).toHaveBeenCalledTimes(2);
+    expect(isConnectTargetCurrent).toHaveBeenLastCalledWith(GHOST, KEY, DECL);
+    expect(vault.read(GHOST, `${KEY}-accounts`)).toBeNull();
+    expect([...vault.data.values()]).not.toContain('rt-stale');
+    expect([...vault.data.values()]).not.toContain('at-stale');
+  });
+
   it('声明 avatarPath → 连接时下载头像存库(不带凭证),listAccounts 带 avatarDataUrl,断开清掉', async () => {
     const avatarDecl: GhostOauthDecl = {
       ...DECL,

@@ -29,7 +29,6 @@ interface PluginSetupPromptProps {
 
 const RUNNING_PHASES = new Set<GhostSetupStepPhase>([
   'action_running',
-  'waiting_external',
   'verifying',
 ]);
 
@@ -142,6 +141,9 @@ function PluginSetupPromptStateful({
       return t('newChat.pluginSetup.saveConfiguration');
     }
     if (step.phase === 'failed') return t('newChat.pluginSetup.retry');
+    if (step.phase === 'waiting_external' && step.action) {
+      return t(`newChat.pluginSetup.action.${step.action.kind}`);
+    }
     if (step.phase !== 'pending') return phaseLabel(step.phase);
     if (!step.action) return phaseLabel(step.phase);
     return t(`newChat.pluginSetup.action.${step.action.kind}`);

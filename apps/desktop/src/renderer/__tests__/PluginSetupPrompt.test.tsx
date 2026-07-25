@@ -147,6 +147,24 @@ afterEach(() => {
 });
 
 describe('PluginSetupPrompt', () => {
+  it('accepts the full manifest capacity plus bounded Host-owned setup steps', () => {
+    const steps = Array.from({ length: 65 }, (_, index) => ({
+      ...pending.steps[0],
+      id: `setup-step-${index}`,
+    }));
+
+    expect(parsePendingPluginSetup({ ...pending, steps })).not.toBeNull();
+    expect(
+      parsePendingPluginSetup({
+        ...pending,
+        steps: Array.from({ length: 73 }, (_, index) => ({
+          ...pending.steps[0],
+          id: `oversized-step-${index}`,
+        })),
+      }),
+    ).toBeNull();
+  });
+
   it('accepts known setup error codes and rejects unknown codes at the Renderer boundary', () => {
     expect(
       parsePendingPluginSetup({
@@ -253,6 +271,41 @@ describe('PluginSetupPrompt', () => {
     ).toBe(true);
     expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(
       true,
+    );
+  });
+
+  it('allows a Host action to be retried while waiting for external setup', () => {
+    const onCommand = vi.fn();
+    render(
+      <PluginSetupPrompt
+        pending={{
+          ...pending,
+          steps: [
+            {
+              ...pending.steps[0],
+              phase: 'waiting_external',
+              action: {
+                id: 'open-settings:account',
+                kind: 'open_plugin_settings',
+              },
+            },
+          ],
+        }}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={onCommand}
+      />,
+    );
+
+    const retryButton = screen.getByRole('button', { name: 'Open settings' });
+    expect((retryButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(retryButton);
+    expect(onCommand).toHaveBeenCalledWith(
+      'setup-1',
+      'run_action',
+      'open-settings:account',
     );
   });
 

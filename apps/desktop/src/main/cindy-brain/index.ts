@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, type WebContents } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -1600,6 +1601,15 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           source: 'oauth',
           ref: secretKey,
         });
+      },
+      isConnectTargetCurrent: (ghostId, secretKey, decl) => {
+        const ghost = findAvailableGhost(ghostId);
+        const currentDecl = ghost
+          ? withRuntimeFiloGoogleClient(ghost.manifest).network?.secrets?.find(
+              (secret) => secret.key === secretKey && secret.source === 'oauth',
+            )?.oauth
+          : undefined;
+        return currentDecl !== undefined && isDeepStrictEqual(currentDecl, decl);
       },
     });
   }

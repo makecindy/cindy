@@ -846,7 +846,7 @@ describe("ghost_call · setup_plan MCP 边界", () => {
     expect(
       ghostSetupPlanInputSchema.safeParse({
         ...validPlan,
-        steps: Array.from({ length: 64 }, (_, i) => ({
+        steps: Array.from({ length: 72 }, (_, i) => ({
           ...validPlan.steps[0],
           id: `step-${i}`,
         })),
@@ -855,7 +855,7 @@ describe("ghost_call · setup_plan MCP 边界", () => {
     expect(
       ghostSetupPlanInputSchema.safeParse({
         ...validPlan,
-        steps: Array.from({ length: 65 }, (_, i) => ({
+        steps: Array.from({ length: 73 }, (_, i) => ({
           ...validPlan.steps[0],
           id: `step-${i}`,
         })),

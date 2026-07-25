@@ -130,6 +130,16 @@ export interface GhostOauthAccountManagerDeps {
     secretKey: string;
     status: GhostOauthAccountStatus;
   }) => void;
+  /**
+   * Fresh lifecycle guard for long-running browser authorization. Production
+   * verifies that the plugin and the exact OAuth declaration still exist
+   * before any callback result is persisted.
+   */
+  isConnectTargetCurrent?: (
+    ghostId: string,
+    secretKey: string,
+    decl: GhostOauthDecl,
+  ) => boolean;
   /** 延时器(仅 invalid_grant 轮换探测用;测试注入即时假体,生产缺省 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -475,6 +485,13 @@ export class GhostOauthAccountManager {
       reclaimPort: isOfficialGhostId(ghostId) ? this.deps.reclaimPort : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
+    if (this.deps.isConnectTargetCurrent?.(ghostId, secretKey, decl) === false) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: '插件或授权声明已变更',
+      };
+    }
 
     // 身份标签:声明了 identity 才拉,失败降级 null(不阻断授权)。label 是
     // 同身份合并的判定键;display 是展示名(declaration 有 displayTemplate 才有);
@@ -502,6 +519,17 @@ export class GhostOauthAccountManager {
       if (identity.avatarUrl !== null && isOfficialGhostId(ghostId)) {
         avatar = await fetchGhostOauthAvatar({ url: identity.avatarUrl, fetchImpl: this.deps.fetchImpl });
       }
+    }
+
+    // Identity/avatar fetches are asynchronous as well. Recheck immediately
+    // before the first vault read/write so uninstall or manifest replacement
+    // during those requests cannot resurrect stale credentials.
+    if (this.deps.isConnectTargetCurrent?.(ghostId, secretKey, decl) === false) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: '插件或授权声明已变更',
+      };
     }
 
     // 清单在授权**之后**才读:授权流可长达数分钟,期间清单可能被并发写

@@ -37,7 +37,7 @@ import { providerSecretStorageKey } from '../../shared/providerSecrets';
 import {
   GHOST_HOST_NOTICE_KEYS,
   GHOST_SECRET_VALUE_MAX_CHARS,
-  GHOST_SETUP_MAX_STEPS,
+  GHOST_SETUP_MAX_INTERACTION_STEPS,
   isGhostSetupErrorCode,
 } from '../../shared/ghost';
 import type {
@@ -3294,7 +3294,7 @@ export function parsePendingPluginSetup(request: {
     typeof request.ghost !== 'object' ||
     !Array.isArray(request.steps) ||
     request.steps.length === 0 ||
-    request.steps.length > GHOST_SETUP_MAX_STEPS ||
+    request.steps.length > GHOST_SETUP_MAX_INTERACTION_STEPS ||
     (request.terminal !== undefined && request.terminal !== true) ||
     (request.intro !== undefined &&
       (typeof request.intro !== 'string' || request.intro.length > 500))

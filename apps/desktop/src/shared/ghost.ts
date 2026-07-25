@@ -827,6 +827,16 @@ export const GHOST_SETUP_MAX_ITEMS_PER_GROUP = 8;
 /** 一张 setup 卡最多需要覆盖 manifest 合法声明的全部可操作条目。 */
 export const GHOST_SETUP_MAX_STEPS =
   GHOST_SETUP_MAX_GROUPS * GHOST_SETUP_MAX_ITEMS_PER_GROUP;
+/**
+ * Host-owned setup providers may append requirements that do not exist in the
+ * plugin manifest (for example, a shared client capability). Reserve a bounded
+ * number of steps for those Core-owned requirements so a maximally valid
+ * manifest still crosses the Main → Renderer interaction boundary intact.
+ */
+export const GHOST_SETUP_MAX_HOST_STEPS = 8;
+/** setup interaction/plan transport capacity, including Host-owned steps. */
+export const GHOST_SETUP_MAX_INTERACTION_STEPS =
+  GHOST_SETUP_MAX_STEPS + GHOST_SETUP_MAX_HOST_STEPS;
 /** setup kv 引用的键名形状(意识 /kv 顶层键;点号仅作普通字符,不做路径下钻)。 */
 export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
