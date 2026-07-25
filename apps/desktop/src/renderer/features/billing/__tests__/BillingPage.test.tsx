@@ -612,33 +612,39 @@ describe('BillingPage remote catalog rendering', () => {
     expect(getBalance).toHaveBeenCalledTimes(2);
   });
 
-  it('never flashes an already-expired payment action on first render', async () => {
+  it('switches to the expired hint once the server stops issuing the payment action', async () => {
+    const order = {
+      orderId: 'order_expiring_action',
+      productCode: 'credit_topup',
+      offerCode: 'credit_topup_custom',
+      amount: '10',
+      currency: 'cny',
+      status: 'PENDING' as const,
+      paymentAction: {
+        type: 'QR_CODE' as const,
+        value: 'https://qr.alipay.example/live',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    };
     Object.assign(checkout.state, {
       open: true,
       kind: 'TOPUP',
       phase: 'AWAITING_PAYMENT',
-      order: {
-        orderId: 'order_expired_action',
-        productCode: 'credit_topup',
-        offerCode: 'credit_topup_custom',
-        amount: '10',
-        currency: 'cny',
-        status: 'PENDING' as const,
-        paymentAction: {
-          type: 'QR_CODE' as const,
-          value: 'https://qr.alipay.example/expired',
-          expiresAt: new Date(Date.now() - 1_000).toISOString(),
-        },
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:01:00.000Z',
-      },
+      order,
     });
 
-    render(<BillingPage />);
+    const view = render(<BillingPage />);
+    // 服务端仍下发的动作以服务端为准展示，不用本地时钟提前藏码。
+    expect(await screen.findByAltText('billing.checkout.qrAlt')).toBeTruthy();
+    expect(screen.queryByText('billing.checkout.actionExpiredBody')).toBeNull();
 
-    // 首帧（remainingSeconds 尚未由 effect 写入）也不得出现二维码入口。
+    // 服务端判定过期后轮询响应把动作置空：切换为过期提示，不再显示二维码。
+    Object.assign(checkout.state, { order: { ...order, paymentAction: null } });
+    view.rerender(<BillingPage />);
+    expect(await screen.findByText('billing.checkout.actionExpiredBody')).toBeTruthy();
     expect(screen.queryByAltText('billing.checkout.qrAlt')).toBeNull();
-    expect(screen.getByText('billing.checkout.actionExpiredBody')).toBeTruthy();
   });
 
   it('does not show zero or block purchases when balance is not provisioned', async () => {

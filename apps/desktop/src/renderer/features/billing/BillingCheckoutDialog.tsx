@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as QRCode from 'qrcode';
 import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, X } from 'lucide-react';
@@ -81,13 +81,16 @@ export function BillingCheckoutDialog({
     if (action?.type === 'REDIRECT') void billingApi.openPaymentRedirect(action.url);
   };
 
-  // 动作到期后不再展示二维码/跳转入口；轮询会把服务端终态收敛过来，用户也可
-  // 直接关闭并重新选择（下一次确认使用新的幂等键）。remainingSeconds 由 effect
-  // 驱动，首帧仍为 null，此时直接按到期时间判断，避免已过期动作闪现。
+  // 过期判定以服务端为权威：服务端只下发仍有效的动作，动作过期后轮询响应里
+  // 会把它置空。因此“曾经有动作、现在没有了”才代表过期，本地时钟偏移不会
+  // 误藏仍可支付的二维码，也不会闪现已过期动作。倒计时仅作展示。
+  const hadActionRef = useRef(false);
+  useEffect(() => {
+    if (action) hadActionRef.current = true;
+    if (!state.open || state.phase !== 'AWAITING_PAYMENT') hadActionRef.current = false;
+  }, [action, state.open, state.phase]);
   const actionExpired =
-    action !== null &&
-    (remainingSeconds === 0 ||
-      (remainingSeconds === null && Date.parse(action.expiresAt) - Date.now() <= 0));
+    state.phase === 'AWAITING_PAYMENT' && action === null && hadActionRef.current;
 
   const canRetry =
     (state.error && state.intent !== null && state.order === null && state.subscription === null) ||
@@ -201,7 +204,7 @@ export function BillingCheckoutDialog({
               </>
             )}
 
-            {state.phase === 'AWAITING_PAYMENT' && !action && (
+            {state.phase === 'AWAITING_PAYMENT' && !action && !actionExpired && (
               <>
                 <Spinner size={26} className="text-[var(--text-secondary)]" />
                 <p className="mt-4 text-sm text-[var(--text-secondary)]">
