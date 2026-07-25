@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 describe('builtinGhostProvisioner locale validation', () => {
-  it('locale 资源不完整时跳过官方种子，不把损坏翻译播种给用户', async () => {
+  it('locale 资源翻译错位时跳过官方种子，不把损坏翻译播种给用户', async () => {
     const root = await makeTempDir();
     const seedRoot = path.join(root, 'seeds');
     const repoRoot = path.join(root, 'installed');
@@ -43,7 +43,7 @@ describe('builtinGhostProvisioner locale validation', () => {
     );
     await fs.promises.writeFile(
       path.join(seedDir, 'locales', 'en.json'),
-      JSON.stringify({ name: 'English', tools: {} }),
+      JSON.stringify({ name: 'English', tools: { nope: { description: 'x' } } }),
     );
     const warn = vi.fn();
 
@@ -61,7 +61,7 @@ describe('builtinGhostProvisioner locale validation', () => {
     expect(fs.existsSync(path.join(repoRoot, 'localized-seed'))).toBe(false);
     expect(warn).toHaveBeenCalledWith(
       'builtin seed skipped: invalid locale resources',
-      expect.objectContaining({ reason: expect.stringContaining('locale.tools 缺少') }),
+      expect.objectContaining({ reason: expect.stringContaining('locale.tools 含未知工具') }),
     );
   });
 });

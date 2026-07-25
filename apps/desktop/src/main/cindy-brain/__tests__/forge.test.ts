@@ -144,7 +144,7 @@ describe('packGhostDir', () => {
     });
   });
 
-  it('Forge 在 locale 缺文件、坏 JSON 或缺译时直接拒绝', async () => {
+  it('Forge 在 locale 缺文件、坏 JSON 或翻译错位时直接拒绝;部分翻译可打包', async () => {
     const manifest = {
       ...GOOD_MANIFEST,
       locales: { en: 'locales/en.json' },
@@ -167,12 +167,20 @@ describe('packGhostDir', () => {
 
     await fs.promises.writeFile(
       path.join(missing, 'locales', 'en.json'),
-      JSON.stringify({ name: 'Demo', tools: {} }),
+      JSON.stringify({ name: 'Demo', tools: { nope: { description: 'x' } } }),
     );
     expect(await packGhostDir(missing)).toMatchObject({
       ok: false,
       errorCode: 'MANIFEST_INVALID',
     });
+
+    // 部分翻译(只给 name)不再挡打包:缺译回退原文。
+    await fs.promises.writeFile(
+      path.join(missing, 'locales', 'en.json'),
+      JSON.stringify({ name: 'Demo' }),
+    );
+    const partialPacked = await packGhostDir(missing);
+    expect(partialPacked.ok, JSON.stringify(partialPacked)).toBe(true);
 
     await fs.promises.rm(path.join(missing, 'locales'), { recursive: true, force: true });
     await fs.promises.mkdir(path.join(missing, 'Locales'), { recursive: true });
@@ -390,6 +398,9 @@ describe('FORGE_GUIDE', () => {
       'host-context-changed',
       'locales/en.json',
       '固定使用英文',
+      // 2026-07-25 locale 可选化:缺译回退原文,翻译错位仍拒;§2.1 同步。
+      '翻译是可选项',
+      '翻译错位仍是硬错误',
       'clientIdAlternatives',
       'cindy.fetch',
       'network 槽',

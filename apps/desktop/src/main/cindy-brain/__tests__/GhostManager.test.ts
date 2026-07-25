@@ -176,7 +176,7 @@ describe('GhostManager · install', () => {
     });
   });
 
-  it('locale 文件缺失、非法 JSON 或缺少工具翻译时 inspect/install 都拒绝', async () => {
+  it('locale 文件缺失、非法 JSON 或翻译错位时 inspect/install 都拒绝;部分翻译回退后可装', async () => {
     const manifest = {
       ...goodManifest(),
       locales: { en: 'locales/en.json' },
@@ -189,10 +189,25 @@ describe('GhostManager · install', () => {
     });
     await expectRejection(await manager.install(invalid), 'file-invalid');
 
-    const incomplete = await makeCindy('locale-incomplete.cindy', manifest, {
-      'locales/en.json': JSON.stringify({ name: 'English', tools: {} }),
+    const unknownTool = await makeCindy('locale-unknown-tool.cindy', manifest, {
+      'locales/en.json': JSON.stringify({ name: 'English', tools: { nope: { description: 'x' } } }),
     });
-    await expectRejection(await manager.install(incomplete), 'file-invalid');
+    await expectRejection(await manager.install(unknownTool), 'file-invalid');
+
+    // 部分翻译(只给 name,工具不翻)不再拒装:缺失条目回退原 manifest 文案。
+    hostLocale = 'en';
+    const partial = await makeCindy('locale-partial.cindy', manifest, {
+      'locales/en.json': JSON.stringify({ name: 'English partial' }),
+    });
+    expect(await manager.install(partial)).toMatchObject({
+      ghost: {
+        manifest: {
+          name: 'English partial',
+          resolvedLocale: 'en',
+          tools: [{ name: 'do_thing', description: '做点事' }],
+        },
+      },
+    });
 
     const aliasedManifest = await makeCindy('locale-manifest-alias.cindy', goodManifest(), {
       'GHOST.JSON': JSON.stringify({ name: 'Alias locale' }),
