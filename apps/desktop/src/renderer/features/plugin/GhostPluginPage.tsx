@@ -2,7 +2,7 @@
  * Plugin catalog and detail coordinator backed by the latest Ghost host APIs.
  *
  * Inputs: installed Ghost snapshots and user actions.
- * Outputs: the Plugin list/detail UI plus install, toggle, and command-launch flows.
+ * Outputs: the Plugin list/detail UI, focus-stable installed queue, and Plugin action flows.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -1222,6 +1222,7 @@ export function InstalledGhostQueue({
       ))}
       {hasOverflow ? (
         <button
+          key="installed-overflow-toggle"
           type="button"
           onClick={() => onExpandedChange(!expanded)}
           className={cn(

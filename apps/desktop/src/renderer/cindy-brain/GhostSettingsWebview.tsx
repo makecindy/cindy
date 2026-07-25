@@ -12,6 +12,7 @@ import {
   observeHostTheme,
 } from './ghostPanelTheme';
 import {
+  GHOST_SETTINGS_LAYOUT_REVISION,
   loadGhostSettingsSnapshot,
   saveGhostSettingsSnapshot,
   snapshotMatchesContext,
@@ -268,6 +269,7 @@ function SettingsWebviewBody({
               dpr: window.devicePixelRatio,
               themeCss: buildSettingsThemeCss(),
               version: manifest.version,
+              layoutRevision: GHOST_SETTINGS_LAYOUT_REVISION,
               capturedAt: Date.now(),
             });
           } catch {

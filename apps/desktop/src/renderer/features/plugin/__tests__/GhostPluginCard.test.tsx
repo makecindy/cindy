@@ -1,12 +1,12 @@
 /**
- * Regression coverage for Plugin card actions and compact marketplace metadata.
+ * Regression coverage for Plugin card actions, compact metadata, and queue focus continuity.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -55,6 +55,18 @@ const marketPlugin: PluginMarketItem = {
   enabled: null,
 };
 
+function InstalledQueueHarness({ items }: { items: readonly GhostPluginListItem[] }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <InstalledGhostQueue
+      items={items}
+      expanded={expanded}
+      onExpandedChange={setExpanded}
+      onSelect={vi.fn()}
+    />
+  );
+}
+
 describe('GhostPluginCard', () => {
   it('shows the installed shortcut name through the shared Tooltip', () => {
     const onSelect = vi.fn();
@@ -75,28 +87,16 @@ describe('GhostPluginCard', () => {
       id: `plugin-${index + 1}`,
       name: `Plugin ${index + 1}`,
     }));
-    const { container, rerender } = render(
-      <InstalledGhostQueue
-        items={plugins}
-        expanded={false}
-        onExpandedChange={(expanded) => {
-          rerender(
-            <InstalledGhostQueue
-              items={plugins}
-              expanded={expanded}
-              onExpandedChange={vi.fn()}
-              onSelect={vi.fn()}
-            />,
-          );
-        }}
-        onSelect={vi.fn()}
-      />,
-    );
+    const { container } = render(<InstalledQueueHarness items={plugins} />);
 
     expect(screen.getByRole('button', { name: 'Plugin 5' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Plugin 6' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.installedExpand' }));
+    const expand = screen.getByRole('button', {
+      name: 'settings.ghosts.page.installedExpand',
+    });
+    expand.focus();
+    fireEvent.click(expand);
 
     const queue = container.querySelector('[data-testid="installed-plugin-queue"]');
     const collapse = screen.getByRole('button', {
@@ -106,6 +106,12 @@ describe('GhostPluginCard', () => {
     expect(queue?.lastElementChild).toBe(collapse);
     expect(within(collapse).queryByText('+2')).toBeNull();
     expect(collapse.querySelector('.lucide-chevron-up')).toBeTruthy();
+    expect(document.activeElement).toBe(collapse);
+
+    fireEvent.click(collapse);
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'settings.ghosts.page.installedExpand' }),
+    );
   });
 
   it('opens the plugin detail from the card body without firing the action', () => {

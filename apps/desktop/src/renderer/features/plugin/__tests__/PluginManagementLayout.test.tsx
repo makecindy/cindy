@@ -1,12 +1,12 @@
 /**
- * Regression coverage for the shared Plugin and Skill shell, including search accessibility.
+ * Regression coverage for the shared Plugin and Skill shell, search accessibility, and focus order.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -29,6 +29,10 @@ import {
   PluginManagementPage,
 } from '../PluginManagementLayout';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function CurrentPath() {
   return <output data-testid="current-path">{useLocation().pathname}</output>;
@@ -200,5 +204,51 @@ describe('PluginManagementLayout', () => {
 
     expect(onQueryChange).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(searchInput);
+  });
+
+  it('matches DOM focus order to the stacked visual rows', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        readonly callback: ResizeObserverCallback;
+
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = callback;
+        }
+
+        observe() {
+          this.callback(
+            [{ contentRect: { width: 700 } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        }
+
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+
+    const { container } = render(
+      <MemoryRouter>
+        <PluginManagementLayout
+          activeTab="plugins"
+          query=""
+          onQueryChange={vi.fn()}
+          headerActions={<button type="button">Add plugin</button>}
+        >
+          <span>Content</span>
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const focusable = [...container.querySelectorAll('input, button')];
+      expect(
+        focusable.indexOf(screen.getByRole('textbox', { name: 'Search plugins' })),
+      ).toBeLessThan(focusable.indexOf(screen.getByRole('tab', { name: 'Plugins' })));
+      expect(focusable.indexOf(screen.getByRole('button', { name: 'Add plugin' }))).toBeLessThan(
+        focusable.indexOf(screen.getByRole('tab', { name: 'Plugins' })),
+      );
+    });
   });
 });
