@@ -2275,7 +2275,7 @@ export function resolveGhostManifestLocale(
               ? {
                   connections: manifest.network.connections.map((connection) => ({
                     ...connection,
-                    ...resource.network!.connections![connection.key],
+                    ...(resource.network!.connections![connection.key] ?? {}),
                   })),
                 }
               : {}),

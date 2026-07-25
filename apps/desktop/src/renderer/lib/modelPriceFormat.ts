@@ -51,6 +51,12 @@ function inferDiscount(
   quote: ModelPriceQuote,
   cost: Required<EffectiveModelCost>,
 ): number | undefined {
+  // effectiveCost 无法提供缓存维度;若 quote 含非零缓存价,无法验证缓存折扣
+  // 是否一致,不推断折扣以避免 badge 与缓存行价格不一致。
+  if ((quote.cacheReadPerMtok && quote.cacheReadPerMtok > 0) ||
+      (quote.cacheCreatePerMtok && quote.cacheCreatePerMtok > 0)) {
+    return undefined;
+  }
   const candidates: number[] = [];
   for (const [original, current] of [
     [quote.inputPerMtok, cost.input],

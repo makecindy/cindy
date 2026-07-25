@@ -71,24 +71,18 @@ export function gatewayModelPriceQuote(
   ) {
     return undefined;
   }
-  const discount =
-    typeof model.costDiscount === 'number' &&
-    Number.isFinite(model.costDiscount) &&
-    model.costDiscount > 0 &&
-    model.costDiscount <= 1
-      ? model.costDiscount
-      : 0;
-  const multiplier = 1 - discount;
+  // quote 保留未折扣的标准价:UI 通过对比 quote(原价) vs CatalogModel.cost(折后价)
+  // 推断折扣 badge;costDiscount 仅在 effectiveGatewayModelCost 侧应用到 cost。
   return applyCodexBudgetDiscount({
     providerId: 'xd',
     modelId,
     currency: gatewayCurrencyForRegion(region),
     source: 'gateway',
     approximate: false,
-    inputPerMtok: inputPerMtok * multiplier,
-    outputPerMtok: outputPerMtok * multiplier,
-    ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok: cacheReadPerMtok * multiplier } : {}),
-    ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok: cacheCreatePerMtok * multiplier } : {}),
+    inputPerMtok,
+    outputPerMtok,
+    ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
+    ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
   });
 }
 
