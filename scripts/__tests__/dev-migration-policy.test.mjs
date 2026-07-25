@@ -132,11 +132,13 @@ test('an isolated declaration cannot point its override back to shared release u
       XDT_ISOLATED: '1',
       XDT_USER_DATA_DIR: sharedUserData,
     };
+    const windowsPathOptions = {
+      platform: 'win32',
+      realpath: (value) => value,
+    };
     assert.throws(
       () =>
-        assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready'], env, {
-          platform: 'win32',
-        }),
+        assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready'], env, windowsPathOptions),
       /may upgrade the release database and prevent an older release from opening/,
     );
     assert.throws(
@@ -171,7 +173,7 @@ test('passive cannot bypass an isolated override targeting release userData', ()
             APPDATA: appData,
             XDT_USER_DATA_DIR: path.win32.join(appData, 'Cindy'),
           },
-          { platform: 'win32' },
+          { platform: 'win32', realpath: (value) => value },
         ),
       /may upgrade the release database and prevent an older release from opening/,
     );
@@ -194,7 +196,7 @@ test('all current and legacy release userData directories are protected', () => 
               APPDATA: appData,
               XDT_USER_DATA_DIR: path.win32.join(appData, dirName),
             },
-            { platform: 'win32' },
+            { platform: 'win32', realpath: (value) => value },
           ),
         /may upgrade the release database and prevent an older release from opening/,
         dirName,
