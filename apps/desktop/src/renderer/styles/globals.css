@@ -222,9 +222,13 @@
     box-shadow var(--motion-fast) var(--motion-ease-move);
 }
 
+/* 鼠标跟随时 transform 必须逐帧贴住指针,不能再排队过渡;但 width/height 由
+   设备列表刷新驱动,指针停在卡上时也要照常补间,否则 228px ↔ 132px 会瞬跳。 */
 .mobile-download-qr-card[data-pointer-active='true'] {
   box-shadow: var(--mobile-download-qr-shadow-active);
-  transition: none;
+  transition:
+    width var(--motion-base) var(--motion-ease-move),
+    height var(--motion-base) var(--motion-ease-move);
 }
 
 /* 只转 transform,不挂 filter/blur:滤镜会让这层每帧重新走一遍 GPU 滤镜通道,

@@ -386,6 +386,37 @@ describe('MobileDownloadDialog', () => {
     ).toBeTruthy();
   });
 
+  it('drops the enabled dot once the remote state read fails', async () => {
+    render(
+      <MobileDownloadDialog
+        open
+        onOpenChange={vi.fn()}
+        remoteAvailable
+        onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
+        triggerRef={detachedTriggerRef}
+      />,
+    );
+
+    const readyDot = () =>
+      screen
+        .getByRole('button', { name: /sidebar\.mobileDownload\.allowControl/ })
+        .querySelector('[class*="--remote-status-ready"]');
+
+    expect(await screen.findByText('sidebar.mobileDownload.remoteAction.enabled')).toBeTruthy();
+    expect(readyDot()).toBeTruthy();
+
+    getState.mockRejectedValueOnce(new Error('state unavailable'));
+    await waitFor(() => expect(presenceChangedHandler).toBeTypeOf('function'));
+    await act(async () => {
+      presenceChangedHandler?.();
+    });
+
+    expect(await screen.findByText('sidebar.mobileDownload.remoteAction.unavailable')).toBeTruthy();
+    // 陈旧的 enabled 快照不能和「暂不可用」文案同时出现。
+    expect(readyDot()).toBeNull();
+  });
+
   it('uses the official Cindy artwork and the shared dialog tokens', () => {
     expect(source).toContain('@/../../resources/icon.png?url');
     expect(source).toContain("t('sidebar.mobileDownload.title')");
@@ -463,6 +494,19 @@ describe('MobileDownloadDialog', () => {
     );
     expect(globalStyles).toContain('@media (prefers-reduced-motion: reduce)');
     expect(globalStyles).toMatch(/\.mobile-download-qr-edge\s*\{\s*animation: none;\s*transform:/);
+  });
+
+  it('keeps the QR size transition alive while the pointer is on the card', () => {
+    // 指针停在卡上时设备列表可能刚好刷新:transform 要逐帧跟手,但 228px ↔ 132px
+    // 仍必须补间,不能整条 transition 关掉。
+    const pointerActiveRule = globalStyles.slice(
+      globalStyles.indexOf(".mobile-download-qr-card[data-pointer-active='true'] {"),
+      globalStyles.indexOf('.mobile-download-qr-edge {'),
+    );
+    expect(pointerActiveRule).not.toMatch(/transition:\s*none/);
+    expect(pointerActiveRule).toMatch(/transition:[^}]*width var\(--motion-base\)/);
+    expect(pointerActiveRule).toMatch(/transition:[^}]*height var\(--motion-base\)/);
+    expect(pointerActiveRule).not.toMatch(/transition:[^}]*transform var\(/);
   });
 
   it('keeps the flowing edge free of per-frame filters and self-authored brand color', () => {

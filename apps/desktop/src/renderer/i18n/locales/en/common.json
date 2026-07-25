@@ -3598,7 +3598,7 @@
     },
     "mobileDownload": {
       "title": "Control Cindy Remotely",
-      "subtitle": "Mobile connected to desktop",
+      "subtitle": "Connect your phone to this desktop",
       "qrAlt": "QR code to download Cindy mobile",
       "preparing": "Preparing QR code…",
       "error": "Couldn’t create the QR code. Try again later.",

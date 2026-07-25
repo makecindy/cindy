@@ -598,7 +598,9 @@ export function MobileDownloadDialog({
                   ) : null}
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5 text-12 text-[var(--confirm-desc)]">
-                  {remoteSnapshot?.enabled ? (
+                  {/* 状态读取失败时右侧文案已经是「暂不可用」,再留一颗上一次成功
+                      读到的绿点会同时给出两个互相矛盾的信号。 */}
+                  {!remoteStatusError && remoteSnapshot?.enabled ? (
                     <span
                       className="h-1.5 w-1.5 rounded-full bg-[var(--remote-status-ready)]"
                       aria-hidden="true"
