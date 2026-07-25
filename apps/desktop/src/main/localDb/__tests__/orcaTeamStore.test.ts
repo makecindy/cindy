@@ -251,6 +251,38 @@ describe('orcaTeamStore', () => {
     ).resolves.toEqual({ status: 'done', idle_since: null, updated_at: 124_000 });
   });
 
+  it('rejects a stale runtime release candidate after another instance updates it', async () => {
+    const { markWorkerRuntimeReleaseIntent } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    const scannedUpdatedAt = 100_000;
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = NULL, updated_at = ? WHERE id = ?',
+      ['done', scannedUpdatedAt, 'worker-1'],
+    );
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = NULL, updated_at = ? WHERE id = ?',
+      ['running', 120_000, 'worker-1'],
+    );
+
+    await expect(
+      markWorkerRuntimeReleaseIntent(
+        'worker-1',
+        'worker-session-1',
+        123_000,
+        scannedUpdatedAt,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'running', idle_since: null, updated_at: 120_000 });
+  });
+
   function createTestDbClient(): DbClient {
     const dbHandle = new Database(':memory:');
     rawDb = dbHandle;

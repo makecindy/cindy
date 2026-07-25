@@ -494,11 +494,14 @@ export async function clearWorkerIdleReleaseMarker(sessionId: string): Promise<b
  * Persist a runtime-release intent before the external provider close. This marker
  * is also the completed release record: if the process exits before or after close,
  * the next resume can deterministically attempt to restore the provider runtime.
+ * Watcher callers may pin the scanned updatedAt so another instance cannot start
+ * a turn and then have that newer row overwritten by this release.
  */
 export async function markWorkerRuntimeReleaseIntent(
   workerId: string,
   sessionId: string,
   releasedAt: number,
+  expectedUpdatedAt?: number,
 ): Promise<boolean> {
   const db = getDbClient().drizzle;
   const result = await db
@@ -509,6 +512,9 @@ export async function markWorkerRuntimeReleaseIntent(
       eq(orcaWorkers.sessionId, sessionId),
       isNull(orcaWorkers.idleSince),
       inArray(orcaWorkers.status, ACTIVE_WORKER_STATUSES),
+      ...(expectedUpdatedAt === undefined
+        ? []
+        : [eq(orcaWorkers.updatedAt, expectedUpdatedAt)]),
     ))
     .run();
   return result.changes > 0;

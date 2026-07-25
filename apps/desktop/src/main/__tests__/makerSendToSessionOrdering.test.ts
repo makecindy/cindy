@@ -589,14 +589,11 @@ describe('sendToSession ordering', () => {
     expect(source).toContain('idleWorker: (params) => orcaTeamService.idleWorker(params),');
     expect(serviceIdleBlock).toContain('clearRuntimeState(worker.sessionId);');
     expect(serviceIdleBlock).toContain('await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)');
-    expect(serviceIdleBlock).toContain('await deps.markWorkerIdle(worker.id)');
-    expect(serviceIdleBlock).toContain('await deps.restoreWorkerStatusIfIdle(worker.id, worker.status)');
+    expect(serviceIdleBlock).toContain('await deps.releaseWorkerRuntime(worker)');
     expect(serviceIdleBlock).toContain('await deps.hasPendingWorkerInput(worker.sessionId)');
     expect(serviceIdleBlock).toContain('deps.hasSendToSessionLock(worker.sessionId)');
-    expect(serviceIdleBlock).toContain('await deps.closeWorkerSession(worker.sessionId)');
     expect(serviceIdleBlock).toContain('await deps.closeWorkerSessionIfIdle(worker.sessionId)');
-    expectOrder(manualIdleBlock, 'await deps.markWorkerIdle(worker.id)', 'await deps.closeWorkerSession(worker.sessionId)');
-    expectOrder(manualIdleBlock, 'await deps.closeWorkerSession(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
+    expectOrder(manualIdleBlock, 'await deps.releaseWorkerRuntime(worker)', 'clearRuntimeState(worker.sessionId);');
     expectOrder(acknowledgedIdleBlock, 'await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)', 'await deps.closeWorkerSessionIfIdle(worker.sessionId)');
     expectOrder(acknowledgedIdleBlock, 'await deps.closeWorkerSessionIfIdle(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
 

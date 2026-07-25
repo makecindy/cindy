@@ -5730,7 +5730,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     markReleased: async (candidate, releasedAt) => {
       // Persist the recovery marker before provider teardown. A crash after this
       // write remains recoverable even if thread/archive already completed.
-      return markWorkerRuntimeReleaseIntent(candidate.id, candidate.sessionId, releasedAt);
+      return markWorkerRuntimeReleaseIntent(
+        candidate.id,
+        candidate.sessionId,
+        releasedAt,
+        candidate.updatedAt,
+      );
     },
     restoreRelease: async (candidate, releasedAt, restoredAt) => {
       return restoreWorkerRuntimeRelease(

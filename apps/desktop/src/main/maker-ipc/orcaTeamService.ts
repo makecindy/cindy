@@ -752,23 +752,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
       if (!params.expectedStatus) {
         try {
-          // Persist first so there is no close-success/write-failure window
-          // where an archived runtime still looks live to the next dispatch.
-          await deps.markWorkerIdle(worker.id);
+          // Reuse the timestamped release marker so a close failure clears only
+          // this attempt without overwriting a newer terminal task status.
+          await deps.releaseWorkerRuntime(worker);
         } catch (error) {
-          return workerIdlePersistenceFailure('idleWorker', worker.id, error);
-        }
-        try {
-          await deps.closeWorkerSession(worker.sessionId);
-        } catch (error) {
-          try {
-            await deps.restoreWorkerStatusIfIdle(worker.id, worker.status);
-          } catch (rollbackError) {
-            deps.log.warn('idleWorker: failed to roll back worker idle state', {
-              workerId: worker.id,
-              err: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-            });
-          }
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
         }
@@ -1032,19 +1019,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ok: false,
       errorCode: 'INTERNAL',
       message: `${owner}: failed to release worker runtime: ${message}`,
-    };
-  }
-
-  function workerIdlePersistenceFailure(owner: string, workerId: string, error: unknown): OrcaOkResult {
-    const message = error instanceof Error ? error.message : String(error);
-    deps.log.warn(`${owner}: persist worker idle state failed`, {
-      workerId,
-      err: message,
-    });
-    return {
-      ok: false,
-      errorCode: 'INTERNAL',
-      message: `${owner}: failed to persist worker idle state: ${message}`,
     };
   }
 

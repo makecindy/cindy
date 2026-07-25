@@ -180,6 +180,15 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     }),
     releaseWorkerRuntime: vi.fn(async (worker) => {
       calls.push(`releaseWorkerRuntime:${worker.sessionId}`);
+      workers = workers.map((item) => (
+        item.id === worker.id
+          ? {
+              ...item,
+              status: 'idle',
+              idleSince: '2026-07-25T10:00:00.000Z',
+            }
+          : item
+      ));
     }),
     closeWorkerSessionIfIdle: vi.fn(async (sessionId) => {
       calls.push(`closeWorkerSessionIfIdle:${sessionId}`);
@@ -1000,8 +1009,7 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'markWorkerIdle',
-      'closeWorkerSession:worker-session-1',
+      'releaseWorkerRuntime:worker-session-1',
       'broadcastOrcaWorkerChanged',
     ]);
   });
@@ -1348,10 +1356,11 @@ describe('OrcaTeamService', () => {
       workerId: 'worker-1',
     });
 
-    expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
+    expect(deps.releaseWorkerRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'worker-1', sessionId: 'worker-session-1' }),
+    );
     expect(calls).toEqual([
-      'markWorkerIdle',
-      'closeWorkerSession:worker-session-1',
+      'releaseWorkerRuntime:worker-session-1',
       'broadcastOrcaWorkerChanged',
     ]);
   });
@@ -1440,10 +1449,10 @@ describe('OrcaTeamService', () => {
     expect(calls).toEqual([]);
   });
 
-  it('rolls back a manual idle marker when closing its runtime fails', async () => {
+  it('reports a manual runtime release failure after its marker rollback', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
-      closeWorkerSession: vi.fn(async (sessionId) => {
-        calls.push(`closeWorkerSession:${sessionId}`);
+      releaseWorkerRuntime: vi.fn(async (worker) => {
+        calls.push(`releaseWorkerRuntime:${worker.sessionId}`);
         throw new Error('close failed');
       }),
     });
@@ -1456,15 +1465,11 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'markWorkerIdle',
-      'closeWorkerSession:worker-session-1',
-      'restoreWorkerStatusIfIdle:running',
+      'releaseWorkerRuntime:worker-session-1',
       'broadcastOrcaWorkerChanged',
     ]);
     expect(getWorker().status).toBe('running');
     expect(getWorker().idleSince).toBeNull();
-    expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
-    expect(deps.restoreWorkerStatusIfIdle).toHaveBeenCalledWith('worker-1', 'running');
     expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledOnce();
     expect(deps.log.warn).toHaveBeenCalledWith('idleWorker: close worker session failed', {
       sessionId: 'worker-session-1',
@@ -1472,9 +1477,9 @@ describe('OrcaTeamService', () => {
     });
   });
 
-  it('does not close a manual idle Worker when persisting its release marker fails', async () => {
+  it('does not finalize a manual idle Worker when persisting its release marker fails', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
-      markWorkerIdle: vi.fn(async () => {
+      releaseWorkerRuntime: vi.fn(async () => {
         throw new Error('db unavailable');
       }),
     });
@@ -1486,14 +1491,13 @@ describe('OrcaTeamService', () => {
     })).resolves.toEqual({
       ok: false,
       errorCode: 'INTERNAL',
-      message: 'idleWorker: failed to persist worker idle state: db unavailable',
+      message: 'idleWorker: failed to release worker runtime: db unavailable',
     });
 
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(['broadcastOrcaWorkerChanged']);
     expect(getWorker().status).toBe('running');
-    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
-    expect(deps.log.warn).toHaveBeenCalledWith('idleWorker: persist worker idle state failed', {
-      workerId: 'worker-1',
+    expect(deps.log.warn).toHaveBeenCalledWith('idleWorker: close worker session failed', {
+      sessionId: 'worker-session-1',
       err: 'db unavailable',
     });
   });
