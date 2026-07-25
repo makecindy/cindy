@@ -1196,8 +1196,7 @@
         ],
         "defaultEffort": "high",
         "sortOrder": 45,
-        "supportsFastMode": false,
-        "defaultEnabled": false
+        "supportsFastMode": false
       },
       "gpt-5.6-luna": {
         "agents": [
