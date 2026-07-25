@@ -32,6 +32,7 @@ function createDeps(overrides: Partial<OrcaIdleReleaseWatcherDeps> = {}) {
     withSessionLock: vi.fn(async (_sessionId, task) => task()),
     hasPendingInput: vi.fn(async () => false),
     markReleased: vi.fn(async () => true),
+    restoreRelease: vi.fn(async () => true),
     touchWorker: vi.fn(async () => undefined),
     closeSessionIfIdle: vi.fn(async () => 'closed' as const),
     broadcastWorkerChanged: vi.fn(),
@@ -75,6 +76,9 @@ describe('createOrcaIdleReleaseWatcher', () => {
       expect(deps.listCandidates).toHaveBeenCalledWith(60_000);
       expect(deps.closeSessionIfIdle).toHaveBeenCalledWith(candidate.sessionId);
       expect(deps.markReleased).toHaveBeenCalledWith(candidate, 120_000);
+      expect(vi.mocked(deps.markReleased).mock.invocationCallOrder[0]!)
+        .toBeLessThan(vi.mocked(deps.closeSessionIfIdle).mock.invocationCallOrder[0]!);
+      expect(deps.restoreRelease).not.toHaveBeenCalled();
       expect(deps.broadcastWorkerChanged).toHaveBeenCalledOnce();
       expect(deps.broadcastWorkerChanged).toHaveBeenCalledWith(candidate.leadSessionId);
       expect(deps.log.info).toHaveBeenCalledWith(
@@ -157,11 +161,25 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
     await watcher.scanNow();
 
-    expect(deps.closeSessionIfIdle).toHaveBeenCalledOnce();
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 
-  it('leaves the worker unmarked and retryable when closing the runtime fails', async () => {
+  it('does not close the runtime when release marker persistence fails', async () => {
+    const { deps, watcher } = createDeps({
+      markReleased: vi.fn(async () => {
+        throw new Error('marker write failed');
+      }),
+    });
+
+    await watcher.scanNow();
+
+    expect(deps.closeSessionIfIdle).not.toHaveBeenCalled();
+    expect(deps.restoreRelease).not.toHaveBeenCalled();
+    expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the persisted release intent when closing the runtime fails', async () => {
     const { deps, watcher } = createDeps({
       closeSessionIfIdle: vi.fn(async () => {
         throw new Error('close failed');
@@ -170,7 +188,12 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
     await watcher.scanNow();
 
-    expect(deps.markReleased).not.toHaveBeenCalled();
+    expect(deps.markReleased).toHaveBeenCalledWith(expect.objectContaining({ id: 'worker-1' }), 120_000);
+    expect(deps.restoreRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'worker-1' }),
+      120_000,
+      120_000,
+    );
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
     expect(deps.log.warn).toHaveBeenCalledWith(
       'idleWatcher: release worker failed',
@@ -185,8 +208,13 @@ describe('createOrcaIdleReleaseWatcher', () => {
 
     await watcher.scanNow();
 
-    expect(deps.touchWorker).toHaveBeenCalledWith('worker-1', 120_000);
-    expect(deps.markReleased).not.toHaveBeenCalled();
+    expect(deps.markReleased).toHaveBeenCalledWith(expect.objectContaining({ id: 'worker-1' }), 120_000);
+    expect(deps.restoreRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'worker-1' }),
+      120_000,
+      120_000,
+    );
+    expect(deps.touchWorker).not.toHaveBeenCalled();
     expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
   });
 

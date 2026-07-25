@@ -35,6 +35,11 @@ export interface OrcaIdleReleaseWatcherDeps {
   withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   hasPendingInput(sessionId: string): Promise<boolean>;
   markReleased(candidate: OrcaIdleReleaseCandidate, releasedAt: number): Promise<boolean>;
+  restoreRelease(
+    candidate: OrcaIdleReleaseCandidate,
+    releasedAt: number,
+    restoredAt: number,
+  ): Promise<boolean>;
   touchWorker(workerId: string, updatedAt: number): Promise<void>;
   /** Atomically re-check and close an idle runtime after local ownership is confirmed. */
   closeSessionIfIdle(sessionId: string): Promise<OrcaIdleRuntimeCloseResult>;
@@ -61,9 +66,10 @@ function isReleaseStatus(status: string): status is OrcaIdleReleaseStatus {
 
 /**
  * Creates the process-level Worker idle watcher. A scan is single-flight, and each
- * release marker is written atomically after the runtime closes so failed teardown
- * remains retryable. Marker persistence reconciles terminal task-status updates
- * that race the close, while duplicate scans cannot broadcast the same release twice.
+ * release marker is written before the external runtime close so a crash or later
+ * persistence outage cannot strand an archived thread without recovery metadata.
+ * Failed or raced closes roll that intent back, while duplicate scans cannot
+ * broadcast the same release twice.
  */
 export function createOrcaIdleReleaseWatcher(
   deps: OrcaIdleReleaseWatcherDeps,
@@ -105,17 +111,34 @@ export function createOrcaIdleReleaseWatcher(
               return;
             }
 
-            const closeResult = await deps.closeSessionIfIdle(candidate.sessionId);
-            if (closeResult === 'busy') {
-              await deps.touchWorker(candidate.id, deps.now());
-              return;
-            }
-
-            // If the locally owned session disappeared after the first check, its
-            // runtime is already gone and the persisted release marker must converge.
+            // Persist the recovery fact before the non-transactional provider close.
+            // If the process exits after this point, resume can safely attempt
+            // unarchive; the compatibility path also handles a marker whose close
+            // never reached thread/archive.
             const releasedAt = deps.now();
             const marked = await deps.markReleased(candidate, releasedAt);
             if (!marked) return;
+
+            let closeResult: OrcaIdleRuntimeCloseResult;
+            try {
+              closeResult = await deps.closeSessionIfIdle(candidate.sessionId);
+            } catch (closeError) {
+              try {
+                await deps.restoreRelease(candidate, releasedAt, deps.now());
+              } catch (restoreError) {
+                deps.log.warn('idleWatcher: release marker rollback failed', {
+                  workerId: candidate.id,
+                  closeError: closeError instanceof Error ? closeError.message : String(closeError),
+                  restoreError: restoreError instanceof Error ? restoreError.message : String(restoreError),
+                });
+              }
+              throw closeError;
+            }
+
+            if (closeResult === 'busy') {
+              await deps.restoreRelease(candidate, releasedAt, deps.now());
+              return;
+            }
 
             deps.log.info('idleWatcher: released worker', {
               workerId: candidate.id,

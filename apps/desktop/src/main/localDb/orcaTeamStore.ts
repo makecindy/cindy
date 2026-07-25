@@ -483,12 +483,11 @@ export async function clearWorkerIdleReleaseMarker(sessionId: string): Promise<b
 }
 
 /**
- * Persist a completed runtime release without depending on a stale task status
- * or updatedAt snapshot. Terminal event persistence may race the runtime close,
- * but every legal Worker status remains release-eligible while the caller holds
- * the session send lock.
+ * Persist a runtime-release intent before the external provider close. This marker
+ * is also the completed release record: if the process exits before or after close,
+ * the next resume can deterministically attempt to restore the provider runtime.
  */
-export async function markWorkerRuntimeReleased(
+export async function markWorkerRuntimeReleaseIntent(
   workerId: string,
   sessionId: string,
   releasedAt: number,
@@ -502,6 +501,37 @@ export async function markWorkerRuntimeReleased(
       eq(orcaWorkers.sessionId, sessionId),
       isNull(orcaWorkers.idleSince),
       inArray(orcaWorkers.status, ACTIVE_WORKER_STATUSES),
+    ))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Roll back a failed runtime-release intent without overwriting a terminal task
+ * status that raced the provider close. The timestamp pins this exact attempt.
+ */
+export async function restoreWorkerRuntimeRelease(
+  workerId: string,
+  sessionId: string,
+  releasedAt: number,
+  previousStatus: OrcaWorkerStatus,
+  restoredAt: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({
+      status: sql<OrcaWorkerStatus>`CASE
+        WHEN ${orcaWorkers.status} = 'idle' THEN ${previousStatus}
+        ELSE ${orcaWorkers.status}
+      END`,
+      idleSince: null,
+      updatedAt: restoredAt,
+    })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.sessionId, sessionId),
+      eq(orcaWorkers.idleSince, releasedAt),
     ))
     .run();
   return result.changes > 0;

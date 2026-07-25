@@ -146,7 +146,8 @@ import {
   markTeamEnded,
   markWorkersStatusByTeam,
   markWorkerIdleIfStatus,
-  markWorkerRuntimeReleased,
+  markWorkerRuntimeReleaseIntent,
+  restoreWorkerRuntimeRelease,
   restoreWorkerDoneIfIdle,
   restoreWorkerStatusIfIdle,
   reconcileInactiveTeamWorkersForLead,
@@ -5696,9 +5697,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     withSessionLock: withSendToSessionLock,
     hasPendingInput: hasPendingIdleReleaseInput,
     markReleased: async (candidate, releasedAt) => {
-      // Terminal event persistence may update status/updated_at while the runtime
-      // closes. The store CAS reconciles that race but still pins worker+session.
-      return markWorkerRuntimeReleased(candidate.id, candidate.sessionId, releasedAt);
+      // Persist the recovery marker before provider teardown. A crash after this
+      // write remains recoverable even if thread/archive already completed.
+      return markWorkerRuntimeReleaseIntent(candidate.id, candidate.sessionId, releasedAt);
+    },
+    restoreRelease: async (candidate, releasedAt, restoredAt) => {
+      return restoreWorkerRuntimeRelease(
+        candidate.id,
+        candidate.sessionId,
+        releasedAt,
+        candidate.status,
+        restoredAt,
+      );
     },
     touchWorker: async (workerId, updatedAt) => {
       await getDbClient().drizzle

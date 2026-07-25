@@ -305,7 +305,7 @@ Codex thread start / resume 成功后必须注册 `threadId -> session context`�
 
 #### 10. Worker 回收要克制（状态：无损 idle release 已落地）
 
-Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已落地无损的 idle release：idle watcher 在 Worker 超过设置的空闲阈值、没有运行中的 turn 或排队输入时，关闭本进程持有的 Maker runtime，并以 CAS 原子写入 `status = idle` 和 `idle_since`。`idle_since != null` 是 runtime 已释放的持久化标记，不是 `idle/running/done/error` 之外的第五种 Worker 状态；Worker 记录、session、历史和上下文都继续保留。
+Worker 的价值在于上下文可延续、可观察、可介入。PR #340 已落地无损的 idle release：idle watcher 在 Worker 超过设置的空闲阈值、没有运行中的 turn 或排队输入时，先以 CAS 持久化 `status = idle` 和 `idle_since` 作为可恢复的释放意图，再关闭本进程持有的 Maker runtime；关闭失败或与发送竞争时按本次标记回滚。持久化优先保证进程在 provider 关闭前后退出都不会留下“thread 已归档但没有恢复标记”的不可恢复窗口；尚未执行归档的标记由 resume 的幂等兼容路径清理。`idle_since != null` 是 runtime 已释放或正在释放的持久化标记，不是 `idle/running/done/error` 之外的第五种 Worker 状态；Worker 记录、session、历史和上下文都继续保留。
 
 再次向该 Worker 派发任务时，既有 resume 链路会复用或重建 runtime，并在任务被接受时恢复运行态。共享 userData 多实例下，watcher 只释放本进程实际持有 runtime 的 Worker；没有本地 runtime 的记录保持不变，由其 runtime owner 负责处理。
 
