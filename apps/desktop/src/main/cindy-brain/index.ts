@@ -1334,7 +1334,7 @@ export function getGhostWorkspaceSlot(): GhostWorkspaceSlot {
       confirmDir: async ({ ghostId, sessionId, dirAbs }) => {
         const bridge = getGhostGrantConfirmBridge();
         if (!bridge) {
-          return { ok: false, message: '确认通道未就绪,请让用户稍后重试' };
+          throw new Error('确认通道未就绪');
         }
         const decision = await bridge.request(sessionId, {
           ghostId,

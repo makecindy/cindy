@@ -4217,20 +4217,29 @@ export const GHOST_WORKSPACE_MIN_INTERVAL_MS = 3000;
  *   确认卡由用户决定(对齐 attachments/dir 过户的两档钳制)。
  * 远程工作区(SSH)v1 不支持,一律拒(fail closed)。
  */
-export interface GhostPipeWorkspaceRequest {
-  type: 'workspace-request';
-  /** v1 只有 ensure-session 一种语义;将来扩能力时在此收窄枚举。 */
-  kind: 'ensure-session';
-  mode: 'pick' | 'dir';
-  /** mode:'dir' 必填:目标项目目录的本机绝对路径。 */
-  dir?: string;
-  /** mode:'dir' 必填:当前在途 ghost_call 的 callId。 */
-  callId?: string;
-  /** pick 模式选择框里的用途说明(净化后随插件名展示);也用作新会话标题。 */
-  title?: string;
-  /** 建成/命中后是否跳转聚焦到该会话(缺省 false,只落侧边栏)。 */
-  focus?: boolean;
-}
+export type GhostPipeWorkspaceRequest =
+  | {
+      type: 'workspace-request';
+      kind: 'ensure-session';
+      mode: 'pick';
+      /** pick 模式选择框里的用途说明(净化后随插件名展示);也用作新会话标题。 */
+      title?: string;
+      /** 建成/命中后是否跳转聚焦到该会话(缺省 false,只落侧边栏)。 */
+      focus?: boolean;
+    }
+  | {
+      type: 'workspace-request';
+      kind: 'ensure-session';
+      mode: 'dir';
+      /** 目标项目目录的本机绝对路径。 */
+      dir: string;
+      /** 当前在途 ghost_call 的 callId。 */
+      callId: string;
+      /** 用作新会话标题(净化后展示)。 */
+      title?: string;
+      /** 建成/命中后是否跳转聚焦到该会话(缺省 false,只落侧边栏)。 */
+      focus?: boolean;
+    };
 
 /** workspace 槽结构化返回。绝对路径不回沙箱,只给目录 basename。 */
 export type GhostPipeWorkspaceResult =
