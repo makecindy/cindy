@@ -452,8 +452,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -662,6 +662,97 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-openai-custom-tool');
   });
 
+  it.each([
+    'moonshot/kimi-k3',
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash',
+  ])('normalizes strict gateway history for model %s', async (model) => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '我先检查项目目录。' }],
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '' }],
+        },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '接着检查工作区。' }],
+        },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model,
+      input: [
+        { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '我先检查项目目录。' }],
+        },
+        { type: 'function_call', name: 'exec_command', call_id: 'call_2', arguments: '{"cmd":"git status"}' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'clean' },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '接着检查工作区。' }],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] },
+      ],
+    });
+  });
+
+  it('keeps interleaved tool history unchanged for non-strict gateway models', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const input = [
+      { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'checking' }] },
+      { type: 'function_call_output', call_id: 'call_1', output: '/repo' },
+    ];
+    const original = { model: 'qwen/qwen3.7-max', input };
+    let current: unknown = original;
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+  });
+
   it('normalizes requests to ByteDance Seed Responses capabilities', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -688,6 +779,15 @@ describe('codex proxy host', () => {
       parallel_tool_calls: false,
       input: [
         { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier answer' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '' }] },
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [
+            { type: 'output_text', text: '' },
+            { type: 'output_text', text: 'non-empty remainder' },
+          ],
+        },
         { type: 'reasoning', summary: [], content: null },
         { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
       ],
@@ -718,6 +818,12 @@ describe('codex proxy host', () => {
           role: 'assistant',
           status: 'completed',
           content: [{ type: 'output_text', text: 'earlier answer' }],
+        },
+        {
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'non-empty remainder' }],
         },
         { type: 'reasoning', summary: [], content: null },
         { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
@@ -1213,7 +1319,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(10); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(11); // encrypted activeStrip, image generation activeStrip, instructions 注入, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

@@ -641,24 +641,133 @@ function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<strin
   return next;
 }
 
-/** Volcengine requires replayed assistant messages to carry their output status. */
+const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
+  'moonshot/kimi-k3',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+]);
+const RESPONSE_TOOL_CALL_TYPES = new Set(['function_call', 'custom_tool_call']);
+const RESPONSE_TOOL_OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
+
+function responseToolCallId(item: unknown, output: boolean): string | null {
+  if (!isPlainObject(item)) return null;
+  const supportedTypes = output ? RESPONSE_TOOL_OUTPUT_TYPES : RESPONSE_TOOL_CALL_TYPES;
+  if (!supportedTypes.has(typeof item.type === 'string' ? item.type : '')) return null;
+  return typeof item.call_id === 'string' && item.call_id.length > 0 ? item.call_id : null;
+}
+
+function stripEmptyResponseMessage(item: unknown): { item: unknown; changed: boolean } | null {
+  if (!isPlainObject(item) || item.type !== 'message') return { item, changed: false };
+  if (item.content === '') return null;
+  if (!Array.isArray(item.content)) return { item, changed: false };
+
+  const content = item.content.filter((part) => !(
+    isPlainObject(part) &&
+    (part.type === 'input_text' || part.type === 'output_text') &&
+    part.text === ''
+  ));
+  if (content.length === 0) return null;
+  return content.length === item.content.length
+    ? { item, changed: false }
+    : { item: { ...item, content }, changed: true };
+}
+
+/** Volcengine requires replayed assistant messages to carry their output status and non-empty text. */
 function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<string, unknown> | null {
   if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.input)) return null;
 
   let changed = false;
-  const input = body.input.map((item) => {
-    if (
-      !isPlainObject(item) ||
-      item.type !== 'message' ||
-      item.role !== 'assistant' ||
-      typeof item.status === 'string'
-    ) {
-      return item;
+  const input: unknown[] = [];
+  for (const item of body.input) {
+    const normalized = stripEmptyResponseMessage(item);
+    if (!normalized) {
+      changed = true;
+      continue;
     }
-    changed = true;
-    return { ...item, status: 'completed' };
-  });
+    if (normalized.changed) changed = true;
+
+    const nextItem = normalized.item;
+    if (
+      isPlainObject(nextItem) &&
+      nextItem.type === 'message' &&
+      nextItem.role === 'assistant' &&
+      typeof nextItem.status !== 'string'
+    ) {
+      changed = true;
+      input.push({ ...nextItem, status: 'completed' });
+      continue;
+    }
+    input.push(nextItem);
+  }
   return changed ? { ...body, input } : null;
+}
+
+/**
+ * LiteLLM converts gateway Responses history to Chat Completions for these models.
+ * Their native APIs require every assistant tool call to be followed immediately
+ * by its tool result, while Codex may persist an assistant progress message between
+ * the Responses function_call and function_call_output items. Codex may also persist
+ * empty assistant output_text items, which Moonshot rejects after history conversion.
+ */
+function normalizeStrictGatewayHistory(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (
+    typeof body.model !== 'string' ||
+    !STRICT_GATEWAY_TOOL_HISTORY_MODELS.has(body.model) ||
+    !Array.isArray(body.input)
+  ) {
+    return null;
+  }
+
+  const matchedOutputs = new Map<number, number>();
+  const usedOutputIndexes = new Set<number>();
+  const outputIndexesByCallId = new Map<string, number[]>();
+  const outputCursorByCallId = new Map<string, number>();
+  for (let index = 0; index < body.input.length; index += 1) {
+    const outputCallId = responseToolCallId(body.input[index], true);
+    if (!outputCallId) continue;
+    const indexes = outputIndexesByCallId.get(outputCallId) ?? [];
+    indexes.push(index);
+    outputIndexesByCallId.set(outputCallId, indexes);
+  }
+
+  for (let callIndex = 0; callIndex < body.input.length; callIndex += 1) {
+    const callId = responseToolCallId(body.input[callIndex], false);
+    if (!callId) continue;
+
+    const outputIndexes = outputIndexesByCallId.get(callId);
+    if (!outputIndexes) continue;
+    let cursor = outputCursorByCallId.get(callId) ?? 0;
+    while (cursor < outputIndexes.length && outputIndexes[cursor] <= callIndex) cursor += 1;
+    if (cursor >= outputIndexes.length) continue;
+
+    const outputIndex = outputIndexes[cursor];
+    outputCursorByCallId.set(callId, cursor + 1);
+    matchedOutputs.set(callIndex, outputIndex);
+    usedOutputIndexes.add(outputIndex);
+  }
+
+  let changed = [...matchedOutputs].some(([callIndex, outputIndex]) => outputIndex !== callIndex + 1);
+  const input: unknown[] = [];
+  for (let index = 0; index < body.input.length; index += 1) {
+    if (usedOutputIndexes.has(index)) continue;
+    const normalized = stripEmptyResponseMessage(body.input[index]);
+    if (!normalized) {
+      changed = true;
+    } else {
+      if (normalized.changed) changed = true;
+      input.push(normalized.item);
+    }
+    const outputIndex = matchedOutputs.get(index);
+    if (outputIndex !== undefined) input.push(body.input[outputIndex]);
+  }
+  return changed ? { ...body, input } : null;
+}
+
+function createStrictGatewayHistoryCompatTransform(): RequestTransform {
+  return (body) => {
+    if (!isPlainObject(body)) return null;
+    return normalizeStrictGatewayHistory(body);
+  };
 }
 
 /** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
@@ -1164,6 +1273,7 @@ function createTransformRequestChain(): RequestTransform[] {
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
+    createStrictGatewayHistoryCompatTransform(),
     createXaiResponsesCompatTransform(),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),

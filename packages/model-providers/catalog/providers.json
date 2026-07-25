@@ -1110,7 +1110,8 @@
       },
       "qwen/qwen3.7-max": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "Qwen 3.7 Max",
         "group": "china",
@@ -1148,7 +1149,8 @@
       },
       "z-ai/glm-5.2": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "GLM-5.2",
         "group": "china",
@@ -1164,7 +1166,8 @@
       },
       "deepseek/deepseek-v4-pro": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "DeepSeek V4 Pro",
         "group": "china",
@@ -1180,7 +1183,8 @@
       },
       "deepseek/deepseek-v4-flash": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "DeepSeek V4 Flash",
         "group": "china",
@@ -1226,7 +1230,8 @@
       },
       "moonshot/kimi-k3": {
         "agents": [
-          "claude-code"
+          "claude-code",
+          "codex"
         ],
         "name": "Kimi K3",
         "group": "china",

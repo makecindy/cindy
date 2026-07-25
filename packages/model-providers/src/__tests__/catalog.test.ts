@@ -147,20 +147,27 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(presets.map((p) => p.id)).toContain('openrouter');
   });
 
-  it('ships product display names for newly discovered XD gateway models', () => {
+  it('ships Codex support metadata for the current XD gateway model set', () => {
     const metadata = BUNDLED_CATALOG.cindyModelMeta as {
       version?: unknown;
       models?: Record<string, unknown>;
     };
     expect(metadata.version).toBe(1);
-    expect(metadata.models?.['bytedance-seed/seed-2.1-pro']).toMatchObject({
-      agents: ['claude-code', 'codex'],
-      name: 'Seed 2.1 Pro',
-    });
-    expect(metadata.models?.['qwen/qwen3.8-max-preview']).toMatchObject({
-      agents: ['claude-code', 'codex'],
-      name: 'Qwen 3.8 Max Preview',
-    });
+    const expected = {
+      'qwen/qwen3.7-max': 'Qwen 3.7 Max',
+      'moonshot/kimi-k3': 'Kimi K3',
+      'z-ai/glm-5.2': 'GLM-5.2',
+      'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
+      'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
+      'bytedance-seed/seed-2.1-pro': 'Seed 2.1 Pro',
+      'qwen/qwen3.8-max-preview': 'Qwen 3.8 Max Preview',
+    };
+    for (const [id, name] of Object.entries(expected)) {
+      expect(metadata.models?.[id], id).toMatchObject({
+        agents: ['claude-code', 'codex'],
+        name,
+      });
+    }
   });
 
   it('models are grouped per-agent (no flat array, no rogue agent keys)', () => {
