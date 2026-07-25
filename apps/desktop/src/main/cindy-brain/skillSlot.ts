@@ -182,7 +182,10 @@ export async function reconcileGhostSkillLinks(
       // 活链接:目标在当前 brainRoot 内才归我们管;他 owner / 外来链接不碰。
       if (!isSameOrInside(real, brainRootCompare)) continue;
       const want = desired.get(entName);
-      if (want !== undefined && real === normalizeForCompare(want.target)) {
+      const wantCompare = want
+        ? ((await realPathOrNull(want.target)) ?? normalizeForCompare(want.target))
+        : null;
+      if (want !== undefined && real === wantCompare) {
         managedLive.set(entName, real);
       } else {
         toRemove.push(entName);

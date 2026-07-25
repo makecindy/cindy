@@ -824,7 +824,7 @@ my-ghost/
 见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`fs\`(请主机
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
-可信 session_id / workdir 注入 args,见 §4.13)、\`pick\`(请主机弹系统选文件夹窗口,
+可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`pick\`(请主机弹系统选文件夹窗口,
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
 预览标签,见 §4.15)、\`skill\`(捆绑 Agent Skills:随包 SKILL.md 技能,启用后
 Claude Code 与 Codex 都能发现,见 §4.16)。
@@ -2210,9 +2210,9 @@ const maker = require('@taptap/maker'); // 之后它的自启动全部走了正�
 cindy.onHostMessage(async (msg) => {
   if (msg.type !== 'tool-call') return;
   const ctx = msg.args.session_context;
-  // ctx = { session_id, workdir, workdir_is_local }
-  if (ctx?.workdir_is_local && ctx.workdir) {
-    // 只有 workdir_is_local === true 才能把 workdir 当本机路径交给 Node 侧
+  // ctx = { session_id, workdir, workdir_is_local, workdir_is_read_only }
+  if (ctx?.workdir_is_local && !ctx.workdir_is_read_only && ctx.workdir) {
+    // 只有本地且非只读时才能把 workdir 交给 Node 侧修改
     await cindy.node.request({ method: 'project/build', params: { dir: ctx.workdir } });
   }
 });
@@ -2225,6 +2225,8 @@ cindy.onHostMessage(async (msg) => {
 - \`workdir_is_local\` 是安全核心:会话跑在 SSH 远程工作区(或主机证明不了是本地)
   时为 \`false\`,此时 \`workdir\` 是远端路径,**绝不能**当本机路径读写——同名本机
   目录可能存在,写下去就是事故;
+- \`workdir_is_read_only\` 来自宿主对会话 permission / plan 状态的统一裁决;
+  为 \`true\` 时只允许检查、列举等只读操作,不得初始化、构建或以其它方式修改 workdir;
 - 这只是"位置信息",不是文件访问权:读写仍走 fs 槽 / node 槽各自的守门;
 - 未声明本槽的插件,args 里永远没有 \`session_context\` 字段。
 

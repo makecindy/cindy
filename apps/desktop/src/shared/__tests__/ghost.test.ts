@@ -2289,25 +2289,67 @@ describe('ghost · 2026-07-23 通用能力四件套(session-context / pick / pre
       session_id: null,
       workdir: '/als/dir',
       workdir_is_local: false,
+      workdir_is_read_only: true,
     });
     // 有 sessionId 但查无会话:同样不可当本地
     expect(deriveGhostSessionContext('s1', '/als/dir', null)).toEqual({
       session_id: 's1',
       workdir: '/als/dir',
       workdir_is_local: false,
+      workdir_is_read_only: true,
     });
     // 本地会话:workdir 取会话真身,可当本地
     expect(
-      deriveGhostSessionContext('s1', null, { workingDir: '/proj', remoteHostId: null }),
-    ).toEqual({ session_id: 's1', workdir: '/proj', workdir_is_local: true });
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/proj',
+        remoteHostId: null,
+        workdirIsReadOnly: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/proj',
+      workdir_is_local: true,
+      workdir_is_read_only: false,
+    });
+    // 计划 / 只读会话:位置仍是本地,但插件不得修改 workdir
+    expect(
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/proj',
+        remoteHostId: null,
+        workdirIsReadOnly: true,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/proj',
+      workdir_is_local: true,
+      workdir_is_read_only: true,
+    });
     // SSH 远程会话:路径给(远端事实),但绝不许当本地
     expect(
-      deriveGhostSessionContext('s1', null, { workingDir: '/remote/proj', remoteHostId: 'h1' }),
-    ).toEqual({ session_id: 's1', workdir: '/remote/proj', workdir_is_local: false });
+      deriveGhostSessionContext('s1', null, {
+        workingDir: '/remote/proj',
+        remoteHostId: 'h1',
+        workdirIsReadOnly: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: '/remote/proj',
+      workdir_is_local: false,
+      workdir_is_read_only: false,
+    });
     // 会话存在但没 workdir:没有可当本地的对象
     expect(
-      deriveGhostSessionContext('s1', null, { workingDir: null, remoteHostId: null }),
-    ).toEqual({ session_id: 's1', workdir: null, workdir_is_local: false });
+      deriveGhostSessionContext('s1', null, {
+        workingDir: null,
+        remoteHostId: null,
+        workdirIsReadOnly: false,
+      }),
+    ).toEqual({
+      session_id: 's1',
+      workdir: null,
+      workdir_is_local: false,
+      workdir_is_read_only: false,
+    });
   });
 });
 

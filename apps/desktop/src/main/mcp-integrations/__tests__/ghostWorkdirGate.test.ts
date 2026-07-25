@@ -37,6 +37,7 @@ vi.mock('../../logger.js', () => ({
 // ALS 语境:恒缺省 → resolveSessionContext 走建线闭包 ctx(claude 路径同款)。
 vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => undefined }));
 
+const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
 const setupAssessmentMock = vi.fn((_ghostId: string) => ({
@@ -50,6 +51,12 @@ const ensureReadyMock = vi.fn(
     assessment: { state: 'ready' as const, revision: 0, groups: [] },
   }),
 );
+const sessionSnapshotMock = vi.fn(async () => ({
+  workingDir: WORKDIR,
+  permissionMode: 'auto',
+  planModeEnabled: false,
+  remoteHostId: null,
+}));
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: listMock }),
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
@@ -80,6 +87,9 @@ vi.mock('../../cindy-brain/ghostLocalPathGrant.js', () => ({ classifyLocalAttach
 vi.mock('../../cindy-brain/cardService.js', () => ({ withCardToken: (r: unknown) => r }));
 vi.mock('../../cindy-brain/forge.js', () => ({ FORGE_GUIDE: 'guide', packGhostDir: vi.fn() }));
 vi.mock('../../cindy-brain/openFileInstall.js', () => ({ handleIncomingCindyFile: vi.fn() }));
+vi.mock('../../localDb/ipc/sessions.js', () => ({
+  getSessionFsSnapshot: sessionSnapshotMock,
+}));
 vi.mock('../../cindy-media/blobStore.js', () => ({}));
 vi.mock('../../cindy-media/ledger.js', () => ({}));
 vi.mock('../../cindy-media/attachmentGrantGate.js', () => ({ chatAttachmentOrigin: vi.fn() }));
@@ -90,12 +100,16 @@ const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisab
   await import('../../cindy-brain/ghostWorkdirPrefs');
 import type { LiziMcpSessionContext } from '@cindy/mcps';
 
-const WORKDIR = '/proj/alpha';
-
-function chipGhost(id: string): unknown {
+function chipGhost(id: string, slots: string[] = ['tool']): unknown {
   return {
     enabled: true,
-    manifest: { id, name: `Ghost ${id}`, kind: 'chip', tools: [{ name: 'run', description: 'd' }] },
+    manifest: {
+      id,
+      name: `Ghost ${id}`,
+      kind: 'chip',
+      slots,
+      tools: [{ name: 'run', description: 'd' }],
+    },
   };
 }
 
@@ -129,6 +143,13 @@ beforeEach(() => {
   });
   grantAttachmentsMock.mockReset();
   logWarnMock.mockClear();
+  sessionSnapshotMock.mockReset();
+  sessionSnapshotMock.mockResolvedValue({
+    workingDir: WORKDIR,
+    permissionMode: 'auto',
+    planModeEnabled: false,
+    remoteHostId: null,
+  });
   clearAllPrefs();
 });
 
@@ -260,5 +281,44 @@ describe('ghost_call 兜底拒绝', () => {
     expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('session-context 宿主铸造', () => {
+  it('剥除上游伪造值，并按会话权限注入可信只读状态', async () => {
+    listMock.mockReturnValue([chipGhost('art', ['tool', 'session-context'])]);
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: WORKDIR,
+      permissionMode: 'auto',
+      planModeEnabled: true,
+      remoteHostId: null,
+    });
+
+    const deps = makeDeps();
+    await deps.callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {
+        session_context: {
+          session_id: 'forged',
+          workdir: '/tmp/forged',
+          workdir_is_local: true,
+          workdir_is_read_only: false,
+        },
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: {
+          session_context: {
+            session_id: 's1',
+            workdir: WORKDIR,
+            workdir_is_local: true,
+            workdir_is_read_only: true,
+          },
+        },
+      }),
+    );
   });
 });

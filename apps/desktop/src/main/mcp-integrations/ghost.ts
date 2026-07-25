@@ -61,6 +61,7 @@ import {
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
+import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
@@ -121,15 +122,26 @@ function dirGrantMemoryKey(
 /**
  * session-context 槽注入体铸造(能力「盖章工作单」):只有主机能证明会话
  * 不是远程工作区(sessions.remoteHostId 为空)时 workdir_is_local 才为 true;
- * 证明不了(无 sessionId 语境 / 查无会话 / 远程会话)一律 false——插件不得把
- * workdir 当本机路径用(fail closed,plugin-security-and-authoring.md §6)。
+ * workdir_is_read_only 复用 fs 槽的 permission / plan 裁决,避免插件靠 prompt
+ * 猜测。证明不了会话时两项都 fail closed。
  */
 async function buildGhostSessionContext(
   sessionId: string | null,
   alsWorkdir: string | null,
 ): Promise<GhostSessionContextInjected> {
   const snapshot = sessionId ? await getSessionFsSnapshot(sessionId) : null;
-  return deriveGhostSessionContext(sessionId, alsWorkdir, snapshot);
+  return deriveGhostSessionContext(
+    sessionId,
+    alsWorkdir,
+    snapshot
+      ? {
+          workingDir: snapshot.workingDir,
+          remoteHostId: snapshot.remoteHostId,
+          workdirIsReadOnly:
+            workdirWriteVerdict(snapshot.permissionMode, snapshot.planModeEnabled) === 'deny',
+        }
+      : null,
+  );
 }
 
 /** 意识显示名(确认卡标题用;查不到回落 id)。 */

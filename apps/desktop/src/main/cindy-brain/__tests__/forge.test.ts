@@ -435,6 +435,7 @@ describe('FORGE_GUIDE', () => {
       // 2026-07-23 通用能力四件套:会话上下文 / node 多入口 / 目录选择 / 面板预览。
       '会话上下文(session-context 槽)',
       'workdir_is_local',
+      'workdir_is_read_only',
       'node.entries',
       'node.secretBindings',
       'request.cindy.secrets',

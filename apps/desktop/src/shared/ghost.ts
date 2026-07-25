@@ -72,7 +72,8 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 字节永远由主机落盘,沙箱本身仍无 fs——本槽是"申请主机代写"的资格,
  * 不是文件系统访问权。
  * 'session-context' = 会话上下文(2026-07-23):agent 派活(tool-call)时,主机把
- * 当次会话的可信 {session_id, workdir, workdir_is_local} 注入 args.session_context。
+ * 当次会话的可信 {session_id, workdir, workdir_is_local, workdir_is_read_only}
+ * 注入 args.session_context。
  * 只注入宿主认证过的事实,插件与 agent 自报的同名字段一律被剥除;远程工作区
  * (workdir 不在本机)时 workdir_is_local=false,插件不得把它当本机路径用。
  * 'pick' = 目录选择(2026-07-23):插件经管子申请主机弹**系统级**选文件夹窗口,
@@ -4091,38 +4092,56 @@ export type GhostPipeNodeResult =
  * session-context 槽注入到 tool-call args.session_context 的形态(主机铸造,
  * snake_case 与 dir_deposit / save_deposit 同风格)。
  *
- * workdir_is_local 是本注入的安全核心:只有主机能证明「该会话不是远程工作区
+ * workdir_is_local 是本注入的位置安全核心:只有主机能证明「该会话不是远程工作区
  * (sessions.remoteHostId 为空)」时才为 true;证明不了(远程会话 / 查无会话 /
  * 无 sessionId 语境)一律 false——插件此时**不得**把 workdir 当本机路径交给
  * Node 侧读写(fail closed,见 docs/dev-rules/plugin-security-and-authoring.md §6)。
+ * workdir_is_read_only 则由同一份会话 permission / plan 状态铸造;为 true 时
+ * 插件不得修改当前 workdir。证明不了会话状态时同样 fail closed 为 true。
  */
 export interface GhostSessionContextInjected {
   session_id: string | null;
   workdir: string | null;
   workdir_is_local: boolean;
+  workdir_is_read_only: boolean;
 }
 
 /**
  * session-context 注入体推导(纯函数;main 侧查会话快照后调用):
- * - 无 sessionId 语境 / 查无会话:回落 ALS workdir 且恒 workdir_is_local=false
- *   (证明不了就不许当本机路径,fail closed);
+ * - 无 sessionId 语境 / 查无会话:回落 ALS workdir,但恒 workdir_is_local=false
+ *   且 workdir_is_read_only=true(证明不了就不许当本机路径或修改,fail closed);
  * - 有快照:workdir 取会话真身,只有 remoteHostId 为空且 workdir 非空才算本地。
  */
 export function deriveGhostSessionContext(
   sessionId: string | null,
   fallbackWorkdir: string | null,
-  snapshot: { workingDir: string | null; remoteHostId: string | null } | null,
+  snapshot: {
+    workingDir: string | null;
+    remoteHostId: string | null;
+    workdirIsReadOnly: boolean;
+  } | null,
 ): GhostSessionContextInjected {
   if (!sessionId) {
-    return { session_id: null, workdir: fallbackWorkdir, workdir_is_local: false };
+    return {
+      session_id: null,
+      workdir: fallbackWorkdir,
+      workdir_is_local: false,
+      workdir_is_read_only: true,
+    };
   }
   if (!snapshot) {
-    return { session_id: sessionId, workdir: fallbackWorkdir, workdir_is_local: false };
+    return {
+      session_id: sessionId,
+      workdir: fallbackWorkdir,
+      workdir_is_local: false,
+      workdir_is_read_only: true,
+    };
   }
   return {
     session_id: sessionId,
     workdir: snapshot.workingDir,
     workdir_is_local: snapshot.remoteHostId === null && snapshot.workingDir !== null,
+    workdir_is_read_only: snapshot.workdirIsReadOnly,
   };
 }
 

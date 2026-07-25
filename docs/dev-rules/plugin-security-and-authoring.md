@@ -122,10 +122,6 @@
 
 - `networkSlot.ts` 的 `as: 'media'` 不能只信任 Content-Type（GLB 常见
   `application/octet-stream`），需要安全的 magic-byte／扩展名嗅探。
-- `skill` 槽尚未镜像进协议仓（`cindy-protocol/packages/plugin-protocol/src/manifest.ts`
-  的 `GHOST_SLOTS` 与校验器是桌面端的手工双份）：本地／手动安装不受影响，但
-  plugin-market 分发声明了 skill 槽的包会被服务端校验拒绝，需与 plugin-server
-  协调后升级 submodule 指针（见 `protocol-and-submodules.md`）。
 - SSH 远程场景必须让 `LiziMcpSessionContext` 携带 remote 标识；目录过户不得回退读取本机
   同名路径，无法证明来源时 **fail closed**。
 - 手机版仍需把历史 mivo 动作按钮降级为纯展示。
