@@ -287,6 +287,22 @@ export class GhostCindySlot {
     }
     const aspectRatio = p.aspectRatio as GhostImageAspectRatio | undefined;
 
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost || !ghost.enabled) {
+      return { ok: false, message: '意识不在可用状态' };
+    }
+    if (!ghost.manifest.slots?.includes('cindy')) {
+      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    }
+    // 能力粒度资格审:详单里没申请的动作点不了(缺详单 = 零能力,提示作者补声明)。
+    const declaredActions: readonly string[] = ghost.manifest.cindy?.[info.category] ?? [];
+    if (!declaredActions.includes(info.action)) {
+      return {
+        ok: false,
+        message: `本意识未声明${CATEGORY_LABEL[info.category]}「${info.verb}」能力(身份卡 cindy.${info.category} 缺 "${info.action}"),请意识作者更新声明`,
+      };
+    }
+
     // 选型优先级(低 → 高逐层覆盖):出厂默认 → 档位(意识意图,主机翻译)
     // → 意识专属覆盖(用户在详情页钉的)→ 调用显式点名(用户当场说的)。
     // 意识报了白名单外的名字 = 拒,不静默降级。配置按类目取(图像/视频
@@ -294,16 +310,13 @@ export class GhostCindySlot {
     const cfg = info.category === 'image' ? this.deps.getImageConfig() : this.deps.getVideoConfig();
     // 目录没给该类目任何模型 = 能力暂不可用:早拒并说清原因,不落回任何写死型号
     // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
-    // 话术三件事:①这是主机侧临时状态,不是插件缺这项功能(工具仍在花名册里,
-    // 摘掉工具会让 AI 误报"插件没这能力");②明确劝退重试(裸"请稍后重试"会
-    // 引来连环空转);③指一条用户能自己走的路。
     if (cfg.models.length === 0 || cfg.defaults === null) {
       const category = CATEGORY_LABEL[info.category];
       return {
         ok: false,
         message:
           `主机当前没有可用的${category}模型(模型目录暂时取不到,不是本插件缺${category}能力)。` +
-          '这是主机侧临时状态,不要重试;请如实告知用户,可稍后再试或重启应用重新加载模型目录。',
+          '这是主机侧临时状态,不要频繁重试;请如实告知用户,可稍后再试或重启应用重新加载模型目录。',
       };
     }
     const defaults = cfg.defaults;
@@ -330,23 +343,6 @@ export class GhostCindySlot {
         return { ok: false, message: '不支持的模型(不在主机白名单内)' };
       }
       model = p.model;
-    }
-
-    const ghost = this.deps.getGhost(ghostId);
-    if (!ghost || !ghost.enabled) {
-      return { ok: false, message: '意识不在可用状态' };
-    }
-    if (!ghost.manifest.slots?.includes('cindy')) {
-      // 身份卡没声明模型槽 = 结构上没有这个器官,直接拒。
-      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
-    }
-    // 能力粒度资格审:详单里没申请的动作点不了(缺详单 = 零能力,提示作者补声明)。
-    const declaredActions: readonly string[] = ghost.manifest.cindy?.[info.category] ?? [];
-    if (!declaredActions.includes(info.action)) {
-      return {
-        ok: false,
-        message: `本意识未声明${CATEGORY_LABEL[info.category]}「${info.verb}」能力(身份卡 cindy.${info.category} 缺 "${info.action}"),请意识作者更新声明`,
-      };
     }
 
     // 吃源图的代办(改图/图生视频):指纹形状先粗筛(不占在途名额),
