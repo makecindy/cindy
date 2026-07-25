@@ -45,6 +45,11 @@ interface VendorSegmentedSwitcherProps {
    * 调用方需自行对「显式同值」去重(如 handler 里 next === persisted 时 return)。
    */
   reselectEmitsChange?: boolean;
+  /**
+   * tablist 的可及名。多实例同屏(如 IM 目录偏好逐行一个)时必须传**本地化且可区分**
+   * 的名字,否则读屏用户听到的全是同一个英文兜底,行与行无法分辨。
+   */
+  ariaLabel?: string;
 }
 
 interface SegmentOption {
@@ -69,6 +74,7 @@ export function VendorSegmentedSwitcher({
   iconOnly = false,
   visualVariant = 'default',
   reselectEmitsChange = false,
+  ariaLabel,
 }: VendorSegmentedSwitcherProps) {
   const isCreateAgentVariant = visualVariant === 'create-agent';
   return (
@@ -91,7 +97,7 @@ export function VendorSegmentedSwitcher({
       )}
       style={{ width }}
       role="tablist"
-      aria-label="Vendor switcher"
+      aria-label={ariaLabel ?? 'Vendor switcher'}
     >
       {OPTIONS.map((opt) => {
         const isActive = value === opt.vendor;

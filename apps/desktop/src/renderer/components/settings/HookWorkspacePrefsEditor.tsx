@@ -447,6 +447,9 @@ export function WorkspacePrefsEditor({
         <VendorSegmentedSwitcher
           value={vendorKey}
           width={168}
+          // 可及名 = 本地化字段名 + 行别名:每行目录都有一个同样的分段,不带别名时
+          // 读屏听到的全部是同一个名字,行与行无法分辨(codex review)。
+          ariaLabel={`${t('settings.tina.prefs.agentLabel')} · ${alias}`}
           disabled={disabled || effAgentCaps === null}
           // 当前段可能是**继承值**(prefs.agentKind 为 null / 过期未知值时显示解析出的
           // 默认 agent),重选它 = 钉成显式偏好 —— 与模型字段的 reselectEmitsChange 同语义;

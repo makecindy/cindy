@@ -292,6 +292,9 @@ export function PermissionSelector({
             'w-[var(--radix-popover-trigger-width)] rounded-[12px] p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',
+            // 共享 PopoverContent 自带 shadow-md;DESIGN.md §4 面板无阴影(分离感来自
+            // 层色/描边),显式压掉。
+            'shadow-none',
           )}
         >
           {optionsList}

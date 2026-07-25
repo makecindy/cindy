@@ -114,7 +114,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
 
     // agent: VendorSegmentedSwitcher 的品牌分段(真实渲染),不再是露原始 id 的下拉
-    const tablist = screen.getByRole('tablist', { name: 'Vendor switcher' });
+    const tablist = screen.getByRole('tablist', { name: 'settings.tina.prefs.agentLabel · cindy' });
     expect(screen.getByRole('tab', { name: 'Claude' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'Codex' }).getAttribute('aria-selected')).toBe('false');
     expect(tablist.textContent).not.toContain('claude-code');
@@ -225,7 +225,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
   it('不可编辑时整行三个控件同步禁用', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ editable: false })} />);
 
-    expect(screen.getByRole('tablist', { name: 'Vendor switcher' }).className).toContain(
+    expect(screen.getByRole('tablist', { name: 'settings.tina.prefs.agentLabel · cindy' }).className).toContain(
       'pointer-events-none',
     );
     expect(screen.getByTestId('model-selector').getAttribute('data-disabled')).toBe('true');

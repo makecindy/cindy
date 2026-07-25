@@ -168,7 +168,12 @@ describe('PermissionSelector triggerVariant', () => {
     const fieldPanel = await screen.findByRole('listbox');
     // Radix PopoverContent 而非 morph 面板:无 data-morph-side 祖先,有 Radix 定位包装
     expect(fieldPanel.closest('[data-morph-side]')).toBeNull();
-    expect(fieldPanel.closest('[data-radix-popper-content-wrapper]')).not.toBeNull();
+    const popperWrapper = fieldPanel.closest('[data-radix-popper-content-wrapper]');
+    expect(popperWrapper).not.toBeNull();
+    // DESIGN.md §4:下拉面板无阴影(分离感来自层色/描边)。共享 PopoverContent 默认
+    // shadow-md,field 面板必须显式压掉(codex review 2026-07-25)。
+    const content = popperWrapper?.firstElementChild as HTMLElement;
+    expect(content.className).toContain('shadow-none');
     expect(screen.getAllByRole('option')).toHaveLength(4);
   });
 
