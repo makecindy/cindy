@@ -302,6 +302,7 @@ import {
   resetHookControlOwnerBoundary,
   disposeHookControl,
 } from './hook-control';
+import { startAccountIntegrationsAfterOwnerDbReady } from './accountIntegrationStartup';
 import { registerSkillhubIpc } from './skillhub/registerIpc';
 import { SkillhubMarketService } from './skillhub/marketService';
 import { skillhubAutoSyncService } from './skillhub/autoSyncService';
@@ -835,8 +836,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // the auth-change activation pass after the new boundary is committed.
   await waitForGhostMutations();
   suspendAllGhosts();
-  // Personal IM channels have the same DB boundary. Relogin restarts them via
-  // app:ready-for-bot after the new DbClient is ready.
+  // Personal IM channels have the same DB boundary. Relogin restarts them from
+  // the next owner DB-ready callback; app:ready-for-bot remains a compatibility
+  // retry after the new DbClient is ready.
   try {
     await stopImConnection(reason);
   } catch (err) {
@@ -5390,22 +5392,23 @@ app.on('ready', async () => {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      // Hook ingress has the same hard dependency on the current owner's DB as
-      // the personal IM channel. Activate it from this authoritative Main-side
-      // readiness point instead of relying only on the renderer's later
-      // fire-and-forget app:ready-for-bot signal. That signal can be lost during
-      // cold-start auto-login or an owner remount, leaving an enabled Hook
-      // permanently disconnected until the user toggles it.
-      try {
-        startHookControlAccount();
-      } catch (err) {
-        // Hook is an optional account integration. A damaged config or endpoint
-        // must not roll back an otherwise healthy owner DB; the renderer's
-        // compatibility signal below provides a later retry.
-        dbClientLog.warn('hook-control activation after owner DB ready failed (non-fatal)', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // Hook and personal IM both require the current owner's DbClient. Start
+      // them from this authoritative Main-side readiness point instead of
+      // relying only on the renderer's later fire-and-forget
+      // app:ready-for-bot signal. That signal can be lost during cold-start
+      // auto-login or an owner remount, leaving a saved Feishu bot disconnected
+      // and unable to claim the owner from its first p2p message.
+      startAccountIntegrationsAfterOwnerDbReady(userId, {
+        isOwnerCurrent: (ownerId) =>
+          isLocalDbOwnerCurrent(
+            authManager.getAuthState(),
+            ownerId,
+            isAppSessionBoundaryPending(),
+          ),
+        startHookControlAccount,
+        startImConnection,
+        log: dbClientLog,
+      });
       attemptStartScheduler();
       attemptStartEmbeddingHost();
       // 旧「资料本地覆写」方案退役(2026-07)的一次性清理:清当前账号名下的
@@ -5545,12 +5548,11 @@ app.on('ready', async () => {
   im.registerIpc();
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
-  // handler。FeishuBot 的 WS 长连接此处不启动 —— 由 renderer 在用户登录 +
-  // localDb 就绪后通过 'app:ready-for-bot' IPC 触发(见下方 handler)。
+  // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
   startImOrchestrators();
   // Renderer → main 的 "应用真正就绪" 兼容信号。LocalDbGate 在
-  // localDb.ensureReady 成功之后调一次。Hook 已在 localDb onReady 的 Main
-  // 权威时点激活，这里保留幂等兜底；FeishuBot 仍由本信号启动。
+  // localDb.ensureReady 成功之后调一次。Hook 与 FeishuBot 已在 localDb onReady
+  // 的 Main 权威时点激活，这里为旧时序与瞬时失败保留幂等重试。
   ipcMain.handle('app:ready-for-bot', (event) => {
     assertTrustedAppRendererEvent(event);
     startHookControlAccount();

@@ -161,9 +161,9 @@ export interface HookDispatcherDeps {
    */
   resolveInteraction?: (interactionId: string, buttonId: string) => boolean;
   /**
-   * Production keeps ingress closed until app:ready-for-bot has opened the
-   * account DB. Tests and standalone consumers retain the historical eager
-   * behavior unless they opt out explicitly.
+   * Production keeps ingress closed until the owner DB-ready callback opens
+   * the account boundary. Tests and standalone consumers retain the historical
+   * eager behavior unless they opt out explicitly.
    */
   accountInitiallyActive?: boolean;
   log: { info(msg: string): void; warn(msg: string): void };
