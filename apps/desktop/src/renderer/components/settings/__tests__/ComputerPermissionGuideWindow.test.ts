@@ -136,7 +136,7 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
     expect(status).not.toHaveBeenCalled();
   });
 
-  it('leaves the hidden drag state when Chromium omits dragend', () => {
+  it('requires an explicit copy drop before entering the turn-on state', () => {
     vi.useFakeTimers();
     const startPermissionAppDrag = vi.fn();
     const finishPermissionAppDrag = vi.fn();
@@ -177,7 +177,7 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
     act(() => vi.advanceTimersByTime(PERMISSION_APP_DRAG_UI_FALLBACK_MS));
 
     expect(screen.queryByText('Dragging Computer Use')).toBeNull();
-    expect(screen.getByText('Turn on Computer Use in Accessibility')).toBeTruthy();
+    expect(screen.getByText('Drag Computer Use into Accessibility')).toBeTruthy();
 
     const retryButton = screen.getByRole('button', { name: /Computer Use/ });
     expect(retryButton).toHaveProperty('draggable', true);
@@ -187,6 +187,21 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
 
     expect(startPermissionAppDrag).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Dragging Computer Use')).toBeTruthy();
+
+    fireEvent.dragEnd(retryButton, {
+      dataTransfer: { dropEffect: 'none' },
+    });
+    expect(finishPermissionAppDrag).toHaveBeenLastCalledWith(false);
+    expect(screen.getByText('Drag Computer Use into Accessibility')).toBeTruthy();
+
+    fireEvent.dragStart(retryButton, {
+      dataTransfer: { effectAllowed: 'none' },
+    });
+    fireEvent.dragEnd(retryButton, {
+      dataTransfer: { dropEffect: 'copy' },
+    });
+    expect(finishPermissionAppDrag).toHaveBeenLastCalledWith(true);
+    expect(screen.getByText('Turn on Computer Use in Accessibility')).toBeTruthy();
   });
 });
 

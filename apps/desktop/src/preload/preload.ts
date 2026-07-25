@@ -4479,7 +4479,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:install-driver'),
       grantPermissions: (options?: {
         showGuide?: boolean;
-        initialStatus?: ComputerDriverStatus;
         openedPaneUrl?: string;
       }): Promise<ComputerDriverPermissionGrantResult> =>
         ipcRenderer.invoke('maker:computer:grant-permissions', options),
@@ -4489,8 +4488,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:permission-guide-status'),
       startPermissionAppDrag: (iconDataUrl: string): void =>
         ipcRenderer.send('maker:computer:permission-app-drag-start', { iconDataUrl }),
-      finishPermissionAppDrag: (): void =>
-        ipcRenderer.send('maker:computer:permission-app-drag-end'),
+      finishPermissionAppDrag: (didCopy: boolean): void =>
+        ipcRenderer.send('maker:computer:permission-app-drag-end', { didCopy }),
       cancelPermissionGrant: (): Promise<{ cancelled: boolean }> =>
         ipcRenderer.invoke('maker:computer:cancel-permission-grant'),
       onPermissionGuideCancelled: (callback: () => void): (() => void) =>

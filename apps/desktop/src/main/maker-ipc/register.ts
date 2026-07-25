@@ -79,7 +79,9 @@ import {
   showComputerPermissionGuideWindow,
   startComputerPermissionAppDrag,
 } from '../computer-permission-guide/window.js';
+import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
 import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -6967,24 +6969,31 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
   });
 
-  ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS, async (_event, options?: {
-    showGuide?: boolean;
-    initialStatus?: Awaited<ReturnType<typeof getComputerDriverStatus>>;
-    openedPaneUrl?: string;
-  }) => {
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS, async (_event, payload?: unknown) => {
+    assertTrustedAppRendererEvent(_event);
+    const options = parseComputerPermissionGrantRequest(payload);
+    if (!options) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Computer Use permission request');
+    }
     const shouldShowGuide = shouldUseComputerPermissionGuide({
       platform: process.platform,
-      showGuide: options?.showGuide === true,
+      showGuide: options.showGuide,
       appBundlePath: getComputerDriverAppBundlePath(),
     });
     try {
-      const initialStatus = options?.initialStatus
-        ?? (shouldShowGuide
-          ? await getComputerDriverStatus({ skipPermissionProbe: true })
-          : undefined);
+      // Permission snapshots are mutable TCC state and cannot be accepted from
+      // Renderer. Re-establish the state in Main immediately before guide side
+      // effects, bypassing both daemon and probe caches.
+      const initialStatus = shouldShowGuide
+        ? await getComputerDriverStatus({
+            forcePermissionProbe: true,
+            freshPermissionProbe: true,
+            bypassPermissionProbeCache: true,
+          })
+        : undefined;
       if (shouldShowGuide) {
         if (!initialStatus) throw new Error('Computer Use permission guide status unavailable');
-        if (options?.openedPaneUrl) {
+        if (options.openedPaneUrl) {
           seedOpenedPermissionPane(options.openedPaneUrl);
         }
         await openComputerPermissionPaneForStatus(initialStatus);
@@ -7025,8 +7034,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     startComputerPermissionAppDrag(_event.sender, payload?.iconDataUrl);
   });
 
-  ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_END, (_event) => {
-    finishComputerPermissionAppDrag(_event.sender);
+  ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_END, (_event, payload?: {
+    didCopy?: unknown;
+  }) => {
+    finishComputerPermissionAppDrag(_event.sender, payload?.didCopy);
   });
 
   // 命令型:取消在途授权流程。幂等,无在途 grant 时 no-op。

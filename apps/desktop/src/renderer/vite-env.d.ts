@@ -4335,13 +4335,12 @@ interface ElectronAPI {
       installDriver: () => Promise<ComputerDriverInstallResult>;
       grantPermissions: (options?: {
         showGuide?: boolean;
-        initialStatus?: ComputerDriverStatus;
         openedPaneUrl?: string;
       }) => Promise<ComputerDriverPermissionGrantResult>;
       driverIcon: () => Promise<{ iconDataUrl: string | null }>;
       permissionGuideStatus: () => Promise<ComputerDriverStatus>;
       startPermissionAppDrag: (iconDataUrl: string) => void;
-      finishPermissionAppDrag: () => void;
+      finishPermissionAppDrag: (didCopy: boolean) => void;
       cancelPermissionGrant: () => Promise<{ cancelled: boolean }>;
       onPermissionGuideCancelled: (callback: () => void) => () => void;
       onPermissionGuideStatusChanged: (

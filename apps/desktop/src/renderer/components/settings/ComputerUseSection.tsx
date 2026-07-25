@@ -207,6 +207,8 @@ export function ComputerUseSection({
   const [computerPermissionPending, setComputerPermissionPending] = useState(false);
   const [computerPermissionRecheckPending, setComputerPermissionRecheckPending] = useState(false);
   const [computerDetailsOpen, setComputerDetailsOpen] = useState(false);
+  const computerUseSectionMountedRef = useRef(true);
+  const computerTogglePendingRef = useRef(false);
   const computerPermissionPendingRef = useRef(false);
   const computerPermissionPollTimerRef = useRef<number | null>(null);
   // Native grant remains cancellable while the user is moving between Settings panes.
@@ -230,15 +232,27 @@ export function ComputerUseSection({
     computerPermissionPendingRef.current = computerPermissionPending;
   }, [computerPermissionPending]);
 
-  // Leaving Settings / Plugin detail must also stop the native CuaDriver grant process.
-  // Otherwise the system prompt can survive navigation for the full driver timeout.
+  // Leaving Settings / Plugin detail invalidates the whole enable attempt,
+  // including install and fresh-preflight awaits before the guide is visible.
   useEffect(() => {
+    computerUseSectionMountedRef.current = true;
     return () => {
-      if (computerPermissionPendingRef.current) {
+      computerUseSectionMountedRef.current = false;
+      computerPermissionFlowSeqRef.current += 1;
+      computerEnableIntentRef.current = false;
+      computerPermissionCompletionInFlightRef.current = false;
+      const hadActivePermissionFlow = (
+        computerTogglePendingRef.current
+        || computerPermissionPendingRef.current
+        || computerPermissionGrantInProgressRef.current
+      );
+      resetComputerPermissionFlow();
+      if (hadActivePermissionFlow) {
         cancelNativeComputerPermissionGrant();
       }
+      computerTogglePendingRef.current = false;
     };
-  }, [cancelNativeComputerPermissionGrant]);
+  }, [cancelNativeComputerPermissionGrant, resetComputerPermissionFlow]);
 
   // 引导弹窗的取消:终止当前的一次性授权请求。
   const handleCancelPermissionGuide = useCallback(() => {
@@ -335,7 +349,6 @@ export function ComputerUseSection({
 
   const requestComputerPermissionGrant = useCallback(async (
     reason: string,
-    initialStatus?: ComputerDriverStatus | null,
     openedPaneUrl?: string,
   ) => {
     computerPermissionGrantInProgressRef.current = true;
@@ -345,10 +358,6 @@ export function ComputerUseSection({
         // The native coach presents the drag/enable steps beside System Settings.
         // Permission status itself advances only after explicit user actions.
         showGuide: window.electronAPI.platform === 'darwin',
-        // The explicit preflight check is authoritative for the first visible
-        // native step. Passing it through prevents an already-granted
-        // Accessibility step from flashing before Screen Recording.
-        ...(initialStatus ? { initialStatus } : {}),
         ...(openedPaneUrl ? { openedPaneUrl } : {}),
       });
       log.debug('computer permission grant result', {
@@ -856,6 +865,12 @@ export function ComputerUseSection({
 
   const handleToggleComputer = useCallback(
     async (next: boolean) => {
+      const flowSeq = computerPermissionFlowSeqRef.current;
+      const isCurrentFlow = () => (
+        computerUseSectionMountedRef.current
+        && computerPermissionFlowSeqRef.current === flowSeq
+      );
+      computerTogglePendingRef.current = true;
       setComputerTogglePending(true);
       computerEnableIntentRef.current = next;
       if (next) computerPermissionCompletionInFlightRef.current = false;
@@ -864,6 +879,7 @@ export function ComputerUseSection({
         if (next && !nextStatus?.installed) {
           setComputerInstallPending(true);
           const installResult = await window.electronAPI.maker.computer.installDriver();
+          if (!isCurrentFlow()) return;
           nextStatus = installResult.status;
           setComputerStatus(installResult.status);
           if (!installResult.status.installed) {
@@ -875,6 +891,7 @@ export function ComputerUseSection({
             fresh: true,
             bypassCache: true,
           });
+          if (!isCurrentFlow()) return;
         }
         if (next && isComputerPermissionPreflightInconclusive(nextStatus)) {
           computerEnableIntentRef.current = false;
@@ -884,9 +901,9 @@ export function ComputerUseSection({
           return;
         }
         if (shouldStartComputerPermissionGuide(next, nextStatus)) {
+          if (!isCurrentFlow()) return;
           setComputerPermissionPending(true);
-          const flowSeq = computerPermissionFlowSeqRef.current;
-          nextStatus = await requestComputerPermissionGrant('toggle', nextStatus);
+          nextStatus = await requestComputerPermissionGrant('toggle');
           // 用户在 grant 等待期间点了引导弹窗的「取消」:整个流程已终止,
           // 不再打开系统设置/弹提示。
           if (computerPermissionFlowSeqRef.current !== flowSeq) return;
@@ -905,6 +922,7 @@ export function ComputerUseSection({
           resetComputerPermissionFlow();
         }
 
+        if (!isCurrentFlow()) return;
         await persistComputerEnabled(next);
         if (!next) {
           computerEnableIntentRef.current = false;
@@ -915,6 +933,7 @@ export function ComputerUseSection({
           setComputerStatus(nextStatus);
         }
       } catch (err) {
+        if (!isCurrentFlow()) return;
         log.warn('setProjectEnabled(computer) failed', err);
         computerEnableIntentRef.current = false;
         setComputerPermissionPending(false);
@@ -928,8 +947,11 @@ export function ComputerUseSection({
             : t('settings.computerUse.directControl.toast.toggleFailed'),
         );
       } finally {
-        setComputerInstallPending(false);
-        setComputerTogglePending(false);
+        computerTogglePendingRef.current = false;
+        if (computerUseSectionMountedRef.current) {
+          setComputerInstallPending(false);
+          setComputerTogglePending(false);
+        }
       }
     },
     [
@@ -966,6 +988,7 @@ export function ComputerUseSection({
   const handleOpenComputerPermission = useCallback(
     async (url: string, granted: boolean) => {
       if (computerPermissionPending) return;
+      const flowSeq = computerPermissionFlowSeqRef.current;
       // Open the exact System Settings pane before starting native onboarding.
       // The old order waited for the paused grant flow first, so the user saw
       // no feedback while the guide was preparing and the pane could open late.
@@ -973,13 +996,18 @@ export function ComputerUseSection({
         url,
         granted ? 'badge-granted' : 'badge-missing',
       );
+      if (
+        !computerUseSectionMountedRef.current
+        || computerPermissionFlowSeqRef.current !== flowSeq
+      ) {
+        return;
+      }
       if (!opened) return;
       if (granted) {
         return;
       }
 
       setComputerPermissionPending(true);
-      const flowSeq = computerPermissionFlowSeqRef.current;
       const initialStatus = computerStatus;
       try {
         // Page entry/Recheck already supplied the source-of-truth snapshot.
@@ -994,7 +1022,7 @@ export function ComputerUseSection({
           return;
         }
 
-        const status = await requestComputerPermissionGrant('badge', initialStatus, url);
+        const status = await requestComputerPermissionGrant('badge', url);
         if (computerPermissionFlowSeqRef.current !== flowSeq) return;
         if (isComputerPermissionReady(status)) {
           setComputerPermissionPending(false);
@@ -1010,6 +1038,12 @@ export function ComputerUseSection({
         // let its native observer complete the remaining step.
         toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
       } catch (err) {
+        if (
+          !computerUseSectionMountedRef.current
+          || computerPermissionFlowSeqRef.current !== flowSeq
+        ) {
+          return;
+        }
         log.warn('computer permission grant failed', err);
         setComputerPermissionPending(false);
         resetComputerPermissionFlow();

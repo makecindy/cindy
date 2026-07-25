@@ -231,7 +231,7 @@ function createDeferred<T>(): {
 function finishTestDrag(guide: typeof import('../window')): void {
   const sender = harness.windows[1].webContents as unknown as WebContents;
   guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
-  guide.finishComputerPermissionAppDrag(sender);
+  guide.finishComputerPermissionAppDrag(sender, true);
 }
 
 function writeDragState(state: {
@@ -533,6 +533,36 @@ describe('Electron Computer Use permission guide window', () => {
 
     expect(harness.nativeDismiss).toHaveBeenCalledOnce();
     expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
+    expect(harness.broadcastSend).toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
+  });
+
+  it('keeps the attach timeout armed when the locator finds window bounds first', async () => {
+    vi.useFakeTimers();
+    const nativeStarted = createDeferred<boolean>();
+    harness.nativeShow.mockReturnValueOnce(nativeStarted.promise);
+    harness.locateComputerUseSwitchTarget.mockResolvedValue({
+      status: 'not-found',
+      systemWindowBounds: { x: 200, y: 100, width: 1000, height: 500 },
+    });
+    harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
+    const guide = await import('../window');
+    const show = guide.showComputerPermissionGuideWindow(null);
+
+    await vi.waitFor(() => {
+      expect(harness.nativeShow).toHaveBeenCalledOnce();
+    });
+    finishTestDrag(guide);
+    await vi.waitFor(() => {
+      expect(harness.locateComputerUseSwitchTarget).toHaveBeenCalled();
+    });
+    nativeStarted.resolve(true);
+    await show;
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(harness.nativeDismiss).toHaveBeenCalledOnce();
     expect(harness.broadcastSend).toHaveBeenCalledWith(
       'maker:computer:permission-guide-cancelled',
     );
@@ -1247,7 +1277,7 @@ describe('Electron Computer Use permission guide window', () => {
     harness.locateComputerUseSwitchTarget.mockResolvedValue({ status: 'not-found' });
     const sender = harness.windows[1].webContents as unknown as WebContents;
     guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
-    guide.finishComputerPermissionAppDrag(sender);
+    guide.finishComputerPermissionAppDrag(sender, true);
 
     await vi.waitFor(() => {
       expect(harness.nativeUpdate).toHaveBeenCalledWith(expect.objectContaining({
@@ -1270,7 +1300,7 @@ describe('Electron Computer Use permission guide window', () => {
     });
     expect(guideWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true });
 
-    guide.finishComputerPermissionAppDrag(sender);
+    guide.finishComputerPermissionAppDrag(sender, true);
     expect(guideWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(false);
   });
 
@@ -1365,7 +1395,7 @@ describe('Electron Computer Use permission guide window', () => {
     expect(dragState.screenRecording).toBe(false);
   });
 
-  it('persists drag state when Chromium omits dragend and the restore timeout fires', async () => {
+  it('does not infer a successful drop when Chromium omits dragend', async () => {
     vi.useFakeTimers();
     const guide = await import('../window');
     await guide.showComputerPermissionGuideWindow(null);
@@ -1377,9 +1407,22 @@ describe('Electron Computer Use permission guide window', () => {
     await vi.advanceTimersByTimeAsync(12_000);
 
     const dragState = guide.readPermissionDragState();
-    expect(dragState.accessibility).toBe(true);
+    expect(dragState.accessibility).toBe(false);
     expect(dragState.screenRecording).toBe(false);
     expect(guideWindow.setIgnoreMouseEvents).toHaveBeenCalledWith(false);
+    expect(harness.locateComputerUseSwitchTarget).not.toHaveBeenCalled();
+  });
+
+  it('does not persist or inspect after a cancelled Electron drag', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    const sender = harness.windows[1].webContents as unknown as WebContents;
+
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
+    guide.finishComputerPermissionAppDrag(sender, false);
+
+    expect(guide.readPermissionDragState().accessibility).toBe(false);
+    expect(harness.locateComputerUseSwitchTarget).not.toHaveBeenCalled();
   });
 
   it('does not write drag state when the guide closes during a drag', async () => {

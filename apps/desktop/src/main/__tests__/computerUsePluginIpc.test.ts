@@ -112,6 +112,33 @@ describe('computer use plugin IPC invariants', () => {
       "context?.agentKind === 'codex' || pluginRegistry.isEnabled('computer')",
     );
   });
+
+  it('revalidates Computer Use guide requests at the Main IPC boundary', () => {
+    const registerSource = fs.readFileSync(
+      path.resolve(__dirname, '../maker-ipc/register.ts'),
+      'utf-8',
+    );
+    const handlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS',
+    );
+    const handlerEnd = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.COMPUTER_DRIVER_ICON',
+      handlerStart,
+    );
+    const handlerBody = registerSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(handlerBody).toContain('assertTrustedAppRendererEvent(_event)');
+    expect(handlerBody).toContain('parseComputerPermissionGrantRequest(payload)');
+    expect(handlerBody).toContain("throwIpcError('INVALID_PARAMS'");
+    expect(handlerBody).toContain('freshPermissionProbe: true');
+    expect(handlerBody).toContain('bypassPermissionProbeCache: true');
+    expect(handlerBody).not.toContain('options?.initialStatus');
+    expect(handlerBody.indexOf('getComputerDriverStatus({')).toBeLessThan(
+      handlerBody.indexOf('openComputerPermissionPaneForStatus(initialStatus)'),
+    );
+  });
 });
 
 describe('computer use UI feedback invariants', () => {
@@ -189,6 +216,42 @@ describe('computer use UI feedback invariants', () => {
     expect(listenerEnd).toBeGreaterThan(listenerStart);
     expect(listenerBody).toContain('result.codexMcpRefreshed === false');
     expect(listenerBody).toContain("toast.warning(t('settings.computerUse.codexRefreshDeferred'))");
+  });
+
+  it('invalidates the whole Computer Use enable attempt when Settings unmounts', () => {
+    const sectionSource = fs.readFileSync(
+      path.resolve(__dirname, '../../renderer/components/settings/ComputerUseSection.tsx'),
+      'utf-8',
+    );
+    const cleanupStart = sectionSource.indexOf(
+      '// Leaving Settings / Plugin detail invalidates the whole enable attempt',
+    );
+    const cleanupEnd = sectionSource.indexOf(
+      '// 引导弹窗的取消',
+      cleanupStart,
+    );
+    const toggleStart = sectionSource.indexOf('const handleToggleComputer');
+    const toggleEnd = sectionSource.indexOf(
+      'const handleOpenComputerPermission',
+      toggleStart,
+    );
+    const cleanupBody = sectionSource.slice(cleanupStart, cleanupEnd);
+    const toggleBody = sectionSource.slice(toggleStart, toggleEnd);
+
+    expect(cleanupStart).toBeGreaterThanOrEqual(0);
+    expect(cleanupBody).toContain('computerUseSectionMountedRef.current = false');
+    expect(cleanupBody).toContain('computerPermissionFlowSeqRef.current += 1');
+    expect(cleanupBody).toContain('computerTogglePendingRef.current');
+    expect(cleanupBody).toContain('cancelNativeComputerPermissionGrant()');
+    expect(toggleStart).toBeGreaterThanOrEqual(0);
+    expect(toggleBody).toContain('const flowSeq = computerPermissionFlowSeqRef.current');
+    expect(toggleBody).toContain('if (!isCurrentFlow()) return');
+    expect(toggleBody.indexOf('const flowSeq')).toBeLessThan(
+      toggleBody.indexOf('await window.electronAPI.maker.computer.installDriver()'),
+    );
+    expect(toggleBody.indexOf('if (!isCurrentFlow()) return')).toBeLessThan(
+      toggleBody.indexOf("requestComputerPermissionGrant('toggle')"),
+    );
   });
 });
 

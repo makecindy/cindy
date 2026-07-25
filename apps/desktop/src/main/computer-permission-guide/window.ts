@@ -44,6 +44,11 @@ import {
   MacComputerPermissionGuideNativeHost,
   type ComputerPermissionGuideNativeState,
 } from './MacComputerPermissionGuideNativeHost.js';
+import {
+  isComputerPermissionPaneUrl,
+  MAC_ACCESSIBILITY_SETTINGS_URL,
+  MAC_SCREEN_RECORDING_SETTINGS_URL,
+} from './request.js';
 
 const log = createLogger('computer-permission-guide');
 // v1 was also used as evidence that the row existed. That is not safe: a
@@ -59,10 +64,6 @@ const NATIVE_ATTACH_TIMEOUT_MS = 30_000;
 const DRAG_ICON_DATA_URL_PREFIX = 'data:image/png;base64,';
 const MAX_DRAG_ICON_BASE64_LENGTH = 256 * 1024;
 const PNG_SIGNATURE_BASE64_PREFIX = 'iVBORw0KGgo';
-const MAC_ACCESSIBILITY_SETTINGS_URL =
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
-const MAC_SCREEN_RECORDING_SETTINGS_URL =
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture';
 const GUIDE_WINDOW_MARGIN = 16;
 
 type ComputerStatus = Awaited<ReturnType<typeof getComputerDriverStatus>>;
@@ -342,7 +343,6 @@ function armNativeAttachTimeout(
   if (
     !isOwnedNativeHost(generation, ownerHost)
     || nativeGuideAttached
-    || lastSwitchLocation?.systemWindowBounds
   ) {
     return;
   }
@@ -351,7 +351,6 @@ function armNativeAttachTimeout(
     if (
       !isOwnedNativeHost(generation, ownerHost)
       || nativeGuideAttached
-      || lastSwitchLocation?.systemWindowBounds
     ) {
       return;
     }
@@ -369,12 +368,10 @@ function rememberSwitchLocation(location: ComputerUseSwitchLocationResult): void
         ...lastSwitchLocation,
         systemWindowBounds: location.systemWindowBounds,
       };
-      clearNativeAttachTimeout();
     }
     return;
   }
   lastSwitchLocation = location;
-  if (location.systemWindowBounds) clearNativeAttachTimeout();
 }
 
 export function getComputerPermissionPaneUrl(status: ComputerStatus | null): string | null {
@@ -389,10 +386,7 @@ export function getComputerPermissionPaneUrl(status: ComputerStatus | null): str
 }
 
 export function seedOpenedPermissionPane(url: string): void {
-  if (
-    url === MAC_ACCESSIBILITY_SETTINGS_URL
-    || url === MAC_SCREEN_RECORDING_SETTINGS_URL
-  ) {
+  if (isComputerPermissionPaneUrl(url)) {
     lastOpenedPermissionPaneUrl = url;
   }
 }
@@ -680,12 +674,10 @@ function armDragRestore(): void {
   if (dragRestoreTimer) clearTimeout(dragRestoreTimer);
   dragRestoreTimer = setTimeout(() => {
     log.debug('restoring Electron permission guide after drag fallback');
-    const permission = draggedPermission;
     restoreGuideAfterDrag();
-    // Chromium can omit dragend after startDrag returns. The timeout is the
-    // renderer's completion fallback, so preserve the same per-lifecycle drag
-    // evidence and refresh path as an explicit dragend.
-    completeElectronPermissionAppDrag(permission);
+    // Chromium can omit dragend after startDrag returns. Without a positive
+    // copy dropEffect there is no safe evidence that System Settings accepted
+    // the app, so restore the coach without starting the locator.
   }, DRAG_RESTORE_TIMEOUT_MS);
 }
 
@@ -827,12 +819,15 @@ export function startComputerPermissionAppDrag(
   }
 }
 
-/** Finish the current drag, persist its step, and check for the new row once. */
-export function finishComputerPermissionAppDrag(sender: WebContents): void {
+/** Finish the current drag and only inspect the row after a confirmed copy drop. */
+export function finishComputerPermissionAppDrag(
+  sender: WebContents,
+  didCopy: unknown,
+): void {
   if (!isComputerPermissionGuideWebContents(sender) || !dragInProgress) return;
   const permission = draggedPermission;
   restoreGuideAfterDrag();
-  completeElectronPermissionAppDrag(permission);
+  if (didCopy === true) completeElectronPermissionAppDrag(permission);
 }
 
 /** Show (or bring back) the independent Electron permission coach. */

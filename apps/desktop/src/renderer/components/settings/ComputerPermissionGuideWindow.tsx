@@ -172,7 +172,7 @@ export function ComputerPermissionGuideWindow() {
     if (dragUiFallbackTimerRef.current !== null) {
       window.clearTimeout(dragUiFallbackTimerRef.current);
     }
-    window.electronAPI.maker.computer.finishPermissionAppDrag();
+    window.electronAPI.maker.computer.finishPermissionAppDrag(false);
   }, []);
 
   const cancel = async () => {
@@ -203,26 +203,31 @@ export function ComputerPermissionGuideWindow() {
     setAwaitingUser(false);
     setDragging(true);
     window.electronAPI.maker.computer.startPermissionAppDrag(iconDataUrl);
-    try {
-      window.sessionStorage.setItem(PERMISSION_APP_DRAGGED_STORAGE_KEY, '1');
-    } catch {
-      // The main-process query flag remains as a fallback in restricted profiles.
-    }
     dragUiFallbackTimerRef.current = window.setTimeout(() => {
       dragUiFallbackTimerRef.current = null;
       setDragging(false);
-      setAwaitingUser(true);
+      setAwaitingUser(false);
     }, PERMISSION_APP_DRAG_UI_FALLBACK_MS);
   };
 
-  const handleDragEnd = () => {
+  const handleDragEnd = (event: React.DragEvent<HTMLButtonElement>) => {
     if (dragUiFallbackTimerRef.current !== null) {
       window.clearTimeout(dragUiFallbackTimerRef.current);
       dragUiFallbackTimerRef.current = null;
     }
-    window.electronAPI.maker.computer.finishPermissionAppDrag();
+    const didCopy = event.dataTransfer.dropEffect === 'copy';
+    window.electronAPI.maker.computer.finishPermissionAppDrag(didCopy);
     setDragging(false);
-    setAwaitingUser(true);
+    setAwaitingUser(didCopy);
+    try {
+      if (didCopy) {
+        window.sessionStorage.setItem(PERMISSION_APP_DRAGGED_STORAGE_KEY, '1');
+      } else {
+        window.sessionStorage.removeItem(PERMISSION_APP_DRAGGED_STORAGE_KEY);
+      }
+    } catch {
+      // The main-process drag result remains authoritative in restricted profiles.
+    }
   };
 
   return (
