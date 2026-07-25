@@ -354,14 +354,27 @@ export function matchScopedWindowForModel(
   return scoped.find((w) => w.modelDisplayName.trim().toLowerCase() === family) ?? null;
 }
 
-// ── 告警判定(chip 变红 / tooltip 高亮的唯一口径) ────────────────────────────
+// ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───
 
-/** 单个窗口告警:已打满,或服务端 severity 明确非 normal。 */
+/**
+ * 窗口进入告警的剩余水位:剩余 ≤10%(已用 ≥90%)。
+ *
+ * 兜的是 unified-headers 源没有 per-window `severity` 这个事实 —— 该源只给 utilization,
+ * 光靠「打满」判定会让 chip 一直到 99.95% 才变红。用固定水位而不是 headers 的整体
+ * `allowed_warning`:水位对着 chip 上正在显示的那个数字,「剩余 8%」是红的能自证;
+ * 整体 status 综合了 chip 上没有的窗口,红了无从解释(见 isClaudeSubscriptionAlerting)。
+ */
+const WINDOW_ALERT_UTILIZATION_PERCENT = 90;
+
+/** 单个窗口告警:剩余水位见底,或服务端 severity 明确非 normal。 */
 export function isClaudeUsageWindowAlerting(
   window: ClaudeUsageWindow | null | undefined,
 ): boolean {
   if (!window) return false;
-  if (typeof window.utilization === 'number' && clampPercent(window.utilization) >= 99.95) {
+  if (
+    typeof window.utilization === 'number'
+    && clampPercent(window.utilization) >= WINDOW_ALERT_UTILIZATION_PERCENT
+  ) {
     return true;
   }
   const severity = window.severity?.trim().toLowerCase();
@@ -394,6 +407,12 @@ export function hasAlertingClaudeSessionWindow(
  * Opus 的会话染红,用户看到的是「剩余 91% / 56% 却是红的」,颜色与数字自相矛盾且无处
  * 解释(chip 上没有那个窗口)。真限流时 rejected 会立刻到,不需要它兜底;「接近限额」
  * 提示仍留在 tooltip —— 那里紧邻全量窗口列表,有上下文。
+ *
+ * 也没有走 `representativeClaim`(「只在 claim 指向 chip 上的窗口时才认 allowed_warning」):
+ * 2026-07-25 实测快照里 claim=`five_hour`,而当时真正吃紧的是 Fable 周限(87%,
+ * severity=warning),5h 只用了 10% —— 这个字段并不指向触发 warning 的窗口,以它为条件
+ * 会原样退回误红。headers 源缺 severity 的预警缺口改由 WINDOW_ALERT_UTILIZATION_PERCENT
+ * 的剩余水位兜住,判据始终是 chip 上看得见的那个数字。
  */
 export function isClaudeSubscriptionAlerting(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,

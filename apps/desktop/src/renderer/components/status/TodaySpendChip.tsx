@@ -68,7 +68,6 @@ import {
 import {
   hasAlertingClaudeSessionWindow,
   isClaudeSubscriptionAlerting,
-  isClaudeUsageWindowAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -527,15 +526,17 @@ function buildCodexTooltipNode(
 // 不到回退总周限并标注口径) · 本会话价值 $。tooltip 列全量窗口 (含非当前模型的
 // scoped 条目) + 套餐 + extra usage。utilization 语义 = 已用百分比 (0-100)。
 
-/** Claude 窗口 → 展示行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。 */
+/**
+ * Claude 窗口 → tooltip 行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。
+ * tooltip 的窗口行不做逐行高亮 (纯文本 tooltip), 告警只体现在 chip 配色与末尾的
+ * 「接近限额」行 —— 故这里不带 alerting 标记。
+ */
 interface ClaudeWindowUsage {
   label: string;
   used: string;
   remaining: string;
   /** tooltip 用的精确 reset 时间点;无数据 → null。 */
   resetAt: string | null;
-  /** 服务端 severity 非 normal, 或已打满 —— tooltip 高亮 / chip 变警示色的依据。 */
-  alerting: boolean;
 }
 
 function toClaudeWindowUsage(
@@ -551,7 +552,6 @@ function toClaudeWindowUsage(
     used: formatPercent(usedPercent),
     remaining: formatPercent(100 - usedPercent),
     resetAt: formatResetAt(window.resetsAt),
-    alerting: isClaudeUsageWindowAlerting(window),
   };
 }
 

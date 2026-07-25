@@ -298,18 +298,36 @@ describe('isClaudeSubscriptionAlerting', () => {
       { fiveHour: { utilization: 100 } },
       'claude-opus-5',
     )).toBe(true);
-    expect(isClaudeSubscriptionAlerting(
-      { sevenDay: { utilization: 99.96 } },
-      'claude-opus-5',
-    )).toBe(true);
     // 总周限 severity 非 normal —— 所有模型共用, 与当前模型无关
     expect(isClaudeSubscriptionAlerting(
       { sevenDay: { utilization: 80, severity: 'warning' } },
       'claude-opus-5',
     )).toBe(true);
-    // severity=normal 且远未打满 → 不告警
+    // 水位远未见底且 severity=normal → 不告警
     expect(isClaudeSubscriptionAlerting(
-      { fiveHour: { utilization: 90, severity: 'normal' }, sevenDay: { utilization: 95 } },
+      { fiveHour: { utilization: 60, severity: 'normal' }, sevenDay: { utilization: 44 } },
+      'claude-opus-5',
+    )).toBe(false);
+  });
+
+  it('alerts when a displayed window runs down to the last 10%', () => {
+    // unified-headers 源不带 per-window severity, 只有 utilization: 光靠「打满」会让
+    // chip 一直到 99.95% 才变红。剩余 ≤10% 即告警, 判据是 chip 上正在显示的那个数字。
+    expect(isClaudeSubscriptionAlerting({ fiveHour: { utilization: 90 } }, 'claude-opus-5'))
+      .toBe(true);
+    expect(isClaudeSubscriptionAlerting({ sevenDay: { utilization: 92 } }, 'claude-opus-5'))
+      .toBe(true);
+    // 水位判定优先于服务端 severity: 只剩 5% 时说 normal 也照样提醒
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: 95, severity: 'normal' } },
+      'claude-opus-5',
+    )).toBe(true);
+    // 阈值下方不告警(89% 已用 = 剩余 11%)
+    expect(isClaudeSubscriptionAlerting({ fiveHour: { utilization: 89 } }, 'claude-opus-5'))
+      .toBe(false);
+    // 其它模型的 scoped 窗口即使见底也不染红当前会话 —— 与阈值无关
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: 10 }, scoped: [{ utilization: 99, modelDisplayName: 'Fable' }] },
       'claude-opus-5',
     )).toBe(false);
   });
