@@ -362,6 +362,8 @@ export function GhostPluginPage() {
   // 权限 diff,经用户确认后才安装,不做静默升级。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
+      // 列表每张卡都有直达入口,用整页互斥防止并发更新互相覆盖忙碌状态。
+      if (marketBusyId !== null) return;
       const marketItem = marketByGhostId.get(ghostId);
       if (!marketItem || marketItem.installState !== 'update-available') return;
       const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
@@ -397,10 +399,11 @@ export function GhostPluginPage() {
       } catch (error) {
         toast.error(t(pluginMarketErrorKey(error)));
       } finally {
-        setMarketBusyId(null);
+        // 只清除自己占用的忙碌位,避免误清后续流程(如详情页安装)的状态。
+        setMarketBusyId((current) => (current === marketItem.pluginId ? null : current));
       }
     },
-    [confirm, ghosts, marketByGhostId, refreshMarket, t],
+    [confirm, ghosts, marketBusyId, marketByGhostId, refreshMarket, t],
   );
 
   const handleUpdate = useCallback(async () => {
@@ -638,9 +641,7 @@ export function GhostPluginPage() {
             ? selectedMarketUpdate.version
             : undefined
         }
-        updateBusy={
-          selectedMarketUpdate !== null && marketBusyId === selectedMarketUpdate.pluginId
-        }
+        updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
       />
@@ -834,9 +835,7 @@ export function GhostPluginPage() {
                     onSelect={() => setSelectedId(item.id)}
                     onAction={() => void handleUseGhost(item.id)}
                     updateVersion={item.marketUpdate?.version}
-                    updateBusy={
-                      item.marketUpdate !== null && marketBusyId === item.marketUpdate.pluginId
-                    }
+                    updateBusy={item.marketUpdate !== null && marketBusyId !== null}
                     onUpdate={
                       item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                     }
