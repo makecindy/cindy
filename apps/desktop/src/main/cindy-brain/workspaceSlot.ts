@@ -200,20 +200,19 @@ export class GhostWorkspaceSlot {
       if (stat === 'not-found') return fail('DIR_NOT_FOUND', '目录不存在(只支持本机已存在的目录)');
       if (stat === 'not-directory') return fail('NOT_DIRECTORY', '该路径不是目录');
       const dirInfo = await this.deps.getSessionDirInfo(ctx.sessionId);
-      // 远程(SSH)工作区 v1 硬拒(fail closed,与管子契约"一律拒"一致):
-      // 远程会话语境下"本机同名路径"证明不了任何来源,确认卡放行也不该建。
-      if (dirInfo !== null && dirInfo.remoteHostId !== null) {
+      // fail closed:快照读不到(查无会话/读失败)或远程(SSH)会话一律硬拒
+      // ——证明不了"本机工作区语境"就连确认卡也不发,防快照失败把远程会话
+      // 漏进确认卡路径(与管子契约"远程一律拒"一致)。
+      if (dirInfo === null || dirInfo.remoteHostId !== null) {
         return fail(
           'INVALID_REQUEST',
-          '发起会话是远程(SSH)工作区,workspace v1 不支持;请改用 mode:"pick" 让用户亲自选本机目录',
+          '无法确认发起会话的本机工作区语境(远程 SSH 会话或会话信息不可用),workspace v1 不支持;请改用 mode:"pick" 让用户亲自选本机目录',
         );
       }
-      // 两档钳制:目录在发起会话的 workdir 内 → 自动放行;其余(workdir 外 /
-      // 查无会话)一律确认卡,证明不了"在内"就弹卡。
+      // 两档钳制:目录在发起会话的 workdir 内 → 自动放行;workdir 外一律
+      // 确认卡,证明不了"在内"就弹卡。
       const insideWorkdir =
-        dirInfo !== null &&
-        dirInfo.workingDir !== null &&
-        this.deps.isInsideWorkdir(request.dir, dirInfo.workingDir);
+        dirInfo.workingDir !== null && this.deps.isInsideWorkdir(request.dir, dirInfo.workingDir);
       if (!insideWorkdir) {
         // 前面的 statDir/getSessionDirInfo await 期间可能有并发请求闯进来,
         // 弹卡前同步 check-and-set,保证确认卡全局一次一张。

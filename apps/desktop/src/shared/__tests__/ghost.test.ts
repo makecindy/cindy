@@ -307,7 +307,7 @@ describe('ghost · 清单校验', () => {
     expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
   });
 
-  it('locale 资源完整覆盖清单文案和全部工具，并按稳定 tool name 合并', () => {
+  it('locale 资源按稳定 tool name 合并;翻译可部分提供、缺译回退原文,错位仍拒', () => {
     const parsed = validateGhostManifest({
       schemaVersion: 2,
       id: 'localized',
@@ -393,15 +393,82 @@ describe('ghost · 清单校验', () => {
         { name: 'beta', description: 'Localized beta' },
       ],
     });
+    // 部分翻译是合法状态:只翻 alpha 的 description(不翻参数、不翻 beta),
+    // 缺失条目解析时回退原文。
+    const partial = validateGhostManifestLocaleResource({
+      name: 'Partial',
+      tools: { alpha: { description: 'Only alpha' } },
+    }, parsed.manifest);
+    expect(partial.ok, JSON.stringify(partial)).toBe(true);
+    if (!partial.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, partial.resource)).toMatchObject({
+      name: 'Partial',
+      description: 'Base description',
+      whenToUse: 'Base routing',
+      tools: [
+        {
+          name: 'alpha',
+          description: 'Only alpha',
+          parameters: {
+            title: 'Base arguments',
+            properties: { query: { title: 'Base query', description: 'Base query description' } },
+          },
+        },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    // 连 name 都可以省:空对象 locale 合法,解析后与原 manifest 恒等。
+    const empty = validateGhostManifestLocaleResource({}, parsed.manifest);
+    expect(empty.ok).toBe(true);
+    if (!empty.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, empty.resource)).toMatchObject({
+      name: 'Base',
+      tools: [{ name: 'alpha', description: 'Base alpha' }, { name: 'beta', description: 'Base beta' }],
+    });
+    // 参数翻译允许只覆盖部分 pointer,未覆盖的回退。
+    const partialParams = validateGhostManifestLocaleResource({
+      tools: {
+        alpha: {
+          description: 'Localized alpha',
+          parameters: { '/properties/query': { title: 'Localized query', description: 'Localized query description' } },
+        },
+      },
+    }, parsed.manifest);
+    expect(partialParams.ok, JSON.stringify(partialParams)).toBe(true);
+    if (!partialParams.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, partialParams.resource)).toMatchObject({
+      tools: [
+        {
+          name: 'alpha',
+          parameters: {
+            title: 'Base arguments',
+            properties: { query: { title: 'Localized query', description: 'Localized query description' } },
+          },
+        },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    // 翻译错位仍是硬错误:未知工具 / 未知 pointer / 未知字段 / 提供了条目却缺 description。
     expect(validateGhostManifestLocaleResource({
-      name: 'Incomplete',
-      description: 'Localized description',
-      whenToUse: 'Localized routing',
-      tools: { alpha: { description: 'Only one' } },
+      tools: { gamma: { description: 'No such tool' } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      tools: { alpha: { description: 'x', parameters: { '/properties/nope': { title: 'x' } } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      tools: { beta: { description: 'x', parameters: { '': { title: 'x' } } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      tools: { alpha: {} },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      description: 'x',
+      whenToUse: 'x',
+      extra: 'x',
     }, parsed.manifest).ok).toBe(false);
   });
 
-  it('locale 资源完整覆盖宿主持有的面板、凭证、连接与 setup 标签', () => {
+  it('locale 资源覆盖宿主持有的面板、凭证、连接与 setup 标签;标签可部分提供', () => {
     const parsed = validateGhostManifest({
       schemaVersion: 2,
       id: 'localized-labels',
@@ -493,9 +560,41 @@ describe('ghost · 清单校验', () => {
         }],
       },
     });
-    expect(validateGhostManifestLocaleResource({
-      name: 'Incomplete',
+    // 只翻面板标题、不翻凭证/连接/kv 也合法,缺失标签回退原文。
+    const panelOnly = validateGhostManifestLocaleResource({
+      name: 'Partial labels',
       panel: { title: 'Localized panel' },
+    }, parsed.manifest);
+    expect(panelOnly.ok, JSON.stringify(panelOnly)).toBe(true);
+    if (!panelOnly.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, panelOnly.resource)).toMatchObject({
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: [{ key: 'api_key', label: 'Base API key', hint: 'Base secret hint' }],
+        connections: [{ key: 'instance', label: 'Base instance' }],
+      },
+      node: { secretBindings: [{ key: 'worker_key', label: 'Base worker key' }] },
+      setup: { requires: [{ anyOf: [{ kind: 'kv', key: 'default_repo', label: 'Base repository' }] }] },
+    });
+    // 提供的标签条目 label 必填、hint 可省(缺 hint 回退原文);未知 key 仍拒。
+    const labelNoHint = validateGhostManifestLocaleResource({
+      network: { secrets: { api_key: { label: 'Localized API key' } } },
+    }, parsed.manifest);
+    expect(labelNoHint.ok, JSON.stringify(labelNoHint)).toBe(true);
+    if (!labelNoHint.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, labelNoHint.resource)).toMatchObject({
+      network: {
+        secrets: [{ key: 'api_key', label: 'Localized API key', hint: 'Base secret hint' }],
+      },
+    });
+    expect(validateGhostManifestLocaleResource({
+      network: { secrets: { nope: { label: 'x' } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      network: { secrets: { api_key: { hint: 'hint without label' } } },
+    }, parsed.manifest).ok).toBe(false);
+    expect(validateGhostManifestLocaleResource({
+      setup: { kv: { default_repo: { label: 'x', hint: 'kv 未声明 hint' } } },
     }, parsed.manifest).ok).toBe(false);
   });
 

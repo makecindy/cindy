@@ -243,6 +243,20 @@ describe('workspaceSlot · dir 流(callId 上下文凭证 + 两档钳制)', () =
     });
   });
 
+  it('会话快照读不到(查无/读失败)→ 同样硬拒,不落确认卡路径(fail closed)', async () => {
+    const service = makeService();
+    const { slot, deps } = makeSlot(
+      { getSessionDirInfo: vi.fn(async () => null), isInsideWorkdir: vi.fn(() => true) },
+      service,
+    );
+    expect(await slot.handleRequest('ws-ghost', DIR_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_REQUEST',
+    });
+    expect(deps.confirmDir).not.toHaveBeenCalled();
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+  });
+
   it('发起会话是远程工作区(remoteHostId 非空)→ 硬拒(fail closed),不弹卡不创建', async () => {
     const service = makeService();
     const { slot, deps } = makeSlot(

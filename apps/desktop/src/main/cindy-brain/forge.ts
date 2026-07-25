@@ -556,8 +556,8 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     }
     const manifest = v.manifest;
 
-    // 2) locale 资源必须真实、可解析且完整覆盖已声明字段。与装入侧使用
-    // 同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
+    // 2) locale 资源必须真实、可解析且提供的条目合法(缺译回退原文,不拒)。
+    // 与装入侧使用同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
     const localeValidation = validateGhostLocaleResourcesInDirectory(dir, manifest);
     if (!localeValidation.ok) {
       return {
@@ -767,8 +767,10 @@ my-ghost/
 \`zh-CN / en / ja / ko\`；插件没提供宿主当前语言时固定使用英文，因此只要声明
 \`locales\` 就必须提供 \`en\`。
 
-每个 locale JSON 完整覆盖清单中已有的可本地化字段；工具按稳定的 tool name 对齐，
-协议键、工具名和参数名不翻译：
+locale JSON 覆盖清单中已有的可本地化字段。**翻译是可选项**：提供的条目必须合法，
+未提供的条目在运行时回退原 manifest 文案(通常是英文)；完整翻译(含每个工具参数
+的 title / description)是高质量插件的推荐标准，但不是打包/装入门槛。工具按稳定的
+tool name 对齐，协议键、工具名和参数名不翻译：
 
 \`\`\`json
 {
@@ -808,14 +810,15 @@ my-ghost/
 }
 \`\`\`
 
-若原清单声明了 \`description\`、\`whenToUse\`、\`tools\`、\`panel.title\`、
-\`network.secrets / connections\`、\`node.secretBindings\` 或 \`setup\` 的 kv 标签，
-每个 locale 文件都必须完整提供对应文案；凭证、连接、Node 凭证和 kv 项按稳定 key 对齐。
-工具参数 schema 中已有的 \`title / description\` 用 JSON Pointer 对齐（如
-\`/properties/query\`；根节点用空字符串 \`""\`），参数名、类型、枚举和协议结构不翻译。
-缺译、未知 key、多余字段、文件缺失、路径大小写与磁盘不一致、无效 JSON 或单文件超过
-64KB 都会在 Forge 打包期、内置播种期与安装期拒绝。清单列表、详情页、Panel 标题、
-安装/配置提示和 Agent 工具目录都消费同一份本地化结果。
+可翻译字段：\`name\`、\`description\`、\`whenToUse\`、\`tools\`(工具 description 与参数
+文案)、\`panel.title\`、\`network.secrets / connections\`、\`node.secretBindings\`、
+\`setup\` 的 kv 标签；凭证、连接、Node 凭证和 kv 项按稳定 key 对齐(提供某个 key 的
+条目时 label 必填,hint 可选)。工具参数 schema 中已有的 \`title / description\` 用
+JSON Pointer 对齐（如 \`/properties/query\`；根节点用空字符串 \`""\`），参数名、类型、
+枚举和协议结构不翻译。缺译不拒绝，只回退原文；但**翻译错位仍是硬错误**——未知
+key、未知字段、原清单没有的条目、类型或长度不合格、文件缺失、路径大小写与磁盘
+不一致、无效 JSON 或单文件超过 64KB 都会在 Forge 打包期、内置播种期与安装期拒绝。
+清单列表、详情页、Panel 标题、安装/配置提示和 Agent 工具目录都消费同一份本地化结果。
 
 十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻

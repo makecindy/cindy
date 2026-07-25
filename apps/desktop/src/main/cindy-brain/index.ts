@@ -1320,8 +1320,11 @@ export function getGhostWorkspaceSlot(): GhostWorkspaceSlot {
         try {
           const stat = await fs.promises.stat(dirAbs);
           return stat.isDirectory() ? 'ok' : 'not-directory';
-        } catch {
-          return 'not-found';
+        } catch (error) {
+          // ENOTDIR = 路径中间某段不是目录,语义上更接近"不是目录"而非"不存在"。
+          return (error as NodeJS.ErrnoException)?.code === 'ENOTDIR'
+            ? 'not-directory'
+            : 'not-found';
         }
       },
       isInsideWorkdir: (dirAbs, workdirAbs) => {
