@@ -39,16 +39,21 @@ vi.mock('@/components/sidebar/MobileDownloadDialog', () => ({
     open,
     remoteAvailable,
     onOpenRemoteSettings,
+    onOpenDevices,
   }: {
     open: boolean;
     remoteAvailable: boolean;
     onOpenRemoteSettings: () => void;
+    onOpenDevices: () => void;
   }) =>
     open ? (
       <div role="dialog">
         <span>{remoteAvailable ? 'remote available' : 'remote unavailable'}</span>
         <button type="button" onClick={onOpenRemoteSettings}>
           open remote settings
+        </button>
+        <button type="button" onClick={onOpenDevices}>
+          open linked devices
         </button>
       </div>
     ) : null,
@@ -87,5 +92,18 @@ describe('UserInfoSection mobile download entry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'open remote settings' }));
     expect(navigate).toHaveBeenCalledWith('/settings?tab=remote-control');
+  });
+
+  it('opens the expanded device list from the dialog', () => {
+    render(<UserInfoSection isCollapsed={false} />);
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'sidebar.user.downloadMobile',
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open linked devices' }));
+
+    expect(navigate).toHaveBeenCalledWith('/settings?tab=remote-control&section=devices');
   });
 });

@@ -3603,16 +3603,18 @@
       "error": "QR コードを作成できませんでした。しばらくしてからお試しください。",
       "platformHint": "iOS・Android 対応、スキャン後に自動判定",
       "openPage": "ダウンロードページを開く",
-      "enableRemote": "リモート操作を有効にする",
-      "openRemoteSettings": "リモート設定を開く",
-      "remoteStatus": {
-        "loading": "リモート操作の状態を確認中…",
-        "error": "リモート操作の状態を取得できません。設定で接続を確認してください",
-        "disabled": "リモート操作は有効になっていません",
-        "connecting": "リモートサービスに接続中…",
-        "ready": "準備完了 — モバイルで同じアカウントにログインしてください",
-        "linked": "{{name}} と連携済み",
-        "deviceId": "このデバイスの ID"
+      "scanToOpen": "スキャンして Cindy を開く",
+      "scanAnother": "別のデバイスをスキャン",
+      "scanAnotherHint": "別のスマートフォンで Cindy を開く",
+      "myDevices": "自分のデバイス",
+      "deviceOffline": "オフライン",
+      "allowControl": "同じアカウントのデバイスによるこのマシンの操作を許可",
+      "deviceId": "このデバイス · {{id}}",
+      "remoteAction": {
+        "checking": "確認中…",
+        "unavailable": "利用できません",
+        "enable": "有効にする",
+        "enabled": "有効"
       },
       "close": "ダウンロード画面を閉じる"
     },

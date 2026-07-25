@@ -213,10 +213,17 @@
 .mobile-download-qr-card {
   transform: perspective(760px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1);
   transform-style: preserve-3d;
-  transition: transform var(--motion-base) var(--motion-ease-move);
+  box-shadow: var(--mobile-download-qr-shadow);
+  isolation: isolate;
+  transition:
+    width var(--motion-base) var(--motion-ease-move),
+    height var(--motion-base) var(--motion-ease-move),
+    transform var(--motion-base) var(--motion-ease-move),
+    box-shadow var(--motion-fast) var(--motion-ease-move);
 }
 
 .mobile-download-qr-card[data-pointer-active='true'] {
+  box-shadow: var(--mobile-download-qr-shadow-active);
   transition: none;
 }
 

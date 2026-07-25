@@ -8,11 +8,12 @@ import {
   type RefObject,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Monitor, QrCode, Smartphone, X } from 'lucide-react';
+import { ChevronRight, Monitor, QrCode, Settings2, Smartphone, X } from 'lucide-react';
 import * as QRCode from 'qrcode';
 
 import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
+import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { cn } from '@/lib/utils';
 
 interface MobileDownloadDialogProps {
@@ -20,6 +21,7 @@ interface MobileDownloadDialogProps {
   onOpenChange: (open: boolean) => void;
   remoteAvailable: boolean;
   onOpenRemoteSettings: () => void;
+  onOpenDevices: () => void;
   triggerRef: RefObject<HTMLButtonElement | null>;
 }
 
@@ -28,37 +30,60 @@ const qrDataUrlPromises = new Map<string, Promise<string>>();
 
 interface MobileRemoteSnapshot {
   enabled: boolean;
-  linkStatus: 'stopped' | 'connecting' | 'online';
-  connectionIssue: DeviceLinkConnectionIssuePayload | null;
-  devices: DeviceLinkDeviceView[];
+  devices: DeviceLinkDeviceView[] | null;
 }
 
 export interface MobileRemotePresentation {
-  state: 'disabled' | 'connecting' | 'error' | 'ready' | 'linked';
+  layout: 'checking' | 'onboarding' | 'linked';
+  remoteEnabled: boolean;
+  linkedMobileCount: number;
+  otherDeviceCount: number;
   selfDeviceId: string | null;
   linkedMobileName: string | null;
+  previewDevices: DeviceLinkDeviceView[];
 }
 
+function isMobileDevice(device: DeviceLinkDeviceView): boolean {
+  return device.platform === 'ios' || device.platform === 'android';
+}
+
+/**
+ * Layout and permission state are intentionally orthogonal: transient relay
+ * connectivity never makes the whole dialog jump between onboarding and
+ * device-management layouts.
+ */
 export function resolveMobileRemotePresentation(
   snapshot: MobileRemoteSnapshot,
 ): MobileRemotePresentation {
-  const self = snapshot.devices.find((device) => device.isSelf);
-  const linkedMobile = snapshot.devices
-    .filter((device) => device.platform === 'ios' || device.platform === 'android')
-    .sort((left, right) => Number(right.online) - Number(left.online))[0];
+  if (!snapshot.devices) {
+    return {
+      layout: 'checking',
+      remoteEnabled: snapshot.enabled,
+      linkedMobileCount: 0,
+      otherDeviceCount: 0,
+      selfDeviceId: null,
+      linkedMobileName: null,
+      previewDevices: [],
+    };
+  }
+
+  const selfDevice = snapshot.devices.find((device) => device.isSelf);
+  const otherDevices = snapshot.devices
+    .filter((device) => !device.isSelf)
+    .sort(compareDevicesByName);
+  const linkedMobileDevices = otherDevices.filter(isMobileDevice);
+  const previewDevices = [...otherDevices]
+    .sort((left, right) => Number(isMobileDevice(right)) - Number(isMobileDevice(left)))
+    .slice(0, 3);
 
   return {
-    state: !snapshot.enabled
-      ? 'disabled'
-      : snapshot.connectionIssue
-        ? 'error'
-        : snapshot.linkStatus !== 'online'
-          ? 'connecting'
-          : linkedMobile
-            ? 'linked'
-            : 'ready',
-    selfDeviceId: self?.deviceId ?? null,
-    linkedMobileName: linkedMobile?.name ?? null,
+    layout: linkedMobileDevices.length > 0 ? 'linked' : 'onboarding',
+    remoteEnabled: snapshot.enabled,
+    linkedMobileCount: linkedMobileDevices.length,
+    otherDeviceCount: otherDevices.length,
+    selfDeviceId: selfDevice?.deviceId ?? null,
+    linkedMobileName: linkedMobileDevices[0]?.name ?? null,
+    previewDevices,
   };
 }
 
@@ -101,6 +126,23 @@ function getQrDataUrl(downloadUrl: string): Promise<string> {
   return promise;
 }
 
+function platformLabel(platform: string | null): string {
+  switch (platform) {
+    case 'darwin':
+      return 'macOS';
+    case 'win32':
+      return 'Windows';
+    case 'linux':
+      return 'Linux';
+    case 'ios':
+      return 'iOS';
+    case 'android':
+      return 'Android';
+    default:
+      return platform ?? '—';
+  }
+}
+
 /**
  * Desktop promotion surface for the regional Cindy mobile download page.
  * The QR edge reuses the official app artwork, so its brand colors stay
@@ -111,6 +153,7 @@ export function MobileDownloadDialog({
   onOpenChange,
   remoteAvailable,
   onOpenRemoteSettings,
+  onOpenDevices,
   triggerRef,
 }: MobileDownloadDialogProps) {
   const { t } = useTranslation();
@@ -118,7 +161,7 @@ export function MobileDownloadDialog({
   const [qrError, setQrError] = useState(false);
   const [remoteSnapshot, setRemoteSnapshot] = useState<MobileRemoteSnapshot | null>(null);
   const [remoteStatusError, setRemoteStatusError] = useState(false);
-  const qrCardRef = useRef<HTMLDivElement>(null);
+  const qrCardRef = useRef<HTMLButtonElement>(null);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
   const remoteActionRef = useRef<HTMLButtonElement>(null);
   const closeActionRef = useRef<HTMLButtonElement>(null);
@@ -152,9 +195,9 @@ export function MobileDownloadDialog({
     }
   }, [open]);
 
+  // Prepare the QR before the first click so opening the dialog never waits on
+  // canvas encoding. The module-level cache keeps this a once-per-endpoint cost.
   useEffect(() => {
-    if (!open) return;
-
     let active = true;
     setQrError(false);
 
@@ -182,10 +225,13 @@ export function MobileDownloadDialog({
     return () => {
       active = false;
     };
-  }, [downloadUrl, open]);
+  }, [downloadUrl]);
 
+  // Device state is also warmed while the dialog is closed. This makes its
+  // first rendered layout stable instead of showing a large QR and then
+  // shrinking it after the IPC calls resolve.
   useEffect(() => {
-    if (!open || !remoteAvailable) {
+    if (!remoteAvailable) {
       setRemoteSnapshot(null);
       setRemoteStatusError(false);
       return;
@@ -198,24 +244,27 @@ export function MobileDownloadDialog({
       const generation = refreshGeneration;
       try {
         const state = await window.electronAPI.deviceLink.getState();
-        let devices: DeviceLinkDeviceView[] = [];
+        let devices: DeviceLinkDeviceView[] | null = null;
         try {
           devices = (await window.electronAPI.deviceLink.listDevices()).devices;
         } catch {
-          // The allow-control switch and relay state remain useful even if the
-          // associated-device list is temporarily unavailable.
+          // The permission switch remains useful even if the device list is
+          // temporarily unavailable. Null prevents a failed list from being
+          // presented as a confirmed empty state.
         }
         if (!active || generation !== refreshGeneration) return;
-        setRemoteSnapshot({
+        setRemoteSnapshot((previous) => ({
           enabled: state.remoteControlEnabled,
-          linkStatus: state.linkStatus,
-          connectionIssue: state.connectionIssue,
-          devices,
-        });
+          // A transient list failure is unknown, not a confirmed empty
+          // account. Keep the last known devices so the dialog layout does
+          // not jump from linked back to onboarding during relay turbulence.
+          devices: devices ?? previous?.devices ?? null,
+        }));
         setRemoteStatusError(false);
       } catch {
         if (!active || generation !== refreshGeneration) return;
-        setRemoteSnapshot(null);
+        // Preserve the last known layout while exposing this failure through
+        // the permission card. A later presence/status event will retry.
         setRemoteStatusError(true);
       }
     };
@@ -237,9 +286,9 @@ export function MobileDownloadDialog({
       offStatus();
       offConnectionIssue();
     };
-  }, [open, remoteAvailable]);
+  }, [remoteAvailable]);
 
-  const handleQrPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const handleQrPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (
       event.pointerType !== 'mouse' ||
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -263,7 +312,7 @@ export function MobileDownloadDialog({
     }
   };
 
-  const resetQrPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const resetQrPointer = (event: ReactPointerEvent<HTMLButtonElement>) => {
     pendingQrTransform.current = null;
     event.currentTarget.dataset.pointerActive = 'false';
     event.currentTarget.style.transform = '';
@@ -272,15 +321,14 @@ export function MobileDownloadDialog({
   const remotePresentation = remoteSnapshot
     ? resolveMobileRemotePresentation(remoteSnapshot)
     : null;
-  const remoteStatusKey = remoteStatusError ? 'error' : (remotePresentation?.state ?? 'loading');
-  const remoteStatusColor =
-    remoteStatusError || remotePresentation?.state === 'error'
-      ? 'var(--remote-status-failed)'
-      : remotePresentation?.state === 'linked' || remotePresentation?.state === 'ready'
-        ? 'var(--remote-status-ready)'
-        : remotePresentation?.state === 'connecting'
-          ? 'var(--remote-status-progress)'
-          : 'var(--remote-status-disconnected)';
+  const hasLinkedMobile = remotePresentation?.layout === 'linked';
+  const remoteStateKey = remoteStatusError
+    ? 'unavailable'
+    : remoteSnapshot
+      ? remoteSnapshot.enabled
+        ? 'enabled'
+        : 'enable'
+      : 'checking';
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -296,7 +344,7 @@ export function MobileDownloadDialog({
         <Dialog.Content
           className={cn(
             'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'max-h-[calc(100vh-32px)] w-[400px] max-w-[calc(100vw-32px)] overflow-y-auto',
+            'max-h-[calc(100vh-32px)] w-[400px] max-w-[calc(100vw-32px)] overflow-y-auto overscroll-contain',
             'select-none rounded-xl p-4',
             'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
             'data-[state=open]:animate-confirm-content-in',
@@ -322,7 +370,7 @@ export function MobileDownloadDialog({
               type="button"
               aria-label={t('sidebar.mobileDownload.close')}
               className={cn(
-                'absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full',
+                'absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full',
                 'text-[var(--confirm-desc)] transition-colors',
                 'hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)]',
                 'active:scale-[0.98]',
@@ -358,124 +406,208 @@ export function MobileDownloadDialog({
             </Dialog.Description>
 
             <div
-              ref={qrCardRef}
-              data-testid="mobile-download-qr-card"
-              className="mobile-download-qr-card relative mt-5 h-[236px] w-[236px] overflow-hidden rounded-xl"
-              onPointerMove={handleQrPointerMove}
-              onPointerLeave={resetQrPointer}
+              className={cn(
+                'mt-5 flex w-full items-center justify-center',
+                hasLinkedMobile ? 'gap-5 text-left' : 'flex-col text-center',
+              )}
             >
-              <div
-                aria-hidden="true"
-                className="mobile-download-qr-edge pointer-events-none absolute inset-[-45%]"
-              >
-                <img
-                  src={cindyIconUrl}
-                  alt=""
-                  className="h-full w-full select-none object-cover"
-                  draggable={false}
-                />
-              </div>
-              <div
-                className={cn(
-                  'absolute inset-px flex items-center justify-center overflow-hidden rounded-lg',
-                  'bg-[var(--confirm-bg)]',
-                )}
-                aria-live="polite"
-              >
-                {qrDataUrl ? (
-                  <img
-                    src={qrDataUrl}
-                    alt={t('sidebar.mobileDownload.qrAlt')}
-                    className="h-full w-full select-none"
-                    draggable={false}
-                  />
-                ) : qrError ? (
-                  <div className="flex max-w-[160px] flex-col items-center gap-2 text-center text-[var(--error-fg-strong)]">
-                    <QrCode className="h-6 w-6" aria-hidden="true" />
-                    <p className="text-12 leading-[18px]">{t('sidebar.mobileDownload.error')}</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-3 text-[var(--confirm-desc)]">
-                    <Spinner size={20} />
-                    <span className="text-12">{t('sidebar.mobileDownload.preparing')}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <p className="mt-5 w-full border-t border-[var(--confirm-btn-secondary-border)] pt-4 text-12 text-[var(--confirm-desc)]">
-              {t('sidebar.mobileDownload.platformHint')}
-            </p>
-
-            {remoteAvailable ? (
-              <div className="mt-4 w-full rounded-xl border border-[var(--confirm-btn-secondary-border)] p-3 text-left">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: remoteStatusColor }}
-                    aria-hidden="true"
-                  />
-                  <span className="text-13 font-medium text-[var(--confirm-title)]">
-                    {remotePresentation?.state === 'linked'
-                      ? t('sidebar.mobileDownload.remoteStatus.linked', {
-                          name: remotePresentation.linkedMobileName,
-                        })
-                      : t(`sidebar.mobileDownload.remoteStatus.${remoteStatusKey}`)}
-                  </span>
-                </div>
-                {remotePresentation?.selfDeviceId ? (
-                  <div className="mt-2 flex items-start justify-between gap-3 text-11 text-[var(--confirm-desc)]">
-                    <span className="shrink-0">
-                      {t('sidebar.mobileDownload.remoteStatus.deviceId')}
-                    </span>
-                    <code className="select-text break-all text-right font-mono text-[var(--confirm-title)]">
-                      {remotePresentation.selfDeviceId}
-                    </code>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="mt-4 flex w-full items-center justify-end gap-2.5">
-              {remoteAvailable ? (
-                <button
-                  ref={remoteActionRef}
-                  type="button"
-                  onClick={onOpenRemoteSettings}
-                  className={cn(
-                    'inline-flex items-center justify-center rounded-full border px-6 py-2.5 text-13 font-medium',
-                    'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                    'transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
-                    'active:scale-[0.98]',
-                    'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  )}
-                >
-                  {t(
-                    remotePresentation?.state === 'disabled'
-                      ? 'sidebar.mobileDownload.enableRemote'
-                      : 'sidebar.mobileDownload.openRemoteSettings',
-                  )}
-                </button>
-              ) : null}
               <button
-                ref={primaryActionRef}
+                ref={(node) => {
+                  qrCardRef.current = node;
+                  primaryActionRef.current = node;
+                }}
                 type="button"
                 disabled={!downloadUrl}
+                data-testid="mobile-download-qr-card"
+                data-compact={hasLinkedMobile ? 'true' : 'false'}
+                aria-label={t('sidebar.mobileDownload.openPage')}
+                className={cn(
+                  'mobile-download-qr-card relative shrink-0 overflow-hidden rounded-xl',
+                  hasLinkedMobile ? 'h-[132px] w-[132px]' : 'h-[228px] w-[228px]',
+                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  'disabled:cursor-not-allowed disabled:opacity-60',
+                )}
                 onClick={() => {
                   if (downloadUrl) void window.electronAPI.openExternal(downloadUrl);
                 }}
+                onPointerMove={handleQrPointerMove}
+                onPointerLeave={resetQrPointer}
+              >
+                <span
+                  aria-hidden="true"
+                  className="mobile-download-qr-edge pointer-events-none absolute inset-[-45%]"
+                >
+                  <img
+                    src={cindyIconUrl}
+                    alt=""
+                    className="h-full w-full select-none object-cover"
+                    draggable={false}
+                  />
+                </span>
+                <span
+                  className={cn(
+                    'absolute inset-px flex items-center justify-center overflow-hidden rounded-lg',
+                    'bg-[var(--confirm-bg)]',
+                  )}
+                  aria-live="polite"
+                >
+                  {qrDataUrl ? (
+                    <img
+                      src={qrDataUrl}
+                      alt={t('sidebar.mobileDownload.qrAlt')}
+                      className="h-full w-full select-none"
+                      draggable={false}
+                    />
+                  ) : qrError ? (
+                    <span className="flex max-w-[160px] flex-col items-center gap-2 text-center text-[var(--error-fg-strong)]">
+                      <QrCode className="h-6 w-6" aria-hidden="true" />
+                      <span className="text-12 leading-[18px]">
+                        {t('sidebar.mobileDownload.error')}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="flex flex-col items-center gap-3 text-[var(--confirm-desc)]">
+                      <Spinner size={20} />
+                      <span className="text-12">{t('sidebar.mobileDownload.preparing')}</span>
+                    </span>
+                  )}
+                </span>
+              </button>
+
+              <div className={cn(hasLinkedMobile ? 'min-w-0 flex-1' : 'mt-4')}>
+                <p className="text-14 font-medium text-[var(--confirm-title)]">
+                  {t(
+                    hasLinkedMobile
+                      ? 'sidebar.mobileDownload.scanAnother'
+                      : 'sidebar.mobileDownload.scanToOpen',
+                  )}
+                </p>
+                <p
+                  className={cn(
+                    'mt-1 text-12 leading-[18px] text-[var(--confirm-desc)]',
+                    !hasLinkedMobile && 'max-w-[260px]',
+                  )}
+                >
+                  {t(
+                    hasLinkedMobile
+                      ? 'sidebar.mobileDownload.scanAnotherHint'
+                      : 'sidebar.mobileDownload.platformHint',
+                  )}
+                </p>
+              </div>
+            </div>
+
+            {hasLinkedMobile && remotePresentation ? (
+              <button
+                type="button"
+                onClick={onOpenDevices}
                 className={cn(
-                  'inline-flex items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                  'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)]',
-                  'transition-colors hover:bg-[var(--confirm-btn-primary-hover)]',
+                  'mt-5 w-full rounded-xl border border-[var(--border-default)] px-3 py-3 text-left',
+                  'transition-colors hover:bg-[var(--surface-hover-soft)]',
                   'active:scale-[0.98]',
                   'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
                 )}
               >
-                {t('sidebar.mobileDownload.openPage')}
+                <span className="flex items-center justify-between gap-3">
+                  <span className="text-14 font-medium text-[var(--confirm-title)]">
+                    {t('sidebar.mobileDownload.myDevices')}
+                  </span>
+                  <span className="flex items-center gap-2 text-[var(--confirm-desc)]">
+                    <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--confirm-title)]">
+                      {remotePresentation.otherDeviceCount}
+                    </span>
+                    <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                  </span>
+                </span>
+
+                <span className="mt-2 flex flex-col">
+                  {remotePresentation.previewDevices.map((device, index) => {
+                    const online = device.online;
+                    return (
+                      <span
+                        key={device.deviceId}
+                        className={cn(
+                          'flex items-center gap-3 py-2',
+                          index > 0 && 'border-t border-[var(--border-default)]',
+                        )}
+                      >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-hover-soft)] text-[var(--confirm-desc)]">
+                          {isMobileDevice(device) ? (
+                            <Smartphone className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+                          ) : (
+                            <Monitor className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+                          )}
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-13 font-medium text-[var(--confirm-title)]">
+                            {device.name}
+                          </span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-11 text-[var(--confirm-desc)]">
+                            <span
+                              className="h-1.5 w-1.5 rounded-full"
+                              style={{
+                                backgroundColor: online
+                                  ? 'var(--remote-status-ready)'
+                                  : 'var(--remote-status-disconnected)',
+                              }}
+                              aria-hidden="true"
+                            />
+                            {online
+                              ? t('settings.devices.status.online')
+                              : t('sidebar.mobileDownload.deviceOffline')}
+                            <span aria-hidden="true">·</span>
+                            {platformLabel(device.platform)}
+                          </span>
+                        </span>
+                      </span>
+                    );
+                  })}
+                </span>
               </button>
-            </div>
+            ) : null}
+
+            {remoteAvailable ? (
+              <button
+                ref={remoteActionRef}
+                type="button"
+                onClick={onOpenRemoteSettings}
+                className={cn(
+                  'mt-3 flex w-full items-center gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3 text-left',
+                  'transition-colors hover:bg-[var(--surface-hover-soft)]',
+                  'active:scale-[0.98]',
+                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                )}
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--confirm-title)]">
+                  <Settings2 className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="text-13 font-medium leading-[18px] text-[var(--confirm-title)]">
+                    {t('sidebar.mobileDownload.allowControl')}
+                  </span>
+                  {remotePresentation?.selfDeviceId ? (
+                    <span
+                      className="mt-0.5 truncate font-mono text-10 leading-[14px] text-[var(--confirm-desc)]"
+                      title={remotePresentation.selfDeviceId}
+                    >
+                      {t('sidebar.mobileDownload.deviceId', {
+                        id: remotePresentation.selfDeviceId,
+                      })}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5 text-12 text-[var(--confirm-desc)]">
+                  {remoteSnapshot?.enabled ? (
+                    <span
+                      className="h-1.5 w-1.5 rounded-full bg-[var(--remote-status-ready)]"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span>{t(`sidebar.mobileDownload.remoteAction.${remoteStateKey}`)}</span>
+                  <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                </span>
+              </button>
+            ) : null}
           </div>
         </Dialog.Content>
       </Dialog.Portal>

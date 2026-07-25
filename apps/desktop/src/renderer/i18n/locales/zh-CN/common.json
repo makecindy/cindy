@@ -3603,16 +3603,18 @@
       "error": "二维码生成失败，请稍后重试",
       "platformHint": "支持 iOS 与 Android，扫码后自动识别",
       "openPage": "打开下载页面",
-      "enableRemote": "开启远程控制",
-      "openRemoteSettings": "远程控制设置",
-      "remoteStatus": {
-        "loading": "正在读取远程控制状态…",
-        "error": "暂时无法读取远程控制状态，请前往设置检查连接",
-        "disabled": "尚未开启远程控制",
-        "connecting": "正在连接远程服务…",
-        "ready": "已就绪，请在移动端登录同一账号",
-        "linked": "已关联 {{name}}",
-        "deviceId": "本机设备号"
+      "scanToOpen": "扫码打开 Cindy",
+      "scanAnother": "扫码添加另一台设备",
+      "scanAnotherHint": "在另一台手机上打开 Cindy",
+      "myDevices": "我的设备",
+      "deviceOffline": "离线",
+      "allowControl": "允许同账号设备控制本机",
+      "deviceId": "本机 · {{id}}",
+      "remoteAction": {
+        "checking": "正在检查…",
+        "unavailable": "暂不可用",
+        "enable": "去开启",
+        "enabled": "已开启"
       },
       "close": "关闭"
     },

@@ -161,36 +161,41 @@ describe('resolveMobileRemotePresentation', () => {
     isSelf: true,
   };
 
-  it('distinguishes disabled, connecting, ready, and linked paths', () => {
+  it('keeps permission state separate from the mobile-linked layout', () => {
     expect(
       resolveMobileRemotePresentation({
         enabled: false,
-        linkStatus: 'stopped',
-        connectionIssue: null,
         devices: [selfDevice],
       }),
-    ).toMatchObject({ state: 'disabled', selfDeviceId: 'desktop-device-1' });
+    ).toMatchObject({
+      layout: 'onboarding',
+      remoteEnabled: false,
+      linkedMobileCount: 0,
+      otherDeviceCount: 0,
+      selfDeviceId: 'desktop-device-1',
+    });
     expect(
       resolveMobileRemotePresentation({
         enabled: true,
-        linkStatus: 'connecting',
-        connectionIssue: null,
-        devices: [selfDevice],
+        devices: [
+          selfDevice,
+          {
+            ...selfDevice,
+            deviceId: 'desktop-2',
+            name: 'Other desktop',
+            isSelf: false,
+          },
+        ],
       }),
-    ).toMatchObject({ state: 'connecting' });
+    ).toMatchObject({
+      layout: 'onboarding',
+      remoteEnabled: true,
+      linkedMobileCount: 0,
+      otherDeviceCount: 1,
+    });
     expect(
       resolveMobileRemotePresentation({
         enabled: true,
-        linkStatus: 'online',
-        connectionIssue: null,
-        devices: [selfDevice],
-      }),
-    ).toMatchObject({ state: 'ready', linkedMobileName: null });
-    expect(
-      resolveMobileRemotePresentation({
-        enabled: true,
-        linkStatus: 'online',
-        connectionIssue: null,
         devices: [
           selfDevice,
           {
@@ -202,37 +207,44 @@ describe('resolveMobileRemotePresentation', () => {
           },
         ],
       }),
-    ).toMatchObject({ state: 'linked', linkedMobileName: 'My iPhone' });
+    ).toMatchObject({
+      layout: 'linked',
+      remoteEnabled: true,
+      linkedMobileCount: 1,
+      otherDeviceCount: 1,
+      selfDeviceId: 'desktop-device-1',
+      linkedMobileName: 'My iPhone',
+    });
   });
 
-  it('surfaces relay connection issues instead of reporting an endless connection attempt', () => {
+  it('keeps an unavailable device list distinct from a confirmed empty list', () => {
     expect(
       resolveMobileRemotePresentation({
         enabled: true,
-        linkStatus: 'connecting',
-        connectionIssue: {
-          kind: 'auth-failed',
-          at: 1,
-        },
-        devices: [selfDevice],
+        devices: null,
       }),
-    ).toMatchObject({ state: 'error' });
+    ).toMatchObject({
+      layout: 'checking',
+      remoteEnabled: true,
+      selfDeviceId: null,
+    });
   });
 });
 
 describe('MobileDownloadDialog', () => {
-  it('does not generate a QR code before the dialog opens', () => {
+  it('warms the QR code and remote snapshot before the dialog opens', async () => {
     render(
       <MobileDownloadDialog
         open={false}
         onOpenChange={vi.fn()}
         remoteAvailable
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );
-    expect(toDataURL).not.toHaveBeenCalled();
-    expect(getState).not.toHaveBeenCalled();
+    await waitFor(() => expect(toDataURL).toHaveBeenCalledTimes(1));
+    expect(getState).toHaveBeenCalledTimes(1);
   });
 
   it('generates the regional QR code and exposes an equivalent browser action', async () => {
@@ -242,15 +254,12 @@ describe('MobileDownloadDialog', () => {
         onOpenChange={vi.fn()}
         remoteAvailable
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );
 
     expect(await screen.findByAltText('sidebar.mobileDownload.qrAlt')).toBeTruthy();
-    expect(toDataURL).toHaveBeenCalledWith('https://cindy.cn/download/#all-versions', {
-      margin: 2,
-      width: 234,
-    });
 
     const openButton = screen.getByRole('button', {
       name: 'sidebar.mobileDownload.openPage',
@@ -260,33 +269,58 @@ describe('MobileDownloadDialog', () => {
     expect(openExternal).toHaveBeenCalledWith('https://cindy.cn/download/#all-versions');
   });
 
-  it('shows the linked mobile state, desktop device ID, and remote settings action', async () => {
+  it('shows the compact QR, device preview, and separate settings actions when mobile is linked', async () => {
     const onOpenRemoteSettings = vi.fn();
+    const onOpenDevices = vi.fn();
     render(
       <MobileDownloadDialog
         open
         onOpenChange={vi.fn()}
         remoteAvailable
         onOpenRemoteSettings={onOpenRemoteSettings}
+        onOpenDevices={onOpenDevices}
         triggerRef={detachedTriggerRef}
       />,
     );
 
-    expect(await screen.findByText('sidebar.mobileDownload.remoteStatus.linked')).toBeTruthy();
-    const deviceId = screen.getByText('desktop-device-1');
-    expect(deviceId).toBeTruthy();
-    expect(deviceId.className).toContain('select-text');
-    expect(deviceId.className).toContain('break-all');
-    fireEvent.click(
-      screen.getByRole('button', { name: 'sidebar.mobileDownload.openRemoteSettings' }),
-    );
+    expect(await screen.findByText('sidebar.mobileDownload.myDevices')).toBeTruthy();
+    expect(screen.getByText('My iPhone')).toBeTruthy();
+    expect(screen.getByText('sidebar.mobileDownload.deviceId')).toBeTruthy();
+    expect(screen.getByTestId('mobile-download-qr-card').dataset.compact).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: /sidebar\.mobileDownload\.myDevices/ }));
+    expect(onOpenDevices).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /sidebar\.mobileDownload\.allowControl/ }));
     expect(onOpenRemoteSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the linked layout when a later device-list refresh fails', async () => {
+    render(
+      <MobileDownloadDialog
+        open
+        onOpenChange={vi.fn()}
+        remoteAvailable
+        onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
+        triggerRef={detachedTriggerRef}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mobile-download-qr-card').dataset.compact).toBe('true'),
+    );
+    listDevices.mockRejectedValueOnce(new Error('temporary list failure'));
+    await act(async () => {
+      presenceChangedHandler?.();
+    });
+    await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('mobile-download-qr-card').dataset.compact).toBe('true');
+    expect(screen.getByText('My iPhone')).toBeTruthy();
   });
 
   it('keeps the newest remote snapshot when event-driven refreshes resolve out of order', async () => {
     let resolveStaleState!: (state: Awaited<ReturnType<typeof getState>>) => void;
     const staleState = {
-      remoteControlEnabled: true,
+      remoteControlEnabled: false,
       keepAwake: false,
       linkStatus: 'connecting' as const,
       connectionIssue: null,
@@ -303,6 +337,7 @@ describe('MobileDownloadDialog', () => {
       )
       .mockResolvedValueOnce({
         ...staleState,
+        remoteControlEnabled: true,
         linkStatus: 'online',
       });
 
@@ -312,6 +347,7 @@ describe('MobileDownloadDialog', () => {
         onOpenChange={vi.fn()}
         remoteAvailable
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );
@@ -320,18 +356,18 @@ describe('MobileDownloadDialog', () => {
     await act(async () => {
       presenceChangedHandler?.();
     });
-    expect(await screen.findByText('sidebar.mobileDownload.remoteStatus.linked')).toBeTruthy();
+    expect(await screen.findByText('sidebar.mobileDownload.remoteAction.enabled')).toBeTruthy();
 
     await act(async () => {
       resolveStaleState(staleState);
     });
     await waitFor(() =>
-      expect(screen.getByText('sidebar.mobileDownload.remoteStatus.linked')).toBeTruthy(),
+      expect(screen.getByText('sidebar.mobileDownload.remoteAction.enabled')).toBeTruthy(),
     );
-    expect(screen.queryByText('sidebar.mobileDownload.remoteStatus.connecting')).toBeNull();
+    expect(screen.queryByText('sidebar.mobileDownload.remoteAction.enable')).toBeNull();
   });
 
-  it('uses the failed status color when the remote state cannot be read', async () => {
+  it('keeps the settings path available when the remote state cannot be read', async () => {
     getState.mockRejectedValueOnce(new Error('state unavailable'));
     render(
       <MobileDownloadDialog
@@ -339,14 +375,15 @@ describe('MobileDownloadDialog', () => {
         onOpenChange={vi.fn()}
         remoteAvailable
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );
 
-    const status = await screen.findByText('sidebar.mobileDownload.remoteStatus.error');
+    expect(await screen.findByText('sidebar.mobileDownload.remoteAction.unavailable')).toBeTruthy();
     expect(
-      status.parentElement?.querySelector('[aria-hidden="true"]')?.getAttribute('style'),
-    ).toContain('--remote-status-failed');
+      screen.getByRole('button', { name: /sidebar\.mobileDownload\.allowControl/ }),
+    ).toBeTruthy();
   });
 
   it('uses the official Cindy artwork and the shared dialog tokens', () => {
@@ -368,13 +405,14 @@ describe('MobileDownloadDialog', () => {
         onOpenChange={vi.fn()}
         remoteAvailable
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );
 
     await waitFor(() =>
       expect(document.activeElement).toBe(
-        screen.getByRole('button', { name: 'sidebar.mobileDownload.openRemoteSettings' }),
+        screen.getByRole('button', { name: /sidebar\.mobileDownload\.allowControl/ }),
       ),
     );
   });
@@ -393,6 +431,7 @@ describe('MobileDownloadDialog', () => {
             onOpenChange={setOpen}
             remoteAvailable
             onOpenRemoteSettings={vi.fn()}
+            onOpenDevices={vi.fn()}
             triggerRef={triggerRef}
           />
         </>
@@ -444,6 +483,7 @@ describe('MobileDownloadDialog', () => {
         onOpenChange={vi.fn()}
         remoteAvailable={false}
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );
@@ -495,6 +535,7 @@ describe('MobileDownloadDialog', () => {
         onOpenChange={vi.fn()}
         remoteAvailable={false}
         onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
         triggerRef={detachedTriggerRef}
       />,
     );

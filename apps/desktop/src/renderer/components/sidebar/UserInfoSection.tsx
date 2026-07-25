@@ -63,6 +63,11 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     navigate('/settings?tab=remote-control');
   };
 
+  const openLinkedDevices = () => {
+    setMobileDownloadOpen(false);
+    navigate('/settings?tab=remote-control&section=devices');
+  };
+
   const mobileDownloadEntry = (
     <button
       ref={mobileDownloadButtonRef}
@@ -134,6 +139,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           onOpenChange={setMobileDownloadOpen}
           remoteAvailable={remoteAvailable}
           onOpenRemoteSettings={openRemoteSettings}
+          onOpenDevices={openLinkedDevices}
           triggerRef={mobileDownloadButtonRef}
         />
       </>
@@ -264,6 +270,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
         onOpenChange={setMobileDownloadOpen}
         remoteAvailable={remoteAvailable}
         onOpenRemoteSettings={openRemoteSettings}
+        onOpenDevices={openLinkedDevices}
         triggerRef={mobileDownloadButtonRef}
       />
     </div>

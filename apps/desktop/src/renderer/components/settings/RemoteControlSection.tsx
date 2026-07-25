@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
@@ -136,6 +137,8 @@ function sshSummary(
 export function RemoteControlSection() {
   const { t } = useTranslation();
   const { mode } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const deviceLinkAvailable = mode === 'cloud';
   const s = useDeviceLinkSettings(deviceLinkAvailable);
 
@@ -145,6 +148,30 @@ export function RemoteControlSection() {
   // SSH 主机轻量快照 —— 只为收起态摘要服务。RemoteSection 内部自管自己的一份;
   // 这里不外提它的状态是有意的(979 行组件不为一行摘要重构)。
   const [hosts, setHosts] = useState<RemoteHostSnapshot[] | null>(null);
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('section') === 'devices') {
+      setDevicesOpen(true);
+    }
+  }, [location.search]);
+
+  const toggleDevices = useCallback(() => {
+    const nextOpen = !devicesOpen;
+    setDevicesOpen(nextOpen);
+    if (nextOpen) return;
+
+    const next = new URLSearchParams(location.search);
+    if (next.get('section') !== 'devices') return;
+    next.delete('section');
+    const search = next.toString();
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+      },
+      { replace: true },
+    );
+  }, [devicesOpen, location.pathname, location.search, navigate]);
 
   const refreshHosts = useCallback(async () => {
     try {
@@ -201,7 +228,7 @@ export function RemoteControlSection() {
               summary={devSumText}
               dotColor={null}
               open={devicesOpen}
-              onToggle={() => setDevicesOpen((v) => !v)}
+              onToggle={toggleDevices}
               pinned={<MyDevicesPanel s={s} variant="self" />}
             >
               <MyDevicesPanel s={s} variant="others" />

@@ -117,6 +117,7 @@ export function SettingsView() {
       next.delete('openPanel');
       next.delete('ghost');
       next.delete('imGroup');
+      next.delete('section');
       // providers 页深链参数(connect/wizard):切走 tab 即作废,防再切回来被误消费。
       next.delete('connect');
       next.delete('wizard');

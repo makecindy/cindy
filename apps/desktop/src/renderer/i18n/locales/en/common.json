@@ -3604,16 +3604,18 @@
       "error": "Couldn’t create the QR code. Try again later.",
       "platformHint": "Supports iOS and Android with automatic detection",
       "openPage": "Open Download Page",
-      "enableRemote": "Enable Remote Control",
-      "openRemoteSettings": "Open Remote Settings",
-      "remoteStatus": {
-        "loading": "Checking remote control status…",
-        "error": "Remote control status is unavailable — check the connection in Settings",
-        "disabled": "Remote control is not enabled",
-        "connecting": "Connecting to the remote service…",
-        "ready": "Ready — sign in on mobile with the same account",
-        "linked": "Linked to {{name}}",
-        "deviceId": "This device ID"
+      "scanToOpen": "Scan to open Cindy",
+      "scanAnother": "Scan Another Device",
+      "scanAnotherHint": "Open Cindy on another phone",
+      "myDevices": "My Devices",
+      "deviceOffline": "Offline",
+      "allowControl": "Allow same-account devices to control this machine",
+      "deviceId": "This device · {{id}}",
+      "remoteAction": {
+        "checking": "Checking…",
+        "unavailable": "Unavailable",
+        "enable": "Enable",
+        "enabled": "Enabled"
       },
       "close": "Close Download Dialog"
     },
