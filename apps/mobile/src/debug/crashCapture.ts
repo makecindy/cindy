@@ -230,9 +230,25 @@ export function markBootPhase(phase: BootPhase): void {
  * 用于冷启动 OTA 换包、设置页手动检查更新等——避免把「进程被主动换掉、没走到
  * ready」误判成上次异常退出。传入 reloadAsync 便于注入测试其调用顺序。
  */
-export function reloadWithMarker(reloadAsync: () => Promise<void>): Promise<void> {
+export async function reloadWithMarker(reloadAsync: () => Promise<void>): Promise<void> {
+  const previous = readBootMarker();
+  const previousPhase = previous?.phase;
   markBootPhase('reloading');
-  return reloadAsync();
+  try {
+    await reloadAsync();
+  } catch (err) {
+    if (
+      previousPhase === 'starting' ||
+      previousPhase === 'endpoints' ||
+      previousPhase === 'ota' ||
+      previousPhase === 'auth' ||
+      previousPhase === 'ready' ||
+      previousPhase === 'reloading'
+    ) {
+      writeBootMarker(previousPhase, previous?.at ?? Date.now());
+    }
+    throw err;
+  }
 }
 
 /** 记录 React 渲染期错误(由 CrashBoundary.componentDidCatch 调用)。 */
