@@ -20,3 +20,12 @@ export function shouldStartComputerPermissionGuide(
 ): boolean {
   return enabling && status?.permissionState?.status === 'missing';
 }
+
+/** Keep persisted opt-in separate from whether the runtime is currently ready. */
+export function getComputerPermissionSwitchChecked(
+  enabled: boolean,
+  togglePending: boolean,
+  enableIntent: boolean,
+): boolean {
+  return togglePending ? enableIntent : enabled;
+}

@@ -149,24 +149,46 @@ describe('computer use UI feedback invariants', () => {
     expect(sectionSource).toContain('COMPUTER_PERMISSION_POLL_TIMEOUT_MS');
   });
 
-  it('refreshes an inconclusive passive preflight before enabling Computer Use', () => {
+  it('refreshes mutable macOS permission state before enabling Computer Use', () => {
     const sectionSource = fs.readFileSync(
       path.resolve(__dirname, '../../renderer/components/settings/ComputerUseSection.tsx'),
       'utf-8',
     );
-    const inconclusiveGuard = sectionSource.indexOf(
-      'isComputerPermissionPreflightInconclusive(nextStatus)',
+    const toggleStart = sectionSource.indexOf(
+      'const handleToggleComputer',
     );
     const enableCall = sectionSource.indexOf(
       'await persistComputerEnabled(next)',
-      inconclusiveGuard,
+      toggleStart,
     );
 
-    expect(inconclusiveGuard).toBeGreaterThanOrEqual(0);
-    expect(sectionSource.slice(inconclusiveGuard, enableCall)).toContain(
-      "refreshComputerPermissionStatus('toggle-inconclusive-preflight'",
+    expect(toggleStart).toBeGreaterThanOrEqual(0);
+    expect(sectionSource.slice(toggleStart, enableCall)).toContain(
+      "refreshComputerPermissionStatus('toggle-fresh-preflight'",
     );
-    expect(enableCall).toBeGreaterThan(inconclusiveGuard);
+    expect(sectionSource.slice(toggleStart, enableCall)).toContain('fresh: true');
+    expect(sectionSource.slice(toggleStart, enableCall)).toContain('bypassCache: true');
+    expect(enableCall).toBeGreaterThan(toggleStart);
+  });
+
+  it('preserves the deferred Codex refresh warning after native onboarding', () => {
+    const sectionSource = fs.readFileSync(
+      path.resolve(__dirname, '../../renderer/components/settings/ComputerUseSection.tsx'),
+      'utf-8',
+    );
+    const listenerStart = sectionSource.indexOf(
+      'onPermissionGuideStatusChanged((status)',
+    );
+    const listenerEnd = sectionSource.indexOf(
+      'const refreshComputerPermissionStatus',
+      listenerStart,
+    );
+    const listenerBody = sectionSource.slice(listenerStart, listenerEnd);
+
+    expect(listenerStart).toBeGreaterThanOrEqual(0);
+    expect(listenerEnd).toBeGreaterThan(listenerStart);
+    expect(listenerBody).toContain('result.codexMcpRefreshed === false');
+    expect(listenerBody).toContain("toast.warning(t('settings.computerUse.codexRefreshDeferred'))");
   });
 });
 

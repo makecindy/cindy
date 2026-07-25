@@ -386,6 +386,12 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.windows[1].options.webPreferences).toMatchObject(
       requiredSecurityPreferences,
     );
+    for (const permissionWindow of harness.windows) {
+      expect(permissionWindow.webContents.setWindowOpenHandler).toHaveBeenCalledOnce();
+      const preventDefault = vi.fn();
+      permissionWindow.listeners.get('will-navigate')?.({ preventDefault });
+      expect(preventDefault).toHaveBeenCalledOnce();
+    }
     expect(guide.isComputerPermissionGuideWebContents(
       harness.windows[1].webContents as unknown as WebContents,
     )).toBe(true);
@@ -441,6 +447,24 @@ describe('Electron Computer Use permission guide window', () => {
       screenRecording: 'missing',
     }));
     expect(harness.openExternal).toHaveBeenCalledOnce();
+  });
+
+  it('retries opening a permission pane after shell launch failure', async () => {
+    harness.openExternal
+      .mockRejectedValueOnce(new Error('launch failed'))
+      .mockResolvedValueOnce(undefined);
+    const guide = await import('../window');
+    const missingAccessibility = {
+      permissionState: {
+        accessibility: 'missing',
+        screenRecording: 'missing',
+      },
+    } as unknown as Parameters<typeof guide.openComputerPermissionPaneForStatus>[0];
+
+    await guide.openComputerPermissionPaneForStatus(missingAccessibility);
+    await guide.openComputerPermissionPaneForStatus(missingAccessibility);
+
+    expect(harness.openExternal).toHaveBeenCalledTimes(2);
   });
 
   it('starts the native guide at the first missing permission without showing the old fallback', async () => {
@@ -571,6 +595,30 @@ describe('Electron Computer Use permission guide window', () => {
     await Promise.resolve();
     expect(harness.windows[0].showInactive).toHaveBeenCalledOnce();
     expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the fallback alive when a started native guide exits before attaching', async () => {
+    vi.useFakeTimers();
+    harness.nativeShow.mockResolvedValueOnce(true);
+    const guide = await import('../window');
+
+    await guide.showComputerPermissionGuideWindow(null);
+    await vi.waitFor(() => {
+      expect(harness.nativeShow).toHaveBeenCalledOnce();
+    });
+    harness.nativeHostState.options?.onExited?.();
+    await vi.waitFor(() => {
+      expect(harness.windows[0].showInactive).toHaveBeenCalledOnce();
+      expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(harness.windows[0].close).not.toHaveBeenCalled();
+    expect(harness.windows[1].close).not.toHaveBeenCalled();
+    expect(harness.broadcastSend).not.toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
   });
 
   it('closes the guide and resumes permission probes when its renderer exits', async () => {

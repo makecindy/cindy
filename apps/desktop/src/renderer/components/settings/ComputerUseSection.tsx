@@ -45,6 +45,7 @@ import { createLogger } from '@/lib/logger';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { androidDeviceLabel, androidStatusFallback, describeAndroidDeviceStatus } from './androidStatusPresentation';
 import {
+  getComputerPermissionSwitchChecked,
   isComputerPermissionPreflightInconclusive,
   isComputerPermissionReady,
   shouldStartComputerPermissionGuide,
@@ -282,8 +283,12 @@ export function ComputerUseSection({
       cancelNativeComputerPermissionGrant();
       if (computerEnableIntentRef.current || computerEnabled) {
         void window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, true)
-          .then(() => {
+          .then((result) => {
             setComputerEnabled(true);
+            if (result.codexMcpRefreshed === false) {
+              toast.warning(t('settings.computerUse.codexRefreshDeferred'));
+              return;
+            }
             toast.success(t('settings.computerUse.directControl.toast.enabled'));
           })
           .catch((err) => {
@@ -310,7 +315,7 @@ export function ComputerUseSection({
   ) => {
     // fresh:重启 daemon 后现场实测 —— 「辅助功能被撤销」只有重启 daemon 才读得到。
     // 仅在 driver 替换或已进入授权流程后使用；页面进入/Recheck 走 passiveOnly，
-    // 开启开关直接消费页面刚刷新的状态，不重复探测。
+    // 开启开关会重新验证可变的 macOS TCC 状态，不能消费可能已过期的页面快照。
     const status = await window.electronAPI.maker.computer.status({
       forcePermissionProbe: true,
       ...(options?.fresh ? { freshPermissionProbe: true } : {}),
@@ -854,11 +859,6 @@ export function ComputerUseSection({
       setComputerTogglePending(true);
       computerEnableIntentRef.current = next;
       if (next) computerPermissionCompletionInFlightRef.current = false;
-      // Page entry already refreshed the source of truth. If it found a
-      // missing permission, reveal the two-step state immediately on enable.
-      if (shouldStartComputerPermissionGuide(next, computerStatus)) {
-        setComputerPermissionPending(true);
-      }
       let nextStatus = computerStatus;
       try {
         if (next && !nextStatus?.installed) {
@@ -870,18 +870,18 @@ export function ComputerUseSection({
             throw new Error(installResult.status.error ?? 'cua-driver install did not produce an installed driver');
           }
         }
-        if (next && isComputerPermissionPreflightInconclusive(nextStatus)) {
-          nextStatus = await refreshComputerPermissionStatus('toggle-inconclusive-preflight', {
+        if (next && nextStatus?.permissionState?.platform === 'macos') {
+          nextStatus = await refreshComputerPermissionStatus('toggle-fresh-preflight', {
             fresh: true,
             bypassCache: true,
           });
-          if (isComputerPermissionPreflightInconclusive(nextStatus)) {
-            computerEnableIntentRef.current = false;
-            setComputerPermissionPending(false);
-            resetComputerPermissionFlow();
-            toast.error(t('settings.computerUse.directControl.toast.permissionFailed'));
-            return;
-          }
+        }
+        if (next && isComputerPermissionPreflightInconclusive(nextStatus)) {
+          computerEnableIntentRef.current = false;
+          setComputerPermissionPending(false);
+          resetComputerPermissionFlow();
+          toast.error(t('settings.computerUse.directControl.toast.permissionFailed'));
+          return;
         }
         if (shouldStartComputerPermissionGuide(next, nextStatus)) {
           setComputerPermissionPending(true);
@@ -1074,10 +1074,14 @@ export function ComputerUseSection({
     !computerScreenRecordingGranted;
   const computerReady =
     computerStatus.installed && isComputerPermissionReady(computerStatus);
-  // An unavailable capability is always shown as off. The switch remains
-  // actionable so turning it on starts the permission/install guide.
-  const computerSwitchChecked = computerReady
-    && (computerTogglePending ? computerEnableIntentRef.current : computerEnabled);
+  // Persisted opt-in and runtime readiness are separate states. Keeping an
+  // unavailable enabled configuration checked lets the user turn it off
+  // instead of forcing the only interaction back into onboarding.
+  const computerSwitchChecked = getComputerPermissionSwitchChecked(
+    computerEnabled,
+    computerTogglePending,
+    computerEnableIntentRef.current,
+  );
   const computerSwitchDisabled =
     computerTogglePending || computerInstallPending || computerPermissionPending;
 

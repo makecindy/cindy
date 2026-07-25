@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getComputerPermissionSwitchChecked,
   isComputerPermissionPreflightInconclusive,
   isComputerPermissionReady,
   shouldStartComputerPermissionGuide,
@@ -80,5 +81,12 @@ describe('computer permission flow', () => {
       false,
       status('missing', 'missing'),
     )).toBe(false);
+  });
+
+  it('keeps persisted opt-in visible independently from runtime readiness', () => {
+    expect(getComputerPermissionSwitchChecked(true, false, false)).toBe(true);
+    expect(getComputerPermissionSwitchChecked(false, false, true)).toBe(false);
+    expect(getComputerPermissionSwitchChecked(false, true, true)).toBe(true);
+    expect(getComputerPermissionSwitchChecked(true, true, false)).toBe(false);
   });
 });

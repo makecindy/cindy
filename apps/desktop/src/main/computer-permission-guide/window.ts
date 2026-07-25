@@ -159,6 +159,13 @@ function loadPermissionView(
   );
 }
 
+function preventPermissionGuideNavigation(webContents: WebContents): void {
+  webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  webContents.on('will-navigate', (event) => {
+    event.preventDefault();
+  });
+}
+
 function closeWindow(window: BrowserWindow | null): void {
   if (window && !window.isDestroyed()) window.close();
 }
@@ -401,6 +408,7 @@ export async function openComputerPermissionPaneForStatus(
     await shell.openExternal(url);
     log.debug('opened Computer Use permission pane', { url });
   } catch (error) {
+    if (lastOpenedPermissionPaneUrl === url) lastOpenedPermissionPaneUrl = null;
     log.warn('failed to open Computer Use permission pane', {
       url,
       error: error instanceof Error ? error.message : String(error),
@@ -914,6 +922,7 @@ export async function showComputerPermissionGuideWindow(
   });
   backdropWindow = backdrop;
   backdrop.setIgnoreMouseEvents(true, { forward: true });
+  preventPermissionGuideNavigation(backdrop.webContents);
   backdrop.webContents.once('did-finish-load', () => {
     if (
       generation !== guideLifecycleGeneration
@@ -981,7 +990,7 @@ export async function showComputerPermissionGuideWindow(
     },
   });
   guideWindow = guide;
-  guide.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  preventPermissionGuideNavigation(guide.webContents);
   guide.webContents.once('did-finish-load', () => {
     if (
       !isGuideLifecycleActive(generation)

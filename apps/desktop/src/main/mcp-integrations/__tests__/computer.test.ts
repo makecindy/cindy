@@ -2365,6 +2365,32 @@ describe('computer mcp integration', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('closes active MCP sessions and blocks tool dispatch while permission onboarding is paused', async () => {
+    setPlatform('darwin');
+    mcpCallToolMock
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true,"windows":[]}' }],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: '{"ok":true}' }],
+      });
+
+    await callComputerDriverTool(
+      'list_windows',
+      {},
+      { sessionId: 'session-permission-guide-pause' },
+    );
+    await pauseComputerDriverPermissionProbe();
+
+    expect(mcpCloseMock).toHaveBeenCalledOnce();
+    await expect(callComputerDriverTool(
+      'list_windows',
+      {},
+      { sessionId: 'session-permission-guide-pause' },
+    )).rejects.toThrow('permission onboarding is active');
+    expect(mcpConnectMock).toHaveBeenCalledOnce();
+  });
+
   it('prepares the runtime before dispatching the first enabled tool call', async () => {
     const prepareRuntimeBeforeUse = vi.fn(async () => undefined);
     mcpCallToolMock.mockResolvedValueOnce({

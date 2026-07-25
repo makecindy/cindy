@@ -567,16 +567,25 @@ export function isComputerDriverPermissionProbePaused(): boolean {
   return computerDriverPermissionProbePaused;
 }
 
+function assertComputerDriverToolDispatchAvailable(): void {
+  if (computerDriverPermissionProbePaused) {
+    throw new ComputerDriverError(
+      'Computer Use tool calls are paused while permission onboarding is active.',
+    );
+  }
+}
+
 /**
  * Pause permission probes while the app is absent from the current macOS
- * permission pane. This does not stop the branded daemon; it only prevents
- * AX/TCC probes from re-registering a deleted app row until System Settings
- * exposes the row again.
+ * permission pane. Close active agent MCP sessions and reject new tool calls
+ * so they cannot re-register a deleted app row while the guide waits for a
+ * fresh drag.
  */
 export async function pauseComputerDriverPermissionProbe(): Promise<void> {
   computerDriverPermissionProbePaused = true;
   cachedPermissionProbe = null;
   lastDaemonAutostartAt = 0;
+  await cleanupActiveComputerDriverSessions();
 }
 
 /** Resume live permission checks after System Settings contains Computer Use. */
@@ -2018,6 +2027,7 @@ function createCuaMcpSession(sessionId: string): CuaMcpSessionEntry {
 }
 
 async function getCuaMcpSession(sessionId: string): Promise<CuaMcpSessionEntry> {
+  assertComputerDriverToolDispatchAvailable();
   const existing = cuaMcpSessions.get(sessionId);
   if (existing) {
     await existing.ready;
@@ -3160,6 +3170,7 @@ export async function callComputerDriverTool(
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
 ): Promise<unknown> {
+  assertComputerDriverToolDispatchAvailable();
   const sessionId = readSessionIdFromContext(context);
   if (!sessionId) {
     throw new ComputerDriverError(`Computer Use tool calls require an active ${BRAND_NAME} session.`);
@@ -3169,6 +3180,7 @@ export async function callComputerDriverTool(
   const driverInputArgs = stripLocalListWindowsArgs(name, rawArgs);
   const normalizedArgs = normalizeToolArgsForDriver(name, driverInputArgs);
   const entry = await getCuaMcpSession(sessionId);
+  assertComputerDriverToolDispatchAvailable();
   const driverArgs = applyDriverSessionArgs(name, normalizedArgs, entry.driverSessionId);
   await initializeDefaultCursorStyle(name, driverArgs, entry, entry.driverSessionId);
   const timeoutMs = getCuaMcpToolTimeoutMs(name);
@@ -3202,6 +3214,7 @@ export async function callComputerDriverTool(
           throw err;
         }
         const freshEntry = await getCuaMcpSession(sessionId);
+        assertComputerDriverToolDispatchAvailable();
         if (getCuaMcpSessionCloseVersion(sessionId) !== sessionCloseVersion) {
           await cleanupComputerDriverSessionInternal(sessionId, {
             resetGeneration: false,
@@ -3323,12 +3336,16 @@ function cleanupComputerDriverSessionInternal(
   return cleanup;
 }
 
-export async function cleanupAllComputerDriverSessions(): Promise<void> {
-  stopPermissionGrantFlow('cleanup');
-  clearProcessSnapshotCache();
+async function cleanupActiveComputerDriverSessions(): Promise<void> {
   const sessionIds = Array.from(cuaMcpSessions.keys());
   await Promise.allSettled(sessionIds.map((sessionId) => cleanupComputerDriverSession(sessionId)));
   await Promise.allSettled(Array.from(cuaMcpSessionCleanups.values()));
+}
+
+export async function cleanupAllComputerDriverSessions(): Promise<void> {
+  stopPermissionGrantFlow('cleanup');
+  clearProcessSnapshotCache();
+  await cleanupActiveComputerDriverSessions();
   cuaDriverSessionGenerations.clear();
   cuaMcpSessionCloseVersions.clear();
 }

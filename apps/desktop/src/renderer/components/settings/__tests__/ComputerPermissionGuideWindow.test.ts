@@ -35,6 +35,7 @@ vi.mock('react-i18next', () => ({
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -64,6 +65,40 @@ describe('resolveComputerPermissionGuideInitialAwaitingUser', () => {
 });
 
 describe('ComputerPermissionGuideWindow native drag fallback', () => {
+  it('does not reuse a localStorage drag hint from an earlier guide lifecycle', async () => {
+    window.localStorage.setItem(PERMISSION_APP_DRAGGED_STORAGE_KEY, '1');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          computer: {
+            permissionGuideStatus: vi.fn().mockResolvedValue({
+              permissionState: {
+                platform: 'macos',
+                required: true,
+                status: 'missing',
+                accessibility: 'missing',
+                screenRecording: 'missing',
+                screenRecordingCapturable: 'missing',
+                canGrant: true,
+              },
+            }),
+            driverIcon: vi.fn().mockResolvedValue({ iconDataUrl: null }),
+            startPermissionAppDrag: vi.fn(),
+            finishPermissionAppDrag: vi.fn(),
+            cancelPermissionGrant: vi.fn().mockResolvedValue({ cancelled: true }),
+            onPermissionGuideStatusChanged: vi.fn(() => () => undefined),
+          },
+        },
+      },
+    });
+
+    render(createElement(ComputerPermissionGuideWindow));
+
+    expect(await screen.findByText('Drag Computer Use into Accessibility')).toBeTruthy();
+    expect(screen.queryByText('Turn on Computer Use in Accessibility')).toBeNull();
+  });
+
   it('initializes from the guide preflight snapshot without probing permissions again', async () => {
     const status = vi.fn();
     const permissionGuideStatus = vi.fn().mockResolvedValue({

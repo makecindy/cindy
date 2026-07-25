@@ -47,7 +47,7 @@ export function resolveComputerPermissionGuideInteraction(
   return 'drag';
 }
 
-/** Restore the drag hint from localStorage or an explicit query parameter. */
+/** Restore the drag hint from this window lifecycle or an explicit query parameter. */
 export function resolveComputerPermissionGuideInitialAwaitingUser(
   search: string,
   storedValue?: string | null,
@@ -59,7 +59,7 @@ function readPermissionAppDraggedState(): boolean {
   try {
     return resolveComputerPermissionGuideInitialAwaitingUser(
       window.location.search,
-      window.localStorage.getItem(PERMISSION_APP_DRAGGED_STORAGE_KEY),
+      window.sessionStorage.getItem(PERMISSION_APP_DRAGGED_STORAGE_KEY),
     );
   } catch {
     return resolveComputerPermissionGuideInitialAwaitingUser(window.location.search);
@@ -154,9 +154,9 @@ export function ComputerPermissionGuideWindow() {
       setAwaitingUser(false);
       setDragging(false);
       try {
-        window.localStorage.removeItem(PERMISSION_APP_DRAGGED_STORAGE_KEY);
+        window.sessionStorage.removeItem(PERMISSION_APP_DRAGGED_STORAGE_KEY);
       } catch {
-        // Restricted profiles do not expose localStorage; the main state wins.
+        // Restricted profiles do not expose sessionStorage; the main state wins.
       }
       previousStepRef.current = step;
     }
@@ -204,7 +204,7 @@ export function ComputerPermissionGuideWindow() {
     setDragging(true);
     window.electronAPI.maker.computer.startPermissionAppDrag(iconDataUrl);
     try {
-      window.localStorage.setItem(PERMISSION_APP_DRAGGED_STORAGE_KEY, '1');
+      window.sessionStorage.setItem(PERMISSION_APP_DRAGGED_STORAGE_KEY, '1');
     } catch {
       // The main-process query flag remains as a fallback in restricted profiles.
     }
