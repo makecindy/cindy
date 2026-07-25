@@ -29,8 +29,8 @@ import {
  *
  * 高度:缺省**随内容自适应**——dom-ready 后宿主 executeJavaScript 量 guest
  * 的 body 内容高(不受信数值,clamp 48–800 收口;量到前占位 160),延迟补量
- * 两次兜后到的布局/字体;声明了 settingsHeight 则固定该值(作者对动态内容
- * 的显式选择)。
+ * 两次兜后到的布局/字体;声明了 settingsHeight 则固定该值,并保持作者布局
+ * 完全不受宿主响应式规则干预。
  *
  * 视觉连续性(规则 7):guest 首帧不可能与宿主同帧(独立渲染进程,
  * attach→装载→绘制天然晚数帧)——追不平就贴快照:渲染稳定后把 guest 画面
@@ -49,17 +49,16 @@ const AUTO_HEIGHT_MIN = 48;
 const AUTO_HEIGHT_MAX = 800;
 
 /**
- * 设置 guest 的结构 CSS(dom-ready 注入,id 守卫幂等):
- * - 所有模式先把文档和子元素宽度收在宿主卡片内,让插件作者的固定宽控件
- *   在极窄内容区也能收缩,而不是顶出卡片;
- * 自适应高度模式再追加:
+ * 自适应高度设置 guest 的结构 CSS(dom-ready 注入,id 守卫幂等):
+ * - 把文档和子元素宽度收在宿主卡片内,让插件作者的固定宽控件在极窄内容区
+ *   也能收缩,而不是顶出卡片;
  * - html/body 高度钉 auto:意识页写 height:100%/100vh 会让 body 高恒等于
  *   当前视口高,量出来的值永远追着容器现值走(只涨不缩的棘轮,内容变矮后
  *   底部空白收不回去),钉 auto 后 body 高回归内容本身;
  * - overflow-x 裁掉:设置卡片里横滚动条永远不是想要的,且它会吃掉十几像素
  *   视口高、连带勾出纵滚动条(量高不知道横滚动条的存在)。
  * 纵向滚动开关不在这里——由量高脚本按"内容是否超 clamp 上限"逐次决定。
- * 固定高度只跳过高度规则,仍应用宽度收口。
+ * 固定高度模式不注入这些规则,遵守 settingsHeight 的作者布局契约。
  */
 const RESPONSIVE_GUEST_CSS =
   'html,body{width:100%!important;max-width:100%!important;overflow-x:hidden!important;}*,*::before,*::after{box-sizing:border-box;min-width:0;max-width:100%;}';
@@ -339,14 +338,15 @@ function SettingsWebviewBody({
     };
     const onDomReady = () => {
       injector.onDomReady();
+      if (fixedHeight !== undefined) {
+        // settingsHeight 契约要求宿主不干预 guest 布局。只用空脚本往返作为
+        // 主题 insertCSS 后的有序揭示屏障,不注入宽度/overflow 规则。
+        void webview.executeJavaScript('void 0').then(reveal, reveal);
+        return;
+      }
       const prepareResponsiveLayout = webview
         .executeJavaScript(RESPONSIVE_STYLE_SCRIPT)
         .catch(() => {});
-      if (fixedHeight !== undefined) {
-        // 固定高度不量高,宽度收口后揭示;这次往返也把淡入排到主题 CSS 之后。
-        void prepareResponsiveLayout.then(reveal, reveal);
-        return;
-      }
       // 结构 CSS 先落地再量(html/body 钉 auto 会改变 body 高,顺序反了首量
       // 就是错值);脚本自带 id 守卫,dom-ready 因 guest 内跳转重入时幂等。
       void prepareResponsiveLayout

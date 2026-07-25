@@ -183,4 +183,22 @@ describe('PluginManagementLayout', () => {
     fireEvent.keyDown(searchInput, { key: 'Escape' });
     expect(document.activeElement).not.toBe(searchInput);
   });
+
+  it('leaves the search query and focus intact when IME handles Escape', () => {
+    const onQueryChange = vi.fn();
+    render(
+      <MemoryRouter>
+        <PluginManagementLayout activeTab="skills" query="calendar" onQueryChange={onQueryChange}>
+          <span>Content</span>
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+
+    const searchInput = screen.getByRole('textbox', { name: 'Search skills' });
+    searchInput.focus();
+    fireEvent.keyDown(searchInput, { key: 'Escape', isComposing: true });
+
+    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(searchInput);
+  });
 });
