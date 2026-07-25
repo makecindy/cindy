@@ -164,10 +164,14 @@ const makeStyles = (colors: ThemeColors) =>
       textAlign: 'center',
     },
     primaryButton: {
+      alignItems: 'center',
       backgroundColor: colors.textPrimary,
       // 单行交互按钮用 pill 几何(设计规范:8px control radius 仅用于不能做 pill 的内联控件)。
       borderRadius: radius.pill,
+      justifyContent: 'center',
       marginTop: spacing.lg,
+      // ≥44pt 触达标准(设计规范):崩溃时用户必须点到的两个动作不能过小。
+      minHeight: 44,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.sm,
     },
@@ -177,12 +181,17 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: fontWeight.medium,
     },
     secondaryButton: {
+      alignItems: 'center',
       borderRadius: radius.pill,
+      justifyContent: 'center',
+      minHeight: 44,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.sm,
     },
     secondaryLabel: {
-      color: colors.textSecondary,
+      // 交互按钮标签用 textPrimary:textSecondary 在兜底屏底色上仅约 2.8:1 对比度,
+      // 低对比例外只适用于次要说明文本,不适用于按钮标签(设计规范)。
+      color: colors.textPrimary,
       fontSize: typeScale.body,
     },
     pressed: {

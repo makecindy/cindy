@@ -28,6 +28,26 @@ describe('normalizeError', () => {
   it('对象 throw 序列化为 message', () => {
     expect(normalizeError({ code: 42 }).message).toBe('{"code":42}');
   });
+
+  it('带 throwing trap 的值不抛,给兜底文案', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('trap');
+        },
+        get() {
+          throw new Error('trap');
+        },
+      },
+    );
+    expect(() => normalizeError(hostile)).not.toThrow();
+    expect(normalizeError(hostile).message).toBe('(unserializable error)');
+    // formatCrashEntry 依赖 normalizeError,同样不能抛(否则会把非致命 rejection 变崩溃)。
+    expect(() =>
+      formatCrashEntry({ source: 'unhandledRejection', error: hostile, at: 0 }),
+    ).not.toThrow();
+  });
 });
 
 describe('formatCrashEntry', () => {

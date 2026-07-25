@@ -201,8 +201,13 @@ function installPromiseRejectionTracking(): void {
     allRejections: true,
     onUnhandled: (_id, error) => {
       // 未处理 rejection 不一定终止进程,只记录、不改 boot 终态(避免把可恢复的 rejection
-      // 误标成 crashed)。
-      recordCrash(formatCrashEntry({ source: 'unhandledRejection', error, at: Date.now() }));
+      // 误标成 crashed)。整体包 try/catch:记录本身绝不能把一个非致命 rejection 变成
+      // 新的未捕获崩溃(normalizeError 已保证不抛,这里再兜一层)。
+      try {
+        recordCrash(formatCrashEntry({ source: 'unhandledRejection', error, at: Date.now() }));
+      } catch {
+        /* ignore */
+      }
     },
     onHandled: () => {},
   };

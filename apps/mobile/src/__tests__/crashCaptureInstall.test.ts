@@ -133,6 +133,31 @@ describe('handler 链', () => {
     expect(log).toContain('kaboom-rejection');
   });
 
+  it('rejection 回调对带 throwing trap 的值不抛(不把非致命 rejection 变成崩溃)', () => {
+    stubErrorUtils();
+    const enable = vi.fn();
+    (globalThis as unknown as { HermesInternal: unknown }).HermesInternal = {
+      hasPromise: () => true,
+      enablePromiseRejectionTracker: enable,
+    };
+    installCrashCapture();
+    const options = enable.mock.calls[0][0] as {
+      onUnhandled?: (id: unknown, error: unknown) => void;
+    };
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('trap');
+        },
+        get() {
+          throw new Error('trap');
+        },
+      },
+    );
+    expect(() => options.onUnhandled?.(1, hostile)).not.toThrow();
+  });
+
   it('缺少 ErrorUtils 时静默跳过,不抛', () => {
     expect(() => installCrashCapture()).not.toThrow();
   });

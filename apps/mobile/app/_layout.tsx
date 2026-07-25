@@ -161,10 +161,16 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
   // handoff reporter:OTA 门就绪在本层上报(reload 期间保持 pending,readiness 不推进)
   const handoff = useLoginHandoff();
   const dispatchHandoff = handoff.dispatch;
+  // 面包屑:进入 OTA 门即标 'ota'(而非等 otaReady)——自建正式包里 check/fetch 是异步的,
+  // 若进程死在这期间,marker 应指向 'ota' 而不是停在 'endpoints' 误判阶段。markBootPhase
+  // 单调前进,不会覆盖已推进的更晚阶段。
+  useEffect(() => {
+    markBootPhase('ota');
+  }, []);
+  // handoff readiness 仍严格以 otaReady 为准(reload 期间保持 pending)。
   useEffect(() => {
     if (otaReady) {
       dispatchHandoff({ type: 'ota-ready' });
-      markBootPhase('ota');
     }
   }, [otaReady, dispatchHandoff]);
   // 自建变体:启动时检查整包更新(runtimeVersion 变化 → 引导跳 NPKG)。

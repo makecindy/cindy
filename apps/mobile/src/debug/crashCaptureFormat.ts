@@ -42,16 +42,30 @@ export const MAX_CRASH_LOG_CHARS = 256 * 1024;
 /** 崩溃记录来源分类。 */
 export type CrashSource = 'uncaught' | 'unhandledRejection' | 'react-render';
 
-/** 把任意 throw 值规整为 { message, stack }(error 可能不是 Error 实例)。 */
+/**
+ * 把任意 throw 值规整为 { message, stack }(error 可能不是 Error 实例)。
+ * 本函数保证**永不抛**:JS 允许 throw 任意值,带 throwing trap 的 Proxy 会让属性访问 /
+ * JSON.stringify / String() 都抛错;若这里抛出,会把一个本可记录的(甚至非致命的)错误
+ * 变成新的未捕获异常。所有取值路径都兜底。
+ */
 export function normalizeError(error: unknown): { message: string; stack?: string } {
-  if (error instanceof Error) {
-    return { message: error.message || error.name || 'Error', stack: error.stack };
-  }
-  if (typeof error === 'string') return { message: error };
   try {
-    return { message: JSON.stringify(error) };
-  } catch {
+    if (error instanceof Error) {
+      return {
+        message: error.message || error.name || 'Error',
+        stack: typeof error.stack === 'string' ? error.stack : undefined,
+      };
+    }
+    if (typeof error === 'string') return { message: error };
+    try {
+      const json = JSON.stringify(error);
+      if (typeof json === 'string') return { message: json };
+    } catch {
+      /* 循环引用 / throwing toJSON:落到 String 兜底 */
+    }
     return { message: String(error) };
+  } catch {
+    return { message: '(unserializable error)' };
   }
 }
 
