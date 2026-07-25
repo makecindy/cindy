@@ -20,8 +20,32 @@ const VERSION_BUMP_KINDS = Object.freeze(['major', 'minor', 'patch']);
 export const PLATFORM_ARCHS = Object.freeze({
   win32: ['x64'],
   darwin: ['arm64', 'x64'],
-  linux: ['x64'],
+  // linux 双架构均可打,但与 darwin 不同:缺省只打宿主 arch(见 parsePackageArgs)。
+  // aarch64 机器上交叉打 x64 deb 不可行——原生模块(better-sqlite3 / node-pty)
+  // 要按目标 arch 重编,sqlite-vec 的 vec0.so 也是预编译平台件。
+  linux: ['x64', 'arm64'],
 });
+
+/**
+ * node arch → Debian 包架构名(deb 文件名与 control 的 Architecture 字段用它)。
+ * 必须与 @electron-forge/maker-deb 的同名函数保持一致:归集产物时要按 maker
+ * 实际写出的文件名命名,错了会把 arm64 包标成 amd64,用户装上直接起不来。
+ * 这里只覆盖 PLATFORM_ARCHS.linux 声明的两种 arch,其余原样返回(与上游同构)。
+ */
+export function debianArch(nodeArch) {
+  switch (nodeArch) {
+    case 'x64':
+      return 'amd64';
+    case 'ia32':
+      return 'i386';
+    case 'armv7l':
+      return 'armhf';
+    case 'arm':
+      return 'armel';
+    default:
+      return nodeArch;
+  }
+}
 
 /** x.y.z 显式版本(不接受前缀 v / 预发布后缀——发布版本号是 CDN 比较键,保持纯净)。 */
 export function isExplicitVersion(value) {

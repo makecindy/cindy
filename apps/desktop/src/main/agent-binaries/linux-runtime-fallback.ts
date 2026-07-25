@@ -44,8 +44,26 @@ const CONFIG: Record<LinuxRuntimeFallbackKind, RuntimeConfig> = {
 const STARTUP_INSTALL_TIMEOUT_MS = 5 * 60_000;
 const VERIFY_TIMEOUT_MS = 15_000;
 const LOOKUP_TIMEOUT_MS = 5_000;
-const LINUX_PLATFORM_KEY = 'linux-x64';
-const CODEX_LINUX_ASSET = 'codex-x86_64-unknown-linux-musl.tar.gz';
+
+/**
+ * pin 文件(`tools/{claude,codex}/latest.json`)里 `runtimeAssets` 的键,同时也是
+ * Claude 官方下载 URL 的平台段。必须跟随宿主 arch:aarch64 机器上写死 linux-x64
+ * 会下到一个根本执行不了的二进制,而下载本身(SHA-256 匹配 x64 资产)是"成功"的,
+ * 故障只会推迟到 readExecutableVersion 才暴露。
+ */
+function linuxPlatformKey(arch: string = process.arch): string {
+  return `linux-${arch}`;
+}
+
+/**
+ * Codex 官方 release 的资产名——只发 musl 静态包,按 Rust target triple 命名。
+ * 未知 arch 原样拼进 URL,与 pin 里的 url 必然不等,由
+ * pinnedOfficialAssetDescriptor 抛错拦下(fail closed,绝不下错架构的包)。
+ */
+function codexLinuxAsset(arch: string = process.arch): string {
+  const rustArch = arch === 'arm64' ? 'aarch64' : arch === 'x64' ? 'x86_64' : arch;
+  return `codex-${rustArch}-unknown-linux-musl.tar.gz`;
+}
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -361,21 +379,26 @@ export function findCachedLinuxRuntimeFallbackBinary(
   }
 }
 
-/** Read an official asset URL and checksum committed alongside the version pin. */
+/**
+ * Read an official asset URL and checksum committed alongside the version pin.
+ * `arch` 只为测试可注入而暴露,生产调用一律走宿主 arch。
+ */
 export function pinnedOfficialAssetDescriptor(
   kind: LinuxRuntimeFallbackKind,
   version: string,
   pin: unknown,
+  arch: string = process.arch,
 ): OfficialAssetDescriptor {
+  const platformKey = linuxPlatformKey(arch);
   const entry = (pin as {
     runtimeAssets?: Record<string, { url?: unknown; sha256?: unknown; size?: unknown }>;
-  })?.runtimeAssets?.[LINUX_PLATFORM_KEY];
+  })?.runtimeAssets?.[platformKey];
   const sha256 = normalizeSha256(entry?.sha256);
   const expectedUrl = kind === 'claude-code'
-    ? `https://downloads.claude.ai/claude-code-releases/${version}/${LINUX_PLATFORM_KEY}/claude`
-    : `https://github.com/openai/codex/releases/download/rust-v${version}/${CODEX_LINUX_ASSET}`;
+    ? `https://downloads.claude.ai/claude-code-releases/${version}/${platformKey}/claude`
+    : `https://github.com/openai/codex/releases/download/rust-v${version}/${codexLinuxAsset(arch)}`;
   if (entry?.url !== expectedUrl || !sha256) {
-    throw new Error(`${kind} ${version} pin lacks a trusted ${LINUX_PLATFORM_KEY} asset`);
+    throw new Error(`${kind} ${version} pin lacks a trusted ${platformKey} asset`);
   }
   const size = typeof entry.size === 'number' && entry.size > 0 ? entry.size : undefined;
   return {
@@ -395,9 +418,13 @@ function parseTarString(buffer: Buffer, start: number, length: number): string {
 export async function extractCodexBinaryFromTarGz(
   archivePath: string,
   destinationPath: string,
+  arch: string = process.arch,
 ): Promise<void> {
   const tarPath = `${archivePath}.tar-${process.pid}`;
   const tempDestination = `${destinationPath}.extract-${process.pid}`;
+  // 归档内的二进制与资产同名(去掉 .tar.gz),故同样按 arch 派生。精确匹配是
+  // 安全属性:只认这一个名字,tar 里夹带的其它条目一概不落盘。
+  const expectedBinaryName = codexLinuxAsset(arch).replace(/\.tar\.gz$/, '');
   try {
     await pipeline(
       fs.createReadStream(archivePath),
@@ -425,7 +452,6 @@ export async function extractCodexBinaryFromTarGz(
         if (nextOffset > tarSize) throw new Error(`truncated tar entry: ${fullName}`);
         const typeFlag = header[156];
         const isRegularFile = typeFlag === 0 || typeFlag === 48;
-        const expectedBinaryName = CODEX_LINUX_ASSET.replace(/\.tar\.gz$/, '');
         if (isRegularFile && path.basename(fullName) === expectedBinaryName && entrySize > 0) {
           fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
           await pipeline(
@@ -480,7 +506,7 @@ async function installCodexFromOfficialAsset(
   const version = CONFIG.codex.version;
   const descriptor = pinnedOfficialAssetDescriptor('codex', version, codexLatest);
   const root = runtimeInstallRoot(app.getPath('userData'), 'codex');
-  const archivePath = path.join(root, `${CODEX_LINUX_ASSET}.${version}`);
+  const archivePath = path.join(root, `${codexLinuxAsset()}.${version}`);
   const binaryPath = privateBinaryPath(app.getPath('userData'), 'codex');
   fs.mkdirSync(root, { recursive: true });
   try {

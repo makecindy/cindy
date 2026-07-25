@@ -135,7 +135,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         // Reject a manifest asset explicitly scoped to another platform, while
         // keeping compatibility with older manifests whose file path had no
         // platform segment at all.
-        const assetPlatform = asset.file.match(/\/(linux-x64|darwin-arm64|darwin-x64|win32-x64)\//)?.[1];
+        const assetPlatform = asset.file.match(/\/(linux-x64|linux-arm64|darwin-arm64|darwin-x64|win32-x64)\//)?.[1];
         if (assetPlatform && assetPlatform !== getPlatformKey()) {
           emit({
             status: 'failed',

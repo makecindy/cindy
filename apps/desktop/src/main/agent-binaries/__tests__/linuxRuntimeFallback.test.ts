@@ -93,33 +93,59 @@ describeOnLinuxFileSystem('install path helpers', () => {
 });
 
 describe('official asset descriptors', () => {
-  it('uses the trusted Claude asset committed with the version pin', () => {
+  // arch 显式传入而非依赖宿主:同一套断言要在 x64 与 aarch64 构建机上都成立。
+  it.each([
+    ['x64', 'linux-x64'],
+    ['arm64', 'linux-arm64'],
+  ])('uses the trusted Claude %s asset committed with the version pin', (arch, platformKey) => {
     const sha256 = 'a'.repeat(64);
+    const url = `https://downloads.claude.ai/claude-code-releases/2.1.219/${platformKey}/claude`;
     expect(pinnedOfficialAssetDescriptor('claude-code', '2.1.219', {
+      runtimeAssets: { [platformKey]: { url, sha256, size: 123 } },
+    }, arch)).toEqual({ url, sha256, size: 123 });
+  });
+
+  it.each([
+    ['x64', 'linux-x64', 'x86_64'],
+    ['arm64', 'linux-arm64', 'aarch64'],
+  ])('uses the pinned Codex %s asset and rejects unexpected metadata', (arch, platformKey, rustArch) => {
+    const sha256 = 'b'.repeat(64);
+    const url = `https://github.com/openai/codex/releases/download/rust-v0.144.6/codex-${rustArch}-unknown-linux-musl.tar.gz`;
+    expect(pinnedOfficialAssetDescriptor('codex', '0.144.6', {
+      runtimeAssets: { [platformKey]: { url, sha256, size: 456 } },
+    }, arch)).toEqual({ url, sha256, size: 456 });
+    expect(() => pinnedOfficialAssetDescriptor('codex', '0.144.6', {
+      runtimeAssets: { [platformKey]: { url: 'https://example.test/codex.tar.gz', sha256 } },
+    }, arch)).toThrow(
+      new RegExp(`pin lacks a trusted ${platformKey} asset`),
+    );
+  });
+
+  // 跨架构混淆是这条链路最危险的失败模式:pin 里只有另一个 arch 的资产时必须
+  // 抛错,绝不能退回宿主跑不了的二进制(下载会因 SHA 命中而"成功",故障要到
+  // 执行时才暴露)。
+  it('refuses a pin that only carries the other architecture', () => {
+    const sha256 = 'c'.repeat(64);
+    const x64Pin = {
       runtimeAssets: {
         'linux-x64': {
           url: 'https://downloads.claude.ai/claude-code-releases/2.1.219/linux-x64/claude',
           sha256,
-          size: 123,
         },
       },
-    })).toEqual({
-      url: 'https://downloads.claude.ai/claude-code-releases/2.1.219/linux-x64/claude',
-      sha256,
-      size: 123,
-    });
+    };
+    expect(() => pinnedOfficialAssetDescriptor('claude-code', '2.1.219', x64Pin, 'arm64')).toThrow(
+      /pin lacks a trusted linux-arm64 asset/,
+    );
   });
 
-  it('uses the pinned Codex asset and rejects missing or unexpected metadata', () => {
-    const sha256 = 'b'.repeat(64);
-    const url = 'https://github.com/openai/codex/releases/download/rust-v0.144.6/codex-x86_64-unknown-linux-musl.tar.gz';
-    expect(pinnedOfficialAssetDescriptor('codex', '0.144.6', {
-      runtimeAssets: { 'linux-x64': { url, sha256, size: 456 } },
-    })).toEqual({ url, sha256, size: 456 });
+  // 未知 arch 走 fail closed:URL 拼出来必然与 pin 不等,不做兜底猜测。
+  it('rejects an unsupported architecture instead of guessing', () => {
+    const sha256 = 'd'.repeat(64);
     expect(() => pinnedOfficialAssetDescriptor('codex', '0.144.6', {
-      runtimeAssets: { 'linux-x64': { url: 'https://example.test/codex.tar.gz', sha256 } },
-    })).toThrow(
-      /pin lacks a trusted linux-x64 asset/,
+      runtimeAssets: { 'linux-armv7l': { url: 'https://example.test/codex.tar.gz', sha256 } },
+    }, 'armv7l')).toThrow(
+      /pin lacks a trusted linux-armv7l asset/,
     );
   });
 });
@@ -135,11 +161,43 @@ describeOnLinuxFileSystem('extractCodexBinaryFromTarGz', () => {
       gzipSync(singleFileTar('codex-x86_64-unknown-linux-musl', Buffer.from('codex-binary'))),
     );
 
-    await extractCodexBinaryFromTarGz(archivePath, destinationPath);
+    await extractCodexBinaryFromTarGz(archivePath, destinationPath, 'x64');
 
     expect(fs.readFileSync(destinationPath, 'utf8')).toBe('codex-binary');
     if (process.platform !== 'win32') {
       expect(fs.statSync(destinationPath).mode & 0o111).not.toBe(0);
     }
+  });
+
+  it('extracts the aarch64 archive binary under the arm64 asset name', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-tar-arm64-'));
+    tempDirs.push(dir);
+    const archivePath = path.join(dir, 'codex.tar.gz');
+    const destinationPath = path.join(dir, 'bin', 'codex');
+    fs.writeFileSync(
+      archivePath,
+      gzipSync(singleFileTar('codex-aarch64-unknown-linux-musl', Buffer.from('codex-arm64-binary'))),
+    );
+
+    await extractCodexBinaryFromTarGz(archivePath, destinationPath, 'arm64');
+
+    expect(fs.readFileSync(destinationPath, 'utf8')).toBe('codex-arm64-binary');
+  });
+
+  // 名字不匹配时必须留空:抽错架构的二进制比抽不到更糟。
+  it('refuses an archive whose binary belongs to another architecture', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-tar-mismatch-'));
+    tempDirs.push(dir);
+    const archivePath = path.join(dir, 'codex.tar.gz');
+    const destinationPath = path.join(dir, 'bin', 'codex');
+    fs.writeFileSync(
+      archivePath,
+      gzipSync(singleFileTar('codex-x86_64-unknown-linux-musl', Buffer.from('codex-binary'))),
+    );
+
+    await expect(
+      extractCodexBinaryFromTarGz(archivePath, destinationPath, 'arm64'),
+    ).rejects.toThrow(/Codex binary not found/);
+    expect(fs.existsSync(destinationPath)).toBe(false);
   });
 });
