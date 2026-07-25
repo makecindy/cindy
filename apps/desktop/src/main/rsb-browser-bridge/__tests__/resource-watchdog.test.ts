@@ -296,4 +296,14 @@ describe('ForegroundTabTracker', () => {
     tracker.drop(1);
     expect(tracker.isForeground('c')).toBe(false);
   });
+
+  it('isForegroundFor only accepts the claim from the specified sender', () => {
+    const tracker = new ForegroundTabTracker();
+    tracker.set(1, 'a');
+    // sender 1 声明了 a → 只有以 sender 1 的身份查询才算前台;
+    // 别的 renderer(如 tab 实际宿主是 2)冒领不生效。
+    expect(tracker.isForegroundFor('a', 1)).toBe(true);
+    expect(tracker.isForegroundFor('a', 2)).toBe(false);
+    expect(tracker.isForegroundFor('b', 1)).toBe(false);
+  });
 });

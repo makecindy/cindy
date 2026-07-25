@@ -266,7 +266,14 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
       throwIpcError('INVALID_PARAMS', `tab ${tabId} is not hosted by the sender`);
     }
     logger.info('RSB browser guest force-killed by user', { tabId });
-    target.forcefullyCrashRenderer();
+    try {
+      target.forcefullyCrashRenderer();
+    } catch (err) {
+      // TOCTOU:registry 反查和 kill 之间 guest 可能刚好死掉。裸抛会把原始
+      // Electron 错误回给 renderer,统一转 IPC 错误协议。
+      logger.warn('forcefullyCrashRenderer threw', { tabId, err });
+      throwIpcError('INTERNAL', 'forcefullyCrashRenderer failed');
+    }
     return { ok: true };
   });
 
@@ -287,7 +294,18 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     listTabs: () =>
       registry.listAll().map((r) => ({ tabId: r.tabId, webContentsId: r.webContentsId })),
     isPinned: (tabId) => registry.isPinned(tabId),
-    isForeground: (tabId) => foregroundTracker.isForeground(tabId),
+    // 前台判定带归属校验:声明者必须就是 guest 当前的宿主 renderer,防止别的
+    // renderer 冒领前台给目标 tab 骗豁免。guest 反查失败(注册竞态)时退回
+    // 无归属版本 —— 此时该 tab 也不在 listTabs 里,不会被误处置。
+    isForeground: (tabId) => {
+      const guest = registry.getWebContentsByTabId(tabId);
+      const owner = guest
+        ? (guest as unknown as { hostWebContents?: WebContents }).hostWebContents
+        : null;
+      return owner
+        ? foregroundTracker.isForegroundFor(tabId, owner.id)
+        : foregroundTracker.isForeground(tabId);
+    },
     lookupWebContents: (id) =>
       (electronWebContents.fromId(id) as GuestWebContentsLike | undefined) ?? null,
     getMetrics: () => app.getAppMetrics(),

@@ -281,4 +281,14 @@ export class ForegroundTabTracker {
     }
     return false;
   }
+
+  /**
+   * 归属校验版:仅当"声明该 tab 为前台的 sender"就是指定 renderer 时才算前台。
+   * 看门狗消费时用它交叉验证 guest 的实际 hostWebContents —— 防止别的 renderer
+   * 冒领前台让目标 tab 享受豁免(review:set-foreground 不做上报时校验是因为
+   * 上报可能早于 dom-ready 的 registry report,硬拒会把可见 tab 永久打成后台)。
+   */
+  isForegroundFor(tabId: string, senderId: number): boolean {
+    return this.bySender.get(senderId) === tabId;
+  }
 }

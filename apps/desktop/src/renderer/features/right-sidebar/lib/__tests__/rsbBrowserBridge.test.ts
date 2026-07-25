@@ -22,6 +22,7 @@ import {
   consumePendingKillCause,
   forceKillBrowserTab,
   initRsbBrowserBridge,
+  PENDING_KILL_CAUSE_TTL_MS,
   releaseRsbBrowserTab,
   reportRsbBrowserTab,
   setForegroundBrowserTab,
@@ -401,6 +402,21 @@ describe('rsbBrowserBridge — resource watchdog events', () => {
     expect(consumePendingKillCause('tab-k')).toBe('memory');
     // 第二次取应为空 —— cause 只对紧随其后的那次 render-process-gone 生效。
     expect(consumePendingKillCause('tab-k')).toBeNull();
+  });
+
+  it('expires a stale pending kill cause after the freshness window', () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    vi.useFakeTimers();
+    try {
+      api.resourceCb?.({ tabId: 'tab-k', kind: 'kill-notice', cause: 'memory' });
+      // kill 在 main 侧失败 / guest 已死时 crash 事件永远不来 —— 超窗后残留的
+      // cause 不能错标下一次无关崩溃。
+      vi.advanceTimersByTime(PENDING_KILL_CAUSE_TTL_MS + 1);
+      expect(consumePendingKillCause('tab-k')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('fans kill-notice / cpu-alert out to per-tab subscribers only', () => {

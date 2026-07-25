@@ -77,13 +77,19 @@ let teardown: (() => void) | null = null;
 const lastReportedWebContentsId = new Map<string, number>();
 
 /**
- * 资源看门狗 kill-notice 的 pending 原因(tabId → cause)。main 先发 notice 再
- * forcefullyCrashRenderer,但两条消息走不同 channel,到达顺序无硬保证:
+ * 资源看门狗 kill-notice 的 pending 原因(tabId → cause + 记录时间)。main 先发
+ * notice 再 forcefullyCrashRenderer,但两条消息走不同 channel,到达顺序无硬保证:
  *  - notice 先到:useBrowserWebview 的 render-process-gone handler 用
  *    `consumePendingKillCause` 取走,banner 直接显示资源原因;
  *  - crash 事件先到:per-tab 订阅回调随后升级已有 crash state。
+ * 带新鲜度窗口:kill 在 main 侧失败 / guest 已死时 crash 事件永远不来,残留的
+ * cause 不能在很久之后错标一次无关崩溃 —— 超窗直接作废。
  */
-const pendingKillCauses = new Map<string, 'memory'>();
+const pendingKillCauses = new Map<string, { cause: 'memory'; at: number }>();
+
+/** pending kill cause 的有效窗口(ms)。notice → crash 事件正常在毫秒级到达,
+ *  10s 足够覆盖慢 IPC,又不至于跨到下一次无关崩溃。 */
+export const PENDING_KILL_CAUSE_TTL_MS = 10_000;
 
 /** per-tab 资源事件订阅(useBrowserWebview 挂/卸)。 */
 const resourceEventListeners = new Map<
@@ -113,11 +119,12 @@ export function subscribeTabResourceEvent(
   };
 }
 
-/** 取走(并清除)该 tab 的 pending kill 原因;无则 null。 */
+/** 取走(并清除)该 tab 的 pending kill 原因;无或已超新鲜度窗口则 null。 */
 export function consumePendingKillCause(tabId: string): 'memory' | null {
-  const cause = pendingKillCauses.get(tabId) ?? null;
+  const entry = pendingKillCauses.get(tabId) ?? null;
   pendingKillCauses.delete(tabId);
-  return cause;
+  if (!entry) return null;
+  return Date.now() - entry.at <= PENDING_KILL_CAUSE_TTL_MS ? entry.cause : null;
 }
 
 /**
@@ -212,7 +219,7 @@ export function initRsbBrowserBridge(): () => void {
       return;
     }
     if (event.kind === 'kill-notice') {
-      pendingKillCauses.set(event.tabId, event.cause);
+      pendingKillCauses.set(event.tabId, { cause: event.cause, at: Date.now() });
     }
     const listeners = resourceEventListeners.get(event.tabId);
     if (listeners) {
