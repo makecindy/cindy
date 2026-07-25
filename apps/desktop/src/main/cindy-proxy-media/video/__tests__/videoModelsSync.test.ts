@@ -4,7 +4,7 @@
  * 同源守卫(与 desktop imageModelCatalogSync 同职责):
  * GATEWAY_VIDEO_MODELS(视频型号 alias 的打包正本;运行时清单以 providers.json
  * 目录为准,目录缺区即视为能力暂不可用,见 cindy-brain/cindyMediaCatalog.ts)
- * 里的每个 id 必须真是 video provider 层注册的 alias——provider 改名/
+ * 里的每个 id 必须是 video provider 层真实注册的 alias——provider 改名/
  * 下架别名而忘改常量时在这里炸,不许静默漂移;首项必须与注册序首别名一致
  * (首项 = 出厂默认)。
  */
