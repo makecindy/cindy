@@ -22,6 +22,7 @@ import {
 	planRuns,
 	printSummary,
 	resolvePnpmInvocation,
+	resolveOutputStream,
 	runCommand,
 	runPlannedTests,
 	selectFilesForTier,
@@ -691,6 +692,12 @@ test("createOutputForwarder stops writing after EPIPE without treating it as a c
 	assert.doesNotThrow(() => forwarder.write(Buffer.from("after")));
 	assert.deepEqual(stream.writes, ["before"]);
 	assert.equal(forwarder.finish(), null);
+});
+
+test("resolveOutputStream preserves explicit null while defaulting undefined", () => {
+	const fallback = new EventEmitter();
+	assert.equal(resolveOutputStream(undefined, fallback), fallback);
+	assert.equal(resolveOutputStream(null, fallback), null);
 });
 
 test("runCommand completes successfully when its output consumer closes with EPIPE", async () => {

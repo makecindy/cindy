@@ -466,6 +466,10 @@ export function createOutputForwarder(stream) {
 	};
 }
 
+export function resolveOutputStream(configured, fallback) {
+	return configured === undefined ? fallback : configured;
+}
+
 export function runCommand(command, args, options = {}) {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
@@ -475,8 +479,8 @@ export function runCommand(command, args, options = {}) {
 		});
 		let output = "";
 		let settled = false;
-		const stdout = createOutputForwarder(options.stdout ?? process.stdout);
-		const stderr = createOutputForwarder(options.stderr ?? process.stderr);
+		const stdout = createOutputForwarder(resolveOutputStream(options.stdout, process.stdout));
+		const stderr = createOutputForwarder(resolveOutputStream(options.stderr, process.stderr));
 		const finish = (result) => {
 			if (settled) return;
 			settled = true;
