@@ -238,10 +238,7 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
   return (
     <span
       data-model-promotion-badge
-      className="inline-flex shrink-0 items-center rounded-full px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-primary-on-dark)]"
-      style={{
-        backgroundColor: 'color-mix(in srgb, var(--card-status-done) 58%, black)',
-      }}
+      className="inline-flex shrink-0 items-center rounded-full bg-[var(--accent-cta-bg)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--accent-pure-cta-fg)]"
     >
       {children}
     </span>
@@ -648,6 +645,9 @@ export function ModelSelectorContent({
   // 必须按实际行来源查价，不能退化为 pricing[modelId]。只有 XD Gateway 目录价会
   // 叠加 CatalogModel.cost 作为折后展示价；其它来源保持价格源自带的币种。
   const pricePresentationOf = (providerId: string | null, id: string) => {
+    // device-link 只同步被控端 provider 目录，不同步价格快照；不能把控制端价格与
+    // 被控端 CatalogModel.cost 拼成一个展示结果。在协议补齐前远程选择器不展示价格。
+    if (deviceId) return null;
     const effectiveProviderId =
       providerId ??
       (currentAgentKind
@@ -1600,7 +1600,8 @@ export function ModelSelector({
       ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
       : undefined;
   const triggerPricePresentation = (() => {
-    if (activeSourceId !== 'xd' || !triggerActiveProvider || !currentAgentKind) return null;
+    if (deviceId || activeSourceId !== 'xd' || !triggerActiveProvider || !currentAgentKind)
+      return null;
     const quote = getModelPriceQuote(pricing, activeSourceId, modelId);
     if (quote && quote.source !== 'gateway') return null;
     if (!quote && pricing == null) return null;

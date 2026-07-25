@@ -250,8 +250,9 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: providersRef.providers }),
 }));
 
+const deviceProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [], loading: false }),
+  useDeviceProviders: () => ({ providers: deviceProvidersRef.providers, loading: false }),
 }));
 
 vi.mock('@/lib/providerModels', () => ({
@@ -502,7 +503,8 @@ describe('ModelSelector trigger variants', () => {
       const discountTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
       const discountBadge = within(discountTrigger).getByText('立省 50%');
       expect(discountBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
-      expect(discountBadge.getAttribute('style')).toContain('var(--card-status-done)');
+      expect(discountBadge.className).toContain('bg-[var(--accent-cta-bg)]');
+      expect(discountBadge.className).toContain('text-[var(--accent-pure-cta-fg)]');
       discounted.unmount();
 
       pricingRef.pricing = {};
@@ -522,6 +524,91 @@ describe('ModelSelector trigger variants', () => {
       ).toBeTruthy();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      pricingRef.pricing = pricingRef.DEFAULT_PRICING;
+    }
+  });
+
+  it('does not mix controller prices with remote provider costs', () => {
+    deviceProvidersRef.providers = [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-opus-4-8',
+              name: 'Opus 4.8',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+              cost: { input: 6, output: 18 },
+            },
+          ],
+        },
+      },
+    ];
+    pricingRef.pricing = {
+      xd: {
+        'claude-opus-4-8': {
+          providerId: 'xd',
+          modelId: 'claude-opus-4-8',
+          currency: 'CNY',
+          source: 'gateway',
+          approximate: false,
+          inputPerMtok: 12,
+          outputPerMtok: 36,
+        },
+      },
+    };
+
+    try {
+      const triggerView = render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'remote-device',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      expect(
+        screen
+          .getByRole('button', { name: /Current: Opus 4\.8/ })
+          .querySelector('[data-model-promotion-badge]'),
+      ).toBeNull();
+      triggerView.unmount();
+
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'remote-device',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      expect(row.textContent).not.toContain('¥12 / ¥36');
+      expect(row.textContent).not.toContain('¥6 / ¥18');
+      expect(within(row).queryByText('立省 50%')).toBeNull();
+
+      fireEvent.pointerEnter(row);
+      expect(
+        within(screen.getByRole('group', { name: /Opus 4\.8/ })).queryByText(
+          'newChat.modelSelector.pricing.title',
+        ),
+      ).toBeNull();
+    } finally {
+      deviceProvidersRef.providers = [];
       pricingRef.pricing = pricingRef.DEFAULT_PRICING;
     }
   });
