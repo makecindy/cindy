@@ -406,7 +406,6 @@ export class Session {
       // Do not transition to closed on a failed teardown: callers that rely on
       // closeIfIdle() need the still-live Session for a safe retry.
       this.sendReservation = null;
-      this.currentTurnOrigin = null;
       throw error;
     }
     this.sendReservation = null;

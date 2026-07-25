@@ -18,6 +18,7 @@ interface OrcaWorkerLink {
   workerId: string;
   teamId: string;
   leadSessionId: string;
+  idleSince: string | null;
 }
 
 export interface OrcaSessionStartOptionsDeps {
@@ -53,6 +54,15 @@ export async function synthesizeOrcaVendorOptionsFromDb(
   }
   if (existingRole === 'worker') {
     o.orcaRole ??= 'worker';
+    if (o.resumeSessionId) {
+      const link = await deps.getWorkerLink(sessionId);
+      if (link) {
+        o.vendorOptions = {
+          ...(o.vendorOptions ?? {}),
+          orcaRuntimeReleased: link.idleSince !== null,
+        };
+      }
+    }
     return true;
   }
 
@@ -87,6 +97,7 @@ export async function synthesizeOrcaVendorOptionsFromDb(
       orcaLeadSessionId: link.leadSessionId,
       orcaWorkerId: link.workerId,
       orcaWorkerSessionId: sessionId,
+      orcaRuntimeReleased: link.idleSince !== null,
     };
     return true;
   }

@@ -738,9 +738,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
 
-      const didIdle = params.expectedStatus
-        ? await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)
-        : (await deps.markWorkerIdle(worker.id), true);
+      if (!params.expectedStatus) {
+        try {
+          await deps.closeWorkerSession(worker.sessionId);
+        } catch (error) {
+          return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
+        }
+        await deps.markWorkerIdle(worker.id);
+        clearRuntimeState(worker.sessionId);
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+        return { ok: true, workerId: worker.id };
+      }
+
+      const didIdle = await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus);
       if (!didIdle) {
         return {
           ok: false,
@@ -754,7 +764,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
       // Queue state can change while the DB CAS awaits I/O. Preserve newly queued
       // follow-ups before close, then use Session.closeIfIdle for atomic send/close ordering.
-      if (params.expectedStatus && await deps.hasPendingWorkerInput(worker.sessionId)) {
+      if (await deps.hasPendingWorkerInput(worker.sessionId)) {
         await rollbackDoneAcknowledgement();
         return {
           ok: false,
@@ -762,21 +772,22 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           message: `worker ${params.workerId} has queued input`,
         };
       }
-      if (params.expectedStatus) {
-        const didClose = await closeWorkerSessionIfIdleBestEffort(worker.sessionId, 'idleWorker');
-        if (!didClose) {
-          await rollbackDoneAcknowledgement();
-          return {
-            ok: false,
-            errorCode: 'WORKER_STATE_CHANGED',
-            message: `worker ${params.workerId} has an active turn`,
-          };
-        }
+      let didClose: boolean;
+      try {
+        didClose = await deps.closeWorkerSessionIfIdle(worker.sessionId);
+      } catch (error) {
+        await rollbackDoneAcknowledgement();
+        return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
+      }
+      if (!didClose) {
+        await rollbackDoneAcknowledgement();
+        return {
+          ok: false,
+          errorCode: 'WORKER_STATE_CHANGED',
+          message: `worker ${params.workerId} has an active turn`,
+        };
       }
       clearRuntimeState(worker.sessionId);
-      if (!params.expectedStatus) {
-        await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
-      }
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       return { ok: true, workerId: worker.id };
     };
@@ -802,9 +813,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (!found.ok) return workerRefFailureForControl(params.workerId, found);
     const { link, worker } = found;
 
+    try {
+      await deps.closeWorkerSession(worker.sessionId);
+    } catch (error) {
+      return workerRuntimeCloseFailure('archiveWorker', worker.sessionId, error);
+    }
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
-    await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
     await deps.archiveWorkerSession(worker.sessionId);
     await deps.updateWorkerStatus(worker.id, 'done');
     deps.broadcastOrcaWorkerChanged(link.leadSessionId);
@@ -957,27 +972,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     return { ok: true, workerId: resolved.link.workerId, queuedMessageId: params.queuedMessageId };
   }
 
-  async function closeWorkerSessionBestEffort(sessionId: string, owner: string): Promise<void> {
-    try {
-      await deps.closeWorkerSession(sessionId);
-    } catch (err) {
-      deps.log.warn(`${owner}: close worker session failed`, {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  async function closeWorkerSessionIfIdleBestEffort(sessionId: string, owner: string): Promise<boolean> {
-    try {
-      return await deps.closeWorkerSessionIfIdle(sessionId);
-    } catch (err) {
-      deps.log.warn(`${owner}: close idle worker session failed`, {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      return true;
-    }
+  function workerRuntimeCloseFailure(owner: string, sessionId: string, error: unknown): OrcaOkResult {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log.warn(`${owner}: close worker session failed`, {
+      sessionId,
+      err: message,
+    });
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `${owner}: failed to release worker runtime: ${message}`,
+    };
   }
 
   return {

@@ -65,6 +65,7 @@ export interface OrcaWorkerLinkRecord {
   teamId: string;
   workerSessionId: string;
   leadSessionId: string;
+  idleSince: string | null;
   leadSession: {
     sessionId: string;
     agentKind: MakerAgentKind;
@@ -424,6 +425,7 @@ export async function getWorkerLink(input: {
     teamId: row.team.id,
     workerSessionId: row.worker.sessionId,
     leadSessionId: row.team.leadSessionId,
+    idleSince: msToIso(row.worker.idleSince),
     leadSession: {
       sessionId: row.leadSession.id,
       agentKind: fromDbAgentKind(row.leadSession.agentKind),

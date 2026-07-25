@@ -11,6 +11,7 @@ const workerLink: OrcaWorkerLinkRecord = {
   teamId: 'team-1',
   workerSessionId: 'worker-session-1',
   leadSessionId: 'lead-session-1',
+  idleSince: null,
   leadSession: {
     sessionId: 'lead-session-1',
     agentKind: 'claude-code',

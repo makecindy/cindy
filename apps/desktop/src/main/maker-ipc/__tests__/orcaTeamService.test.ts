@@ -948,7 +948,7 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual(['[Auto-bridged: worker 完成但未调 send_to_lead]\n\n部分输出']);
   });
 
-  it('marks worker idle and clears bridge state before closing its session', async () => {
+  it('closes the worker runtime before marking it idle and clearing bridge state', async () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
@@ -958,8 +958,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'markWorkerIdle',
       'closeWorkerSession:worker-session-1',
+      'markWorkerIdle',
       'broadcastOrcaWorkerChanged',
     ]);
   });
@@ -1205,8 +1205,8 @@ describe('OrcaTeamService', () => {
 
     expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
     expect(calls).toEqual([
-      'markWorkerIdle',
       'closeWorkerSession:worker-session-1',
+      'markWorkerIdle',
       'broadcastOrcaWorkerChanged',
     ]);
   });
@@ -1295,8 +1295,8 @@ describe('OrcaTeamService', () => {
     expect(calls).toEqual([]);
   });
 
-  it('keeps idle successful when closing its session fails', async () => {
-    const { calls, deps, service, setWorker } = createDeps({
+  it('does not mark a worker idle when closing its runtime fails', async () => {
+    const { calls, deps, getWorker, service, setWorker } = createDeps({
       closeWorkerSession: vi.fn(async (sessionId) => {
         calls.push(`closeWorkerSession:${sessionId}`);
         throw new Error('close failed');
@@ -1305,19 +1305,42 @@ describe('OrcaTeamService', () => {
     setWorker(createWorker({ status: 'running' }));
 
     await expect(service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
-      ok: true,
-      workerId: 'worker-1',
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'idleWorker: failed to release worker runtime: close failed',
     });
 
-    expect(calls).toEqual([
-      'markWorkerIdle',
-      'closeWorkerSession:worker-session-1',
-      'broadcastOrcaWorkerChanged',
-    ]);
+    expect(calls).toEqual(['closeWorkerSession:worker-session-1']);
+    expect(getWorker().status).toBe('running');
+    expect(deps.markWorkerIdle).not.toHaveBeenCalled();
+    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
     expect(deps.log.warn).toHaveBeenCalledWith('idleWorker: close worker session failed', {
       sessionId: 'worker-session-1',
       err: 'close failed',
     });
+  });
+
+  it('rolls a done acknowledgement back when the atomic runtime close throws', async () => {
+    const { deps, getWorker, service, setWorker } = createDeps({
+      closeWorkerSessionIfIdle: vi.fn(async () => {
+        throw new Error('archive failed');
+      }),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'idleWorker: failed to release worker runtime: archive failed',
+    });
+
+    expect(getWorker().status).toBe('done');
+    expect(deps.restoreWorkerDoneIfIdle).toHaveBeenCalledWith('worker-1');
+    expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(1);
   });
 
   it('clears bridge state and archives worker session before marking worker done', async () => {
@@ -1431,26 +1454,28 @@ describe('OrcaTeamService', () => {
     expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
   });
 
-  it('continues archiving when closing its session fails', async () => {
+  it('does not persist archive state when closing its runtime fails', async () => {
+    const forgetWorkerSession = vi.fn();
     const { calls, deps, service, setWorker } = createDeps({
       closeWorkerSession: vi.fn(async (sessionId) => {
         calls.push(`closeWorkerSession:${sessionId}`);
         throw new Error('close failed');
       }),
+      forgetWorkerSession,
     });
     setWorker(createWorker({ status: 'running' }));
 
     await expect(service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' })).resolves.toEqual({
-      ok: true,
-      workerId: 'worker-1',
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'archiveWorker: failed to release worker runtime: close failed',
     });
 
-    expect(calls).toEqual([
-      'closeWorkerSession:worker-session-1',
-      'archiveWorkerSession:worker-session-1',
-      'updateWorkerStatus:done',
-      'broadcastOrcaWorkerChanged',
-    ]);
+    expect(calls).toEqual(['closeWorkerSession:worker-session-1']);
+    expect(forgetWorkerSession).not.toHaveBeenCalled();
+    expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
     expect(deps.log.warn).toHaveBeenCalledWith('archiveWorker: close worker session failed', {
       sessionId: 'worker-session-1',
       err: 'close failed',

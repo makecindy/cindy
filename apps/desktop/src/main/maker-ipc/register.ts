@@ -3970,6 +3970,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     });
     const { session: resumedSession } = await bootstrapSession(opts);
     await markOrcaRoleIfNeeded(resumedSession.id, 'worker');
+    // idle_since doubles as the persisted "runtime was released" marker used
+    // before Codex thread/unarchive. Once bootstrap succeeds, clear it and
+    // restart the idle-release clock so a focus-only wake can be released again.
+    const resumedAt = Date.now();
+    await db.update(orcaWorkers)
+      .set({ idleSince: null, updatedAt: resumedAt })
+      .where(eq(orcaWorkers.id, target.id));
     return true;
   }
 

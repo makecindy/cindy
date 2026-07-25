@@ -24,7 +24,7 @@ function createLogger() {
  * 可控事件流的 fake handle:send 后通过 emit() 往事件流逐条推 AgentEvent。
  * isTurnRunning 跟随 send/terminal 翻转,模拟真实 turn 边界。
  */
-function createControllableHandle(opts?: { sendError?: Error }) {
+function createControllableHandle(opts?: { sendError?: Error; closeError?: Error }) {
   let push: ((e: AgentEvent) => void) | null = null;
   let turnRunning = false;
   const buffered: AgentEvent[] = [];
@@ -40,7 +40,9 @@ function createControllableHandle(opts?: { sendError?: Error }) {
     },
     async steer() {},
     async abort() {},
-    async close() {},
+    async close() {
+      if (opts?.closeError) throw opts.closeError;
+    },
     async *events() {
       for (const e of buffered) yield e;
       buffered.length = 0;
@@ -196,6 +198,20 @@ describe('Session per-turn origin 打标', () => {
     // 事件循环已起(startEventLoopIfNeeded 在 handle.send 前调),别的 turn 的事件流进来
     await emit({ type: 'text', data: { text: '别的 turn 的事件', isFinal: true } });
     expect(seen.at(-1)?.turnOrigin).toBeUndefined(); // origin 已清,不误打
+  });
+
+  it('handle.close 抛错时保留当前 turn origin，后续终态事件仍能正确收口', async () => {
+    const { handle, emit } = createControllableHandle({ closeError: new Error('archive failed') });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((e) => seen.push({ ...e }));
+
+    await session.send('go', { origin: SCHED_ORIGIN });
+    await expect(session.close()).rejects.toThrow('archive failed');
+    await emit({ type: 'done', data: {} });
+
+    expect(seen.at(-1)?.turnOrigin).toEqual(SCHED_ORIGIN);
+    expect(session.getStatus()).toBe('active');
   });
 
   it('失败 send 还原(而非清空)正在跑 turn 的 origin —— turn1 的 done 仍带 origin(回归 Greptile P1)', async () => {

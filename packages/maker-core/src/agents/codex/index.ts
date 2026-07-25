@@ -2455,21 +2455,29 @@ export class CodexAgent extends BaseAgent {
       try {
         acquireHostBindingLeaseIfNeeded();
         assertCurrentHost('thread/resume');
-        let resp: ThreadResumeResponse;
-        try {
-          resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
-        } catch (error) {
-          // Idle Workers are deliberately archived to release their app-server
-          // runtime. Codex requires an explicit restore before they can resume.
-          if (vo.orcaRole !== 'worker' || !/\bis archived\b/i.test(String(error))) throw error;
-          log.info('thread/resume restoring archived Worker thread', {
+        // idle_since is the persisted acknowledgement that this Worker's
+        // runtime was released. Avoid parsing Codex's human-readable error
+        // text to decide whether thread/unarchive is required.
+        if (vo.orcaRole === 'worker' && vo.orcaRuntimeReleased === true) {
+          log.info('thread/resume restoring released Worker thread', {
             resumeSessionId: opts.resumeSessionId,
           });
           assertCurrentHost('thread/unarchive');
-          await host.unarchiveThread(opts.resumeSessionId);
+          try {
+            await host.unarchiveThread(opts.resumeSessionId);
+          } catch (error) {
+            // A focused Worker can have a stale persisted release marker after
+            // its runtime was already restored. thread/unarchive is not
+            // idempotent, so fall through to one normal resume attempt.
+            assertCurrentHost('thread/unarchive');
+            log.warn('thread/unarchive failed for released Worker; attempting thread/resume', {
+              resumeSessionId: opts.resumeSessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
           assertCurrentHost('thread/resume after unarchive');
-          resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
         }
+        const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);
         assertCurrentHost('thread/resume');
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
@@ -4372,10 +4380,19 @@ export class CodexAgent extends BaseAgent {
         // Worker idle release must reclaim the per-thread MCP/runtime process.
         // unsubscribe only drops this client's subscription and leaves that
         // runtime alive until Codex's long unload delay elapses.
-        if (vo.orcaRole === 'worker') {
-          assertCurrentHost('thread/archive');
-          await host.archiveThread(threadId);
-          assertCurrentHost('thread/archive');
+        if (vo.orcaRole === 'worker' && !skipIfStaleHost('thread/archive')) {
+          try {
+            await host.archiveThread(threadId);
+            assertCurrentHost('thread/archive');
+          } catch (error) {
+            // Host retirement already reclaimed the Worker runtime. Complete
+            // local teardown so stale handles do not remain registered.
+            if (isCurrentHost()) throw error;
+            log.warn('thread/archive interrupted by app-server replacement; continuing local close', {
+              threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
         closed = true;
         unregisterCodexMcpContext(threadId);

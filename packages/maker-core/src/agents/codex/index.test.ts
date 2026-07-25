@@ -141,7 +141,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
       if (req.method === 'thread/unarchive') {
         const threadId = (req.params as { threadId?: unknown } | undefined)?.threadId;
         if (typeof threadId === 'string') MockCodexTransport.archivedThreadIds.delete(threadId);
-        this.emitLine({ id: req.id, result: {} });
+        this.emitLine({ id: req.id, result: { thread: { id: threadId } } });
         return;
       }
       if (req.method === 'skills/list') {
@@ -379,7 +379,11 @@ function installFakeHost(
     if (method === Method.ThreadRollback) {
       return { thread: { id: 'rollback-thread-id' } };
     }
-    if (method === Method.ThreadArchive || method === Method.ThreadUnarchive) return {};
+    if (method === Method.ThreadArchive) return {};
+    if (method === Method.ThreadUnarchive) {
+      const threadId = (params as { threadId?: unknown }).threadId;
+      return { thread: { id: threadId } };
+    }
     throw new Error(`unexpected method: ${method}`);
   });
   const subscribeThread = vi.fn((_threadId: string, handlers: ThreadEventHandlers) => {
@@ -1868,6 +1872,30 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('allows a stale Worker handle to close after its local host is force-retired', async () => {
+    const agent = new CodexAgent(createDeps());
+    const staleHandle = await agent.startSession({
+      sessionId: 'session-worker-before-auth-restart',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await agent.forceDisposeLocalHostForAuthChange('test forced retire');
+
+    await expect(staleHandle.close()).resolves.toBeUndefined();
+    const replacementHandle = await agent.startSession({
+      sessionId: 'session-worker-after-auth-restart',
+      model: 'gpt-5.4',
+      workingDir: '/repo-local',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+    expect(createdTransports).toHaveLength(2);
+
+    await replacementHandle.close();
+    await agent.dispose();
+  });
+
   it('collapses in-flight turn state with a terminal transport error when the local host is force-retired', async () => {
     // 回归 2026-07-19:auth 失效触发 retiring host with active sessions 时,原实现
     // 静默清 subscribers 再杀进程,session 收不到任何终态事件 → isTurnRunning 永久
@@ -3251,13 +3279,10 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(host.archiveThread).toHaveBeenCalledTimes(2);
   });
 
-  it('unarchives an archived Worker before retrying thread/resume', async () => {
+  it('unarchives a persistently released Worker before thread/resume', async () => {
     const agent = new CodexAgent(createDeps());
-    let resumeAttempts = 0;
     const host = installFakeHost(agent, (method) => {
       if (method !== Method.ThreadResume) return undefined;
-      resumeAttempts += 1;
-      if (resumeAttempts === 1) throw new Error('session archived-worker-id is archived');
       return {
         thread: { id: 'archived-worker-id' },
         model: 'gpt-5.4',
@@ -3271,11 +3296,48 @@ describe('CodexAgent MCP thread context hooks', () => {
       model: 'gpt-5.4',
       workingDir: '/repo',
       resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
-      vendorOptions: { orcaRole: 'worker' },
+      vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
     });
 
     expect(host.unarchiveThread).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
-    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('still resumes a Worker when its persisted release marker is stale', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive) throw new Error('no archived rollout found');
+      return undefined;
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-stale-marker',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174001',
+      vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
+    });
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('does not unarchive a Worker without a persisted release marker', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-active',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174002',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    expect(host.unarchiveThread).not.toHaveBeenCalled();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
     await handle.close();
   });
 
