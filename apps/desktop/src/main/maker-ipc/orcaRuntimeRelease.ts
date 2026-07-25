@@ -42,29 +42,29 @@ export interface OrcaRuntimeReleaseDeps {
 export function createOrcaRuntimeRelease(deps: OrcaRuntimeReleaseDeps) {
   return async (worker: OrcaRuntimeReleaseWorker): Promise<void> => {
     let session = deps.getSession(worker.sessionId);
-    if (!session && worker.idleSince === null) {
+    let recreatedOwnership = false;
+    if (!session) {
       // A resumable generic close only removes local ownership; it does not
-      // acknowledge provider runtime release. Recreate that ownership before
-      // persisting a marker so explicit archive/end-team cannot leak a runtime.
+      // acknowledge provider runtime release. An existing marker is only a
+      // pre-close intent, so interrupted releases must also recreate ownership.
       await deps.resumeSession(worker);
       session = deps.getSession(worker.sessionId);
       if (!session) {
         throw new Error(`worker ${worker.id} session could not be resumed for runtime release`);
       }
+      recreatedOwnership = true;
     }
 
     let releasedAt: number | null = null;
-    if (worker.idleSince === null) {
+    if (worker.idleSince === null || recreatedOwnership) {
+      // Resume/unarchive consumes an existing marker. Persist a fresh intent
+      // before retrying archive so a crash cannot strand the provider runtime.
       releasedAt = deps.now();
       const didMark = await deps.markRelease(worker.id, worker.sessionId, releasedAt);
       if (!didMark) {
         throw new Error(`worker ${worker.id} changed before runtime release`);
       }
     }
-
-    // An existing marker is durable evidence that an earlier close completed
-    // or remains retryable. No local Session is required in that case.
-    if (!session) return;
 
     if (session.isTurnRunning?.()) {
       try {

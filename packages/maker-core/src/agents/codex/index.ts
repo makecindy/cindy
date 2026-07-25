@@ -4036,6 +4036,7 @@ export class CodexAgent extends BaseAgent {
       get model() { return mutableModel; },
       get codexProxyActive() { return hostUsesCodexProxy; },
       get codexProductPromptDelivery() { return codexProductPromptDelivery; },
+      isClosed() { return closed; },
 
       async send(message: UserMessage, sendOpts?: SendOptions) {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
@@ -4432,15 +4433,25 @@ export class CodexAgent extends BaseAgent {
           options?.releaseRuntime === true &&
           !runtimeReleased;
         if (closed && !shouldReleaseRuntime) return;
+        let releaseErrorAfterLocalClose: unknown;
         if (shouldReleaseRuntime) {
           if (skipIfStaleHost('thread/archive')) {
-            // Host retirement already reclaimed the provider runtime.
-            runtimeReleased = true;
+            if (opts.remoteHostId) {
+              releaseErrorAfterLocalClose = staleHostError('thread/archive');
+            } else {
+              // Retiring a local app-server process reclaims its runtime.
+              runtimeReleased = true;
+            }
           } else if (!host.hasActiveClient()) {
-            // A transport failure already reclaimed the provider runtime. Do
-            // not restart app-server just to archive a process that is gone.
-            log.warn('thread/archive skipped because app-server client is unavailable', { threadId });
-            runtimeReleased = true;
+            if (opts.remoteHostId) {
+              releaseErrorAfterLocalClose = new Error(
+                'Codex remote Worker runtime release was not acknowledged because the app-server proxy is unavailable',
+              );
+            } else {
+              // A local transport exit also terminates the app-server process.
+              log.warn('thread/archive skipped because app-server client is unavailable', { threadId });
+              runtimeReleased = true;
+            }
           } else {
             try {
               await host.archiveThread(threadId);
@@ -4454,14 +4465,18 @@ export class CodexAgent extends BaseAgent {
                 log.warn('thread/archive already completed before retry response', { threadId });
                 runtimeReleased = true;
               } else if (!isCurrentHost() || !host.hasActiveClient()) {
-                // Host retirement or transport shutdown already reclaimed the
-                // Worker runtime. Complete local teardown so stale handles do
-                // not remain registered.
-                log.warn('thread/archive interrupted by app-server shutdown; continuing local close', {
+                // A remote daemon survives its local proxy, so retain the
+                // archive error after completing local teardown. A recreated
+                // Session can reconnect and retry with the durable marker.
+                log.warn('thread/archive interrupted by app-server shutdown; completing local close', {
                   threadId,
                   error: error instanceof Error ? error.message : String(error),
                 });
-                runtimeReleased = true;
+                if (opts.remoteHostId) {
+                  releaseErrorAfterLocalClose = error;
+                } else {
+                  runtimeReleased = true;
+                }
               } else {
                 throw error;
               }
@@ -4471,16 +4486,18 @@ export class CodexAgent extends BaseAgent {
         // Session may upgrade a generic close while it is in flight. In that
         // case only the provider archive above is new; local teardown already
         // completed during the first close call.
-        if (closed) return;
-        closed = true;
-        unregisterCodexMcpContext(threadId);
-        // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
-        // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
-        try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
-        try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
-        try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
-        try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
-        try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+        if (!closed) {
+          closed = true;
+          unregisterCodexMcpContext(threadId);
+          // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
+          // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
+          try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
+          try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
+          try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
+          try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
+          try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+        }
+        if (releaseErrorAfterLocalClose) throw releaseErrorAfterLocalClose;
       },
 
       events(): AsyncIterable<AgentEvent> {

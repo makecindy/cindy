@@ -154,4 +154,41 @@ describe('Session close lifecycle', () => {
     expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
     expect(session.getStatus()).toBe('closed');
   });
+
+  it('closes the outer Session when an upgraded runtime release fails after local teardown', async () => {
+    const genericClose = createDeferred();
+    let handleClosed = false;
+    const close = vi.fn()
+      .mockImplementationOnce(async () => {
+        await genericClose.promise;
+        handleClosed = true;
+      })
+      .mockRejectedValueOnce(new Error('archive failed after local teardown'));
+    const handle = {
+      id: 'thread-1',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      close,
+      isClosed: () => handleClosed,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-1',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+    });
+
+    const firstClose = session.close();
+    const releaseClose = session.close({ releaseRuntime: true });
+    genericClose.resolve();
+
+    await expect(firstClose).rejects.toThrow('archive failed after local teardown');
+    await expect(releaseClose).rejects.toThrow('archive failed after local teardown');
+
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(session.getStatus()).toBe('closed');
+  });
 });

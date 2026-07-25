@@ -3946,6 +3946,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     teamId: string;
     leadSessionId: string;
     sessionId: string;
+    idleSince: string | null;
   }): Promise<boolean> {
     const live = maker.getSession(target.sessionId);
     if (live) return false;
@@ -3960,6 +3961,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       orcaLeadSessionId: target.leadSessionId,
       orcaWorkerId: target.id,
       orcaWorkerSessionId: target.sessionId,
+      orcaRuntimeReleased: target.idleSince !== null,
     };
     const extraDirs = await readSessionExtraDirsFromDb(target.sessionId);
     const opts = buildCreateOptsWithStderr({

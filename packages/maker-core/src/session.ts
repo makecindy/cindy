@@ -439,11 +439,21 @@ export class Session {
         // Session status changes to closed.
       } while (this.closeReleaseRuntimeRequested && !releaseRuntimeApplied);
     } catch (error) {
-      // Do not transition to closed on a failed teardown: callers that rely on
-      // closeIfIdle() need the still-live Session for a safe retry.
-      this.sendReservation = null;
+      // Provider release can fail after a generic close already completed its
+      // local teardown. Remove that unusable Session so lifecycle retry can
+      // recreate ownership instead of dispatching through a closed handle.
+      if (this.handle.isClosed?.()) {
+        this.finalizeClose();
+      } else {
+        // A still-live handle remains reachable for a direct close retry.
+        this.sendReservation = null;
+      }
       throw error;
     }
+    this.finalizeClose();
+  }
+
+  private finalizeClose(): void {
     this.sendReservation = null;
     this.closeReleaseRuntimeRequested = false;
     this.currentTurnOrigin = null;

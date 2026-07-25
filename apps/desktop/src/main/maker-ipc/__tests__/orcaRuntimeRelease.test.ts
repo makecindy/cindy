@@ -155,6 +155,22 @@ describe('createOrcaRuntimeRelease', () => {
     expect(harness.session.close).toHaveBeenCalledWith({ releaseRuntime: true });
   });
 
+  it('recreates missing local ownership and refreshes an existing release marker', async () => {
+    const harness = createHarness();
+    let currentSession: typeof harness.session | null = null;
+    harness.deps.getSession = vi.fn(() => currentSession);
+    harness.deps.resumeSession = vi.fn(async () => {
+      harness.calls.push('resumeSession');
+      currentSession = harness.session;
+    });
+
+    await harness.release({ ...worker, idleSince: '90' });
+
+    expect(harness.calls).toEqual(['resumeSession', 'markRelease', 'abort', 'closeSession']);
+    expect(harness.deps.markRelease).toHaveBeenCalledWith('worker-1', 'session-1', 100);
+    expect(harness.session.close).toHaveBeenCalledWith({ releaseRuntime: true });
+  });
+
   it('fails without persisting a marker when a missing Session cannot be recreated', async () => {
     const { deps, release } = createHarness({
       getSession: vi.fn(() => null),

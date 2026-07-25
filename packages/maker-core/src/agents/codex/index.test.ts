@@ -3333,6 +3333,70 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(host.archiveThread).not.toHaveBeenCalled();
   });
 
+  it('keeps a remote Worker release retryable when its local proxy client is unavailable', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.hasActiveClient.mockReturnValue(false);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-worker-inactive-proxy',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host-1',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow(
+      'remote Worker runtime release was not acknowledged',
+    );
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+    expect(handle.isClosed?.()).toBe(true);
+  });
+
+  it('keeps a remote Worker release retryable after archive loses its proxy connection', async () => {
+    const archiveError = new Error('remote proxy disconnected during archive');
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    host.archiveThread.mockImplementationOnce(async () => {
+      host.hasActiveClient.mockReturnValue(false);
+      throw archiveError;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-worker-interrupted-archive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host-1',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toBe(archiveError);
+
+    expect(host.archiveThread).toHaveBeenCalledOnce();
+    expect(handle.isClosed?.()).toBe(true);
+  });
+
+  it('keeps a remote Worker release retryable when its local host binding is stale', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const hosts = (agent as unknown as { hosts: Map<string, unknown> }).hosts;
+    hosts.set('remote:remote-host-1', host);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-worker-stale-host',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host-1',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+    hosts.delete('remote:remote-host-1');
+
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow(
+      'app-server was replaced before thread/archive',
+    );
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
+    expect(handle.isClosed?.()).toBe(true);
+  });
+
   it('does not archive a Worker thread during a generic resumable close', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

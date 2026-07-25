@@ -699,6 +699,9 @@ export interface AgentSessionHandle {
   /** 关闭本地会话；releaseRuntime 仅用于显式的无损 dormant release。 */
   close(options?: AgentSessionCloseOptions): Promise<void>;
 
+  /** Whether provider-local teardown has already made this handle unusable. */
+  isClosed?(): boolean;
+
   /**
    * Detach from a long-lived remote session without terminating the upstream
    * process. Agents without detach semantics leave this undefined.
