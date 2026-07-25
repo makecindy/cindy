@@ -35,4 +35,17 @@ describe('disableOrcaInternal stranded-lead recovery', () => {
     const calls = registerSource.match(/await clearLeadOrcaRoleState\(leadSessionId\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('keeps the active team retryable when a Worker runtime close fails', () => {
+    const disableStart = registerSource.indexOf('async function disableOrcaInternal');
+    const disableEnd = registerSource.indexOf('ipcMain.handle(MAKER_INVOKE.SESSION_DISABLE_ORCA', disableStart);
+    const disableBlock = registerSource.slice(disableStart, disableEnd);
+    const closeIndex = disableBlock.indexOf('await maker.closeSession(w.sessionId, { releaseRuntime: true });');
+    const rethrowIndex = disableBlock.indexOf('throw err;', closeIndex);
+    const finalizeIndex = disableBlock.indexOf("await markTeamEnded(team.id, 'completed');");
+
+    expect(closeIndex).toBeGreaterThanOrEqual(0);
+    expect(rethrowIndex).toBeGreaterThan(closeIndex);
+    expect(finalizeIndex).toBeGreaterThan(rethrowIndex);
+  });
 });

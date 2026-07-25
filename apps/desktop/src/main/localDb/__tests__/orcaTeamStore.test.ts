@@ -156,6 +156,34 @@ describe('orcaTeamStore', () => {
     ).resolves.toEqual({ status: 'done', idle_since: null });
   });
 
+  it('persists a runtime release after a terminal status update races the close', async () => {
+    const { markWorkerRuntimeReleased } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, updated_at = ? WHERE id = ?',
+      ['error', 99_000, 'worker-1'],
+    );
+
+    await expect(
+      markWorkerRuntimeReleased('worker-1', 'wrong-session', 123_000),
+    ).resolves.toBe(false);
+    await expect(
+      markWorkerRuntimeReleased('worker-1', 'worker-session-1', 123_000),
+    ).resolves.toBe(true);
+    await expect(
+      markWorkerRuntimeReleased('worker-1', 'worker-session-1', 124_000),
+    ).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null; updated_at: number }>(
+        'SELECT status, idle_since, updated_at FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'idle', idle_since: 123_000, updated_at: 123_000 });
+  });
+
   function createTestDbClient(): DbClient {
     const dbHandle = new Database(':memory:');
     rawDb = dbHandle;

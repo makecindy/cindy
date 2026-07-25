@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
@@ -478,6 +478,31 @@ export async function clearWorkerIdleReleaseMarker(sessionId: string): Promise<b
     .update(orcaWorkers)
     .set({ idleSince: null, updatedAt: Date.now() })
     .where(and(eq(orcaWorkers.sessionId, sessionId), isNotNull(orcaWorkers.idleSince)))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * Persist a completed runtime release without depending on a stale task status
+ * or updatedAt snapshot. Terminal event persistence may race the runtime close,
+ * but every legal Worker status remains release-eligible while the caller holds
+ * the session send lock.
+ */
+export async function markWorkerRuntimeReleased(
+  workerId: string,
+  sessionId: string,
+  releasedAt: number,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({ status: 'idle', idleSince: releasedAt, updatedAt: releasedAt })
+    .where(and(
+      eq(orcaWorkers.id, workerId),
+      eq(orcaWorkers.sessionId, sessionId),
+      isNull(orcaWorkers.idleSince),
+      inArray(orcaWorkers.status, ACTIVE_WORKER_STATUSES),
+    ))
     .run();
   return result.changes > 0;
 }

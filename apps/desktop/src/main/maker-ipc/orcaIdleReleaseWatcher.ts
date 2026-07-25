@@ -62,7 +62,8 @@ function isReleaseStatus(status: string): status is OrcaIdleReleaseStatus {
 /**
  * Creates the process-level Worker idle watcher. A scan is single-flight, and each
  * release marker is written atomically after the runtime closes so failed teardown
- * remains retryable and duplicate scans cannot broadcast the same release twice.
+ * remains retryable. Marker persistence reconciles terminal task-status updates
+ * that race the close, while duplicate scans cannot broadcast the same release twice.
  */
 export function createOrcaIdleReleaseWatcher(
   deps: OrcaIdleReleaseWatcherDeps,

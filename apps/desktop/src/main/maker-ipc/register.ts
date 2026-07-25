@@ -146,6 +146,7 @@ import {
   markTeamEnded,
   markWorkersStatusByTeam,
   markWorkerIdleIfStatus,
+  markWorkerRuntimeReleased,
   restoreWorkerDoneIfIdle,
   restoreWorkerStatusIfIdle,
   reconcileInactiveTeamWorkersForLead,
@@ -5267,9 +5268,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         try {
           await maker.closeSession(w.sessionId, { releaseRuntime: true });
         } catch (err) {
-          log.warn('disableOrca: closeSession failed', {
+          log.warn('disableOrca: closeSession failed; leaving team active for retry', {
             sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
           });
+          throw err;
         }
       }
       cleanupPendingInteractionsForSession(w.sessionId, 'orca_disable');
@@ -5694,15 +5696,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     withSessionLock: withSendToSessionLock,
     hasPendingInput: hasPendingIdleReleaseInput,
     markReleased: async (candidate, releasedAt) => {
-      // Drizzle proxy 的 UPDATE ... RETURNING 会执行写入但返回空数组；这里直接用
-      // DbClient async exec 的 changes 做原子 compare-and-set 结果判定。
-      const result = await getDbClient().exec(
-        `UPDATE orca_workers
-         SET status = 'idle', idle_since = ?, updated_at = ?
-         WHERE id = ? AND status = ? AND idle_since IS NULL AND updated_at = ?`,
-        [releasedAt, releasedAt, candidate.id, candidate.status, candidate.updatedAt],
-      );
-      return result.changes === 1;
+      // Terminal event persistence may update status/updated_at while the runtime
+      // closes. The store CAS reconciles that race but still pins worker+session.
+      return markWorkerRuntimeReleased(candidate.id, candidate.sessionId, releasedAt);
     },
     touchWorker: async (workerId, updatedAt) => {
       await getDbClient().drizzle
