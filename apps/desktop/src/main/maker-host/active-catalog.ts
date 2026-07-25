@@ -66,6 +66,9 @@ export interface XdGatewayModelInfo {
   /** AIGateway 标准 token 单价(per token)。 */
   inputCostPerToken?: number;
   outputCostPerToken?: number;
+  /** AIGateway 缓存 token 单价(per token);参与「免费」判定与价格展示。 */
+  cacheReadInputTokenCost?: number;
+  cacheCreationInputTokenCost?: number;
   /** 进哪些 runtime tab;缺省 = 仅 claude-code 兜底。 */
   agents?: AgentKind[];
   name?: string;
@@ -119,6 +122,10 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 
 type Effort = CatalogModel['efforts'][number];
 
+function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cost'] | undefined {
   const input = model.inputCostPerToken;
   const output = model.outputCostPerToken;
@@ -140,9 +147,13 @@ function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cos
       ? model.costDiscount
       : 0;
   const multiplier = 1 - discount;
+  const cacheRead = nonNegativeFiniteOrUndefined(model.cacheReadInputTokenCost);
+  const cacheWrite = nonNegativeFiniteOrUndefined(model.cacheCreationInputTokenCost);
   return {
     input: input * 1_000_000 * multiplier,
     output: output * 1_000_000 * multiplier,
+    ...(cacheRead !== undefined ? { cacheRead: cacheRead * 1_000_000 * multiplier } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * 1_000_000 * multiplier } : {}),
   };
 }
 

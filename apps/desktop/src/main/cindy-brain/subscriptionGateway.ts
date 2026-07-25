@@ -446,7 +446,9 @@ export function isGhostEligibleSessionRow(row: {
   orcaRole: string | null | undefined;
 }): boolean {
   // orcaRole 宽松判空:worker-thread 代理序列化可能把 NULL 列变 undefined。
-  return (row.source === 'desktop' || row.source === 'shared') && row.orcaRole == null;
+  // plugin 来源:workspace 槽创建的项目会话,用户打开后正常交互,应享有完整的
+  // ghost 事件(turn/hook/session-switched 等),与 desktop/shared 同等待遇。
+  return (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin') && row.orcaRole == null;
 }
 
 /**
