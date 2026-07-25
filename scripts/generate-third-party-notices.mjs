@@ -520,7 +520,13 @@ function readBundledLicense(relativePath) {
   );
 }
 
-function buildDesktopCommonEntries(apacheText, sharpPackageName) {
+/**
+ * 桌面三平台共有的随包分发组件声明。
+ *
+ * @param sharpPackageNames sharp 预编译包名,可传单个或数组。一个平台声明覆盖多个
+ *   架构时(如 linux 的 x64/arm64)必须把两个架构的包都传进来——见下方 sharp 段。
+ */
+function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   const entries = [];
 
   // ripgrep — 随包分发的搜索二进制
@@ -639,28 +645,33 @@ function buildDesktopCommonEntries(apacheText, sharpPackageName) {
   );
 
   // sharp 预编译包内含多种第三方动态库;保留包自带清单和精确版本表。
-  const sharpDir = resolvePkgDir(sharpPackageName, DESKTOP_DIR);
-  if (!sharpDir)
-    throw new Error(
-      `sharp platform package is not installed: ${sharpPackageName}`,
+  // 逐架构出条目:README 与 versions.json 都是 per-arch 的,一个平台声明覆盖两个
+  // 架构时只读其中一份,另一个架构的分发物就会带着错误的架构描述发出去
+  // (arm64 用户拿到的声明写着 "Linux (glibc) x64")。
+  for (const sharpPackageName of [sharpPackageNames].flat()) {
+    const sharpDir = resolvePkgDir(sharpPackageName, DESKTOP_DIR);
+    if (!sharpDir)
+      throw new Error(
+        `sharp platform package is not installed: ${sharpPackageName}`,
+      );
+    const sharpJson = readJson(path.join(sharpDir, "package.json"));
+    const versions = readJson(path.join(sharpDir, "versions.json"));
+    const licensingReadme = normalizeNoticeText(
+      fs.readFileSync(path.join(sharpDir, "README.md"), "utf8"),
     );
-  const sharpJson = readJson(path.join(sharpDir, "package.json"));
-  const versions = readJson(path.join(sharpDir, "versions.json"));
-  const licensingReadme = normalizeNoticeText(
-    fs.readFileSync(path.join(sharpDir, "README.md"), "utf8"),
-  );
-  entries.push(
-    bundledComponent({
-      name: `${sharpPackageName} embedded native libraries`,
-      version: sharpJson.version,
-      license: "LicenseRef-Sharp-Third-Party-Licenses",
-      url: `https://github.com/lovell/sharp-libvips/tree/v${sharpPackageName.includes("libvips") ? sharpJson.version : "1.2.4"}`,
-      licenseText:
-        `${licensingReadme}\n\nExact bundled library versions:\n${JSON.stringify(versions, null, 2)}\n\n` +
-        "Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. " +
-        `The bundled libvips version is ${versions.vips}.`,
-    }),
-  );
+    entries.push(
+      bundledComponent({
+        name: `${sharpPackageName} embedded native libraries`,
+        version: sharpJson.version,
+        license: "LicenseRef-Sharp-Third-Party-Licenses",
+        url: `https://github.com/lovell/sharp-libvips/tree/v${sharpPackageName.includes("libvips") ? sharpJson.version : "1.2.4"}`,
+        licenseText:
+          `${licensingReadme}\n\nExact bundled library versions:\n${JSON.stringify(versions, null, 2)}\n\n` +
+          "Corresponding build recipes and pinned upstream source locations are available at the exact sharp-libvips tag above. " +
+          `The bundled libvips version is ${versions.vips}.`,
+      }),
+    );
+  }
 
   // SQLite — better-sqlite3 静态编译进 native addon
   entries.push(
@@ -1265,10 +1276,10 @@ const artifactDefinitions = {
   },
   "desktop-linux": {
     closure: desktopLinuxNpm,
-    manual: buildDesktopCommonEntries(
-      apacheText,
+    manual: buildDesktopCommonEntries(apacheText, [
       "@img/sharp-libvips-linux-x64",
-    ),
+      "@img/sharp-libvips-linux-arm64",
+    ]),
     productName: "Cindy desktop application — Linux x64/arm64 glibc",
     description: ["Linux x64 与 arm64 glibc 桌面安装包的第三方开源组件声明。"],
     notes: [
