@@ -433,9 +433,10 @@ describe('session-stable plugin policy', () => {
     const liveGate = vi.fn(() => false);
     // Simulate the legacy host dependency without adding it back to SshMcpDeps.
     // A running server must rely on the policy frozen by its host runtime.
-    const legacyDeps = Object.assign(deps, {
+    const legacyDeps = {
+      ...deps,
       isEnabledForWorkdir: liveGate,
-    });
+    };
     const { client, cleanup } = await makeServerClient(legacyDeps);
 
     const result = await client.callTool({
