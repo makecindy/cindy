@@ -804,7 +804,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(pay).toHaveProperty('disabled', false);
   });
 
-  it('routes a live subscription to plan change instead of creating another subscription', async () => {
+  it('does not expose plan change when an active subscription has no effective plan', async () => {
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
       subscription: {
         subscriptionId: 'subscription_fixture',
@@ -820,11 +820,9 @@ describe('BillingPage remote catalog rendering', () => {
     }));
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
 
-    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
-    expect(screen.getByText('Configured subscription')).toBeTruthy();
-    expect(screen.queryByText('billing.settings.subscriptionCard.action')).toBeNull();
+    expect(await screen.findByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
@@ -1035,6 +1033,24 @@ describe('BillingPage plan change', () => {
               },
             ],
           },
+          {
+            code: 'plus_year',
+            interval: 'YEAR' as const,
+            currency: 'usd',
+            amount: '90',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '1200',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_plus_year_stripe',
+                provider: 'stripe',
+                capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                paymentAction: 'REDIRECT' as const,
+              },
+            ],
+          },
         ],
       },
       {
@@ -1056,6 +1072,78 @@ describe('BillingPage plan change', () => {
             purchaseOptions: [
               {
                 id: 'listing_max_stripe',
+                provider: 'stripe',
+                capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                paymentAction: 'REDIRECT' as const,
+              },
+            ],
+          },
+          {
+            code: 'max_year',
+            interval: 'YEAR' as const,
+            currency: 'usd',
+            amount: '200',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '3000',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_max_year_stripe',
+                provider: 'stripe',
+                capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                paymentAction: 'REDIRECT' as const,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        code: 'same_level',
+        name: 'Same-level plan',
+        kind: 'SUBSCRIPTION' as const,
+        level: 1,
+        sortOrder: 0,
+        offers: [
+          {
+            code: 'same_level_month',
+            interval: 'MONTH' as const,
+            currency: 'usd',
+            amount: '12',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '120',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_same_level_stripe',
+                provider: 'stripe',
+                capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                paymentAction: 'REDIRECT' as const,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        code: 'starter',
+        name: 'Starter plan',
+        kind: 'SUBSCRIPTION' as const,
+        level: 0,
+        sortOrder: 0,
+        offers: [
+          {
+            code: 'starter_month',
+            interval: 'MONTH' as const,
+            currency: 'usd',
+            amount: '5',
+            minAmount: null,
+            maxAmount: null,
+            creditAmount: '50',
+            rolloverCap: '0',
+            purchaseOptions: [
+              {
+                id: 'listing_starter_stripe',
                 provider: 'stripe',
                 capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
                 paymentAction: 'REDIRECT' as const,
@@ -1118,11 +1206,11 @@ describe('BillingPage plan change', () => {
   };
 
   const activeSubscription = (
-    pendingPlanChange: unknown = null,
+    pendingPlanChange: BillingSubscription['pendingPlanChange'] = null,
     interval: 'MONTH' | 'YEAR' = 'MONTH',
-    status: 'ACTIVE' | 'TRIALING' = 'ACTIVE',
+    status: BillingSubscription['status'] = 'ACTIVE',
     cancelAtPeriodEnd = false,
-  ) => ({
+  ): BillingSubscription => ({
     subscriptionId: 'subscription_active',
     status,
     provider: 'stripe',
@@ -1133,7 +1221,7 @@ describe('BillingPage plan change', () => {
     effectivePlan: {
       version: 1 as const,
       product: { code: 'plus', kind: 'SUBSCRIPTION' as const, level: 1 },
-      offer: { code: 'plus_month', interval },
+      offer: { code: interval === 'YEAR' ? 'plus_year' : 'plus_month', interval },
       terms: { amount: '9', currency: 'usd', creditAmount: '100', rolloverCap: '0' },
       capturedAt: '2026-07-01T00:00:00.000Z',
     },
@@ -1186,7 +1274,7 @@ describe('BillingPage plan change', () => {
     });
   });
 
-  it('offers every purchasable plan and lets the server decide reachability', async () => {
+  it('offers same-provider monthly plans in upgrade, same-tier, downgrade order', async () => {
     const billing = install(billingMocks());
     billing.quotePlanChange.mockResolvedValue({
       planChangeId: 'plan_change_1',
@@ -1203,17 +1291,27 @@ describe('BillingPage plan change', () => {
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
 
     await screen.findByText('billing.planChange.targetTitle');
-    expect(screen.getByText('Max plan')).toBeTruthy();
-    expect(screen.getByText('Alipay-only Max')).toBeTruthy();
+    const maxButton = screen.getByText('Max plan').closest('button')!;
+    const sameLevelButton = screen.getByText('Same-level plan').closest('button')!;
+    const starterButton = screen.getByText('Starter plan').closest('button')!;
+    expect(
+      maxButton.compareDocumentPosition(sameLevelButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      sameLevelButton.compareDocumentPosition(starterButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(within(maxButton).getByText('billing.planChange.upgradeBadge')).toBeTruthy();
+    expect(within(maxButton).getByText('stripe')).toBeTruthy();
+    expect(within(sameLevelButton).getByText('billing.planChange.sameLevelBadge')).toBeTruthy();
+    expect(within(starterButton).getByText('billing.planChange.downgradeBadge')).toBeTruthy();
+    expect(screen.queryByText('Alipay-only Max')).toBeNull();
     expect(screen.queryByText('Coming soon Max')).toBeNull();
-    // The current plan renders in the summary card but must not be a candidate.
-    expect(screen.getAllByText('billing.planChange.upgradeBadge')).toHaveLength(2);
 
-    fireEvent.click(screen.getByText('Alipay-only Max'));
+    fireEvent.click(maxButton);
     await screen.findByText('billing.planChange.quoteTitle');
     expect(billing.quotePlanChange).toHaveBeenCalledTimes(1);
     expect(billing.quotePlanChange).toHaveBeenCalledWith({
-      targetOfferCode: 'cn_max_month',
+      targetOfferCode: 'max_month',
       idempotencyKey: 'desktop:plan-change:00000000-0000-4000-8000-000000000042',
     });
     expect(
@@ -1237,7 +1335,7 @@ describe('BillingPage plan change', () => {
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps plan change visible for yearly subscriptions and defers eligibility to the server', async () => {
+  it('does not expose plan change for yearly subscriptions while server v1 is monthly-only', async () => {
     const billing = billingMocks();
     billing.getCurrentSubscription = vi.fn(async () => ({
       subscription: activeSubscription(null, 'YEAR'),
@@ -1247,24 +1345,117 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await screen.findByText('Plus plan');
-    fireEvent.click(screen.getByText('billing.settings.subscriptionCard.changeAction'));
-    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
-    expect(screen.getByText('Max plan')).toBeTruthy();
+    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+    expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
     expect(billing.quotePlanChange).not.toHaveBeenCalled();
   });
 
-  it('keeps plan change visible when subscription status is not client-approved', async () => {
+  it('does not offer cross-provider targets when the current provider is unavailable', async () => {
+    const subscription = activeSubscription();
+    delete subscription.provider;
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({ subscription }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    expect(await screen.findByText('billing.planChange.emptyTitle')).toBeTruthy();
+    expect(screen.queryByText('Max plan')).toBeNull();
+    expect(billing.quotePlanChange).not.toHaveBeenCalled();
+  });
+
+  it.each(['TRIALING', 'PAST_DUE', 'UNPAID', 'PAUSED'] as const)(
+    'does not expose plan change for server-ineligible %s subscriptions',
+    async (status) => {
+      const billing = billingMocks();
+      billing.getCurrentSubscription = vi.fn(async () => ({
+        subscription: activeSubscription(null, 'MONTH', status),
+      }));
+      install(billing);
+
+      render(<BillingPage />);
+
+      await screen.findByText('Plus plan');
+      expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+      expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+    },
+  );
+
+  it('does not expose plan change when cancellation is scheduled for period end', async () => {
     const billing = billingMocks();
     billing.getCurrentSubscription = vi.fn(async () => ({
-      subscription: activeSubscription(null, 'MONTH', 'TRIALING', true),
+      subscription: activeSubscription(null, 'MONTH', 'ACTIVE', true),
     }));
     install(billing);
 
     render(<BillingPage />);
 
     await screen.findByText('Plus plan');
-    expect(screen.getByText('billing.settings.subscriptionCard.changeAction')).toBeTruthy();
-    expect(screen.queryByText('billing.settings.subscriptionCard.action')).toBeNull();
+    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+    expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+  });
+
+  it('routes INCOMPLETE without an effective plan to recovery and keeps duplicate purchase blocked', async () => {
+    const incompleteSubscription: BillingSubscription = {
+      ...activeSubscription(null, 'MONTH', 'INCOMPLETE'),
+      effectivePlan: null,
+    };
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: incompleteSubscription,
+    }));
+    install(billing);
+    checkout.recoverables.subscription = incompleteSubscription;
+
+    render(<BillingPage />);
+
+    await waitFor(() =>
+      expect(screen.getAllByText('billing.recovery.continueSubscription')).toHaveLength(2),
+    );
+    const recoveryActions = screen.getAllByText('billing.recovery.continueSubscription');
+    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+    fireEvent.click(recoveryActions[1]);
+    expect(checkout.resumeSubscription).toHaveBeenCalledWith(incompleteSubscription);
+  });
+
+  it('keeps the duplicate-purchase guard reachable when INCOMPLETE recovery is unavailable', async () => {
+    const incompleteSubscription: BillingSubscription = {
+      ...activeSubscription(null, 'MONTH', 'INCOMPLETE'),
+      effectivePlan: null,
+    };
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: incompleteSubscription,
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
+    fireEvent.click(screen.getByText('stripe').closest('button')!);
+    expect(screen.getByText('billing.actions.pay').closest('button')).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(screen.getByText('billing.currentSubscription.purchaseBlocked')).toBeTruthy();
+  });
+
+  it('explains a rejected quote and returns to the candidate list', async () => {
+    const billing = install(billingMocks());
+    billing.quotePlanChange.mockRejectedValue(
+      new Error('[PLAN_CHANGE_NOT_AVAILABLE] target offer is not allowed'),
+    );
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    fireEvent.click(await screen.findByText('Max plan'));
+
+    expect(await screen.findByText('billing.planChange.quoteRejected')).toBeTruthy();
+    fireEvent.click(screen.getByText('billing.planChange.chooseAnotherPlan'));
+    expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
+    expect(screen.getByText('Max plan')).toBeTruthy();
   });
 
   it('shows a scheduled downgrade banner and undoes it through DELETE', async () => {

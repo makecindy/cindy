@@ -370,6 +370,28 @@ describe('billing IPC', () => {
       method: 'POST',
       body: { targetOfferCode: 'plus_month' },
       headers: { 'Idempotency-Key': 'desktop:plan-change:12345678' },
+      allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
+    });
+  });
+
+  it('preserves the safe plan-change rejection code across IPC', async () => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(
+      new ServerApiError(
+        'PLAN_CHANGE_NOT_AVAILABLE',
+        409,
+        'upstream detail must not reach the renderer',
+      ),
+    );
+
+    await expect(
+      call(BILLING_INVOKE.QUOTE_PLAN_CHANGE, {
+        targetOfferCode: 'max_month',
+        idempotencyKey: 'desktop:plan-change:12345678',
+      }),
+    ).rejects.toMatchObject({
+      code: 'PLAN_CHANGE_NOT_AVAILABLE',
+      message: '[PLAN_CHANGE_NOT_AVAILABLE] target plan is not available',
     });
   });
 

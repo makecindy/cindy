@@ -7281,6 +7281,7 @@
     "planChange": {
       "targetTitle": "サブスクリプションプランの変更",
       "upgradeBadge": "アップグレード",
+      "sameLevelBadge": "同じレベル",
       "downgradeBadge": "ダウングレード",
       "emptyTitle": "切り替え可能なプランがありません",
       "emptyDescription": "現在の支払い方法で切り替え可能なプランがまだ設定されていません。",
@@ -7302,7 +7303,9 @@
       "expiredBody": "見積もりの有効期限が切れました。もう一度プラン変更を開始してください。",
       "failedTitle": "プラン変更に失敗しました",
       "failedBody": "プラン変更は完了しませんでした。現在のプランは変わりません。",
-      "requestFailed": "リクエストに失敗しました。もう一度お試しください。",
+      "requestFailed": "プラン変更リクエストを完了できませんでした。サブスクリプションの状態を更新して、もう一度お試しください。",
+      "quoteRejected": "現在のサブスクリプションではこのプランに変更できません。別のプランを選択してください。",
+      "chooseAnotherPlan": "別のプランを選択",
       "resyncHint": "確認結果を検証できませんでした。サーバーから最新の状態を同期しています…",
       "upgradeDueNow": "今期の差額 {{amount}} をお支払いください",
       "upgradeNoAmount": "確認後、アップグレードは即時適用されます。",

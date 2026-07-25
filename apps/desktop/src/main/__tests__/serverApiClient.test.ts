@@ -220,4 +220,56 @@ describe('serverApiFetch', () => {
       'method=GET',
     );
   });
+
+  it('surfaces only explicitly allowed business codes on redacted requests', async () => {
+    mocks.getAccessToken.mockReturnValue('token-a');
+    mocks.netFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'PLAN_CHANGE_NOT_AVAILABLE',
+            message: 'private subscription detail',
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'PRIVATE_SUBSCRIPTION_STATE',
+            message: 'another private subscription detail',
+          },
+        }),
+      });
+
+    await expect(
+      serverApiFetch('/api/billing/subscription/plan-change-quotes', {
+        baseUrl: 'https://model-access.example.com',
+        redactErrorDetails: true,
+        allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
+      }),
+    ).rejects.toMatchObject({
+      code: 'PLAN_CHANGE_NOT_AVAILABLE',
+      statusCode: 409,
+      message: '请求失败 (409)',
+    });
+    await expect(
+      serverApiFetch('/api/billing/subscription/plan-change-quotes', {
+        baseUrl: 'https://model-access.example.com',
+        redactErrorDetails: true,
+        allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
+      }),
+    ).rejects.toMatchObject({
+      code: 'HTTP_409',
+      statusCode: 409,
+      message: '请求失败 (409)',
+    });
+
+    const logged = JSON.stringify(mocks.logger.warn.mock.calls);
+    expect(logged).not.toContain('private subscription detail');
+    expect(logged).not.toContain('PRIVATE_SUBSCRIPTION_STATE');
+  });
 });

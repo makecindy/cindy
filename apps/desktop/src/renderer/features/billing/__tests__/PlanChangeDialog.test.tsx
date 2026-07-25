@@ -33,6 +33,7 @@ function quoteReadyState(overrides: Partial<PlanChangeState> = {}): PlanChangeSt
     },
     targetPlan: null,
     error: false,
+    quoteFailureReason: null,
     stale: false,
     ...overrides,
   };
@@ -47,6 +48,7 @@ describe('PlanChangeStatusDialog stale snapshot handling', () => {
         onClose={vi.fn()}
         onConfirm={vi.fn()}
         onRefresh={vi.fn()}
+        onReselect={vi.fn()}
         onAbandon={vi.fn()}
       />,
     );
@@ -65,6 +67,7 @@ describe('PlanChangeStatusDialog stale snapshot handling', () => {
         onClose={vi.fn()}
         onConfirm={vi.fn()}
         onRefresh={onRefresh}
+        onReselect={vi.fn()}
         onAbandon={vi.fn()}
       />,
     );
@@ -92,6 +95,7 @@ describe('PlanChangeStatusDialog stale snapshot handling', () => {
         onClose={vi.fn()}
         onConfirm={vi.fn()}
         onRefresh={onRefresh}
+        onReselect={vi.fn()}
         onAbandon={vi.fn()}
       />,
     );
@@ -103,5 +107,29 @@ describe('PlanChangeStatusDialog stale snapshot handling', () => {
 
     fireEvent.click(screen.getByText('billing.actions.refresh'));
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains a rejected target and returns to plan selection', () => {
+    const onReselect = vi.fn();
+    render(
+      <PlanChangeStatusDialog
+        state={quoteReadyState({
+          phase: 'FAILED',
+          planChange: null,
+          error: true,
+          quoteFailureReason: 'TARGET_NOT_ALLOWED',
+        })}
+        targetName="Max"
+        onClose={vi.fn()}
+        onConfirm={vi.fn()}
+        onRefresh={vi.fn()}
+        onReselect={onReselect}
+        onAbandon={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('billing.planChange.quoteRejected')).toBeTruthy();
+    fireEvent.click(screen.getByText('billing.planChange.chooseAnotherPlan'));
+    expect(onReselect).toHaveBeenCalledTimes(1);
   });
 });

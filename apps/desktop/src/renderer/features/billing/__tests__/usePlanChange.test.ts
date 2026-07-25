@@ -289,6 +289,27 @@ describe('usePlanChange', () => {
     });
   });
 
+  it.each([
+    ['[PLAN_CHANGE_NOT_AVAILABLE] target offer is not allowed', 'TARGET_NOT_ALLOWED'],
+    [
+      'Error invoking remote method: Error: [PRECONDITION_FAILED] subscription changed',
+      'REQUEST_FAILED',
+    ],
+    ['[INVALID_PARAMS] targetOfferCode is invalid', 'REQUEST_FAILED'],
+    ['[INTERNAL] billing service request failed', 'REQUEST_FAILED'],
+  ] as const)('classifies a quote failure from the IPC error protocol', async (message, reason) => {
+    api.quotePlanChange.mockRejectedValue(new Error(message));
+    const { result } = renderHook(() => usePlanChange(ACCOUNT_ID, vi.fn()));
+
+    await act(() => result.current.startQuote('max_month', TARGET_PLAN));
+
+    expect(result.current.state).toMatchObject({
+      phase: 'FAILED',
+      error: true,
+      quoteFailureReason: reason,
+    });
+  });
+
   it('reuses the same idempotency key when retrying the same target after a failure', async () => {
     api.quotePlanChange.mockRejectedValueOnce(new Error('network'));
     api.quotePlanChange.mockResolvedValueOnce(change());

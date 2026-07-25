@@ -77,7 +77,7 @@ const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capab
   'PROVIDER_MANAGED_SUBSCRIPTION',
 ]);
 
-const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] = [
+const NON_TERMINAL_SUBSCRIPTION_STATUSES: BillingSubscription['status'][] = [
   'INCOMPLETE',
   'TRIALING',
   'ACTIVE',
@@ -85,6 +85,12 @@ const SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES: BillingSubscription['status'][] =
   'UNPAID',
   'PAUSED',
 ];
+
+// This list only controls which card action opens the plan-change flow. It is
+// intentionally separate from the new-purchase guard above: INCOMPLETE still
+// blocks a duplicate purchase, but without an effective plan there is nothing
+// meaningful to change.
+const PLAN_CHANGE_ENTRY_STATUSES: BillingSubscription['status'][] = ['ACTIVE'];
 
 function decimalParts(value: string): { value: bigint; scale: number } | null {
   const match = /^(0|[1-9]\d{0,14})(?:\.(\d{1,9}))?$/.exec(value.trim());
@@ -417,7 +423,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const subscriptionPurchaseBlocked =
     currentSubscription !== null &&
-    SUBSCRIPTION_PURCHASE_BLOCKING_STATUSES.includes(currentSubscription.status);
+    NON_TERMINAL_SUBSCRIPTION_STATUSES.includes(currentSubscription.status);
   const canCheckout =
     !checkout.recovering &&
     selected !== null &&
@@ -438,7 +444,22 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const currentPlan = currentSubscription?.effectivePlan ?? null;
   const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
-  const hasNonTerminalSubscription = subscriptionPurchaseBlocked;
+  const currentProvider =
+    currentSubscription?.provider &&
+    SUPPORTED_BILLING_PROVIDERS.has(currentSubscription.provider as SupportedBillingProvider)
+      ? (currentSubscription.provider as SupportedBillingProvider)
+      : null;
+  const showPlanChangeEntry =
+    currentPlan !== null &&
+    currentSubscription !== null &&
+    PLAN_CHANGE_ENTRY_STATUSES.includes(currentSubscription.status) &&
+    !currentSubscription.cancelAtPeriodEnd &&
+    currentPlan.offer.interval === 'MONTH';
+  const recoverableSubscription =
+    currentSubscription?.status === 'INCOMPLETE' &&
+    checkout.recoverables.subscription?.subscriptionId === currentSubscription.subscriptionId
+      ? checkout.recoverables.subscription
+      : null;
   const currentPlanFacts = useMemo(() => {
     if (!currentSubscription) return null;
     const plan = currentSubscription.effectivePlan;
@@ -453,25 +474,46 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     };
   }, [billingLocale, currentSubscription, planNameOf, t]);
 
-  // The server quote owns reachability and direction. The renderer only hides
-  // offers that are not currently sold and the exact current offer.
+  // The server quote remains authoritative for business reachability. Until
+  // that contract supports cross-interval/provider changes, keep those two
+  // client-side compatibility gates so the dialog cannot offer known-invalid
+  // targets.
   const planChangeCandidates = useMemo<PlanChangeCandidate[]>(() => {
-    if (!hasNonTerminalSubscription) return [];
+    if (!showPlanChangeEntry || !currentPlan || !currentProvider) return [];
+    const directionRank: Record<Exclude<PlanChangeCandidate['direction'], null>, number> = {
+      UPGRADE: 0,
+      SAME_LEVEL: 1,
+      DOWNGRADE: 2,
+    };
     return subscriptionOffers
       .filter(
-        (entry) => isCatalogOfferPurchasable(entry) && entry.offer.code !== currentPlan?.offer.code,
+        (entry) =>
+          isCatalogOfferPurchasable(entry) &&
+          entry.offer.interval === currentPlan.offer.interval &&
+          entry.offer.code !== currentPlan.offer.code &&
+          entry.purchaseOptions.some((option) => option.provider === currentProvider),
       )
       .map(({ product, offer }) => ({
         product,
         offer,
+        providers: [currentProvider],
         direction:
-          currentPlan && product.level !== null && product.level !== currentPlan.product.level
-            ? product.level > currentPlan.product.level
+          product.level === null
+            ? null
+            : product.level > currentPlan.product.level
               ? ('UPGRADE' as const)
-              : ('DOWNGRADE' as const)
-            : null,
-      }));
-  }, [subscriptionOffers, hasNonTerminalSubscription, currentPlan]);
+              : product.level < currentPlan.product.level
+                ? ('DOWNGRADE' as const)
+                : ('SAME_LEVEL' as const),
+      }))
+      .sort(
+        (left, right) =>
+          (left.direction === null ? 3 : directionRank[left.direction]) -
+            (right.direction === null ? 3 : directionRank[right.direction]) ||
+          left.product.sortOrder - right.product.sortOrder ||
+          left.offer.code.localeCompare(right.offer.code),
+      );
+  }, [subscriptionOffers, showPlanChangeEntry, currentPlan, currentProvider]);
 
   const openPurchaseDialog = (kind: PurchaseKind) => {
     resetSelection();
@@ -534,7 +576,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     if (candidate.offer.interval === null) return;
     setPlanChangeTargetOpen(false);
     void planChange.startQuote(candidate.offer.code, {
-      product: { code: candidate.product.code, level: candidate.product.level ?? 0 },
+      product: { code: candidate.product.code, level: candidate.product.level },
       offer: { code: candidate.offer.code, interval: candidate.offer.interval },
       terms: {
         amount: candidate.offer.amount ?? '0',
@@ -551,6 +593,11 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     // banner reflects what is still open on the server.
     if (phase === 'QUOTE_READY' || phase === 'PENDING_PROVIDER' || phase === 'AWAITING_PAYMENT')
       void loadSubscription();
+  };
+
+  const reselectPlanChangeTarget = () => {
+    planChange.close();
+    setPlanChangeTargetOpen(true);
   };
 
   return (
@@ -595,18 +642,25 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               facts={currentPlanFacts}
               loading={loadingSubscription}
               error={subscriptionError}
-              hasNonTerminalSubscription={hasNonTerminalSubscription}
-              actionDisabled={loadingSubscription || subscriptionError}
+              showPlanChangeEntry={showPlanChangeEntry}
+              recoveryAvailable={recoverableSubscription !== null}
+              actionDisabled={
+                loadingSubscription ||
+                subscriptionError ||
+                (recoverableSubscription !== null && checkout.recovering)
+              }
               pendingPlanChange={pendingPlanChange}
               pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
               onChangePlan={openPlanChange}
+              onRecover={() => {
+                if (recoverableSubscription) checkout.resumeSubscription(recoverableSubscription);
+              }}
               onPurchase={() => openPurchaseDialog('SUBSCRIPTION')}
               onResumePending={() => {
                 if (pendingPlanChange) planChange.resumePending(pendingPlanChange);
               }}
               onCancelPending={() => {
-                if (pendingPlanChange)
-                  void planChange.cancelChange(pendingPlanChange.planChangeId);
+                if (pendingPlanChange) void planChange.cancelChange(pendingPlanChange.planChangeId);
               }}
             />
           </BillingGroup>
@@ -718,6 +772,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         onClose={closePlanChangeStatus}
         onConfirm={() => void planChange.confirm()}
         onRefresh={() => void planChange.refresh()}
+        onReselect={reselectPlanChangeTarget}
         onAbandon={() => {
           const change = planChange.state.planChange;
           if (change) void planChange.cancelChange(change.planChangeId);
@@ -792,11 +847,13 @@ function SubscriptionOverviewCard({
   facts,
   loading,
   error,
-  hasNonTerminalSubscription,
+  showPlanChangeEntry,
+  recoveryAvailable,
   actionDisabled,
   pendingPlanChange,
   pendingTargetName,
   onChangePlan,
+  onRecover,
   onPurchase,
   onResumePending,
   onCancelPending,
@@ -804,11 +861,13 @@ function SubscriptionOverviewCard({
   facts: CurrentPlanFacts | null;
   loading: boolean;
   error: boolean;
-  hasNonTerminalSubscription: boolean;
+  showPlanChangeEntry: boolean;
+  recoveryAvailable: boolean;
   actionDisabled: boolean;
   pendingPlanChange: BillingPendingPlanChange | null;
   pendingTargetName: string | null;
   onChangePlan: () => void;
+  onRecover: () => void;
   onPurchase: () => void;
   onResumePending: () => void;
   onCancelPending: () => void;
@@ -882,13 +941,15 @@ function SubscriptionOverviewCard({
         </div>
         <button
           type="button"
-          onClick={hasNonTerminalSubscription ? onChangePlan : onPurchase}
+          onClick={showPlanChangeEntry ? onChangePlan : recoveryAvailable ? onRecover : onPurchase}
           disabled={actionDisabled}
           className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {hasNonTerminalSubscription
+          {showPlanChangeEntry
             ? t('billing.settings.subscriptionCard.changeAction')
-            : t('billing.settings.subscriptionCard.action')}
+            : recoveryAvailable
+              ? t('billing.recovery.continueSubscription')
+              : t('billing.settings.subscriptionCard.action')}
         </button>
       </div>
       {pendingPlanChange && (

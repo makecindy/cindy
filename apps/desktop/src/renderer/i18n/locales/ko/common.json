@@ -7281,6 +7281,7 @@
     "planChange": {
       "targetTitle": "구독 플랜 변경",
       "upgradeBadge": "업그레이드",
+      "sameLevelBadge": "동일 등급",
       "downgradeBadge": "다운그레이드",
       "emptyTitle": "전환 가능한 플랜이 없습니다",
       "emptyDescription": "현재 결제 수단으로 전환할 수 있는 다른 플랜이 아직 설정되지 않았습니다.",
@@ -7302,7 +7303,9 @@
       "expiredBody": "견적이 만료되었습니다. 플랜 변경을 다시 시작해 주세요.",
       "failedTitle": "플랜 변경 실패",
       "failedBody": "플랜 변경이 완료되지 않았습니다. 현재 플랜은 그대로 유지됩니다.",
-      "requestFailed": "요청에 실패했습니다. 다시 시도해 주세요.",
+      "requestFailed": "플랜 변경 요청을 완료하지 못했습니다. 구독 상태를 새로고침한 후 다시 시도하세요.",
+      "quoteRejected": "현재 구독에서는 이 플랜으로 변경할 수 없습니다. 다른 플랜을 선택하세요.",
+      "chooseAnotherPlan": "다른 플랜 선택",
       "resyncHint": "확인 결과를 검증할 수 없습니다. 서버에서 최신 상태를 동기화하는 중…",
       "upgradeDueNow": "이번 기간 차액 {{amount}}을(를) 결제하세요",
       "upgradeNoAmount": "확인 후 업그레이드가 즉시 적용됩니다.",

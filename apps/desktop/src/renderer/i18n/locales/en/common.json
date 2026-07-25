@@ -7292,6 +7292,7 @@
     "planChange": {
       "targetTitle": "Change subscription plan",
       "upgradeBadge": "Upgrade",
+      "sameLevelBadge": "Same tier",
       "downgradeBadge": "Downgrade",
       "emptyTitle": "No plans available to switch to",
       "emptyDescription": "The server has not configured another plan for your current payment method.",
@@ -7313,7 +7314,9 @@
       "expiredBody": "The quote expired. Start the plan change again to get a new quote.",
       "failedTitle": "Plan change failed",
       "failedBody": "The plan change did not complete. Your current plan is unchanged.",
-      "requestFailed": "The request failed. Please try again.",
+      "requestFailed": "The plan change request couldn’t be completed. Refresh your subscription status and try again.",
+      "quoteRejected": "This plan isn’t available for your current subscription. Choose another plan.",
+      "chooseAnotherPlan": "Choose Another Plan",
       "resyncHint": "The confirmation result could not be verified. Syncing the latest status from the server…",
       "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
       "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",

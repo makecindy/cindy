@@ -31,8 +31,12 @@ import type { PlanChangeState } from './usePlanChange';
 export type PlanChangeCandidate = {
   product: BillingCatalogProduct;
   offer: BillingCatalogOffer;
-  /** UI hint only; the server quote is the authority on the change type. */
-  direction: 'UPGRADE' | 'DOWNGRADE' | null;
+  providers: Array<'alipay' | 'stripe'>;
+  /**
+   * UI hint only; the server quote is authoritative. Null means the product
+   * level is missing, so the client hides the direction instead of guessing.
+   */
+  direction: 'UPGRADE' | 'SAME_LEVEL' | 'DOWNGRADE' | null;
 };
 
 function formatEffectiveDate(iso: string, locale: string): string {
@@ -109,6 +113,17 @@ export function PlanChangeTargetDialog({
                       : candidate.direction === 'DOWNGRADE'
                         ? ArrowDownRight
                         : null;
+                  const directionLabel =
+                    candidate.direction === 'UPGRADE'
+                      ? t('billing.planChange.upgradeBadge')
+                      : candidate.direction === 'DOWNGRADE'
+                        ? t('billing.planChange.downgradeBadge')
+                        : candidate.direction === 'SAME_LEVEL'
+                          ? t('billing.planChange.sameLevelBadge')
+                          : null;
+                  const providerLabel = candidate.providers
+                    .map((provider) => t(`billing.providers.${provider}`))
+                    .join(', ');
                   return (
                     <button
                       key={candidate.offer.code}
@@ -125,12 +140,12 @@ export function PlanChangeTargetDialog({
                         <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                           {candidate.product.name}
                         </p>
-                        {DirectionIcon && (
-                          <p className="mt-0.5 inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
-                            <DirectionIcon size={12} />
-                            {candidate.direction === 'UPGRADE'
-                              ? t('billing.planChange.upgradeBadge')
-                              : t('billing.planChange.downgradeBadge')}
+                        {(directionLabel || providerLabel) && (
+                          <p className="mt-0.5 flex min-h-4 items-center gap-1 text-11 text-[var(--text-tertiary)]">
+                            {DirectionIcon && <DirectionIcon size={12} />}
+                            {directionLabel && <span>{directionLabel}</span>}
+                            {directionLabel && providerLabel && <span aria-hidden>·</span>}
+                            {providerLabel && <span>{providerLabel}</span>}
                           </p>
                         )}
                       </div>
@@ -190,6 +205,7 @@ export function PlanChangeStatusDialog({
   onClose,
   onConfirm,
   onRefresh,
+  onReselect,
   onAbandon,
 }: {
   state: PlanChangeState;
@@ -197,6 +213,7 @@ export function PlanChangeStatusDialog({
   onClose: () => void;
   onConfirm: () => void;
   onRefresh: () => void;
+  onReselect: () => void;
   onAbandon: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -439,7 +456,9 @@ export function PlanChangeStatusDialog({
                 </div>
                 <p className="mt-4 max-w-[340px] text-sm text-[var(--text-secondary)]">
                   {state.error
-                    ? t('billing.planChange.requestFailed')
+                    ? state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
+                      ? t('billing.planChange.quoteRejected')
+                      : t('billing.planChange.requestFailed')
                     : state.phase === 'CANCELED'
                       ? t('billing.planChange.canceledBody')
                       : state.phase === 'EXPIRED'
@@ -463,6 +482,15 @@ export function PlanChangeStatusDialog({
               )}
             </div>
             <div className="flex items-center gap-2">
+              {state.phase === 'FAILED' && state.quoteFailureReason === 'TARGET_NOT_ALLOWED' && (
+                <button
+                  type="button"
+                  onClick={onReselect}
+                  className="h-9 rounded-full bg-[var(--text-primary)] px-5 text-13 font-medium text-[var(--surface)]"
+                >
+                  {t('billing.planChange.chooseAnotherPlan')}
+                </button>
+              )}
               {(state.phase === 'AWAITING_PAYMENT' ||
                 state.phase === 'PENDING_PROVIDER' ||
                 (state.phase === 'QUOTE_READY' && state.stale)) && (

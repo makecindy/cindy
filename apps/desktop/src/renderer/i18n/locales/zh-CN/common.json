@@ -7281,6 +7281,7 @@
     "planChange": {
       "targetTitle": "更改订阅套餐",
       "upgradeBadge": "升级",
+      "sameLevelBadge": "同等级",
       "downgradeBadge": "降级",
       "emptyTitle": "暂无可切换的套餐",
       "emptyDescription": "服务端尚未为当前支付方式配置其他可切换套餐。",
@@ -7302,7 +7303,9 @@
       "expiredBody": "报价已过期，请重新发起套餐变更获取新报价。",
       "failedTitle": "套餐变更失败",
       "failedBody": "套餐变更未完成，当前套餐保持不变。",
-      "requestFailed": "请求失败，请重试。",
+      "requestFailed": "套餐变更请求未完成，请刷新订阅状态后重试。",
+      "quoteRejected": "当前订阅无法切换到这个套餐，请选择其他套餐。",
+      "chooseAnotherPlan": "选择其他套餐",
       "resyncHint": "确认结果暂时无法核实，正在从服务端同步最新状态…",
       "upgradeDueNow": "本期需支付差价 {{amount}}",
       "upgradeNoAmount": "确认后升级立即生效。",

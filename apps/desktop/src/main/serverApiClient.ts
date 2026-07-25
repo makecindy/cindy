@@ -50,6 +50,12 @@ export interface ApiFetchOptions {
   timeoutMs?: number;
   /** Keep upstream response/network details out of local logs for sensitive flows. */
   redactErrorDetails?: boolean;
+  /**
+   * Upstream business codes that may cross a redacted boundary. Messages and
+   * response bodies remain hidden; every code must be explicitly allowlisted
+   * by the caller.
+   */
+  allowedRedactedErrorCodes?: readonly string[];
 }
 
 interface RawResponse<T> {
@@ -161,7 +167,9 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       );
     }
     throw new ServerApiError(
-      opts.redactErrorDetails ? statusToCode(result.status) : errCode,
+      opts.redactErrorDetails && !opts.allowedRedactedErrorCodes?.includes(errCode)
+        ? statusToCode(result.status)
+        : errCode,
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
     );
