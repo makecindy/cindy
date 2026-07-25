@@ -3671,6 +3671,8 @@
     "pluginSetup": {
       "title": "{{name}} 설정",
       "assessmentReadFailed": "플러그인 설정 상태를 읽을 수 없습니다.",
+      "setupIncomplete": "플러그인 설정이 완료되지 않았습니다.",
+      "setupChangedDuringResume": "호출 재개 중 플러그인 설정이 변경되었습니다. 설정을 완료한 후 다시 시도하세요.",
       "chooseOne": "설정 방법을 하나 선택하세요",
       "restoreAria": "{{name}} 설정 펼치기",
       "minimizeAria": "{{name}} 설정 접기",

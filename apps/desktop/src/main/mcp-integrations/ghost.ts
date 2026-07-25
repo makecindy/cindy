@@ -705,7 +705,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         return {
           ok: false,
           errorCode: 'SETUP_REQUIRED',
-          message: '插件配置在调用恢复前发生变化，请完成设置后重试。',
+          message: t('newChat.pluginSetup.setupChangedDuringResume'),
           setup: finalAssessment,
         };
       }
@@ -729,7 +729,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         try {
           const grantOnlyAssessment = getGhostSetupAssessment(ghostId);
           if (grantOnlyAssessment.state !== 'ready') {
-            return { ok: false, errorCode: 'SETUP_REQUIRED', message: '插件尚未完成配置。', setup: grantOnlyAssessment };
+            return { ok: false, errorCode: 'SETUP_REQUIRED', message: t('newChat.pluginSetup.setupIncomplete'), setup: grantOnlyAssessment };
           }
         } catch {
           return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
@@ -865,7 +865,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           return {
             ok: false,
             errorCode: 'SETUP_REQUIRED',
-            message: '插件配置在调用恢复前发生变化，请完成设置后重试。',
+            message: t('newChat.pluginSetup.setupChangedDuringResume'),
             setup: preDispatchAssessment,
           };
         }
