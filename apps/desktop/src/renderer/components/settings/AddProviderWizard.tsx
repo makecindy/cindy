@@ -83,6 +83,7 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
       'claude-code': {
         baseUrl: 'https://api.anthropic.com',
         models: [
+          { id: 'claude-opus-5', name: 'Claude Opus 5' },
           { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
           { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
         ],

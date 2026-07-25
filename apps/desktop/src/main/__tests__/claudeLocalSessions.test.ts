@@ -372,6 +372,28 @@ describe('parseClaudeCodeMessageLine', () => {
     expect(rows[0].agentMeta).toMatchObject({ model: 'claude-opus-4-8' });
   });
 
+  it('normalizes opus-5 [1m] wire model id to catalog id', () => {
+    const rows = parseClaudeCodeMessageLine(
+      line({
+        type: 'assistant',
+        uuid: 'assistant-opus5',
+        message: {
+          id: 'msg_opus5',
+          model: 'claude-opus-5[1m]',
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+      }),
+      10,
+      sdkSessionId,
+      'claude-sonnet-4-6',
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].agentMeta).toMatchObject({ model: 'claude-opus-5' });
+  });
+
   it('maps Claude task notifications back to tool_result instead of user text', () => {
     const rows = parseClaudeCodeMessageLine(
       line({

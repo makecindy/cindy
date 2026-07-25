@@ -992,6 +992,7 @@ function usageTokenCount(usage: unknown): number {
 function normalizeClaudeModel(raw: string): string {
   const model = raw.trim();
   if (!model) return '';
+  if (model.includes('opus-5')) return 'claude-opus-5';
   if (model.includes('opus-4-8')) return 'claude-opus-4-8';
   if (model.includes('opus-4-7')) return 'claude-opus-4-7';
   if (model.includes('opus-4-6')) return 'claude-opus-4-6';
