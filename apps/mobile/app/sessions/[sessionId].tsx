@@ -322,6 +322,10 @@ import {
   MobileCindyVoiceRunContext,
 } from '@/session/mobileCindyVoiceSession';
 import {
+  currentMobileVoiceUiLanguage,
+  resolveMobileVoiceRefinementSourceLanguage,
+} from '@/session/mobileVoiceLanguage';
+import {
   getMobileVoiceInputHistoryForHost,
   recordMobileVoiceInputHistoryForHost,
   updateMobileVoiceInputHistoryEntryForHost,
@@ -3460,10 +3464,14 @@ export default function SessionScreen() {
           recordHistory: (text) => recordMobileVoiceInputHistoryForHost(deviceId, text),
           updateHistoryEntry: (entryId, text) => updateMobileVoiceInputHistoryEntryForHost(deviceId, entryId, text),
           onRefinementApplied: (input) => {
+            const uiLanguage = currentMobileVoiceUiLanguage();
             voiceDictionaryLearningTrackerRef.current?.captureRefinedInsertion({
               ...input,
-              uiLanguage: 'zh-CN',
-              sourceLanguage: credential.settings?.language,
+              uiLanguage,
+              sourceLanguage: resolveMobileVoiceRefinementSourceLanguage(
+                credential.settings?.language,
+                uiLanguage,
+              ),
             });
           },
         });

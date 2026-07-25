@@ -121,6 +121,7 @@ describe('mobileVoiceInput', () => {
         voiceInputHistory: ['桌面较新的术语', '桌面较早的术语'],
       },
     }), {
+      uiLanguage: 'zh-CN',
       localVoiceInputHistory: ['手机最新术语', '手机较早术语'],
       refinementContext: {
         selectionBefore: '当前输入框前文',
@@ -148,6 +149,23 @@ describe('mobileVoiceInput', () => {
     expect(history.indexOf('- 桌面较早的术语')).toBeLessThan(history.indexOf('- 桌面较新的术语'));
     expect(history.indexOf('- 桌面较新的术语')).toBeLessThan(history.indexOf('- 手机较早术语'));
     expect(history.indexOf('- 手机较早术语')).toBeLessThan(history.indexOf('- 手机最新术语'));
+  });
+
+  it('uses the current UI language for refinement when ASR language is auto', () => {
+    const context = buildMobileVoiceRefinementContext(storedCredential({
+      settings: {
+        language: 'auto',
+        refinementEnabled: true,
+        playInteractionSound: true,
+      },
+    }), {
+      uiLanguage: 'ja',
+    });
+
+    expect(context).toMatchObject({
+      uiLanguage: 'ja',
+      sourceLanguage: 'ja',
+    });
   });
 
   it('normalizes the desktop transcribe result before inserting into the draft', () => {

@@ -2,6 +2,10 @@ import { apiFetchRaw } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import {
+  currentMobileVoiceUiLanguage,
+  resolveMobileVoiceRefinementSourceLanguage,
+} from '@/session/mobileVoiceLanguage';
+import {
   DictationRefiner,
   extractJsonStringFieldSnapshot,
   type DictationRefinementContext,
@@ -222,6 +226,7 @@ export async function uploadMobileVoiceRecording(
 export function buildMobileVoiceRefinementContext(
   credential: StoredMobileVoiceCredential,
   options: {
+    uiLanguage?: string;
     sourceLanguage?: string;
     refinementContext?: DictationRefinementContext;
     localVoiceInputHistory?: readonly string[];
@@ -230,9 +235,18 @@ export function buildMobileVoiceRefinementContext(
   const settings = credential.settings;
   const dictionaryEntries = settings?.dictionaryEntries ?? [];
   const history = mergeMobileVoiceHistories(settings?.voiceInputHistory, options.localVoiceInputHistory);
+  const uiLanguage = options.refinementContext?.uiLanguage?.trim()
+    || options.uiLanguage?.trim()
+    || currentMobileVoiceUiLanguage();
+  const sourceLanguage = resolveMobileVoiceRefinementSourceLanguage(
+    options.refinementContext?.sourceLanguage
+      ?? options.sourceLanguage
+      ?? settings?.language,
+    uiLanguage,
+  );
   const base: DictationRefinementContext = {
-    uiLanguage: 'zh-CN',
-    sourceLanguage: options.sourceLanguage ?? resolveSyncedSourceLanguage(settings?.language),
+    uiLanguage,
+    sourceLanguage,
     userRefinementInstructions: settings?.refinementInstructions?.trim() || undefined,
     userDictionary: formatMobileVoiceDictionary(dictionaryEntries) || undefined,
     dictionaryAliasHints: dictionaryEntries.map((entry) => ({
@@ -245,8 +259,8 @@ export function buildMobileVoiceRefinementContext(
   return {
     ...base,
     ...options.refinementContext,
-    uiLanguage: options.refinementContext?.uiLanguage ?? base.uiLanguage,
-    sourceLanguage: options.refinementContext?.sourceLanguage ?? base.sourceLanguage,
+    uiLanguage,
+    sourceLanguage,
   };
 }
 
@@ -618,12 +632,6 @@ function parseJsonObject(text: string): unknown {
 
 function hasReadableStreamBody(value: unknown): value is ReadableStream<Uint8Array> {
   return !!value && typeof (value as { getReader?: unknown }).getReader === 'function';
-}
-
-function resolveSyncedSourceLanguage(language: string | undefined): string | undefined {
-  const value = language?.trim();
-  if (!value || value.toLowerCase() === 'auto') return undefined;
-  return value;
 }
 
 function formatMobileVoiceDictionary(

@@ -11,6 +11,7 @@ import {
   assertMobileVoiceCredentialShape,
   type StoredMobileVoiceCredential,
 } from '@/session/mobileVoiceCredentialStore';
+import { resolveMobileVoiceAsrLanguage } from '@/session/mobileVoiceLanguage';
 
 const VOICE_SESSION_REQUEST_TIMEOUT_MS = 10_000;
 const VOICE_REFINE_WARMUP_TIMEOUT_MS = 10_000;
@@ -43,6 +44,7 @@ type VoiceSessionResponse = {
 /** Per-dictation holder for one-shot ASR tickets and the owning refine session. */
 export class MobileCindyVoiceRunContext {
   private latestSessionId: string | null = null;
+  private readonly sourceLanguage: string | undefined;
   /**
    * 旧 voice-server 不认识 'auto' 标记时置位:会话分配已降级为无润色,后续
    * refine/warmup 直接快速失败(原始 ASR 文本保留),听写本身不受影响。
@@ -53,9 +55,11 @@ export class MobileCindyVoiceRunContext {
     private readonly getAccessToken: AccessTokenProvider,
     private readonly refreshAccessToken: AccessTokenProvider,
     private readonly apiFetch: AuthenticatedApiFetch,
-    private readonly sourceLanguage: string | undefined,
+    sourceLanguage: string | undefined,
     private readonly refinerProvider: string | undefined,
-  ) {}
+  ) {
+    this.sourceLanguage = resolveMobileVoiceAsrLanguage(sourceLanguage);
+  }
 
   async createAsrConnection(asrProvider: string): Promise<{
     websocketUrl: string;
@@ -243,7 +247,7 @@ export function createMobileCindyVoiceCredential(hostDeviceId: string): StoredMo
     refiner: { ...CINDY_MANAGED_REFINER_CHAIN[0] },
     refinerProviderChain: CINDY_MANAGED_REFINER_CHAIN.map((item) => ({ ...item })),
     settings: {
-      language: 'zh-CN',
+      language: 'auto',
       refinementEnabled: true,
       playInteractionSound: true,
     },
