@@ -114,11 +114,29 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
   }
 
   // ── Phase 2: pre-async (serial, awaited before concurrent teardown) ─────
+  // 每个 disposer 单独设超时: pre-async 是串行 await, 某个 disposer 卡死
+  // (返回永不 settle 的 Promise) 会无限阻塞整条 shutdown, app.exit() 永远
+  // 到不了。超时就 log 并继续 —— 与 async 阶段同样 "log + proceed" 语义,
+  // 保证退出始终可推进; 个体任务的取消/降级由 disposer 自己负责。
   for (const d of registry.filter((x) => x.phase === 'pre-async')) {
+    let timer: NodeJS.Timeout | undefined;
     try {
-      await d.fn();
+      const timedOut = new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), timeoutMs);
+      });
+      const outcome = await Promise.race([
+        Promise.resolve()
+          .then(() => d.fn())
+          .then(() => 'done' as const),
+        timedOut,
+      ]);
+      if (outcome === 'timeout') {
+        log.warn(`pre-async disposer "${d.name}" timed out after ${timeoutMs}ms — proceeding`);
+      }
     } catch (err) {
       log.error(`pre-async disposer "${d.name}" threw`, err);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 

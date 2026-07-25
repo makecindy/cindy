@@ -34,7 +34,9 @@ describe('Windows startup PowerShell compatibility', () => {
 
   it('awaits orphan ownership scanning before any concurrent teardown', () => {
     const bootstrap = read('src/main/bootstrap-electron.ts');
-    const reaperRegistration = bootstrap.indexOf("onQuit('reap-claude-orphans'");
+    // Match the disposer name literal rather than the whole onQuit(...) call so
+    // the assertion survives prettier wrapping the registration across lines.
+    const reaperRegistration = bootstrap.indexOf("'reap-claude-orphans'");
     const makerRegistration = bootstrap.indexOf("onQuit('shutdown-maker'");
 
     expect(reaperRegistration).toBeGreaterThan(-1);

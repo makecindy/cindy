@@ -897,7 +897,11 @@ authManager.setAuthSessionTeardown(teardownAuthAccountBoundary);
 
 // Fire-and-forget startup cleanup: Windows enumeration is an async native
 // snapshot, so it neither blocks the first frame nor launches PowerShell.
-void reapClaudeOrphans().catch((err) => {
+// reapCurrentSession:false — this pass runs concurrently with bootstrap, so it
+// must only reap historical orphans (dead parent) and never a claude.exe whose
+// parent is us: that would be a session launched moments after cold start, not
+// an orphan. Quit-time cleanup is the one that reaps live current-session trees.
+void reapClaudeOrphans({ reapCurrentSession: false }).catch((err) => {
   // Defensive: reapClaudeOrphans already catches its own scan/kill errors.
   // This only fires on truly unexpected failures and must never abort bootstrap.
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
@@ -5453,7 +5457,11 @@ onQuit(
 // Pre-async 阶段: 串行 await。Claude ownership snapshot + tree reap 必须在任何
 // 并发 teardown 之前完成；否则 proxy / maker 先关会让直接 Claude 进程退出并丢失
 // 可证明归属的 PPID 链。
-onQuit('reap-claude-orphans', () => reapClaudeOrphans().then(() => undefined), 'pre-async');
+onQuit(
+  'reap-claude-orphans',
+  () => reapClaudeOrphans({ reapCurrentSession: true }).then(() => undefined),
+  'pre-async',
+);
 
 // Async 阶段: 并发跑, 6s 超时兜底。
 //   - shutdown-maker:       Layer 1 关 sessions → Layer 2 dispose agents (Codex

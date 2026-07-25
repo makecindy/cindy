@@ -309,6 +309,89 @@ describe('reapClaudeOrphans', () => {
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
+  it('startup pass skips current-session children but still reaps historical orphans', async () => {
+    const selfChildPid = 111;
+    const historicalPid = 222;
+    const execFileSync = vi.fn();
+    vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid === 99999) {
+        const err = new Error('missing') as NodeJS.ErrnoException;
+        err.code = 'ESRCH';
+        throw err;
+      }
+      return true;
+    }) as typeof process.kill);
+    const { reapClaudeOrphans } = await importReaper({
+      platform: 'win32',
+      execFileSync,
+      windowsProcesses: [
+        {
+          name: 'claude.exe',
+          pid: selfChildPid,
+          ppid: process.pid,
+          commandLine: 'C:\\tools\\claude.exe',
+        },
+        {
+          name: 'claude.exe',
+          pid: historicalPid,
+          ppid: 99999,
+          commandLine: 'C:\\Users\\me\\AppData\\Roaming\\xdt-maker\\claude-code\\claude.exe',
+        },
+      ],
+    });
+
+    const result = await reapClaudeOrphans({ reapCurrentSession: false });
+
+    expect(result.killedSelfSpawned).toBe(0);
+    expect(result.killedHistoricalOrphans).toBe(1);
+    expect(execFileSync).not.toHaveBeenCalledWith(
+      'taskkill',
+      ['/T', '/F', '/PID', String(selfChildPid)],
+      expect.anything(),
+    );
+    expect(execFileSync).toHaveBeenCalledWith(
+      'taskkill',
+      ['/T', '/F', '/PID', String(historicalPid)],
+      expect.objectContaining({ stdio: 'ignore' }),
+    );
+  });
+
+  it('serializes native snapshots so a timed-out scan cannot poison the next', async () => {
+    vi.useFakeTimers();
+    const callbacks: Array<(processes: WindowsProcessRow[]) => void> = [];
+    const getAllProcesses = vi.fn((cb: (processes: WindowsProcessRow[]) => void) => {
+      callbacks.push(cb);
+    });
+    const flush = async () => {
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    };
+    const { reapClaudeOrphans } = await importReaper({
+      platform: 'win32',
+      getAllProcesses,
+    });
+
+    // Startup scan issues one native call whose callback stays pending past 1s.
+    const startup = reapClaudeOrphans({ reapCurrentSession: false });
+    await flush();
+    expect(getAllProcesses).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(startup).resolves.toEqual(expect.objectContaining({ scannedTotal: 0 }));
+
+    // Quit scan begins while the first native call is STILL pending: it must not
+    // issue a second call yet (no coalescing onto the stale in-flight request).
+    const quit = reapClaudeOrphans({ reapCurrentSession: true });
+    await flush();
+    expect(getAllProcesses).toHaveBeenCalledTimes(1);
+
+    // Only after the first native call drains may the quit scan enumerate afresh.
+    callbacks[0]([]);
+    await flush();
+    expect(getAllProcesses).toHaveBeenCalledTimes(2);
+
+    callbacks[1]([]);
+    await expect(quit).resolves.toEqual(expect.objectContaining({ scannedTotal: 0 }));
+  });
+
   it('does not throw when killing fails', async () => {
     const execFileSync = vi.fn(() => {
       throw new Error('already gone');

@@ -127,6 +127,24 @@ describe('cleanupLegacyDevShortcuts', () => {
     expect(files.has(unrelatedShortcut)).toBe(true);
   });
 
+  it('treats whitespace-only arguments as argumentless and still removes the link', async () => {
+    const whitespaceArgsShortcut = path.join(START_MENU, 'Electron.lnk');
+    const { deps, files, removed } = makeHarness({
+      dirs: { [START_MENU]: [dirEntry('Electron.lnk', 'file')] },
+      files: {
+        [whitespaceArgsShortcut]: {
+          target: 'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
+          args: '   ',
+        },
+      },
+    });
+
+    await cleanupLegacyDevShortcuts(deps);
+
+    expect(files.has(whitespaceArgsShortcut)).toBe(false);
+    expect(removed).toEqual([whitespaceArgsShortcut]);
+  });
+
   it('skips non-Windows platforms before touching the filesystem', async () => {
     const { deps } = makeHarness();
     deps.platform = 'darwin';

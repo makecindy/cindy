@@ -227,7 +227,11 @@ async function collectShortcutFiles(
 function isArgumentlessDevElectronShortcut(details: LegacyShortcutDetails): boolean {
   if (typeof details.target !== 'string' || details.target.length === 0) return false;
   const target = details.target.replace(/\//g, '\\').toLowerCase();
-  return target.endsWith('\\node_modules\\electron\\dist\\electron.exe') && !details.args;
+  // Whitespace-only arguments are equivalent to no arguments — a `.lnk` may store
+  // a trailing space or empty COMMAND_LINE_ARGUMENTS, and the legacy dev links we
+  // target carry none. Trim before deciding so those are still recognized.
+  const hasArgs = (details.args ?? '').trim().length > 0;
+  return target.endsWith('\\node_modules\\electron\\dist\\electron.exe') && !hasArgs;
 }
 
 async function runCleanup(

@@ -150,6 +150,24 @@ describe('runQuitDisposers', () => {
     expect(elapsed).toBeLessThan(200);
   });
 
+  it('pre-async phase honors per-disposer timeout — later phases still run', async () => {
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    const log: string[] = [];
+
+    // 永不 resolve 的 pre-async disposer 不能无限阻塞整条 shutdown。
+    onQuit('hang-pre', () => new Promise(() => { /* never */ }), 'pre-async');
+    onQuit('after-pre', () => { log.push('after-pre'); }, 'pre-async');
+    onQuit('post', () => { log.push('post'); }, 'post-async');
+
+    const start = Date.now();
+    await runQuitDisposers(50);
+    const elapsed = Date.now() - start;
+
+    // 卡住的 disposer 超时后, 后续 pre-async 与 post-async 仍然执行。
+    expect(log).toEqual(['after-pre', 'post']);
+    expect(elapsed).toBeLessThan(400);
+  });
+
   it('rejected async disposer does not break the chain', async () => {
     const { onQuit, runQuitDisposers } = await freshLifecycle();
     let postRan = false;

@@ -6,7 +6,7 @@
  *   abort path only terminates the direct `claude` child. On Windows that kill
  *   is a Win32 TerminateProcess call: it does not propagate to grandchildren,
  *   so stdio MCP servers started below `claude.exe` can survive as orphaned
- *   `node` processes after xdt-maker quits, restarts, or crashes.
+ *   `node` processes after Cindy quits, restarts, or crashes.
  *
  * Timing trap:
  *   On a normal quit, this must run before maker-core asks the SDK to abort the
@@ -18,12 +18,15 @@
  *
  * Safety guarantees:
  *   - Current-session cleanup only targets `claude` processes whose parent is
- *     the current Electron main process.
- *   - Historical cleanup requires both an xdt-maker bundled Claude binary path
- *     marker and a dead parent, so an active second xdt-maker instance is left
- *     alone.
+ *     the current Electron main process, and only at quit time — the startup
+ *     pass (`reapCurrentSession: false`) never touches them, so a session
+ *     launched moments after a cold start is not misread as an orphan.
+ *   - Historical cleanup requires both a Cindy-bundled Claude binary path marker
+ *     (matching every current + historical userData dir name, plus dev-checkout
+ *     `apps/claude-code-bin/` binaries) and a dead parent, so an active second
+ *     Cindy instance is left alone.
  *   - External Claude installs (for example `/usr/local/bin/claude`) do not
- *     contain the xdt-maker marker and are not historical-orphan candidates.
+ *     contain the Cindy marker and are not historical-orphan candidates.
  *   - Scan / kill failures are best-effort and never block app startup or quit.
  *   - Windows enumeration uses the Win32 Tool Help snapshot API through a
  *     native N-API module. It must not launch PowerShell during app startup:
@@ -97,15 +100,42 @@ interface ProcessRow {
 
 const WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS = 1000;
 
+// Serializes native enumerations. @vscode/windows-process-tree keeps a single
+// module-level in-progress request: issuing getAllProcesses while a prior call is
+// still running coalesces our callback onto that in-flight result. If a startup
+// scan hits WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS and returns [] while its native
+// call is still pending, a later quit-time scan could otherwise receive that
+// stale snapshot — missing a claude.exe spawned after startup, right before
+// `shutdown-maker` tears down transport. Chaining guarantees a fresh native
+// enumeration is issued only after the previous one has actually drained.
+let nativeSnapshotChain: Promise<unknown> = Promise.resolve();
+
+function runNativeProcessSnapshot(): Promise<IProcessInfo[]> {
+  return new Promise<IProcessInfo[]>((resolve, reject) => {
+    try {
+      getAllProcesses(resolve, ProcessDataFlag.CommandLine);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+}
+
 async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
-  return new Promise((resolve, reject) => {
+  // Issue this native call only after any previous enumeration drains. The chain
+  // advances when the native callback fires (or errors), NOT when the timeout
+  // below resolves, so a timed-out scan can never leave a request in flight that
+  // poisons the next one.
+  const nativeCall = nativeSnapshotChain.then(
+    () => runNativeProcessSnapshot(),
+    () => runNativeProcessSnapshot(),
+  );
+  nativeSnapshotChain = nativeCall.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return new Promise<IProcessInfo[]>((resolve) => {
     let settled = false;
-    const finish = (processes: IProcessInfo[]): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolve(processes);
-    };
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -115,13 +145,23 @@ async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
       resolve([]);
     }, WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS);
 
-    try {
-      getAllProcesses(finish, ProcessDataFlag.CommandLine);
-    } catch (err) {
-      settled = true;
-      clearTimeout(timeout);
-      reject(err instanceof Error ? err : new Error(String(err)));
-    }
+    nativeCall.then(
+      (processes) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(processes);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        log.debug('windows process snapshot failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        resolve([]);
+      },
+    );
   });
 }
 
@@ -272,11 +312,27 @@ function killProcessTree(pid: number, childrenByParent: Map<number, number[]>): 
   }
 }
 
+export interface ReapOptions {
+  /**
+   * Kill Claude trees whose parent is the current Electron process.
+   *
+   * Quit-time cleanup sets this true. The startup pass must leave it false: it
+   * runs fire-and-forget while bootstrap continues, so its async snapshot can
+   * complete after a session was launched (interrupted-turn resume, scheduler,
+   * a fast user action). Such a fresh `claude.exe` has `ppid === process.pid`
+   * and would be misread as a self-spawned orphan and killed even though it is a
+   * legitimate, live current session. Historical orphans (dead parent) are still
+   * reaped at startup regardless of this flag.
+   */
+  reapCurrentSession?: boolean;
+}
+
 /**
  * Reaps Claude Code process trees owned by this app instance, plus historical
  * Cindy-bundled Claude processes whose parent has already died.
  */
-export async function reapClaudeOrphans(): Promise<ReaperResult> {
+export async function reapClaudeOrphans(options: ReapOptions = {}): Promise<ReaperResult> {
+  const reapCurrentSession = options.reapCurrentSession ?? true;
   const start = Date.now();
   let scan: ScanResult = { rows: [], childrenByParent: new Map() };
 
@@ -295,7 +351,11 @@ export async function reapClaudeOrphans(): Promise<ReaperResult> {
     if (proc.pid === process.pid) continue;
 
     if (proc.ppid === process.pid) {
-      if (killProcessTree(proc.pid, scan.childrenByParent)) killedSelfSpawned += 1;
+      // Only quit-time cleanup reaps live current-session children; the startup
+      // pass must not race a freshly launched session (see ReapOptions).
+      if (reapCurrentSession && killProcessTree(proc.pid, scan.childrenByParent)) {
+        killedSelfSpawned += 1;
+      }
       continue;
     }
 
