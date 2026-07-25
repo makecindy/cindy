@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 import i18n from '@/i18n';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
-import type { PendingPluginSetup } from '@/lib/makerChatStore';
+import { parsePendingPluginSetup, type PendingPluginSetup } from '@/lib/makerChatStore';
 
 const pending: PendingPluginSetup = {
   requestId: 'setup-1',
@@ -147,6 +147,21 @@ afterEach(() => {
 });
 
 describe('PluginSetupPrompt', () => {
+  it('accepts known setup error codes and rejects unknown codes at the Renderer boundary', () => {
+    expect(
+      parsePendingPluginSetup({
+        ...pending,
+        steps: [{ ...pending.steps[0], phase: 'failed', errorCode: 'AUTH_FAILED' }],
+      })?.steps[0].errorCode,
+    ).toBe('AUTH_FAILED');
+    expect(
+      parsePendingPluginSetup({
+        ...pending,
+        steps: [{ ...pending.steps[0], phase: 'failed', errorCode: 'PROVIDER_RAW_ERROR' }],
+      }),
+    ).toBeNull();
+  });
+
   it('renders Host identity and Agent text as plain text, then sends a run_action command', () => {
     const onCommand = vi.fn();
     render(
@@ -239,6 +254,32 @@ describe('PluginSetupPrompt', () => {
     expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it('localizes stable error codes and ignores legacy Main copy when both are present', () => {
+    render(
+      <PluginSetupPrompt
+        pending={{
+          ...pending,
+          steps: [
+            {
+              ...pending.steps[0],
+              phase: 'failed',
+              errorCode: 'TIMEOUT',
+              errorMessage: '等待超时',
+            },
+          ],
+        }}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Setup timed out. Try again.')).toBeTruthy();
+    expect(screen.queryByText('等待超时')).toBeNull();
   });
 
   it('hides actions after a partially satisfied setup is cancelled', () => {

@@ -3647,7 +3647,19 @@
       "retry": "Retry",
       "saveConfiguration": "Save Configuration",
       "saving": "Saving…",
-      "assessmentReadFailed": "Couldn't refresh the setup status. Please try again.",
+      "error": {
+        "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
+        "ACTION_STALE": "This setup changed. Choose the setup action again.",
+        "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
+        "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
+        "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
+        "SAVE_FAILED": "Couldn't save this configuration. Try again.",
+        "WINDOW_CLOSED": "The window that started setup was closed. Return to the session and try again.",
+        "TARGET_UNAVAILABLE": "This plugin is disabled, uninstalled, or unavailable. Check the plugin and try again.",
+        "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
+        "TIMEOUT": "Setup timed out. Try again."
+      },
       "hostRequirements": {
         "modelProvider": {
           "label": "AI Model Service",

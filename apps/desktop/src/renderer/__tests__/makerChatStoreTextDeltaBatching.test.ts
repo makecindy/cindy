@@ -117,6 +117,14 @@ let onStatusChanged: ((data: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
 let onInteractionDismissed: ((data: unknown) => void) | undefined;
+const getPendingInteractions = vi.fn<
+  (sessionId: string) => Promise<
+    Array<{
+      request: { kind: string; requestId: string; [key: string]: unknown };
+      persistId?: string;
+    }>
+  >
+>(async () => []);
 
 const input = {
   getProjection: vi.fn(async (sessionId: string) => projection(sessionId)),
@@ -195,6 +203,7 @@ function installElectronBridge(): void {
         send: vi.fn(async () => ({ accepted: true })),
         resolveInteraction: vi.fn(async () => {}),
         submitPluginSetupInline: vi.fn(async () => {}),
+        getPendingInteractions,
         steer: vi.fn(async () => true),
         generateTitle: vi.fn(async () => ({ title: 't' })),
         abortSession: vi.fn(async () => {}),
@@ -646,6 +655,103 @@ describe('makerChatStore text delta batching', () => {
         expectedRevision: 3,
       }),
     );
+  });
+
+  it('clears stale plugin_setup cards and in-flight state from an authoritative empty snapshot', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    makerChatStore.setPluginSetupViewerState(SESSION_ID, 'minimized');
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-1',
+      'run_action',
+      'oauth:google-account',
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight).not.toBeNull();
+
+    getPendingInteractions.mockResolvedValueOnce([]);
+    await makerChatStore.reconcilePendingInteractions(SESSION_ID);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup).toBeNull();
+    expect(snapshot.pendingPluginSetupQueue).toEqual([]);
+    expect(snapshot.pluginSetupCommandInFlight).toBeNull();
+    expect(snapshot.pluginSetupViewerState).toBe('expanded');
+  });
+
+  it('promotes the surviving queued plugin_setup from an authoritative snapshot', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    makerChatStore.setPluginSetupViewerState(SESSION_ID, 'minimized');
+
+    getPendingInteractions.mockResolvedValueOnce([
+      {
+        request: {
+          ...pluginSetupRequest(3),
+          requestId: 'plugin-setup-2',
+          ghost: {
+            id: 'second-plugin',
+            name: 'Second Plugin',
+          },
+        },
+      },
+    ]);
+    await makerChatStore.reconcilePendingInteractions(SESSION_ID);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-2',
+        revision: 3,
+      }),
+    );
+    expect(snapshot.pendingPluginSetupQueue).toEqual([]);
+    expect(snapshot.pluginSetupViewerState).toBe('expanded');
+  });
+
+  it('preserves plugin_setup state when the authoritative snapshot fetch fails', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    makerChatStore.setPluginSetupViewerState(SESSION_ID, 'minimized');
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-1',
+      'run_action',
+      'oauth:google-account',
+    );
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+
+    getPendingInteractions.mockRejectedValueOnce(new Error('device link disconnected'));
+    await expect(makerChatStore.reconcilePendingInteractions(SESSION_ID)).rejects.toThrow(
+      'device link disconnected',
+    );
+
+    const after = makerChatStore.getSnapshot(SESSION_ID);
+    expect(after.pendingPluginSetup).toBe(before.pendingPluginSetup);
+    expect(after.pendingPluginSetupQueue).toBe(before.pendingPluginSetupQueue);
+    expect(after.pluginSetupCommandInFlight).toBe(before.pluginSetupCommandInFlight);
+    expect(after.pluginSetupViewerState).toBe('minimized');
   });
 
   it('sends the independent plugin_setup decision and waits for a newer snapshot', async () => {

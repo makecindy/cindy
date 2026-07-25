@@ -209,6 +209,8 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
       steps: [
         {
           ...snapshot().steps[0],
+          phase: 'failed',
+          errorCode: 'SAVE_FAILED',
           action: {
             id: 'inline_form:opaque',
             kind: 'inline_form',
@@ -234,6 +236,10 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
     const remote = sanitizeGhostSetupSnapshotForRemote(local);
 
     expect(remote).not.toBe(local);
+    expect(remote.steps[0]).toMatchObject({
+      phase: 'failed',
+      errorCode: 'SAVE_FAILED',
+    });
     expect(remote.steps[0].action).toEqual({
       id: 'inline_form:opaque',
       kind: 'inline_form',
@@ -256,6 +262,13 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
         ? local.steps[0].action.form.fields[0].externalLink
         : undefined,
     ).toEqual({ url: 'https://desktop-only.example/keys' });
+  });
+
+  it('drops unknown error codes at the remote transport boundary', () => {
+    const local = snapshot();
+    (local.steps[0] as { errorCode?: string }).errorCode = 'PROVIDER_RAW_ERROR';
+
+    expect(sanitizeGhostSetupSnapshotForRemote(local).steps[0]).not.toHaveProperty('errorCode');
   });
 
   it('preserves non-plugin interaction requests by identity', () => {

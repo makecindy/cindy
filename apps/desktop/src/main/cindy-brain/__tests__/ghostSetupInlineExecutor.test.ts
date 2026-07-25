@@ -5,6 +5,7 @@ import type {
   GhostSetupAllowedAction,
   GhostSetupAssessment,
 } from '../../../shared/ghost';
+import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../../shared/ghost';
 import { executeGhostSetupInlineSubmission } from '../ghostSetupInlineExecutor';
 
 const action: Extract<GhostSetupAllowedAction, { kind: 'inline_form' }> = {
@@ -193,5 +194,27 @@ describe('executeGhostSetupInlineSubmission', () => {
       ).toBe(false);
     }
     expect(getAssessment).not.toHaveBeenCalled();
+  });
+
+  it('applies the Secret length limit to the trimmed value that is stored', () => {
+    const storeSecret = vi.fn(() => true);
+    const value = `  ${'x'.repeat(GHOST_SECRET_VALUE_MAX_CHARS)}  `;
+
+    expect(
+      executeGhostSetupInlineSubmission(
+        {
+          getAssessment: () => assessment(),
+          getManifest: () => manifest(),
+          storeSecret,
+          emitChange: vi.fn(),
+        },
+        { ghostId: 'demo', action, value },
+      ),
+    ).toEqual({ ok: true });
+    expect(storeSecret).toHaveBeenCalledWith(
+      'demo',
+      'api_key',
+      'x'.repeat(GHOST_SECRET_VALUE_MAX_CHARS),
+    );
   });
 });

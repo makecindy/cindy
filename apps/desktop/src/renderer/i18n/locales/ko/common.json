@@ -3646,7 +3646,19 @@
       "retry": "다시 시도",
       "saveConfiguration": "설정 저장",
       "saving": "저장 중…",
-      "assessmentReadFailed": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
+      "error": {
+        "ACTION_FAILED": "설정 작업을 완료할 수 없습니다. 다시 시도하세요.",
+        "ACTION_STALE": "설정 내용이 변경되었습니다. 설정 작업을 다시 선택하세요.",
+        "AUTH_CANCELLED": "인증이 취소되었습니다. 필요한 경우 다시 인증하세요.",
+        "AUTH_FAILED": "인증을 완료할 수 없습니다. 다시 시도하세요.",
+        "INLINE_INVALID": "설정 내용이 올바르지 않습니다. 확인한 후 다시 시도하세요.",
+        "INLINE_UNAVAILABLE": "이 Cindy 버전에서는 채팅에서 이 설정을 저장할 수 없습니다. Cindy를 업데이트한 후 다시 시도하세요.",
+        "SAVE_FAILED": "설정을 저장할 수 없습니다. 다시 시도하세요.",
+        "WINDOW_CLOSED": "설정을 시작한 창이 닫혔습니다. 세션으로 돌아가 다시 시도하세요.",
+        "TARGET_UNAVAILABLE": "플러그인이 비활성화되었거나 제거되었거나 사용할 수 없습니다. 플러그인 상태를 확인한 후 다시 시도하세요.",
+        "ASSESSMENT_FAILED": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
+        "TIMEOUT": "설정 대기 시간이 초과되었습니다. 다시 시도하세요."
+      },
       "hostRequirements": {
         "modelProvider": {
           "label": "AI 모델 서비스",

@@ -14,11 +14,15 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { GhostSetupEnsureResult } from '../../cindy-brain/ghostSetupCoordinator';
+import type {
+  GhostSetupEnsureRequest,
+  GhostSetupEnsureResult,
+} from '../../cindy-brain/ghostSetupCoordinator';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
 const prefsFile = () => path.join(tmpUserData, 'ghost-workdir-prefs.json');
 const logWarnMock = vi.fn();
+const grantAttachmentsMock = vi.fn();
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
 vi.mock('../../appSessionState.js', () => ({
@@ -40,10 +44,12 @@ const setupAssessmentMock = vi.fn((_ghostId: string) => ({
   revision: 0,
   groups: [],
 }));
-const ensureReadyMock = vi.fn(async (): Promise<GhostSetupEnsureResult> => ({
-  ok: true as const,
-  assessment: { state: 'ready' as const, revision: 0, groups: [] },
-}));
+const ensureReadyMock = vi.fn(
+  async (_request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> => ({
+    ok: true as const,
+    assessment: { state: 'ready' as const, revision: 0, groups: [] },
+  }),
+);
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: listMock }),
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
@@ -59,7 +65,7 @@ vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
 // 以下依赖在本测试路径上不会被触达,但 import 副作用重,一律断开。
 vi.mock('../../cindy-brain/attachmentGrant.js', () => ({
   GrantPolicyError: class extends Error {},
-  grantAttachmentsToGhost: vi.fn(),
+  grantAttachmentsToGhost: grantAttachmentsMock,
   MAX_GRANT_ATTACHMENTS: 4,
   MAX_GRANT_ONLY_ATTACHMENTS: 32,
 }));
@@ -121,6 +127,7 @@ beforeEach(() => {
     ok: true,
     assessment: { state: 'ready', revision: 0, groups: [] },
   });
+  grantAttachmentsMock.mockReset();
   logWarnMock.mockClear();
   clearAllPrefs();
 });
@@ -219,6 +226,39 @@ describe('ghost_call 兜底拒绝', () => {
       errorCode: 'INTERNAL',
       message: '插件配置状态读取失败',
     });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('grant_only 在任何附件授权副作用前完成 setup gate，且忽略 tool', async () => {
+    ensureReadyMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'SETUP_REQUIRED',
+      message: '插件尚未完成设置',
+      setup: {
+        state: 'required',
+        revision: 1,
+        groups: [],
+      },
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'not-a-real-tool',
+      args: {},
+      attachments: ['/tmp/unconfigured.png'],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 's1',
+        ghostId: 'art',
+        workingDir: WORKDIR,
+      }),
+    );
+    expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 });

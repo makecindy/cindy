@@ -6,8 +6,12 @@
  * settings write, then broadcasts full snapshots with increasing revisions.
  */
 
-import type { GhostSetupAllowedAction, GhostSetupStepPhase } from '../../shared/ghost.js';
-import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost.js';
+import type {
+  GhostSetupAllowedAction,
+  GhostSetupErrorCode,
+  GhostSetupStepPhase,
+} from '../../shared/ghost.js';
+import { GHOST_SECRET_VALUE_MAX_CHARS, isGhostSetupErrorCode } from '../../shared/ghost.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 
 export interface GhostSetupInteractionStep {
@@ -19,6 +23,9 @@ export interface GhostSetupInteractionStep {
   description: string;
   phase: GhostSetupStepPhase;
   action?: GhostSetupAllowedAction;
+  /** Stable cross-locale failure identity; Renderer owns user-facing copy. */
+  errorCode?: GhostSetupErrorCode;
+  /** Legacy controlled-Desktop compatibility only. New Main snapshots omit it. */
   errorMessage?: string;
 }
 
@@ -278,6 +285,7 @@ export function sanitizeGhostSetupSnapshotForRemote(
       title: step.title,
       description: step.description,
       phase: step.phase,
+      ...(isGhostSetupErrorCode(step.errorCode) ? { errorCode: step.errorCode } : {}),
       ...(step.errorMessage !== undefined ? { errorMessage: step.errorMessage } : {}),
       ...(step.action
         ? {

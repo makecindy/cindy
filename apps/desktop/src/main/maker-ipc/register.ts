@@ -141,7 +141,6 @@ import {
 } from '../localDb/orcaTeamStore.js';
 import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
 import { desktopClaudeAuthAdapter, desktopCodexAuthAdapter, readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
 import { syncExternalCodexSessionFromDesktop } from '../maker-host/codex-local-sessions.js';
@@ -1188,7 +1187,7 @@ initGhostSetupCoordinator({
         message: '用户已在当前工作目录停用该插件;不要重试。',
       };
     }
-    if (!(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+    if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
       return {
         ok: false,
         errorCode: 'TOOL_NOT_FOUND',
@@ -1216,7 +1215,6 @@ initGhostSetupCoordinator({
     }),
   executeInlineAction: ({ sessionId, ghostId, action, value }) =>
     executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
-  assessmentReadFailureMessage: () => t('newChat.pluginSetup.assessmentReadFailed'),
   logger: log,
 });
 

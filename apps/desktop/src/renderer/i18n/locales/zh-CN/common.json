@@ -3646,7 +3646,19 @@
       "retry": "重试",
       "saveConfiguration": "保存配置",
       "saving": "保存中…",
-      "assessmentReadFailed": "暂时无法刷新配置状态，请重试。",
+      "error": {
+        "ACTION_FAILED": "设置操作未完成，请重试。",
+        "ACTION_STALE": "设置已更新，请重新选择配置操作。",
+        "AUTH_CANCELLED": "授权已取消，您可以重新授权。",
+        "AUTH_FAILED": "未能完成授权，请重试。",
+        "INLINE_INVALID": "配置内容无效，请检查后重试。",
+        "INLINE_UNAVAILABLE": "当前版本无法在对话中保存此配置，请更新 Cindy 后重试。",
+        "SAVE_FAILED": "未能保存配置，请重试。",
+        "WINDOW_CLOSED": "发起设置的窗口已关闭，请回到该会话重试。",
+        "TARGET_UNAVAILABLE": "插件已停用、卸载或不可用，请检查插件状态后重试。",
+        "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
+        "TIMEOUT": "等待设置超时，请重试。"
+      },
       "hostRequirements": {
         "modelProvider": {
           "label": "AI 模型服务",

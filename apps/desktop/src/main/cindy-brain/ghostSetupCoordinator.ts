@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   GhostSetupAllowedAction,
   GhostSetupAssessment,
+  GhostSetupErrorCode,
   GhostSetupPlan,
 } from '../../shared/ghost.js';
 import type { GhostSetupChangeBus } from './ghostSetupChangeBus.js';
@@ -48,12 +49,19 @@ export type GhostSetupTargetValidation =
       message: string;
     };
 
-export interface GhostSetupActionResult {
-  ok: boolean;
-  /** Settings actions return immediately and then wait for a committed write. */
-  waitingExternal?: boolean;
-  message?: string;
-}
+export type GhostSetupActionResult =
+  | {
+      ok: true;
+      /** Settings actions return immediately and then wait for a committed write. */
+      waitingExternal?: boolean;
+    }
+  | {
+      ok: false;
+      /** Stable identity published to interaction snapshots when the action fails. */
+      errorCode: GhostSetupErrorCode;
+      /** Main-only diagnostic detail; never copied into a new interaction snapshot. */
+      message?: string;
+    };
 
 export interface GhostSetupCoordinatorDeps {
   changeBus: GhostSetupChangeBus;
@@ -61,7 +69,7 @@ export interface GhostSetupCoordinatorDeps {
   assess: (ghostId: string) => Promise<GhostSetupAssessment> | GhostSetupAssessment;
   validateTarget: (
     ghostId: string,
-    tool: string,
+    tool: string | undefined,
     workingDir?: string | null,
   ) => GhostSetupTargetValidation;
   getGhostIdentity: (ghostId: string) => {
@@ -84,8 +92,6 @@ export interface GhostSetupCoordinatorDeps {
   timeoutMs?: number;
   terminalGraceMs?: number;
   createRequestId?: () => string;
-  /** Resolved lazily so a renderer-synced Main locale is used at failure time. */
-  assessmentReadFailureMessage?: () => string;
   logger?: {
     warn: (message: string, context?: Record<string, unknown>) => void;
   };
@@ -94,7 +100,8 @@ export interface GhostSetupCoordinatorDeps {
 export interface GhostSetupEnsureRequest {
   sessionId: string | null;
   ghostId: string;
-  tool: string;
+  /** Omitted for setup-only operations such as grant_only that ignore the requested tool. */
+  tool?: string;
   /** Captured call scope; revalidated after every setup/policy change. */
   workingDir?: string | null;
   plan?: GhostSetupPlan;
@@ -219,14 +226,14 @@ export class GhostSetupCoordinator {
       const settleTargetFailure = (
         failure: Exclude<GhostSetupTargetValidation, { ok: true }>,
       ): void => {
-        publish(assessment, 'failed', failure.message);
+        publish(assessment, 'failed', 'TARGET_UNAVAILABLE');
         settle(failure, 'target-invalid');
       };
 
       const publish = (
         nextAssessment: GhostSetupAssessment,
         phase?: GhostSetupInteractionStep['phase'],
-        errorMessage?: string,
+        errorCode?: GhostSetupErrorCode,
         allPendingSteps = false,
       ): void => {
         assessment = nextAssessment;
@@ -235,7 +242,7 @@ export class GhostSetupCoordinator {
         snapshot = toSnapshot(requestId, identity, assessment, plan, {
           revision: nextRevision,
           phase,
-          errorMessage,
+          errorCode,
           activeActionId,
           allPendingSteps,
         });
@@ -254,12 +261,7 @@ export class GhostSetupCoordinator {
             current = await readUntilQuiet();
           } catch (error) {
             if (settled) return;
-            publish(
-              assessment,
-              'failed',
-              this.deps.assessmentReadFailureMessage?.() ??
-                'Could not refresh the plugin setup status. Please try again.',
-            );
+            publish(assessment, 'failed', 'ASSESSMENT_FAILED');
             this.deps.logger?.warn('plugin setup assessment failed', {
               ghostId: request.ghostId,
               error: error instanceof Error ? error.message : String(error),
@@ -334,12 +336,13 @@ export class GhostSetupCoordinator {
         } catch (error) {
           result = {
             ok: false,
+            errorCode: 'ACTION_FAILED',
             message: error instanceof Error ? error.message : '插件设置操作失败',
           };
         }
         if (settled) return;
         if (!result.ok) {
-          publish(assessment, 'failed', result.message ?? '插件设置操作失败');
+          publish(assessment, 'failed', result.errorCode ?? 'ACTION_FAILED');
           return;
         }
         if (result.waitingExternal) publish(assessment, 'waiting_external');
@@ -404,10 +407,15 @@ export class GhostSetupCoordinator {
                 action,
                 value: submit.value,
               })
-            : { ok: false, message: '当前版本不支持内联插件设置' };
+            : {
+                ok: false,
+                errorCode: 'INLINE_UNAVAILABLE',
+                message: '当前版本不支持内联插件设置',
+              };
         } catch (error) {
           result = {
             ok: false,
+            errorCode: 'ACTION_FAILED',
             message: error instanceof Error ? error.message : '插件设置操作失败',
           };
         } finally {
@@ -415,7 +423,7 @@ export class GhostSetupCoordinator {
         }
         if (settled) return;
         if (!result.ok) {
-          publish(assessment, 'failed', result.message ?? '插件设置操作失败');
+          publish(assessment, 'failed', result.errorCode ?? 'ACTION_FAILED');
           return;
         }
         await verify();
@@ -428,7 +436,7 @@ export class GhostSetupCoordinator {
         return;
       }
       timeoutId = setTimeout(() => {
-        publish(assessment, 'failed', '等待超时', true);
+        publish(assessment, 'failed', 'TIMEOUT', true);
         settle(
           {
             ok: false,
@@ -558,7 +566,7 @@ function toSnapshot(
   override?: {
     revision?: number;
     phase?: GhostSetupInteractionStep['phase'];
-    errorMessage?: string;
+    errorCode?: GhostSetupErrorCode;
     activeActionId?: string;
     allPendingSteps?: boolean;
   },
@@ -595,8 +603,8 @@ function toSnapshot(
           ? (override?.phase ?? 'pending')
           : ('pending' as const),
       ...(action && !satisfied ? { action } : {}),
-      ...(!satisfied && active && override?.errorMessage
-        ? { errorMessage: override.errorMessage }
+      ...(!satisfied && active && override?.errorCode
+        ? { errorCode: override.errorCode }
         : {}),
     };
   });

@@ -1680,16 +1680,30 @@ export async function executeGhostSetupAction(args: {
   responseTarget?: GhostSetupInteractionResponseTarget;
 }): Promise<GhostSetupActionResult> {
   const ghost = findAvailableGhost(args.ghostId);
-  if (!ghost) return { ok: false, message: '目标插件已卸载或不可用' };
+  if (!ghost) {
+    return {
+      ok: false,
+      errorCode: 'TARGET_UNAVAILABLE',
+      message: '目标插件已卸载或不可用',
+    };
+  }
   if (args.action.kind === 'oauth_connect') {
     const prefix = 'oauth_connect:secret:';
-    if (!args.action.id.startsWith(prefix)) return { ok: false, message: '授权动作已失效' };
+    if (!args.action.id.startsWith(prefix)) {
+      return { ok: false, errorCode: 'ACTION_STALE', message: '授权动作已失效' };
+    }
     const secretKey = args.action.id.slice(prefix.length);
     const runtimeManifest = withRuntimeFiloGoogleClient(ghost.manifest);
     const decl = runtimeManifest.network?.secrets?.find(
       (secret) => secret.key === secretKey && secret.source === 'oauth',
     )?.oauth;
-    if (!decl) return { ok: false, message: '授权声明已变更，请重新尝试' };
+    if (!decl) {
+      return {
+        ok: false,
+        errorCode: 'ACTION_STALE',
+        message: '授权声明已变更，请重新尝试',
+      };
+    }
     const connected = await getGhostOauthAccountManager().connectAccount(
       args.ghostId,
       secretKey,
@@ -1699,6 +1713,7 @@ export async function executeGhostSetupAction(args: {
       ? { ok: true }
       : {
           ok: false,
+          errorCode: connected.error === 'CANCELLED' ? 'AUTH_CANCELLED' : 'AUTH_FAILED',
           message:
             connected.error === 'CANCELLED'
               ? '授权已取消'
@@ -1707,9 +1722,15 @@ export async function executeGhostSetupAction(args: {
   }
 
   const navigation = ghostSetupNavigationForAction(args.ghostId, args.action);
-  if (!navigation) return { ok: false, message: '不支持的插件设置动作' };
+  if (!navigation) {
+    return { ok: false, errorCode: 'ACTION_STALE', message: '不支持的插件设置动作' };
+  }
   if (!args.responseTarget || args.responseTarget.isDestroyed()) {
-    return { ok: false, message: '发起设置的窗口已关闭，请重新尝试' };
+    return {
+      ok: false,
+      errorCode: 'WINDOW_CLOSED',
+      message: '发起设置的窗口已关闭，请重新尝试',
+    };
   }
   // Settings are rendered by the trusted Desktop Renderer. Main sends only a
   // fixed local route target after validating the action against this ghost;

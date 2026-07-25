@@ -30,12 +30,18 @@ export function executeGhostSetupInlineSubmission(
   },
 ): GhostSetupActionResult {
   const trimmed = args.value.trim();
-  if (trimmed.length === 0 || args.value.length > GHOST_SECRET_VALUE_MAX_CHARS) {
-    return { ok: false, message: '凭证内容无效' };
+  if (trimmed.length === 0 || trimmed.length > GHOST_SECRET_VALUE_MAX_CHARS) {
+    return { ok: false, errorCode: 'INLINE_INVALID', message: '凭证内容无效' };
   }
 
   const manifest = deps.getManifest(args.ghostId);
-  if (!manifest) return { ok: false, message: '目标插件已卸载或不可用' };
+  if (!manifest) {
+    return {
+      ok: false,
+      errorCode: 'TARGET_UNAVAILABLE',
+      message: '目标插件已卸载或不可用',
+    };
+  }
 
   const assessment = deps.getAssessment(args.ghostId);
   let boundRef: string | null = null;
@@ -55,7 +61,11 @@ export function executeGhostSetupInlineSubmission(
     if (boundRef) break;
   }
   if (!boundRef?.startsWith('secret:')) {
-    return { ok: false, message: '配置动作已失效，请重新尝试' };
+    return {
+      ok: false,
+      errorCode: 'ACTION_STALE',
+      message: '配置动作已失效，请重新尝试',
+    };
   }
 
   const secretKey = boundRef.slice('secret:'.length);
@@ -67,9 +77,15 @@ export function executeGhostSetupInlineSubmission(
   );
   const nodeDecl = manifest.node?.secretBindings?.find((secret) => secret.key === secretKey);
   const decl = networkDecl ?? nodeDecl;
-  if (!decl) return { ok: false, message: '凭证声明已变更，请重新尝试' };
+  if (!decl) {
+    return {
+      ok: false,
+      errorCode: 'ACTION_STALE',
+      message: '凭证声明已变更，请重新尝试',
+    };
+  }
   if (!deps.storeSecret(args.ghostId, secretKey, trimmed)) {
-    return { ok: false, message: '凭证保存失败' };
+    return { ok: false, errorCode: 'SAVE_FAILED', message: '凭证保存失败' };
   }
   deps.emitChange(args.ghostId, secretKey);
   try {

@@ -38,10 +38,12 @@ import {
   GHOST_HOST_NOTICE_KEYS,
   GHOST_SECRET_VALUE_MAX_CHARS,
   GHOST_SETUP_MAX_STEPS,
+  isGhostSetupErrorCode,
 } from '../../shared/ghost';
 import type {
   GhostSetupActionKind,
   GhostSetupAllowedAction,
+  GhostSetupErrorCode,
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
@@ -492,6 +494,9 @@ export interface PendingPluginSetup {
     description: string;
     phase: GhostSetupStepPhase;
     action?: PluginSetupAction;
+    /** Preferred stable failure identity; localized by this Renderer. */
+    errorCode?: GhostSetupErrorCode;
+    /** Legacy controlled-Desktop fallback only. */
     errorMessage?: string;
   }>;
 }
@@ -3324,6 +3329,7 @@ export function parsePendingPluginSetup(request: {
       step.description.length > 500 ||
       typeof step.phase !== 'string' ||
       !PLUGIN_SETUP_STEP_PHASES.has(step.phase as GhostSetupStepPhase) ||
+      (step.errorCode !== undefined && !isGhostSetupErrorCode(step.errorCode)) ||
       (step.errorMessage !== undefined &&
         (typeof step.errorMessage !== 'string' || step.errorMessage.length > 500))
     ) {
@@ -3366,6 +3372,7 @@ export function parsePendingPluginSetup(request: {
       description: step.description,
       phase: step.phase as GhostSetupStepPhase,
       ...(action ? { action } : {}),
+      ...(isGhostSetupErrorCode(step.errorCode) ? { errorCode: step.errorCode } : {}),
       ...(typeof step.errorMessage === 'string' ? { errorMessage: step.errorMessage } : {}),
     });
   }
@@ -4890,6 +4897,60 @@ function reconcilePendingInteractions(sessionId: string): Promise<number> {
       .getPendingInteractions(sessionId)
       .then((list) => {
         if (!Array.isArray(list)) return 0;
+        // A successful list response is the Host-authoritative snapshot for Setup
+        // interactions. Reconcile it subtractively before replaying the snapshot so
+        // a Device Link reconnect cannot leave cards that the Host already closed.
+        // Other interaction kinds keep their existing replay semantics.
+        const authoritativePluginSetupIds = new Set<string>();
+        for (const item of list) {
+          const request = item?.request;
+          if (
+            request?.kind === 'plugin_setup' &&
+            typeof request.requestId === 'string' &&
+            request.requestId.length > 0
+          ) {
+            authoritativePluginSetupIds.add(request.requestId);
+          }
+        }
+        setState(sessionId, (state) => {
+          const currentSurvives =
+            state.pendingPluginSetup !== null &&
+            authoritativePluginSetupIds.has(state.pendingPluginSetup.requestId);
+          const survivingQueue = state.pendingPluginSetupQueue.filter(
+            (setup) =>
+              authoritativePluginSetupIds.has(setup.requestId) &&
+              (!currentSurvives || setup.requestId !== state.pendingPluginSetup?.requestId),
+          );
+          const nextCurrent = currentSurvives
+            ? state.pendingPluginSetup
+            : (survivingQueue.shift() ?? null);
+          const currentChanged = nextCurrent !== state.pendingPluginSetup;
+          const queueChanged =
+            survivingQueue.length !== state.pendingPluginSetupQueue.length ||
+            survivingQueue.some(
+              (setup, index) => setup !== state.pendingPluginSetupQueue[index],
+            );
+          const nextCommand =
+            state.pluginSetupCommandInFlight &&
+            authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
+              ? state.pluginSetupCommandInFlight
+              : null;
+
+          if (
+            !currentChanged &&
+            !queueChanged &&
+            nextCommand === state.pluginSetupCommandInFlight
+          ) {
+            return state;
+          }
+          return {
+            ...state,
+            pendingPluginSetup: nextCurrent,
+            pendingPluginSetupQueue: survivingQueue,
+            pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
+            pluginSetupCommandInFlight: nextCommand,
+          };
+        });
         for (const item of list) {
           applyInteractionRequestRef?.({
             sessionId,

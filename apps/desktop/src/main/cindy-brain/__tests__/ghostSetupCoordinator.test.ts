@@ -320,6 +320,44 @@ describe('GhostSetupCoordinator', () => {
     await expect(waiting).resolves.toMatchObject({ ok: true });
   });
 
+  it('publishes action error codes without copying Main diagnostic messages', async () => {
+    const h = harness(required());
+    h.executeAction.mockResolvedValue({
+      ok: false,
+      errorCode: 'AUTH_FAILED',
+      message: '授权失败：provider-local-detail',
+    });
+    const waiting = h.coordinator.ensureReady({
+      sessionId: 'session-1',
+      ghostId: 'gmail',
+      tool: 'search',
+    });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const initial = h.bridge.pendingSnapshots()[0].request;
+
+    h.bridge.resolve(initial.requestId, {
+      kind: 'plugin_setup',
+      action: 'run_action',
+      actionId: 'oauth_connect:secret:google',
+      expectedRevision: initial.revision,
+    });
+
+    await vi.waitFor(() => {
+      const step = h.bridge.pendingSnapshots()[0].request.steps[0];
+      expect(step).toMatchObject({ phase: 'failed', errorCode: 'AUTH_FAILED' });
+      expect(step).not.toHaveProperty('errorMessage');
+    });
+    expect(JSON.stringify(h.broadcast.mock.calls)).not.toContain('provider-local-detail');
+
+    const failed = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve(failed.requestId, {
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: failed.revision,
+    });
+    await waiting;
+  });
+
   it('executes navigation actions once per session instead of sharing the first route', async () => {
     const h = harness(requiredNavigation());
     h.executeAction.mockResolvedValue({ ok: true, waitingExternal: true });
@@ -749,7 +787,7 @@ describe('GhostSetupCoordinator', () => {
     expect(assess).toHaveBeenCalledTimes(3);
   });
 
-  it('publishes the injected localized message when re-assessment fails', async () => {
+  it('publishes a stable code without leaking a Main-localized message when re-assessment fails', async () => {
     const changeBus = new GhostSetupChangeBus();
     const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
     let assessmentReads = 0;
@@ -765,7 +803,6 @@ describe('GhostSetupCoordinator', () => {
       validateTarget: () => ({ ok: true }),
       getGhostIdentity: () => ({ id: 'gmail', name: 'Gmail' }),
       executeAction: vi.fn(),
-      assessmentReadFailureMessage: () => 'Could not refresh setup. Try again.',
       terminalGraceMs: 0,
     });
 
@@ -780,8 +817,9 @@ describe('GhostSetupCoordinator', () => {
     await vi.waitFor(() => {
       expect(bridge.pendingSnapshots()[0].request.steps[0]).toMatchObject({
         phase: 'failed',
-        errorMessage: 'Could not refresh setup. Try again.',
+        errorCode: 'ASSESSMENT_FAILED',
       });
+      expect(bridge.pendingSnapshots()[0].request.steps[0]).not.toHaveProperty('errorMessage');
     });
 
     const snapshot = bridge.pendingSnapshots()[0].request;
@@ -820,7 +858,8 @@ describe('GhostSetupCoordinator', () => {
     const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn() });
     const executeAction = vi.fn();
     let disabledWorkdir: string | null = null;
-    const validateTarget = vi.fn((_ghostId: string, _tool: string, workingDir?: string | null) =>
+    const validateTarget = vi.fn(
+      (_ghostId: string, _tool: string | undefined, workingDir?: string | null) =>
       workingDir === disabledWorkdir
         ? ({
             ok: false,
@@ -1170,7 +1209,7 @@ describe('GhostSetupCoordinator', () => {
         steps: [
           expect.objectContaining({
             phase: 'failed',
-            errorMessage: '等待超时',
+            errorCode: 'TIMEOUT',
           }),
         ],
       }),

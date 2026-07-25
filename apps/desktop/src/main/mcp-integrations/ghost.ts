@@ -620,54 +620,6 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             '用户已在当前工作目录停用该插件;不要重试,改用其它可用方式完成任务,必要时如实转告用户。',
         };
       }
-      // 批量预授权(grant_only):只过户不派发——agent 跑批量任务(逐张图
-      // 逐次调用)前先把整批文件申报一次,用户在一张确认卡上批完,后续
-      // 逐次调用命中授权记忆零弹卡。上限放宽到 MAX_GRANT_ONLY_ATTACHMENTS。
-      if (grantOnly) {
-        // 资格闸:grant_only 不经管子派发器(不派发工具),这里自查——
-        // 不存在/沉睡的意识不该拿到授权行,也不该让用户白点一次确认卡。
-        const target = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId);
-        if (!target) {
-          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件不存在或已卸载' };
-        }
-        if (!target.enabled) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_ASLEEP',
-            message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
-          };
-        }
-        if (!attachments || attachments.length === 0) {
-          return {
-            ok: false,
-            errorCode: 'ATTACHMENT_INVALID',
-            message: 'grant_only 调用必须携带 attachments(要预授权的文件地址列表)',
-          };
-        }
-        const grant = await grantAttachmentUrls({
-          ghostId,
-          urls: attachments,
-          workdirAbs: sessionWorkdir,
-          sessionId: sessionIdForConfirm,
-          maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
-        });
-        if (!grant.ok) {
-          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
-        }
-        log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
-        return {
-          ok: true,
-          result: {
-            ok: true,
-            granted_count: grant.hashes.length,
-            attachments: grant.hashes,
-            guidance:
-              '整批文件已过户并获授权;继续逐次调用目标工具,引用原路径或这些指纹都不会再弹确认卡。不要向用户复述指纹列表。',
-          },
-        };
-      }
       // Runtime setup gate: resolve the target before creating any durable
       // attachment grant, directory ticket, sandbox, card call, or dispatch.
       const target = getGhostManager()
@@ -683,11 +635,22 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
         };
       }
-      if (!(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+      // grant_only never dispatches and intentionally ignores its tool field.
+      if (
+        !grantOnly &&
+        !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+      ) {
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
           message: `目标插件没有工具 ${tool}`,
+        };
+      }
+      if (grantOnly && (!attachments || attachments.length === 0)) {
+        return {
+          ok: false,
+          errorCode: 'ATTACHMENT_INVALID',
+          message: 'grant_only 调用必须携带 attachments(要预授权的文件地址列表)',
         };
       }
       const setupCoordinator = getGhostSetupCoordinator();
@@ -701,7 +664,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       const setup = await setupCoordinator.ensureReady({
         sessionId: ghostSetupInteractionSessionId(sessionContext),
         ghostId,
-        tool,
+        ...(!grantOnly ? { tool } : {}),
         workingDir: sessionWorkdir,
         ...(setupPlan ? { plan: setupPlan } : {}),
       });
@@ -725,7 +688,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           message: '用户已在当前工作目录停用该插件;不要重试。',
         };
       }
-      if (!(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+      if (
+        !grantOnly &&
+        !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+      ) {
         return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `目标插件不再提供工具 ${tool}` };
       }
       const finalAssessment = getGhostSetupAssessment(ghostId);
@@ -735,6 +701,31 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           errorCode: 'SETUP_REQUIRED',
           message: '插件配置在调用恢复前发生变化，请完成设置后重试。',
           setup: finalAssessment,
+        };
+      }
+      // 批量预授权(grant_only):只过户不派发。它与普通调用共用上面的
+      // Host-authoritative setup gate，确保任何授权副作用之前插件已经 ready。
+      if (grantOnly) {
+        const grant = await grantAttachmentUrls({
+          ghostId,
+          urls: attachments!,
+          workdirAbs: sessionWorkdir,
+          sessionId: sessionIdForConfirm,
+          maxCount: MAX_GRANT_ONLY_ATTACHMENTS,
+        });
+        if (!grant.ok) {
+          return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
+        }
+        log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
+        return {
+          ok: true,
+          result: {
+            ok: true,
+            granted_count: grant.hashes.length,
+            attachments: grant.hashes,
+            guidance:
+              '整批文件已过户并获授权;继续逐次调用目标工具,引用原路径或这些指纹都不会再弹确认卡。不要向用户复述指纹列表。',
+          },
         };
       }
       if (attachments && attachments.length > 0) {

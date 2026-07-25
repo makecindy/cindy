@@ -123,6 +123,9 @@ function PluginSetupPromptStateful({
 
   const phaseLabel = (phase: GhostSetupStepPhase): string =>
     t(`newChat.pluginSetup.phase.${phase}`);
+  const stepErrorMessage = (step: PendingPluginSetup['steps'][number]): string | undefined =>
+    step.errorCode ? t(`newChat.pluginSetup.error.${step.errorCode}`) : step.errorMessage;
+  const currentStepErrorMessage = currentStep ? stepErrorMessage(currentStep) : undefined;
 
   const actionLabel = (step = currentStep): string => {
     if (!step) return '';
@@ -480,9 +483,9 @@ function PluginSetupPromptStateful({
                 </label>
               </div>
               {renderInlineFormControl(currentStep, false, false)}
-              {currentStep.errorMessage ? (
+              {currentStepErrorMessage ? (
                 <p className="mt-2 text-13 leading-5 text-[var(--error-fg)]">
-                  {currentStep.errorMessage}
+                  {currentStepErrorMessage}
                 </p>
               ) : null}
             </div>
@@ -506,6 +509,7 @@ function PluginSetupPromptStateful({
                 const running = RUNNING_PHASES.has(step.phase);
                 const failed = step.phase === 'failed';
                 const satisfied = step.phase === 'satisfied';
+                const errorMessage = stepErrorMessage(step);
                 const alternativeStep = isAlternativeStep(step);
                 const currentGroupOption = step.groupId === currentGroupId;
                 const inlineOption = currentGroupOption && step.action?.kind === 'inline_form';
@@ -585,9 +589,9 @@ function PluginSetupPromptStateful({
                           {actionLabel(step)}
                         </button>
                       ) : null}
-                      {step.errorMessage ? (
+                      {errorMessage ? (
                         <p className="mt-1 text-13 leading-5 text-[var(--error-fg)]">
-                          {step.errorMessage}
+                          {errorMessage}
                         </p>
                       ) : null}
                     </div>

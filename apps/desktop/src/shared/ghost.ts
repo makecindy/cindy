@@ -974,6 +974,36 @@ export type GhostSetupStepPhase =
   | 'failed'
   | 'cancelled';
 
+/**
+ * Setup 卡片跨进程／跨设备传输的稳定错误码。
+ *
+ * Main 可以保留内部错误详情用于诊断，但 interaction snapshot 只携带这些
+ * 与 locale 无关的 code；每个 Renderer 按自己的语言映射可操作文案。
+ */
+export const GHOST_SETUP_ERROR_CODES = [
+  'ACTION_FAILED',
+  'ACTION_STALE',
+  'AUTH_CANCELLED',
+  'AUTH_FAILED',
+  'INLINE_INVALID',
+  'INLINE_UNAVAILABLE',
+  'SAVE_FAILED',
+  'WINDOW_CLOSED',
+  'TARGET_UNAVAILABLE',
+  'ASSESSMENT_FAILED',
+  'TIMEOUT',
+] as const;
+
+export type GhostSetupErrorCode = (typeof GHOST_SETUP_ERROR_CODES)[number];
+
+/** 不可信 interaction payload 的稳定 Setup 错误码守卫。 */
+export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorCode {
+  return (
+    typeof value === 'string' &&
+    (GHOST_SETUP_ERROR_CODES as readonly string[]).includes(value)
+  );
+}
+
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
   /** 清单格式版本,恒 2(v1 声明型已于 2026-07-12 移除,无存量不留兼容)。 */
