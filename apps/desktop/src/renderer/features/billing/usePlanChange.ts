@@ -93,9 +93,11 @@ export function usePlanChange(
   const [state, setState] = useState<PlanChangeState>(INITIAL_STATE);
   const stateRef = useRef(state);
   const mountedRef = useRef(true);
-  const inFlightRef = useRef(false);
   // 会话代次：切换账号或重新挂载后，旧账号/旧会话的迟到响应不得覆盖新状态。
   const sessionRef = useRef(0);
+  // 请求锁按会话持有：旧会话的在途刷新不阻断新目标的重新报价，
+  // 且旧请求结束时不会误释放新会话已持有的锁。
+  const inFlightRef = useRef<number | null>(null);
   const settledNotifiedRef = useRef(new Set<string>());
   const onSettledRef = useRef(onSettled);
   stateRef.current = state;
@@ -137,21 +139,22 @@ export function usePlanChange(
     [notifySettled],
   );
 
-  const withRequestLock = useCallback(async (request: () => Promise<void>) => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+  const withRequestLock = useCallback(async (session: number, request: () => Promise<void>) => {
+    if (inFlightRef.current === session) return;
+    inFlightRef.current = session;
     try {
       await request();
     } finally {
-      inFlightRef.current = false;
+      if (inFlightRef.current === session) inFlightRef.current = null;
     }
   }, []);
 
   const startQuote = useCallback(
     async (targetOfferCode: string, targetPlan: PlanChangeTargetSnapshot | null) => {
-      if (!accountId || inFlightRef.current) return;
-      // 每次重新选择目标都是新的结算会话：新幂等键，服务端自动撤销旧未完成变更。
-      const session = sessionRef.current;
+      if (!accountId || inFlightRef.current === sessionRef.current) return;
+      // 每次重新选择目标都是新的结算会话：新代次 + 新幂等键，旧会话在途响应作废，
+      // 服务端自动撤销旧未完成变更。
+      const session = ++sessionRef.current;
       const idempotencyKey = newBillingIdempotencyKey('plan-change');
       setState({
         open: true,
@@ -162,7 +165,7 @@ export function usePlanChange(
         quoteFailureReason: null,
         stale: false,
       });
-      await withRequestLock(async () => {
+      await withRequestLock(session, async () => {
         try {
           applyChange(await billingApi.quotePlanChange(targetOfferCode, idempotencyKey), session, {
             targetPlan,
@@ -184,7 +187,11 @@ export function usePlanChange(
 
   const confirm = useCallback(async () => {
     const current = stateRef.current;
-    if (!current.planChange || current.planChange.status !== 'QUOTED' || inFlightRef.current)
+    if (
+      !current.planChange ||
+      current.planChange.status !== 'QUOTED' ||
+      inFlightRef.current === sessionRef.current
+    )
       return;
     const change = current.planChange;
     const session = sessionRef.current;
@@ -194,7 +201,7 @@ export function usePlanChange(
       error: false,
       quoteFailureReason: null,
     }));
-    await withRequestLock(async () => {
+    await withRequestLock(session, async () => {
       try {
         applyChange(await billingApi.confirmPlanChange(change.planChangeId), session);
       } catch {
@@ -233,7 +240,7 @@ export function usePlanChange(
     if (!current.planChange) return;
     const planChangeId = current.planChange.planChangeId;
     const session = sessionRef.current;
-    await withRequestLock(async () => {
+    await withRequestLock(session, async () => {
       try {
         applyChange(await billingApi.refreshPlanChange(planChangeId), session);
       } catch {
@@ -247,9 +254,9 @@ export function usePlanChange(
   /** Cancels a quoted change or a scheduled downgrade (撤销). */
   const cancelChange = useCallback(
     async (planChangeId: string) => {
-      if (inFlightRef.current) return;
+      if (inFlightRef.current === sessionRef.current) return;
       const session = sessionRef.current;
-      await withRequestLock(async () => {
+      await withRequestLock(session, async () => {
         try {
           applyChange(await billingApi.cancelPlanChange(planChangeId), session);
         } catch {

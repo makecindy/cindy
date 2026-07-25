@@ -76,9 +76,10 @@ const SUPPORTED_SUBSCRIPTION_CAPABILITIES = new Set<BillingPurchaseOption['capab
   'PROVIDER_MANAGED_SUBSCRIPTION',
 ]);
 
-// 服务端的“当前订阅”只包含真实生命周期状态（不再下发 INCOMPLETE）；未完成的
-// 首购不阻断重新选择套餐。
+// 新服务端的“当前订阅”只包含真实生命周期状态，未完成首购不再下发也不阻断重选；
+// INCOMPLETE 仅作为旧服务端兼容防御保留（旧服务端仍会拒绝重复首购）。
 const NON_TERMINAL_SUBSCRIPTION_STATUSES: BillingSubscription['status'][] = [
+  'INCOMPLETE',
   'TRIALING',
   'ACTIVE',
   'PAST_DUE',
