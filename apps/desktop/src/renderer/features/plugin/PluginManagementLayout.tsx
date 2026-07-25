@@ -118,6 +118,7 @@ export function PluginManagementHeader({
 
   const tabs = (
     <div
+      key="plugin-management-tabs"
       className="plugin-motion-tabs inline-flex shrink-0 rounded-full border p-0.5 backdrop-blur-md"
       role="tablist"
       aria-label={t('sidebar.horizontalTabbarAria')}
@@ -146,7 +147,10 @@ export function PluginManagementHeader({
       // 该容器 flex-1 撑满 tab 与右缘之间的整段空间;no-drag 只能标在其中的
       // 交互元素(搜索框 / 动作按钮)上,标在容器上会把中段空白也挖出拖拽区
       // (windowDrag.tsx:drag 区域是纯几何计算,与内容实际占位无关)。
-      <div className="plugin-management-tools flex min-w-0 flex-1 items-center justify-end gap-1.5">
+      <div
+        key="plugin-management-tools"
+        className="plugin-management-tools flex min-w-0 flex-1 items-center justify-end gap-1.5"
+      >
         {searchable ? (
           <div
             className="plugin-management-search-control flex h-9 min-w-[148px] max-w-[260px] flex-1 items-center gap-2 rounded-full border px-3 backdrop-blur-md transition-[width,background-color,border-color,box-shadow] focus-within:border-[var(--focus-ring)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)] motion-reduce:transition-none"

@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -250,5 +250,62 @@ describe('PluginManagementLayout', () => {
         focusable.indexOf(screen.getByRole('tab', { name: 'Plugins' })),
       );
     });
+  });
+
+  it('preserves focused controls while reordering rows across the stacked breakpoint', async () => {
+    let resizeCallback: ResizeObserverCallback | null = null;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+
+        observe() {
+          resizeCallback?.(
+            [{ contentRect: { width: 800 } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        }
+
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+
+    render(
+      <MemoryRouter>
+        <PluginManagementLayout
+          activeTab="plugins"
+          query=""
+          onQueryChange={vi.fn()}
+          headerActions={<button type="button">Add plugin</button>}
+        >
+          <span>Content</span>
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+
+    const search = screen.getByRole('textbox', { name: 'Search plugins' });
+    search.focus();
+    act(() => {
+      resizeCallback?.(
+        [{ contentRect: { width: 700 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    expect(screen.getByRole('textbox', { name: 'Search plugins' })).toBe(search);
+
+    const pluginsTab = screen.getByRole('tab', { name: 'Plugins' });
+    pluginsTab.focus();
+    act(() => {
+      resizeCallback?.(
+        [{ contentRect: { width: 800 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+    await waitFor(() => expect(document.activeElement).toBe(pluginsTab));
+    expect(screen.getByRole('tab', { name: 'Plugins' })).toBe(pluginsTab);
   });
 });
