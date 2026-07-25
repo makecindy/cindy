@@ -129,6 +129,27 @@ describe('orcaTeamStore', () => {
     ]);
   });
 
+  it('clears a restored runtime marker without changing the worker task status', async () => {
+    const { clearWorkerIdleReleaseMarker } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    await client.exec(
+      'UPDATE orca_workers SET status = ?, idle_since = ? WHERE id = ?',
+      ['done', 123_000, 'worker-1'],
+    );
+
+    await expect(clearWorkerIdleReleaseMarker('worker-session-1')).resolves.toBe(true);
+    await expect(clearWorkerIdleReleaseMarker('worker-session-1')).resolves.toBe(false);
+    await expect(
+      client.queryOne<{ status: string; idle_since: number | null }>(
+        'SELECT status, idle_since FROM orca_workers WHERE id = ?',
+        ['worker-1'],
+      ),
+    ).resolves.toEqual({ status: 'done', idle_since: null });
+  });
+
   function createTestDbClient(): DbClient {
     const dbHandle = new Database(':memory:');
     rawDb = dbHandle;

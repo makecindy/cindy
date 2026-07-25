@@ -3324,6 +3324,33 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('persists a successful Worker unarchive before a failing thread/resume', async () => {
+    const onCodexThreadUnarchived = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadResume) {
+        expect(onCodexThreadUnarchived).toHaveBeenCalledOnce();
+        throw new Error('thread/resume transport timeout');
+      }
+      return undefined;
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-worker-resume-after-unarchive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174003',
+      vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
+    })).rejects.toThrow('thread/resume transport timeout');
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(onCodexThreadUnarchived).toHaveBeenCalledWith({
+      sessionId: 'session-worker-resume-after-unarchive',
+      threadId: '123e4567-e89b-12d3-a456-426614174003',
+    });
+    await agent.dispose();
+  });
+
   it('does not unarchive a Worker without a persisted release marker', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);

@@ -30,6 +30,7 @@ import { LspServerPool } from '@cindy/mcps';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
+  clearWorkerIdleReleaseMarker,
   getWorkerLink,
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
@@ -528,6 +529,9 @@ export function getMaker(): Maker {
       },
       unregisterCodexMcpThreadContext,
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
+      onCodexThreadUnarchived: async ({ sessionId }) => {
+        await clearWorkerIdleReleaseMarker(sessionId);
+      },
       registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
         registerCodexProxyComposed(sessionId, threadId, text),
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,

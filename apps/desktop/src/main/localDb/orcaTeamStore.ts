@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
@@ -469,6 +469,17 @@ export async function updateWorkerStatus(
       ...(status === 'running' ? { idleSince: null } : {}),
     })
     .where(eq(orcaWorkers.id, workerId));
+}
+
+/** Clear the persisted runtime-release marker immediately after a Worker runtime is restored. */
+export async function clearWorkerIdleReleaseMarker(sessionId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const result = await db
+    .update(orcaWorkers)
+    .set({ idleSince: null, updatedAt: Date.now() })
+    .where(and(eq(orcaWorkers.sessionId, sessionId), isNotNull(orcaWorkers.idleSince)))
+    .run();
+  return result.changes > 0;
 }
 
 /** Atomically marks a worker idle only while it still has the expected status. */

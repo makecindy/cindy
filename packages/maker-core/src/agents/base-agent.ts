@@ -290,6 +290,16 @@ export interface AgentDeps {
   prepareCodexResumeSession?: (threadId: string) => Promise<string | void>;
 
   /**
+   * Codex 专用钩子：Worker thread/unarchive 成功后，让 host 立即持久化 runtime
+   * 已恢复的事实。必须在 thread/resume 前完成，避免 resume 临时失败后重复调用
+   * 非幂等的 thread/unarchive。
+   */
+  onCodexThreadUnarchived?: (args: {
+    sessionId: string;
+    threadId: string;
+  }) => Promise<void>;
+
+  /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。
    *
    * 约束:

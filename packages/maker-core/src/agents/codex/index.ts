@@ -2459,15 +2459,30 @@ export class CodexAgent extends BaseAgent {
         // runtime was released. Avoid parsing Codex's human-readable error
         // text to decide whether thread/unarchive is required.
         if (vo.orcaRole === 'worker' && vo.orcaRuntimeReleased === true) {
+          const releasedThreadId = opts.resumeSessionId;
           log.info('thread/resume restoring released Worker thread', {
-            resumeSessionId: opts.resumeSessionId,
+            resumeSessionId: releasedThreadId,
           });
           assertCurrentHost('thread/unarchive');
           // idle_since is written only after thread/archive succeeds, so a
           // failed restore must remain retryable. Do not hide timeouts,
           // transport failures, or temporary server errors behind a resume
           // request that is guaranteed to fail while the thread is archived.
-          await host.unarchiveThread(opts.resumeSessionId);
+          await host.unarchiveThread(releasedThreadId);
+          // thread/unarchive is not idempotent. Persist its success before
+          // thread/resume so a temporary resume failure does not cause the next
+          // startup to unarchive the already-restored thread again.
+          vo.orcaRuntimeReleased = false;
+          const onCodexThreadUnarchived = this.deps.onCodexThreadUnarchived;
+          if (onCodexThreadUnarchived) {
+            if (!opts.sessionId) {
+              throw new Error('Released Codex Worker restore requires a local sessionId');
+            }
+            await onCodexThreadUnarchived({
+              sessionId: opts.sessionId,
+              threadId: releasedThreadId,
+            });
+          }
           assertCurrentHost('thread/resume after unarchive');
         }
         const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);

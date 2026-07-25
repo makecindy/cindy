@@ -483,7 +483,7 @@ export interface ThreadUnsubscribeResponse {
   status: ThreadUnsubscribeStatus;
 }
 
-/** Archive a thread after its runtime has shut down, while preserving its history for a later resume. */
+/** Archive a thread to shut down its runtime while preserving its history for a later resume. */
 export interface ThreadArchiveParams {
   threadId: string;
 }
