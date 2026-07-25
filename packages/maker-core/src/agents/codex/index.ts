@@ -2463,18 +2463,11 @@ export class CodexAgent extends BaseAgent {
             resumeSessionId: opts.resumeSessionId,
           });
           assertCurrentHost('thread/unarchive');
-          try {
-            await host.unarchiveThread(opts.resumeSessionId);
-          } catch (error) {
-            // A focused Worker can have a stale persisted release marker after
-            // its runtime was already restored. thread/unarchive is not
-            // idempotent, so fall through to one normal resume attempt.
-            assertCurrentHost('thread/unarchive');
-            log.warn('thread/unarchive failed for released Worker; attempting thread/resume', {
-              resumeSessionId: opts.resumeSessionId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
+          // idle_since is written only after thread/archive succeeds, so a
+          // failed restore must remain retryable. Do not hide timeouts,
+          // transport failures, or temporary server errors behind a resume
+          // request that is guaranteed to fail while the thread is archived.
+          await host.unarchiveThread(opts.resumeSessionId);
           assertCurrentHost('thread/resume after unarchive');
         }
         const resp = await host.request<ThreadResumeResponse>(Method.ThreadResume, params);

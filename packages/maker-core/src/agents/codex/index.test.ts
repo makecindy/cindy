@@ -3304,24 +3304,24 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('still resumes a Worker when its persisted release marker is stale', async () => {
+  it('does not resume a released Worker when thread/unarchive fails', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
-      if (method === Method.ThreadUnarchive) throw new Error('no archived rollout found');
+      if (method === Method.ThreadUnarchive) throw new Error('thread/unarchive transport timeout');
       return undefined;
     });
 
-    const handle = await agent.startSession({
+    await expect(agent.startSession({
       sessionId: 'session-worker-resume-stale-marker',
       model: 'gpt-5.4',
       workingDir: '/repo',
       resumeSessionId: '123e4567-e89b-12d3-a456-426614174001',
       vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
-    });
+    })).rejects.toThrow('thread/unarchive transport timeout');
 
     expect(host.unarchiveThread).toHaveBeenCalledOnce();
-    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
-    await handle.close();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    await agent.dispose();
   });
 
   it('does not unarchive a Worker without a persisted release marker', async () => {
