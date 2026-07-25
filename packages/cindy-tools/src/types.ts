@@ -109,8 +109,8 @@ export interface CindyGhostInfo {
   command?: string;
   tools: CindyGhostToolInfo[];
   /**
-   * Host 现查的配置评估。可选仅用于兼容旧 Host；支持 Setup Runtime 的
-   * Host 应始终返回，Agent 不得把字段缺失解释为自己有权判定 ready。
+   * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
+   * 读取/计算失败时可省略；Agent 不得把字段缺失解释为 ready 或自行放行。
    */
   setup?: CindyGhostSetupAssessment;
 }
@@ -123,7 +123,7 @@ export type CindyGhostCallErrorCode =
   | 'TOOL_NOT_FOUND' // 该意识没有这个工具
   | 'GHOST_CRASHED' // 电子脑执行中崩溃
   | 'TIMEOUT' // 执行超时(host 掐掉)
-  | 'SETUP_REQUIRED' // 当前无可用交互面；返回脱敏 assessment，未派发插件
+  | 'SETUP_REQUIRED' // 配置仍未就绪（无交互面或恢复前又变化）；可带脱敏 assessment，未派发插件
   | 'SETUP_CANCELLED' // 用户取消插件配置；原调用未派发，不要自动重试
   | 'ATTACHMENT_INVALID' // attachments 里的图片地址无法过户(格式/找不到/超数)
   | 'DIR_INVALID' // dir 目录无法过户(不存在/不在会话 workdir 内/超限额)
