@@ -523,8 +523,10 @@ function readBundledLicense(relativePath) {
 /**
  * 桌面三平台共有的随包分发组件声明。
  *
- * @param sharpPackageNames sharp 预编译包名,可传单个或数组。一个平台声明覆盖多个
- *   架构时(如 linux 的 x64/arm64)必须把两个架构的包都传进来——见下方 sharp 段。
+ * @param sharpPackageNames sharp 预编译包名,可传单个或数组。该包的 README 与
+ *   versions.json 是 per-arch 的(见下方 sharp 段),所以一个平台声明覆盖多个架构时
+ *   应把每个架构的包都传进来。desktop-linux 已按此传 x64 + arm64;desktop-macos
+ *   的 productName 同样是 x64/arm64 但目前只传 arm64,属既存缺口,记在 issue #452。
  */
 function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   const entries = [];
