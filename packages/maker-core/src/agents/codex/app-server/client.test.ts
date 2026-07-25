@@ -227,6 +227,35 @@ describe('AppServerClient auth invalidation', () => {
   });
 });
 
+describe('AppServerClient request timeout', () => {
+  it('rejects and removes a pending request when the server stays connected without responding', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const client = new AppServerClient({
+        createTransport: () => transport,
+        logger,
+      });
+      client.start();
+
+      const request = client.request(
+        'thread/unsubscribe',
+        { threadId: 'thread-1' },
+        { timeoutMs: 25 },
+      );
+      const rejection = expect(request).rejects.toThrow(
+        'codex app-server thread/unsubscribe timed out after 25ms',
+      );
+      await vi.advanceTimersByTimeAsync(25);
+
+      await rejection;
+      await expect(client.close()).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('AppServerClient server requests', () => {
   it('passes request id/method metadata to handlers and answers the original JSON-RPC request', async () => {
     const transport = new FakeTransport();

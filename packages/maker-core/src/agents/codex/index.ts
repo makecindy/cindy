@@ -1735,7 +1735,7 @@ export class CodexAgent extends BaseAgent {
     if (opts?.maxTokens !== undefined) {
       log.warn(`maxTokens=${opts.maxTokens} ignored — Codex host protocol does not expose max_tokens`);
     }
-    let subscription: { release: () => void } | null = null;
+    let subscription: ThreadSubscription | null = null;
     try {
       const { host } = await this.getUtilityHost();
       await host.ensureStarted();
@@ -4241,6 +4241,21 @@ export class CodexAgent extends BaseAgent {
             // no-op: stale subscription cleanup should not fail a successful rollback.
           }
           unregisterCodexMcpContext(previousThreadId);
+          if (closed) {
+            try {
+              await host.unsubscribeThread(nextThreadId);
+            } catch (e) {
+              log.warn('thread/unsubscribe replacement after close threw', {
+                error: String(e),
+                threadId: nextThreadId,
+              });
+            }
+            log.info('commitRewindFiles discarded replacement after concurrent close', {
+              previousThreadId,
+              nextThreadId,
+            });
+            return sdkSessionId ? { sdkSessionId } : {};
+          }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);

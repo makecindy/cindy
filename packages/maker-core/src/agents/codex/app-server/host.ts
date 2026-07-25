@@ -101,6 +101,8 @@ const NOTIFICATIONS_TO_OPT_OUT = [
   'turn/diff/updated',
 ];
 
+const DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
+
 /** thread/started 之外的 notification 都直接 params.threadId; thread/started 走 params.thread.id。 */
 function extractThreadId(method: string, params: unknown): string | null {
   if (!params || typeof params !== 'object') return null;
@@ -204,6 +206,8 @@ export interface AppServerHostOptions {
    * 解决 thread/started 比 subscribeThread() 早到的固有竞争。
    */
   notificationBufferTtlMs?: number;
+  /** thread/unsubscribe 的最大等待时间，避免 session close 被失联 app-server 卡死。 */
+  threadUnsubscribeTimeoutMs?: number;
   /**
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次
    * (单次 latch 在 client 内)。stderr 始终只作为诊断日志。
@@ -226,6 +230,7 @@ export class AppServerHost {
   private readonly connectionId = randomUUID();
   private readonly logger: Logger;
   private readonly bufferTtlMs: number;
+  private readonly threadUnsubscribeTimeoutMs: number;
 
   private client: AppServerClient | null = null;
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
@@ -249,6 +254,8 @@ export class AppServerHost {
     }
     this.logger = opts.logger.child('codex-app-server-host');
     this.bufferTtlMs = opts.notificationBufferTtlMs ?? 5_000;
+    this.threadUnsubscribeTimeoutMs =
+      opts.threadUnsubscribeTimeoutMs ?? DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS;
   }
 
   isCodexProxyActive(): boolean {
@@ -464,6 +471,17 @@ export class AppServerHost {
     return this.client.request<R>(method, params);
   }
 
+  /** Release one thread's live runtime without archiving or deleting its history. */
+  async unsubscribeThread(threadId: string): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+    await client.request<ThreadUnsubscribeResponse>(
+      Method.ThreadUnsubscribe,
+      { threadId },
+      { timeoutMs: this.threadUnsubscribeTimeoutMs },
+    );
+  }
+
   /**
    * 强制关停 (app.before-quit / 测试 cleanup / transport error 恢复)。幂等。
    * 清空 subscribers + close client (杀子进程)。**结束后允许 ensureStarted 重新 spawn**
@@ -557,19 +575,38 @@ export class AppServerHost {
       }
     }
 
-    let released = false;
+    let localReleased = false;
+    let serverReleased = false;
+    let releasePromise: Promise<void> | null = null;
     return {
-      release: async () => {
-        if (released) return;
-        released = true;
-        const cur = this.subscribers.get(threadId);
-        // A later subscription for the same thread owns the live server state now.
-        if (cur !== handlers) return;
-        this.subscribers.delete(threadId);
-        this.buffered.delete(threadId);
-        const client = this.client;
-        if (!client) return;
-        await client.request<ThreadUnsubscribeResponse>(Method.ThreadUnsubscribe, { threadId });
+      release: () => {
+        if (serverReleased) return Promise.resolve();
+        if (releasePromise) return releasePromise;
+
+        if (!localReleased) {
+          const cur = this.subscribers.get(threadId);
+          // A later subscription for the same thread owns the live server state now.
+          if (cur !== handlers) {
+            serverReleased = true;
+            return Promise.resolve();
+          }
+          this.subscribers.delete(threadId);
+          this.buffered.delete(threadId);
+          localReleased = true;
+        } else if (this.subscribers.has(threadId)) {
+          // A retry must not unsubscribe a newer local owner for the same thread.
+          serverReleased = true;
+          return Promise.resolve();
+        }
+
+        releasePromise = this.unsubscribeThread(threadId)
+          .then(() => {
+            serverReleased = true;
+          })
+          .finally(() => {
+            releasePromise = null;
+          });
+        return releasePromise;
       },
     };
   }

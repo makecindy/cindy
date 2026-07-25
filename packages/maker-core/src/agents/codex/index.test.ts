@@ -19,6 +19,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
   class MockCodexTransport {
     static threadSeq = 1;
     static failThreadStart = false;
+    static dropThreadUnsubscribe = false;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -113,6 +114,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'thread/unsubscribe') {
+        if (MockCodexTransport.dropThreadUnsubscribe) return;
         this.emitLine({ id: req.id, result: { status: 'unsubscribed' } });
         return;
       }
@@ -225,6 +227,7 @@ beforeEach(() => {
   createdTransports.length = 0;
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
+  MockCodexTransport.dropThreadUnsubscribe = false;
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -346,11 +349,13 @@ function installFakeHost(
     threadHandlers = handlers;
     return { release: vi.fn() };
   });
+  const unsubscribeThread = vi.fn(async (_threadId: string) => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const host = {
     ensureStarted,
     request,
     subscribeThread,
+    unsubscribeThread,
     isCodexProxyActive,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
@@ -2878,6 +2883,28 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(transport!.closed).toBe(false);
   });
 
+  it('finishes closing when the app-server stays connected without answering thread/unsubscribe', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropThreadUnsubscribe = true;
+      const agent = new CodexAgent(createDeps());
+      const handle = await agent.startSession({
+        sessionId: 'session-codex-mcp-runtime-release-timeout',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        vendorOptions: { orcaRole: 'worker' },
+      });
+
+      const closePromise = handle.close();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(closePromise).resolves.toBeUndefined();
+      expect(createdTransports[0]?.closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('skips Codex MCP thread context registration for remote sessions', async () => {
     const registerCodexMcpThreadContext = vi.fn();
     const unregisterCodexMcpThreadContext = vi.fn();
@@ -4404,6 +4431,38 @@ describe('CodexAgent rewind', () => {
       text: registeredText,
     });
     await handle.close();
+  });
+
+  it('discards the replacement thread when close races with rollback cleanup', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-close-race',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    let resolveRelease: (() => void) | undefined;
+    const releaseGate = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockImplementation(() => releaseGate);
+
+    const rewindPromise = commitRewindFiles('', '', { tailTurnsToDrop: 1 });
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+    const closePromise = handle.close();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(2));
+    resolveRelease?.();
+
+    await expect(rewindPromise).resolves.toEqual({ sdkSessionId: 'start-thread-id' });
+    await closePromise;
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('rollback-thread-id');
   });
 });
 
