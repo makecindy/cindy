@@ -438,7 +438,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const currentPlan = currentSubscription?.effectivePlan ?? null;
   const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
-  const hasCurrentSubscription = currentSubscription !== null;
+  const hasNonTerminalSubscription = subscriptionPurchaseBlocked;
   const currentPlanFacts = useMemo(() => {
     if (!currentSubscription) return null;
     const plan = currentSubscription.effectivePlan;
@@ -456,7 +456,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   // The server quote owns reachability and direction. The renderer only hides
   // offers that are not currently sold and the exact current offer.
   const planChangeCandidates = useMemo<PlanChangeCandidate[]>(() => {
-    if (!hasCurrentSubscription) return [];
+    if (!hasNonTerminalSubscription) return [];
     return subscriptionOffers
       .filter(
         (entry) => isCatalogOfferPurchasable(entry) && entry.offer.code !== currentPlan?.offer.code,
@@ -471,7 +471,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               : ('DOWNGRADE' as const)
             : null,
       }));
-  }, [subscriptionOffers, hasCurrentSubscription, currentPlan]);
+  }, [subscriptionOffers, hasNonTerminalSubscription, currentPlan]);
 
   const openPurchaseDialog = (kind: PurchaseKind) => {
     resetSelection();
@@ -595,7 +595,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               facts={currentPlanFacts}
               loading={loadingSubscription}
               error={subscriptionError}
-              hasSubscription={hasCurrentSubscription}
+              hasNonTerminalSubscription={hasNonTerminalSubscription}
               actionDisabled={loadingSubscription || subscriptionError}
               pendingPlanChange={pendingPlanChange}
               pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
@@ -792,7 +792,7 @@ function SubscriptionOverviewCard({
   facts,
   loading,
   error,
-  hasSubscription,
+  hasNonTerminalSubscription,
   actionDisabled,
   pendingPlanChange,
   pendingTargetName,
@@ -804,7 +804,7 @@ function SubscriptionOverviewCard({
   facts: CurrentPlanFacts | null;
   loading: boolean;
   error: boolean;
-  hasSubscription: boolean;
+  hasNonTerminalSubscription: boolean;
   actionDisabled: boolean;
   pendingPlanChange: BillingPendingPlanChange | null;
   pendingTargetName: string | null;
@@ -882,11 +882,11 @@ function SubscriptionOverviewCard({
         </div>
         <button
           type="button"
-          onClick={hasSubscription ? onChangePlan : onPurchase}
+          onClick={hasNonTerminalSubscription ? onChangePlan : onPurchase}
           disabled={actionDisabled}
           className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {hasSubscription
+          {hasNonTerminalSubscription
             ? t('billing.settings.subscriptionCard.changeAction')
             : t('billing.settings.subscriptionCard.action')}
         </button>

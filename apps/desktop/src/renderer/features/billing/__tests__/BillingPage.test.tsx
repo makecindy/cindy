@@ -828,6 +828,38 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
+  it.each(['CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
+    'routes a %s terminal subscription to repurchase',
+    async (status) => {
+      window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
+        subscription: {
+          subscriptionId: 'subscription_terminal',
+          status,
+          currentPeriodStartAt: null,
+          currentPeriodEndAt: null,
+          entitlementValidUntil: null,
+          cancelAtPeriodEnd: false,
+          effectivePlan: null,
+          purchaseAttemptId: null,
+          paymentAction: null,
+        },
+      }));
+
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+      fireEvent.click((await screen.findByText('Configured subscription')).closest('button')!);
+      fireEvent.click(screen.getByText('stripe').closest('button')!);
+      fireEvent.click(screen.getByText('billing.actions.pay'));
+
+      expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+      expect(checkout.startSubscription).toHaveBeenCalledWith({
+        offerCode: 'plus_month',
+        purchaseOptionId: 'listing_stripe',
+      });
+    },
+  );
+
   it('keeps subscription purchases disabled when subscription status is unavailable', async () => {
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => {
       throw new Error('subscription status unavailable');
