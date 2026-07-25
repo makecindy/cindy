@@ -330,6 +330,12 @@ interface ModelSelectorProps {
    */
   unknownModelLabel?: (modelId: string) => string;
   /**
+   * 可及名上下文前缀(如「模型 · chat」)。多实例同屏(IM 目录偏好逐行一个)时前置到
+   * trigger 的 aria-label,行与行才能被读屏区分 —— 与 VendorSegmentedSwitcher.ariaLabel
+   * 同一动机;单实例的 composer 不传,行为不变。
+   */
+  ariaContext?: string;
+  /**
    * session-agent-switch:会话内显式两步切换引擎(先选 Agent,再选模型)。
    * 传入后列表顶部渲染 Claude / Codex 分段;切到非当前引擎的 tab 进入「浏览目标
    * 引擎模型」态(带提示行),此时点模型行调 onSwitch(而非 onModelChange),由调用方
@@ -1512,6 +1518,7 @@ export function ModelSelector({
   fallbackOption,
   reselectEmitsChange = false,
   unknownModelLabel,
+  ariaContext,
   currentProviderId,
   sourceDisconnected = false,
   onProviderChange,
@@ -1687,7 +1694,7 @@ export function ModelSelector({
   // 断开态仅在「非 noSource」时生效:全部来源都断开时 noSource CTA 优先(下拉已无可选行,
   // 跳设置才是正确恢复路径);还有别的已连接来源时,下拉换源就是恢复路径,trigger 保持可点。
   const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
-  const ariaLabel = noSource
+  const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
       ? `${t('newChat.modelSelector.source.disconnected')}: ${displayLabel}`
@@ -1697,6 +1704,8 @@ export function ModelSelector({
             effort: effortLabel,
           })
         : t('newChat.modelSelector.trigger.aria', { model: displayLabel });
+  // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
+  const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
   const isBudget = modelId.startsWith('codex/');
   const isFieldTrigger = triggerVariant === 'field';
   const isCreateAgentVariant = visualVariant === 'create-agent';

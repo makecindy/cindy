@@ -440,8 +440,11 @@ export function WorkspacePrefsEditor({
     <div className="flex flex-wrap items-end gap-2">
       {/* agent 分段是固定 168px 的 pill,不参与压缩 —— 卡片变窄时整块换行,
           而不是把 Claude / Codex 两段挤到溢出容器。
-          禁用条件与另两个字段对齐(含 effAgentCaps === null): 能力清单未就绪时换 agent,
-          联动校准拿不到目标 agent 的档位表, 只能盲写。 */}
+          禁用只看行级只读态,**不含 effAgentCaps === null**:patchForAgentChange 只清
+          model/effort、不做能力校准,切 agent 本身不需要当前 agent 的清单;若跟着
+          caps 一起禁,当前 agent 能力请求瞬时失败就把整行钉死,用户连切到另一个
+          (可用的)agent 都不行(codex review)。模型/权限字段仍按 caps 禁用 ——
+          它们的选项列表真的来自 caps。 */}
       <PrefsField label={t('settings.tina.prefs.agentLabel')} className="shrink-0">
         <VendorSegmentedSwitcher
           value={vendorKey}
@@ -449,7 +452,7 @@ export function WorkspacePrefsEditor({
           // 可及名 = 本地化字段名 + 行别名:每行目录都有一个同样的分段,不带别名时
           // 读屏听到的全部是同一个名字,行与行无法分辨(codex review)。
           ariaLabel={`${t('settings.tina.prefs.agentLabel')} · ${alias}`}
-          disabled={disabled || effAgentCaps === null}
+          disabled={disabled}
           // 当前段可能是**继承值**(prefs.agentKind 为 null / 过期未知值时显示解析出的
           // 默认 agent),重选它 = 钉成显式偏好 —— 与模型字段的 reselectEmitsChange 同语义;
           // 显式同值由下方 nextAgent === prefs.agentKind 去重,不产生空写。
@@ -486,6 +489,8 @@ export function WorkspacePrefsEditor({
           triggerVariant="field"
           popoverSide="bottom"
           dense
+          // 可及名上下文与 agent 分段同规则(字段名 · 行别名),多卡片同屏读屏可区分。
+          ariaContext={`${t('settings.tina.prefs.modelLabel')} · ${alias}`}
           // 能力清单未就绪才禁用; agent 未显式设置时也可直接选模型(随手把
           // agent 显式配对写入, 与 Slack 卡「选中模型即落 (agent, model)」同规则)
           disabled={disabled || effAgentCaps === null || eff.agentKind.id === null}
@@ -510,6 +515,8 @@ export function WorkspacePrefsEditor({
           vendorKey={vendorKey}
           triggerVariant="field"
           dense
+          // 可及名上下文与 agent 分段同规则(字段名 · 行别名),多卡片同屏读屏可区分。
+          ariaContext={`${t('settings.tina.prefs.permissionLabel')} · ${alias}`}
           disabled={disabled || effAgentCaps === null}
           onPermissionModeChange={(next) => {
             if (next !== prefs.permissionMode) state.applyPatch(alias, { permissionMode: next });

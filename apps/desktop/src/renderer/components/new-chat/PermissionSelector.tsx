@@ -41,6 +41,12 @@ interface PermissionSelectorProps {
    * 输入面 token / 同 hover),让设置卡片里的「模型」「权限模式」两个字段等高成套。
    */
   triggerVariant?: 'chip' | 'field';
+  /**
+   * 可及名上下文前缀(如「权限模式 · chat」)。多实例同屏(IM 目录偏好逐行一个)时
+   * 前置到 trigger 的 aria-label,行与行才能被读屏区分 —— 与
+   * VendorSegmentedSwitcher.ariaLabel 同一动机;单实例的 composer 不传,行为不变。
+   */
+  ariaContext?: string;
 }
 
 /**
@@ -96,6 +102,7 @@ export function PermissionSelector({
   iconOnly = false,
   visualVariant = 'default',
   triggerVariant = 'chip',
+  ariaContext,
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -200,7 +207,11 @@ export function PermissionSelector({
               triggerTone === 'bypassPermissions' && 'text-[var(--perm-bypass-selected-text)]',
               disabled && 'pointer-events-none opacity-50',
             )}
-            aria-label={t('newChat.permissionSelector.triggerAria', { label: triggerLabel })}
+            aria-label={
+              ariaContext
+                ? `${ariaContext}:${t('newChat.permissionSelector.triggerAria', { label: triggerLabel })}`
+                : t('newChat.permissionSelector.triggerAria', { label: triggerLabel })
+            }
           >
             {triggerContent}
           </button>

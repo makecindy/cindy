@@ -187,6 +187,11 @@ describe('PermissionSelector triggerVariant', () => {
     expect(onChange).toHaveBeenCalledWith('bypassPermissions');
   });
 
+  it('ariaContext 前置到 trigger 可及名(多实例同屏读屏区分,不传则原样)', () => {
+    renderSelector({ triggerVariant: 'field', ariaContext: '权限模式 · chat' });
+    expect(screen.getByRole('button', { name: '权限模式 · chat:默认权限' })).toBeTruthy();
+  });
+
   it('field 形态选中危险档时只染文字,不改底色', () => {
     renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
     const cls = getTrigger().className;

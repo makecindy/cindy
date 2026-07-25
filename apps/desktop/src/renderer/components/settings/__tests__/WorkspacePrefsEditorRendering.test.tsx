@@ -18,17 +18,23 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+// caps 可用性开关:capsUnavailable=true 模拟能力请求在途/失败(hook 返回 null),
+// 供「分段不因 caps 缺失禁死」用例使用;afterEach 复位。
+let capsUnavailable = false;
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: (agent: 'codex' | 'claude-code') => ({
-    capabilities: {
-      availableModels: [
-        { id: agent === 'codex' ? 'gpt-5.5' : 'claude-opus-4-8', efforts: ['high'], defaultEffort: 'high' },
-      ],
-      permissionModes: [{ id: 'bypassPermissions', displayName: 'Bypass permissions' }],
-    },
-    loading: false,
-    error: null,
-  }),
+  useAgentCapabilities: (agent: 'codex' | 'claude-code') =>
+    capsUnavailable
+      ? { capabilities: null, loading: true, error: null }
+      : {
+          capabilities: {
+            availableModels: [
+              { id: agent === 'codex' ? 'gpt-5.5' : 'claude-opus-4-8', efforts: ['high'], defaultEffort: 'high' },
+            ],
+            permissionModes: [{ id: 'bypassPermissions', displayName: 'Bypass permissions' }],
+          },
+          loading: false,
+          error: null,
+        },
 }));
 
 // 两个重依赖选择器只验「用了它、参数对」,内部行为由各自的测试负责。
@@ -43,6 +49,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onModelChange: (modelId: string) => void;
     reselectEmitsChange?: boolean;
     unknownModelLabel?: (modelId: string) => string;
+    ariaContext?: string;
   }) => (
     <div
       data-testid="model-selector"
@@ -51,6 +58,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-vendor={props.vendorKey}
       data-trigger-variant={props.triggerVariant}
       data-disabled={String(props.disabled)}
+      data-aria-context={props.ariaContext ?? ''}
       // onProviderChange 是「供应商分段模式」的开关(ModelSelector 内部
       // sourcesEnabled = !!onProviderChange),这里暴露出来供断言。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
@@ -68,6 +76,7 @@ vi.mock('@/components/new-chat/PermissionSelector', () => ({
     vendorKey: string;
     triggerVariant?: string;
     disabled?: boolean;
+    ariaContext?: string;
   }) => (
     <div
       data-testid="permission-selector"
@@ -75,6 +84,7 @@ vi.mock('@/components/new-chat/PermissionSelector', () => ({
       data-vendor={props.vendorKey}
       data-trigger-variant={props.triggerVariant}
       data-disabled={String(props.disabled)}
+      data-aria-context={props.ariaContext ?? ''}
     />
   ),
 }));
@@ -107,6 +117,7 @@ function stateWith(overrides: Partial<HookWorkspacePrefsState> = {}): HookWorksp
 afterEach(() => {
   cleanup();
   applyPatch.mockReset();
+  capsUnavailable = false;
 });
 
 describe('WorkspacePrefsEditor 复用标准选择器', () => {
@@ -324,5 +335,39 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
       model: null,
       effort: null,
     });
+  });
+
+  // 能力请求在途/失败(caps=null)不能把 agent 分段禁死:patchForAgentChange 只清
+  // model/effort、不做能力校准,切 agent 不需要当前 agent 的清单;跟着禁会让瞬时
+  // 失败变成死局,用户连切到另一个(可用的)agent 都不行(codex review 2026-07-25)。
+  // 模型/权限字段的选项列表真的来自 caps,维持禁用。
+  it('caps 未就绪: agent 分段仍可切换,模型/权限字段禁用', () => {
+    capsUnavailable = true;
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
+
+    for (const tab of screen.getAllByRole('tab')) {
+      expect((tab as HTMLButtonElement).disabled).toBe(false);
+    }
+    screen.getByRole('tab', { name: 'Codex' }).click();
+    expect(applyPatch).toHaveBeenCalledWith('cindy', {
+      agentKind: 'codex',
+      model: null,
+      effort: null,
+    });
+    expect(screen.getByTestId('model-selector').getAttribute('data-disabled')).toBe('true');
+    expect(screen.getByTestId('permission-selector').getAttribute('data-disabled')).toBe('true');
+  });
+
+  // 读屏可及名:三个字段都带「字段名 · 行别名」上下文,多卡片同屏行与行可区分
+  // (tablist 直接命名;模型/权限经 ariaContext 前置到 trigger aria-label)。
+  it('模型/权限字段带 alias 化 ariaContext', () => {
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
+
+    expect(screen.getByTestId('model-selector').getAttribute('data-aria-context')).toBe(
+      'settings.tina.prefs.modelLabel · cindy',
+    );
+    expect(screen.getByTestId('permission-selector').getAttribute('data-aria-context')).toBe(
+      'settings.tina.prefs.permissionLabel · cindy',
+    );
   });
 });
