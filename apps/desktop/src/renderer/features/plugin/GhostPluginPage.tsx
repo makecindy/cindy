@@ -107,6 +107,19 @@ export function GhostPluginPage() {
   const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
+  // 市场操作的同步互斥锁。React state 在提交前有窗口期,快速连点会让多个回调
+  // 都读到 null;ref 先到先得,state 只驱动按钮禁用等 UI 展示。
+  const marketBusyLockRef = useRef<string | null>(null);
+  const acquireMarketBusy = useCallback((pluginId: string) => {
+    if (marketBusyLockRef.current !== null) return false;
+    marketBusyLockRef.current = pluginId;
+    setMarketBusyId(pluginId);
+    return true;
+  }, []);
+  const releaseMarketBusy = useCallback((pluginId: string) => {
+    if (marketBusyLockRef.current === pluginId) marketBusyLockRef.current = null;
+    setMarketBusyId((current) => (current === pluginId ? null : current));
+  }, []);
   const marketRefreshRequestRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
   const refreshMarket = useCallback(async (preserveOnError = false) => {
@@ -139,6 +152,7 @@ export function GhostPluginPage() {
   useEffect(() => {
     setMarketSnapshot(null);
     setMarketDetail(null);
+    marketBusyLockRef.current = null;
     setMarketBusyId(null);
     marketDetailRequestRef.current += 1;
     void refreshMarket();
@@ -362,12 +376,11 @@ export function GhostPluginPage() {
   // 权限 diff,经用户确认后才安装,不做静默升级。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
-      // 列表每张卡都有直达入口,用整页互斥防止并发更新互相覆盖忙碌状态。
-      if (marketBusyId !== null) return;
       const marketItem = marketByGhostId.get(ghostId);
       if (!marketItem || marketItem.installState !== 'update-available') return;
       const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
-      setMarketBusyId(marketItem.pluginId);
+      // 列表每张卡都有直达入口,同步互斥防止并发更新互相覆盖忙碌状态。
+      if (!acquireMarketBusy(marketItem.pluginId)) return;
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         const diff = diffGhostPermissionItems(
@@ -399,11 +412,10 @@ export function GhostPluginPage() {
       } catch (error) {
         toast.error(t(pluginMarketErrorKey(error)));
       } finally {
-        // 只清除自己占用的忙碌位,避免误清后续流程(如详情页安装)的状态。
-        setMarketBusyId((current) => (current === marketItem.pluginId ? null : current));
+        releaseMarketBusy(marketItem.pluginId);
       }
     },
-    [confirm, ghosts, marketBusyId, marketByGhostId, refreshMarket, t],
+    [acquireMarketBusy, confirm, ghosts, marketByGhostId, refreshMarket, releaseMarketBusy, t],
   );
 
   const handleUpdate = useCallback(async () => {
@@ -526,10 +538,9 @@ export function GhostPluginPage() {
 
   const handleSelectMarket = useCallback(
     async (pluginId: string) => {
-      // 与 handleMarketUpdate 共用同一互斥位:更新进行中不再叠加其它市场操作。
-      if (marketBusyId !== null) return;
+      // 与 handleMarketUpdate 共用同一互斥锁:更新进行中不叠加其它市场操作。
+      if (!acquireMarketBusy(pluginId)) return;
       const requestId = ++marketDetailRequestRef.current;
-      setMarketBusyId(pluginId);
       try {
         const detail = await window.electronAPI.pluginMarket.detail(pluginId);
         if (requestId === marketDetailRequestRef.current) setMarketDetail(detail);
@@ -538,10 +549,10 @@ export function GhostPluginPage() {
           toast.error(t(pluginMarketErrorKey(error)));
         }
       } finally {
-        setMarketBusyId((current) => (current === pluginId ? null : current));
+        releaseMarketBusy(pluginId);
       }
     },
-    [marketBusyId, t],
+    [acquireMarketBusy, releaseMarketBusy, t],
   );
 
   const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
@@ -575,8 +586,10 @@ export function GhostPluginPage() {
 
   const handleInstallFromMarket = useCallback(async () => {
     if (!marketDetail) return;
-    // 与 handleMarketUpdate 共用同一互斥位:其它市场操作进行中不叠加安装。
-    if (marketBusyId !== null) return;
+    // 与 handleMarketUpdate 共用同一互斥锁:其它市场操作进行中不叠加安装。
+    // 弹确认框前只做只读检查;真正占锁在用户确认之后(确认框是模态的,
+    // 不存在两个确认同时到达的并发窗口)。
+    if (marketBusyLockRef.current !== null) return;
     const confirmed = await confirm({
       title: t('settings.ghosts.market.installConfirmTitle', {
         name: marketDetail.name,
@@ -587,7 +600,7 @@ export function GhostPluginPage() {
       autoFocusConfirm: true,
     });
     if (!confirmed) return;
-    setMarketBusyId(marketDetail.pluginId);
+    if (!acquireMarketBusy(marketDetail.pluginId)) return;
     try {
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
       toast.success(
@@ -601,9 +614,9 @@ export function GhostPluginPage() {
     } catch (error) {
       toast.error(t(pluginMarketErrorKey(error)));
     } finally {
-      setMarketBusyId((current) => (current === marketDetail.pluginId ? null : current));
+      releaseMarketBusy(marketDetail.pluginId);
     }
-  }, [confirm, marketBusyId, marketDetail, refreshMarket, t]);
+  }, [acquireMarketBusy, confirm, marketDetail, refreshMarket, releaseMarketBusy, t]);
 
   if (marketDetail) {
     return (
