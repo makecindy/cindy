@@ -693,7 +693,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         !grantOnly &&
         !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
       ) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `目标插件不再提供工具 ${tool}` };
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
       }
       let finalAssessment;
       try {
@@ -744,7 +744,8 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         if (!grant.ok) {
           return { ok: false, errorCode: 'ATTACHMENT_INVALID', message: grant.message };
         }
-        // Post-grant revalidation: the grant process may have taken time.
+        // Post-grant revalidation: the grant process includes an async user
+        // confirmation step; re-check everything before returning success.
         const postGrant = getGhostManager()
           .list()
           .find((g) => g.manifest.id === ghostId);
@@ -753,6 +754,17 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         }
         if (!postGrant.enabled) {
           return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
+        }
+        if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+          return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
+        }
+        try {
+          const postGrantAssessment = getGhostSetupAssessment(ghostId);
+          if (postGrantAssessment.state !== 'ready') {
+            return { ok: false, errorCode: 'SETUP_REQUIRED', message: t('newChat.pluginSetup.setupChangedDuringResume'), setup: postGrantAssessment };
+          }
+        } catch {
+          return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
         }
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {

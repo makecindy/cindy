@@ -913,7 +913,11 @@ export class AgentIslandService {
     const existing = this.state.sessions.get(hydrated.sessionId);
     if (existing?.pendingInteractionIds.has(requestId)) {
       existing.pendingInteractionDetails.set(requestId, detail);
-      if (existing.detail !== detail && existing.phase === 'needs-interaction') {
+      if (
+        existing.detail !== detail &&
+        existing.phase === 'needs-interaction' &&
+        existing.interactionKind === 'plugin_setup'
+      ) {
         existing.detail = detail;
       }
       this.publish();
