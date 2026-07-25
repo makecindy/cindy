@@ -358,8 +358,13 @@ describe('GhostSetupCoordinator', () => {
     await waiting;
   });
 
-  it('executes navigation actions once per session instead of sharing the first route', async () => {
+  it('executes navigation actions once per session even in the same responding window', async () => {
     const h = harness(requiredNavigation());
+    const sameWindow: GhostSetupInteractionResponseTarget = {
+      id: 101,
+      isDestroyed: () => false,
+      send: vi.fn(),
+    };
     h.executeAction.mockResolvedValue({ ok: true, waitingExternal: true });
     const first = h.coordinator.ensureReady({
       sessionId: 'session-1',
@@ -374,12 +379,16 @@ describe('GhostSetupCoordinator', () => {
     await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(2));
 
     for (const { request } of h.bridge.pendingSnapshots()) {
-      h.bridge.resolve(request.requestId, {
-        kind: 'plugin_setup',
-        action: 'run_action',
-        actionId: 'open_plugin_settings:plugin_config:settings',
-        expectedRevision: request.revision,
-      });
+      h.bridge.resolve(
+        request.requestId,
+        {
+          kind: 'plugin_setup',
+          action: 'run_action',
+          actionId: 'open_plugin_settings:plugin_config:settings',
+          expectedRevision: request.revision,
+        },
+        sameWindow,
+      );
     }
 
     await vi.waitFor(() => expect(h.executeAction).toHaveBeenCalledTimes(2));
@@ -445,10 +454,11 @@ describe('GhostSetupCoordinator', () => {
       expect.objectContaining({ responseTarget: firstWindow }),
     );
 
-    h.bridge.resolve(request.requestId, {
+    const current = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve(current.requestId, {
       kind: 'plugin_setup',
       action: 'cancel',
-      expectedRevision: request.revision,
+      expectedRevision: current.revision,
     });
     await waiting;
   });
@@ -553,6 +563,51 @@ describe('GhostSetupCoordinator', () => {
       message: '用户取消了插件设置，本次调用未执行。',
     });
     expect(h.executeAction).not.toHaveBeenCalled();
+  });
+
+  it('rejects cancellation from a stale setup revision', async () => {
+    const h = harness(required());
+    let settled = false;
+    const waiting = h.coordinator
+      .ensureReady({
+        sessionId: 'session-1',
+        ghostId: 'gmail',
+        tool: 'search',
+      })
+      .finally(() => {
+        settled = true;
+      });
+    await vi.waitFor(() => expect(h.bridge.pendingSnapshots()).toHaveLength(1));
+    const staleRevision = h.bridge.pendingSnapshots()[0].request.revision;
+
+    h.setAssessment({ ...required(), revision: staleRevision + 1 });
+    h.changeBus.emit('gmail', { source: 'secret', ref: 'google' });
+    await vi.waitFor(() =>
+      expect(h.bridge.pendingSnapshots()[0].request.revision).toBe(staleRevision + 1),
+    );
+
+    const broadcastsBeforeStaleCancel = h.broadcast.mock.calls.length;
+    h.bridge.resolve('request-1', {
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: staleRevision,
+    });
+    await vi.waitFor(() =>
+      expect(h.broadcast.mock.calls.length).toBeGreaterThan(broadcastsBeforeStaleCancel),
+    );
+    expect(settled).toBe(false);
+    expect(h.bridge.pendingSnapshots()[0].request.steps[0].phase).not.toBe('cancelled');
+
+    const current = h.bridge.pendingSnapshots()[0].request;
+    h.bridge.resolve('request-1', {
+      kind: 'plugin_setup',
+      action: 'cancel',
+      expectedRevision: current.revision,
+    });
+    await expect(waiting).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'SETUP_CANCELLED',
+    });
   });
 
   it('non-interactive calls fail closed with the safe assessment boundary', async () => {

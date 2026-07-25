@@ -401,6 +401,17 @@ describe('parseGhostSetupInlineSubmit', () => {
       parseGhostSetupInlineSubmit({
         actionId: 'inline_form:opaque',
         expectedRevision: 2,
+        value: `  ${'x'.repeat(4096)} \n`,
+      }),
+    ).toEqual({
+      actionId: 'inline_form:opaque',
+      expectedRevision: 2,
+      value: 'x'.repeat(4096),
+    });
+    expect(
+      parseGhostSetupInlineSubmit({
+        actionId: 'inline_form:opaque',
+        expectedRevision: 2,
         value: 'x'.repeat(4097),
       }),
     ).toBeNull();

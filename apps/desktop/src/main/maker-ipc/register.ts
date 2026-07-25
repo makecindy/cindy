@@ -1142,6 +1142,7 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
     };
     if (typeof value.sessionId !== 'string') return;
     if (channel === MAKER_PUSH.INTERACTION_REQUEST && value.request?.kind === 'plugin_setup') {
+      if (!shouldNotifyAgentIslandForSession(value.sessionId)) return;
       if (value.request.terminal === true) {
         // The Renderer keeps the terminal snapshot for its short visual
         // grace, while Agent Island must stop treating it as attention now.

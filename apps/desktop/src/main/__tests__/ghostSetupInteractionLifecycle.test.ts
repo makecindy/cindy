@@ -29,4 +29,21 @@ describe('plugin setup interaction lifecycle contract', () => {
       "cleanupPendingInteractionsForSession(sessionId, 'turn_idle_reconcile');",
     );
   });
+
+  it('applies the Agent Island session policy before forwarding Setup snapshots', () => {
+    const bridgeStart = registerSource.indexOf(
+      'const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({',
+    );
+    const bridgeEnd = registerSource.indexOf('\n});', bridgeStart);
+    const bridgeSource = registerSource.slice(bridgeStart, bridgeEnd);
+    const policyIndex = bridgeSource.indexOf(
+      'if (!shouldNotifyAgentIslandForSession(value.sessionId)) return;',
+    );
+    const forwardIndex = bridgeSource.indexOf(
+      'getAgentIslandService()?.handlePluginSetupInteraction(',
+    );
+
+    expect(policyIndex).toBeGreaterThanOrEqual(0);
+    expect(forwardIndex).toBeGreaterThan(policyIndex);
+  });
 });

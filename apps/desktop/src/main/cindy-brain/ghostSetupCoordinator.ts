@@ -314,13 +314,13 @@ export class GhostSetupCoordinator {
         activeActionId = action.id;
         publish(assessment, 'action_running');
         // OAuth is a Host-global flow and remains shared. Navigation actions
-        // target a concrete window, so de-duplicate only within that target;
-        // another window showing the same session must receive its own route.
+        // belong to a session + responding window: two sessions displayed in
+        // one window must each receive a route carrying its own sessionId.
         const flightScope =
           action.kind === 'oauth_connect'
             ? 'shared'
             : responseTarget
-              ? `target:${responseTarget.id}`
+              ? `session:${sessionId}:target:${responseTarget.id}`
               : `session:${sessionId}`;
         const flightKey = `${request.ghostId}\u0000${action.id}\u0000${flightScope}`;
         let flight = this.actionFlights.get(flightKey);
@@ -359,6 +359,10 @@ export class GhostSetupCoordinator {
         responseTarget?: GhostSetupInteractionResponseTarget,
       ): Promise<void> => {
         if (command.action === 'cancel') {
+          if (command.expectedRevision !== snapshot.revision) {
+            await verify();
+            return;
+          }
           publish(assessment, 'cancelled', undefined, true);
           settle(
             {

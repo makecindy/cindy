@@ -388,6 +388,7 @@ export function parseGhostSetupInlineSubmit(raw: unknown): GhostSetupInlineSubmi
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
   const keys = Object.keys(value);
+  const trimmedValue = typeof value.value === 'string' ? value.value.trim() : null;
   if (
     keys.length !== 3 ||
     !keys.every((key) => ['actionId', 'expectedRevision', 'value'].includes(key)) ||
@@ -396,16 +397,16 @@ export function parseGhostSetupInlineSubmit(raw: unknown): GhostSetupInlineSubmi
     value.actionId.length > 256 ||
     !Number.isInteger(value.expectedRevision) ||
     (value.expectedRevision as number) < 0 ||
-    typeof value.value !== 'string' ||
-    value.value.trim().length === 0 ||
-    value.value.length > GHOST_SECRET_VALUE_MAX_CHARS
+    trimmedValue === null ||
+    trimmedValue.length === 0 ||
+    trimmedValue.length > GHOST_SECRET_VALUE_MAX_CHARS
   ) {
     return null;
   }
   return {
     actionId: value.actionId,
     expectedRevision: value.expectedRevision as number,
-    value: value.value,
+    value: trimmedValue,
   };
 }
 
