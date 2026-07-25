@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
+import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelRefresh.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
@@ -137,7 +138,9 @@ describe('provider:models-refresh handler', () => {
 
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'custom-provider'),
-    ).rejects.toThrow(/INVALID_PARAMS/);
+    ).rejects.toThrow(
+      `[INVALID_PARAMS] providerId must be one of: ${BUILTIN_REFRESHABLE_PROVIDER_IDS.join(', ')}`,
+    );
     expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
   });
 

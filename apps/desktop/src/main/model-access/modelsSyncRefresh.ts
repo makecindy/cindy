@@ -1,3 +1,6 @@
+import type { ModelAccessStatus } from '../../shared/modelAccess.js';
+import type { CredentialsSync } from './credentialsSync.js';
+
 /**
  * Wait for the model-list request that belongs to one Cindy account generation.
  *
@@ -17,6 +20,19 @@ export type ModelsSyncRefreshOutcome =
   | 'failed'
   | 'not-started'
   | 'account-changed';
+
+/**
+ * A model-only refresh must not reacquire credentials when the current credentials
+ * are already ready. Reacquisition can transition the shared status to `failed`
+ * during a transient endpoint outage, which would invalidate an otherwise usable
+ * model snapshot before the `/models` request even starts.
+ */
+export async function ensureCredentialsReadyForModelsRefresh(
+  sync: Pick<CredentialsSync, 'getStatus' | 'retry'>,
+): Promise<ModelAccessStatus> {
+  const status = sync.getStatus();
+  return status.state === 'ok' ? status : sync.retry();
+}
 
 export async function waitForModelsSyncRefresh(input: {
   expectedGeneration: number;

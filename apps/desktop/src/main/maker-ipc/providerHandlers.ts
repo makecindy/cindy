@@ -25,6 +25,7 @@ import {
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import {
+  BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
   type BuiltinRefreshableProviderId,
   type ProviderModelRefreshResult,
@@ -192,7 +193,10 @@ export function registerProviderHandlers(
     async (event, providerId: unknown): Promise<ProviderModelRefreshResult> => {
       deps.assertTrustedSender(event);
       if (!isBuiltinRefreshableProviderId(providerId)) {
-        throwIpcError('INVALID_PARAMS', 'providerId must be xd|anthropic|openai|xai');
+        throwIpcError(
+          'INVALID_PARAMS',
+          `providerId must be one of: ${BUILTIN_REFRESHABLE_PROVIDER_IDS.join(', ')}`,
+        );
       }
       try {
         await deps.refreshBuiltinModels(providerId);

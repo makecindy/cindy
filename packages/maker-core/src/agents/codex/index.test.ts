@@ -632,6 +632,49 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  it('replaces a provider-oauth utility host with an OpenAI-bound host for explicit refreshes', async () => {
+    const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexProxyActive: ctx.credentialMode === 'provider-oauth',
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      onCodexLocalModelsListed,
+      prepareCodexExtraSpawnConfig,
+    }));
+    const xaiHandle = await agent.startSession({
+      sessionId: 'session-provider-oauth-before-openai-refresh',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+    await xaiHandle.close();
+
+    await expect(
+      agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toBe(true);
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[0].lines.some((line) => (
+      (JSON.parse(line) as { method?: string }).method === Method.ModelList
+    ))).toBe(false);
+    expect(createdTransports[1].lines.some((line) => (
+      (JSON.parse(line) as { method?: string }).method === Method.ModelList
+    ))).toBe(true);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
+      remoteHostId: undefined,
+      credentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+    });
+    expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
+    await agent.dispose();
+  });
+
   it('reads every model/list page and publishes one complete snapshot', async () => {
     const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
     const agent = new CodexAgent(createDeps({}, { onCodexLocalModelsListed }));

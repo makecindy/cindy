@@ -121,6 +121,11 @@ export interface CodexLocalCredentialModeSwitchContext {
   activeSubscriptions: number;
 }
 
+export interface RefreshLocalModelsOptions {
+  /** Bind control-plane model discovery to a specific local credential route. */
+  credentialMode?: AgentCredentialMode;
+}
+
 export interface ClaudeSubagentTaskRegistration {
   taskId: string;
   parentToolUseId: string;
@@ -1008,7 +1013,7 @@ export abstract class BaseAgent {
    * 默认无运行时发现能力，返回 false；Codex 覆盖后通过 app-server `model/list`
    * 拉完整分页快照。返回值表示快照是否仍属于当前 host 且已由宿主成功应用。
    */
-  async refreshLocalModels(): Promise<boolean> {
+  async refreshLocalModels(_options?: RefreshLocalModelsOptions): Promise<boolean> {
     return false;
   }
 

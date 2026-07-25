@@ -32,6 +32,7 @@ import {
   type AgentDeps,
   type StartSessionOptions,
   type OneShotOptions,
+  type RefreshLocalModelsOptions,
   type SendOptions,
 } from '../base-agent.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
@@ -1507,8 +1508,11 @@ export class CodexAgent extends BaseAgent {
    * 成功时未必已经触发模型注册表刷新。`model/list` 是官方 app-server 的权威读取面，
    * 同时也是 cache ready barrier；分页全部读完后才一次性交给宿主，避免 UI 看到半份目录。
    */
-  override async refreshLocalModels(): Promise<boolean> {
-    const { key, host } = await this.getUtilityHost();
+  override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
+    const key = hostKey();
+    const host = options?.credentialMode
+      ? await this.getHost(undefined, options.credentialMode)
+      : (await this.getUtilityHost()).host;
     const init = await host.ensureStarted();
     if (init.codexHome) this.codexHome = init.codexHome;
 
