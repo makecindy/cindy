@@ -23,7 +23,13 @@
  * createDesktopProviderService.ts,这样依赖本 holder 的纯逻辑模块(及其单测)不被 electron 污染。
  */
 
-import { BUNDLED_CATALOG, type AgentKind, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  type AgentKind,
+  type Catalog,
+  type CatalogModel,
+  type Provider,
+} from '@cindy/model-providers';
 
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 
@@ -55,6 +61,11 @@ export interface XdGatewayAgentOverride {
 /** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 同形)。 */
 export interface XdGatewayModelInfo {
   id: string;
+  /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
+  /** AIGateway 标准 token 单价(per token)。 */
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
   /** 进哪些 runtime tab;缺省 = 仅 claude-code 兜底。 */
   agents?: AgentKind[];
   name?: string;
@@ -107,6 +118,34 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 
 type Effort = CatalogModel['efforts'][number];
+
+function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cost'] | undefined {
+  const input = model.inputCostPerToken;
+  const output = model.outputCostPerToken;
+  if (
+    typeof input !== 'number' ||
+    !Number.isFinite(input) ||
+    input < 0 ||
+    typeof output !== 'number' ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
+    return undefined;
+  }
+  const discount =
+    typeof model.costDiscount === 'number' &&
+    Number.isFinite(model.costDiscount) &&
+    model.costDiscount > 0 &&
+    model.costDiscount <= 1
+      ? model.costDiscount
+      : 0;
+  const multiplier = 1 - discount;
+  return {
+    input: input * 1_000_000 * multiplier,
+    output: output * 1_000_000 * multiplier,
+  };
+}
+
 /** base + custom + discovered augment 的合并缓存;null = 待重算(惰性)。 */
 let merged: Catalog | null = null;
 /** bundled + active v1 `cindyModelMeta` 的合并索引；目录变化时与 merged 一起失效。 */
@@ -146,8 +185,7 @@ function augmentModels(
         .sort(
           (a, b) =>
             (a.model.sortOrder ?? Number.MAX_SAFE_INTEGER) -
-              (b.model.sortOrder ?? Number.MAX_SAFE_INTEGER) ||
-            a.index - b.index,
+              (b.model.sortOrder ?? Number.MAX_SAFE_INTEGER) || a.index - b.index,
         )
         .map(({ model }) => model)
     : combined;
@@ -175,7 +213,7 @@ function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
     model.defaultEffort && CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(model.defaultEffort)
       ? bridgeEfforts.includes('xhigh')
         ? 'xhigh'
-        : bridgeEfforts[bridgeEfforts.length - 1] ?? null
+        : (bridgeEfforts[bridgeEfforts.length - 1] ?? null)
       : model.defaultEffort;
   return {
     ...model,
@@ -200,7 +238,8 @@ function projectCodexModelsToClaude(p: Provider): Provider {
   const alignedExisting = existing.map((model) => {
     if (!model.id.startsWith(CHATGPT_MODEL_PREFIX)) return model;
     const source = canonical.get(model.id.slice(CHATGPT_MODEL_PREFIX.length));
-    if (!source || (model.name === source.name && model.sortOrder === source.sortOrder)) return model;
+    if (!source || (model.name === source.name && model.sortOrder === source.sortOrder))
+      return model;
     aligned = true;
     return { ...model, name: source.name, sortOrder: source.sortOrder };
   });
@@ -249,15 +288,22 @@ function buildCindyModelMetaIndex(meta: unknown): Map<string, CindyModelMetaFiel
     const fields: CindyModelMetaFields = {};
     if (typeof e.name === 'string' && e.name.length > 0) fields.name = e.name;
     if (typeof e.group === 'string' && e.group.length > 0) fields.group = e.group;
-    if (typeof e.description === 'string' && e.description.length > 0) fields.description = e.description;
-    if (typeof e.sortOrder === 'number' && Number.isFinite(e.sortOrder)) fields.sortOrder = e.sortOrder;
+    if (typeof e.description === 'string' && e.description.length > 0)
+      fields.description = e.description;
+    if (typeof e.sortOrder === 'number' && Number.isFinite(e.sortOrder))
+      fields.sortOrder = e.sortOrder;
     if (typeof e.defaultEnabled === 'boolean') fields.defaultEnabled = e.defaultEnabled;
-    if (typeof e.contextWindow === 'number' && Number.isFinite(e.contextWindow) && e.contextWindow > 0) {
+    if (
+      typeof e.contextWindow === 'number' &&
+      Number.isFinite(e.contextWindow) &&
+      e.contextWindow > 0
+    ) {
       fields.contextWindow = e.contextWindow;
     }
     if (Array.isArray(e.efforts)) {
-      const efforts = e.efforts.filter((value): value is Effort =>
-        typeof value === 'string' && VALID_EFFORTS.has(value));
+      const efforts = e.efforts.filter(
+        (value): value is Effort => typeof value === 'string' && VALID_EFFORTS.has(value),
+      );
       if (efforts.length === e.efforts.length) fields.efforts = efforts;
     }
     if (e.defaultEffort === null) fields.defaultEffort = null;
@@ -327,7 +373,7 @@ export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBa
       ? fields.defaultEffort
       : efforts.includes('high')
         ? 'high'
-        : efforts[efforts.length - 1] ?? null;
+        : (efforts[efforts.length - 1] ?? null);
   return { efforts, defaultEffort };
 }
 
@@ -336,7 +382,10 @@ export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBa
  * 典型修正:订阅 `/v1/models` / SDK 捕获给的家族级名字("Fable")→ 产品命名
  * ("Fable 5");上游无排序 → 产品排序。
  */
-function overlayCindyMeta(model: CatalogModel, fields: CindyModelMetaFields | undefined): CatalogModel {
+function overlayCindyMeta(
+  model: CatalogModel,
+  fields: CindyModelMetaFields | undefined,
+): CatalogModel {
   if (!fields) return model;
   return {
     ...model,
@@ -376,7 +425,9 @@ function computeMerged(): Catalog {
   // 动态清单供应商先清零静态模型(2026-07-19 统一重构):无论目录来自 bundled 还是
   // 远端(含仍带静态段的旧版 v1 OSS 文件),这三家的清单**只信运行时注入**——
   // 否则过渡期旧 OSS 文件会让静态清单复活,违反「无可用性证明不展示」。
-  const normalized = providers.map((p) => (DYNAMIC_LIST_PROVIDER_IDS.has(p.id) ? withEmptyModels(p) : p));
+  const normalized = providers.map((p) =>
+    DYNAMIC_LIST_PROVIDER_IDS.has(p.id) ? withEmptyModels(p) : p,
+  );
   if (normalized.some((p, index) => p !== providers[index])) providers = normalized;
 
   // 同一份规范快照先进入 Codex,再从「静态 first-wins 后的生效 Codex 列表」投影 bridge。
@@ -418,9 +469,7 @@ function computeMerged(): Catalog {
       anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
     );
     providers = providers.map((p) =>
-      p.id === 'anthropic'
-        ? { ...p, models: { ...p.models, 'claude-code': overlaid } }
-        : p,
+      p.id === 'anthropic' ? { ...p, models: { ...p.models, 'claude-code': overlaid } } : p,
     );
   }
 
@@ -443,7 +492,8 @@ function computeMerged(): Catalog {
     for (const agent of agentKeys) models[agent] = [];
     for (const gm of gwModels) {
       // tab 归属:服务端 agents > 仅 claude-code(网关 /v1/messages 翻译覆盖面最广,不猜)
-      const targetAgents: AgentKind[] = gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
+      const targetAgents: AgentKind[] =
+        gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
       for (const agent of targetAgents) {
         if (!models[agent]) continue; // 未知 agent 键防御(wire 数据)
         const ov = gm.perAgent?.[agent] ?? {};
@@ -453,8 +503,7 @@ function computeMerged(): Catalog {
           rawEfforts === undefined
             ? ['low', 'medium', 'high']
             : rawEfforts.filter((e): e is Effort => VALID_EFFORTS.has(e));
-        const rawDefault =
-          ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
+        const rawDefault = ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
         const defaultEffort: Effort | null =
           rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
             ? (rawDefault as Effort)
@@ -464,6 +513,7 @@ function computeMerged(): Catalog {
                 ? efforts[efforts.length - 1]
                 : null;
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
+        const cost = effectiveGatewayModelCost(gm);
         const merged: CatalogModel = {
           id: gm.id,
           name: gm.name ?? gm.id,
@@ -476,14 +526,14 @@ function computeMerged(): Catalog {
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
+          ...(cost ? { cost } : {}),
         };
         models[agent]!.push(merged);
       }
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
     for (const agent of agentKeys) {
-      models[agent] = models[agent]!
-        .map((model, index) => ({ model, index }))
+      models[agent] = models[agent]!.map((model, index) => ({ model, index }))
         .sort(
           (a, b) =>
             (a.model.sortOrder ?? Number.MAX_SAFE_INTEGER) -

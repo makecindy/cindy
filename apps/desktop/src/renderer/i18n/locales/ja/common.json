@@ -3725,6 +3725,8 @@
         "output": "出力",
         "cacheRead": "キャッシュ読み取り",
         "cacheCreate": "キャッシュ書き込み",
+        "free": "期間限定無料",
+        "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
         "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"

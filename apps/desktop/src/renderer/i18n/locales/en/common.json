@@ -3726,6 +3726,8 @@
         "output": "Output",
         "cacheRead": "Cache read",
         "cacheCreate": "Cache write",
+        "free": "Limited-time free",
+        "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
         "subscriptionEstimate": "Value estimate, not an actual bill"
