@@ -390,9 +390,16 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
   return agentKind === 'codex' ? 'codex' : 'cc';
 }
 
-/** 选择器的 vendor key → hook prefs 的 agentKind。 */
+/**
+ * 选择器的 vendor key → hook prefs 的 agentKind。
+ * MakerVendor 还含 'orca' 等本编辑器不支持的值 —— 分段只有 Claude/Codex 两项,该分支
+ * 物理不可达;若未来有人把别的 vendor 接进来,fail-fast 好过静默写成 claude-code
+ * 偏好(Copilot review)。
+ */
 function toAgentKind(vendor: MakerVendor): KnownAgent {
-  return vendor === 'codex' ? 'codex' : 'claude-code';
+  if (vendor === 'codex') return 'codex';
+  if (vendor === 'cc') return 'claude-code';
+  throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
 
 
