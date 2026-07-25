@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Hand,
   CodeXml,
@@ -95,6 +95,22 @@ export function PermissionSelector({
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // field 形态的停靠侧按 trigger 当前位置**动态**选空间大的一侧(MorphPopover 按请求侧
+  // 钳高、不做碰撞翻转,选侧责任在调用方)。恒定任一侧都会在某个位置截断 —— 设置页的
+  // 目录卡片列表可长可短,同一个字段既可能贴视口顶也可能贴底(2026-07 Light 实测:
+  // 恒 bottom 时页面末行的菜单被底部钳得只剩 2 个选项)。chip 形态仍恒向上(composer
+  // 底部工具栏,历史行为)。
+  const triggerElRef = useRef<HTMLButtonElement | null>(null);
+  const [fieldSide, setFieldSide] = useState<'top' | 'bottom'>('bottom');
+  const pickFieldSide = (): 'top' | 'bottom' => {
+    const rect = triggerElRef.current?.getBoundingClientRect();
+    if (!rect) return 'bottom';
+    return window.innerHeight - rect.bottom >= rect.top ? 'bottom' : 'top';
+  };
+  const openWithSidePick = (next: boolean) => {
+    if (next && triggerVariant === 'field') setFieldSide(pickFieldSide());
+    setOpen(next);
+  };
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
@@ -159,15 +175,13 @@ export function PermissionSelector({
   return (
     <MorphPopover
       open={open && !disabled}
-      onOpenChange={(next) => setOpen(disabled ? false : next)}
+      onOpenChange={(next) => openWithSidePick(disabled ? false : next)}
       panelWidth={300}
       panelClassName="p-2"
       panelAriaLabel={t('newChat.permissionSelector.listAria')}
-      // 停靠侧:composer chip 恒向上(底部工具栏,上方才有空间);field 恒向下
-      // (设置页字段上方通常贴着卡片标题)。MorphPopover 是按请求侧的可用空间
-      // 钳高、不做碰撞翻转的(morph-popover.tsx:176-180), 所以这里必须按形态
-      // 选对侧 —— 靠近视口顶部的设置行若沿用 side='top' 会开成截断/零高。
-      side={isFieldTrigger ? 'bottom' : 'top'}
+      // 停靠侧:composer chip 恒向上(底部工具栏,历史行为);field 按 trigger 位置
+      // 动态选空间大的一侧(见 pickFieldSide 注释)。
+      side={isFieldTrigger ? fieldSide : 'top'}
       // field 形态从设置页输入面生长(chip 形态仍从 composer 胶囊面生长)。
       startBg={isFieldTrigger ? 'var(--settings-input-bg)' : 'var(--composer-pill-bg)'}
       startBorderColor="var(--border-default)"
@@ -179,9 +193,10 @@ export function PermissionSelector({
           contentClassName="max-w-[280px] whitespace-normal break-words text-left"
         >
           <button
+            ref={triggerElRef}
             type="button"
             disabled={disabled}
-            onClick={() => setOpen((prev) => (disabled ? false : !prev))}
+            onClick={() => openWithSidePick(disabled ? false : !open)}
             aria-expanded={open && !disabled}
             aria-haspopup="listbox"
             className={cn(

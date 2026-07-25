@@ -147,10 +147,11 @@ describe('PermissionSelector triggerVariant', () => {
     expect(getTrigger().className).toContain('h-9');
   });
 
-  // MorphPopover 按「请求侧的可用空间」钳高、不做碰撞翻转,所以形态必须选对停靠侧:
-  // composer chip 在底部工具栏 → 向上;设置页 field 上方常贴着卡片标题 → 向下,
-  // 否则靠近视口顶部的设置行会把菜单开成截断 / 零高。
-  it('chip 向上开、field 向下开(MorphPopover 不做碰撞翻转)', async () => {
+  // MorphPopover 按「请求侧的可用空间」钳高、不做碰撞翻转,选侧责任在调用方:
+  // composer chip 在底部工具栏 → 恒向上(历史行为);field 按 trigger 位置**动态**选
+  // 空间大的一侧 —— 恒定任一侧都会在某个位置截断(2026-07 Light 实测:恒 bottom 时
+  // 页面末行的菜单被视口底钳得只剩 2 个选项)。
+  it('chip 恒向上;field 动态选侧(上方空间大时向上开)', async () => {
     const { unmount } = renderSelector();
     fireEvent.click(getTrigger());
     const chipPanel = await screen.findByRole('listbox');
@@ -160,10 +161,24 @@ describe('PermissionSelector triggerVariant', () => {
     unmount();
     cleanup();
 
+    // jsdom 无布局(rect 全 0): 下方空间 = innerHeight - 0 ≥ 上方 0 → 'bottom'
     renderSelector({ triggerVariant: 'field' });
     fireEvent.click(getTrigger());
     const fieldPanel = await screen.findByRole('listbox');
     expect(fieldPanel.closest('[data-morph-side]')?.getAttribute('data-morph-side')).toBe('bottom');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull(), { timeout: 1500 });
+    cleanup();
+
+    // trigger 贴近视口底(下方空间 < 上方)→ 向上开
+    renderSelector({ triggerVariant: 'field' });
+    const trigger = getTrigger();
+    trigger.getBoundingClientRect = () =>
+      ({ top: 700, bottom: 740, left: 0, right: 200, width: 200, height: 40, x: 0, y: 700 }) as DOMRect;
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true });
+    fireEvent.click(trigger);
+    const abovePanel = await screen.findByRole('listbox');
+    expect(abovePanel.closest('[data-morph-side]')?.getAttribute('data-morph-side')).toBe('top');
   });
 
   it('field 形态仍走同一份选项列表与危险档配色', async () => {
