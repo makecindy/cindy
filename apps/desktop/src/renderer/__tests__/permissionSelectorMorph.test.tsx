@@ -131,15 +131,17 @@ describe('PermissionSelector triggerVariant', () => {
     expect(cls).not.toContain('settings-input-bg');
   });
 
-  it('field 形态:输入面样式,与 ModelSelector 的 field trigger 同规格', () => {
+  it('field 形态:输入面样式,与 ModelSelector 的 field trigger 同规格(pill,§4 Select 触发器)', () => {
     renderSelector({ triggerVariant: 'field' });
     const cls = getTrigger().className;
-    expect(cls).toContain('rounded-lg');
+    // DESIGN.md §4 Select & Dropdown:单行 select trigger 同单行输入,胶囊形(9999px),
+    // 不是 8px 内圆角(那一档只留给穿不了 pill 的控件)。
+    expect(cls).toContain('rounded-full');
     expect(cls).toContain('border-[var(--border-default)]');
     expect(cls).toContain('bg-[var(--settings-input-bg)]');
     expect(cls).toContain('hover:bg-[var(--surface-hover-soft)]');
     expect(cls).toContain('w-full');
-    expect(cls).not.toContain('rounded-full');
+    expect(cls).not.toContain('rounded-lg');
   });
 
   it('field 形态 dense 压一档高度(与同排模型字段等高)', () => {

@@ -375,6 +375,11 @@ interface ModelSelectorContentProps {
   reselectEmitsChange?: boolean;
   /** Morph 原位展开时，要求真实 pointer move 后才展示行级配置，避免静止光标误触。 */
   pointerRevealRequiresIntent?: boolean;
+  /**
+   * field 形态:面板宽度绑定 trigger(DESIGN.md §4「Panel width must bind to the
+   * trigger width」),主菜单列由固定 320 改为撑满外层 PopoverContent。
+   */
+  fluidWidth?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex';
@@ -414,6 +419,7 @@ export function ModelSelectorContent({
   configurationEnabled = true,
   reselectEmitsChange = false,
   pointerRevealRequiresIntent = false,
+  fluidWidth = false,
   agentSwitch,
 }: ModelSelectorContentProps) {
   const { t } = useTranslation();
@@ -1270,9 +1276,15 @@ export function ModelSelectorContent({
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
 
-  // ── 主菜单:固定 320 宽,选项浮层 portal 到 body,hover 时主菜单完全不重排 ─────
+  // ── 主菜单:固定 320 宽(field 形态改绑 trigger 宽度,见 fluidWidth),选项浮层
+  //    portal 到 body,hover 时主菜单完全不重排 ─────
   const pane = (
-    <div className="flex w-[320px] shrink-0 flex-col gap-1.5 p-2">
+    <div
+      className={cn(
+        'flex shrink-0 flex-col gap-1.5 p-2',
+        fluidWidth ? 'w-full min-w-0' : 'w-[320px]',
+      )}
+    >
       {/* session-agent-switch:显式两步引擎切换——先在分段里选 Agent,再选模型。
           复用新建会话的 VendorSegmentedSwitcher 视觉(dense),宽度撑满列表列。 */}
       {agentSwitch && (
@@ -1606,7 +1618,8 @@ export function ModelSelector({
             'flex min-w-0 max-w-full items-center gap-1 transition-colors',
             isFieldTrigger
               ? cn(
-                  'w-full rounded-lg border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
+                  // pill 而非 8px:DESIGN.md §4 Select & Dropdown 规定单行 select trigger 同单行输入,胶囊形。
+                  'w-full rounded-full border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
                   dense ? 'h-9' : 'h-10',
                   'hover:bg-[var(--surface-hover-soft)]',
                 )
@@ -1824,6 +1837,7 @@ export function ModelSelector({
       configurationEnabled={configurationEnabled}
       reselectEmitsChange={reselectEmitsChange}
       pointerRevealRequiresIntent={morphEnabled}
+      fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
       followSession={
         fallbackOption
@@ -1866,7 +1880,10 @@ export function ModelSelector({
         sideOffset={4}
         collisionPadding={8}
         className={cn(
-          'w-auto overflow-hidden rounded-[12px] p-0',
+          // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
+          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持内容自宽。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)]' : 'w-auto',
+          'overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',
         )}

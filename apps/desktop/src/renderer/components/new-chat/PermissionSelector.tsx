@@ -172,7 +172,7 @@ export function PermissionSelector({
             type="button"
             disabled={disabled}
             // field 走 Radix Popover,开合交给 PopoverTrigger;chip 的 morph 自管点击。
-            onClick={isFieldTrigger ? undefined : () => setOpen(disabled ? false : !open)}
+            onClick={isFieldTrigger ? undefined : () => setOpen((prev) => (disabled ? false : !prev))}
             aria-expanded={open && !disabled}
             aria-haspopup="listbox"
             className={cn(
@@ -180,7 +180,8 @@ export function PermissionSelector({
               isFieldTrigger
                 ? cn(
                     // 与 ModelSelector 的 field trigger 逐字对齐,两个字段才能等高成套。
-                    'w-full rounded-lg border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
+                    // pill 而非 8px:DESIGN.md §4 Select & Dropdown 规定单行 select trigger 同单行输入,胶囊形。
+                    'w-full rounded-full border border-[var(--border-default)] bg-[var(--settings-input-bg)] px-3',
                     dense ? 'h-9' : 'h-10',
                     'text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]',
                   )
