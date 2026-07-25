@@ -13,6 +13,7 @@ export interface OrcaWorkerControlHandlerDeps {
   idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: IdleWorkerExpectedStatus }): Promise<OrcaWorkerControlResult>;
   archiveWorker(params: { callerLeadSessionId: string; workerId: string }): Promise<OrcaWorkerControlResult>;
   logInfo(message: string, fields?: Record<string, unknown>): void;
+  logWarn(message: string, fields?: Record<string, unknown>): void;
 }
 
 /** WORKER_IDLE / WORKER_ARCHIVE 只做 IPC 参数校验和错误码翻译，业务归属检查留在 OrcaTeamService。 */
@@ -30,7 +31,11 @@ export function registerOrcaWorkerControlHandlers(
         workerId: b.workerId,
         ...(forcedExpectedStatus ? { expectedStatus: forcedExpectedStatus } : b.expectedStatus ? { expectedStatus: b.expectedStatus } : {}),
       });
-    } catch {
+    } catch (error) {
+      deps.logWarn('idleWorker IPC failed', {
+        workerId: b.workerId,
+        err: error instanceof Error ? error.message : String(error),
+      });
       throwIpcError('INTERNAL', t('newChat.collaboration.idleWorkerFailed'));
     }
     if (!result.ok) throwOrcaServiceFailure(result);
@@ -53,7 +58,11 @@ export function registerOrcaWorkerControlHandlers(
         callerLeadSessionId: b.leadSessionId,
         workerId: b.workerId,
       });
-    } catch {
+    } catch (error) {
+      deps.logWarn('archiveWorker IPC failed', {
+        workerId: b.workerId,
+        err: error instanceof Error ? error.message : String(error),
+      });
       throwIpcError('INTERNAL', t('newChat.collaboration.archiveWorkerFailed'));
     }
     if (!result.ok) throwOrcaServiceFailure(result);

@@ -3439,6 +3439,33 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('does not swallow unrelated INVALID_REQUEST errors while restoring a released Worker', async () => {
+    const onCodexThreadUnarchived = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive) {
+        throw Object.assign(
+          new Error('unknown thread id'),
+          { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+        );
+      }
+      return undefined;
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-worker-invalid-unarchive',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174009',
+      vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
+    })).rejects.toThrow('unknown thread id');
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect(onCodexThreadUnarchived).not.toHaveBeenCalled();
+    await agent.dispose();
+  });
+
   it('retries release-marker persistence after Worker unarchive already succeeded', async () => {
     let unarchiveAttempts = 0;
     const onCodexThreadUnarchived = vi.fn()

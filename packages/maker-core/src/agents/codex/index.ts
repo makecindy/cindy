@@ -234,6 +234,18 @@ function isAlreadyArchivedThreadError(error: unknown): boolean {
   return /\b(?:already|is)\s+archived\b/i.test(message);
 }
 
+function isNotArchivedThreadError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? error.code : undefined;
+  if (code !== JSONRPC_ERROR_CODE.INVALID_REQUEST) return false;
+  const message = error instanceof Error
+    ? error.message
+    : 'message' in error && typeof error.message === 'string'
+      ? error.message
+      : '';
+  return /\bis not archived\b/i.test(message);
+}
+
 function hasUnsafeForkRolloutPayload(line: string): boolean {
   try {
     const parsed: unknown = JSON.parse(line);
@@ -2484,19 +2496,17 @@ export class CodexAgent extends BaseAgent {
           try {
             await host.unarchiveThread(releasedThreadId);
           } catch (error) {
-            const code = error && typeof error === 'object' && 'code' in error
-              ? error.code
-              : undefined;
             // PR #340 wrote idle_since after thread/unsubscribe. A Worker that
             // was already dormant before this archive-based release shipped
             // therefore has a legacy marker but no archived Codex thread.
-            // Codex reports that state mismatch as structured INVALID_REQUEST.
-            // Only that deterministic compatibility case may continue; timeout
-            // and transport/server failures still block thread/resume.
-            if (code !== JSONRPC_ERROR_CODE.INVALID_REQUEST) throw error;
+            // Only the structured INVALID_REQUEST whose message explicitly
+            // confirms "is not archived" is that deterministic compatibility
+            // case. Other invalid requests, timeouts, and transport/server
+            // failures still block thread/resume.
+            if (!isNotArchivedThreadError(error)) throw error;
             log.warn('thread/unarchive rejected legacy Worker release marker; continuing resume', {
               resumeSessionId: releasedThreadId,
-              code,
+              code: JSONRPC_ERROR_CODE.INVALID_REQUEST,
             });
           }
           // thread/unarchive is not idempotent. Persist its success before

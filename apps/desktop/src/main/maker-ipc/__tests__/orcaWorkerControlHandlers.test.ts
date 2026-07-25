@@ -13,6 +13,7 @@ function createDeps() {
     idleWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
     archiveWorker: vi.fn(async (): Promise<WorkerControlResult> => ({ ok: true, workerId: 'worker-1' })),
     logInfo: vi.fn(),
+    logWarn: vi.fn(),
   };
 }
 
@@ -187,6 +188,31 @@ describe('Orca worker control IPC handlers', () => {
     ).rejects.toMatchObject({
       code: 'INTERNAL',
       message: expect.not.stringContaining('store failed'),
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('archiveWorker IPC failed', {
+      workerId: 'worker-1',
+      err: 'store failed',
+    });
+  });
+
+  it('logs idle service exceptions before returning a stable IPC error', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    deps.idleWorker.mockRejectedValueOnce(new Error('provider failed'));
+    registerOrcaWorkerControlHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.WORKER_IDLE, {
+        leadSessionId: 'lead-1',
+        workerId: 'worker-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL',
+      message: expect.not.stringContaining('provider failed'),
+    });
+    expect(deps.logWarn).toHaveBeenCalledWith('idleWorker IPC failed', {
+      workerId: 'worker-1',
+      err: 'provider failed',
     });
   });
 });

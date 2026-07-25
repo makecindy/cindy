@@ -5378,6 +5378,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     idleWorker: (params) => orcaTeamService.idleWorker(params),
     archiveWorker: (params) => orcaTeamService.archiveWorker(params),
     logInfo: (message, fields) => log.info(message, fields),
+    logWarn: (message, fields) => log.warn(message, fields),
   });
 
   ipcMain.handle(MAKER_INVOKE.TEAM_END, async (_e, leadSessionId: unknown) => {
