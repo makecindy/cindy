@@ -167,6 +167,30 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(refreshBuiltinModelsSpy).toHaveBeenCalledWith('xd');
   });
 
+  it('同一事件循环内连续点击刷新只启动一个请求', async () => {
+    let resolveRefresh!: (value: { ok: true; providerId: 'xd' }) => void;
+    const pendingRefresh = new Promise<{ ok: true; providerId: 'xd' }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    refreshBuiltinModelsSpy.mockReturnValueOnce(pendingRefresh);
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+
+    const button = await screen.findByRole('button', {
+      name: 'settings.providers.models.refreshAria',
+    });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(refreshBuiltinModelsSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveRefresh({ ok: true, providerId: 'xd' });
+      await pendingRefresh;
+    });
+  });
+
   it('检测到本机 CLI 且渠道未连接 → 建议行出现,点击直达向导授权步', async () => {
     scanResult = {
       detections: [

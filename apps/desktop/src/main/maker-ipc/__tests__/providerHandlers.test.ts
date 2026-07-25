@@ -8,6 +8,7 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
 import { listCustomProviders } from '../../maker-host/custom-provider-store.js';
+import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
@@ -173,6 +174,25 @@ describe('provider:models-refresh handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xai'),
     ).rejects.toThrow("[INTERNAL] model list refresh failed for 'xai'");
+  });
+
+  it('preserves structured IPC errors from provider-specific refreshers', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh failed.');
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xd'),
+    ).rejects.toMatchObject({
+      code: 'MODEL_ACCESS_FAILED',
+      message: '[MODEL_ACCESS_FAILED] Cindy AI model list refresh failed.',
+    });
   });
 });
 

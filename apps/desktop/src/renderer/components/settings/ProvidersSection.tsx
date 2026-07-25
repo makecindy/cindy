@@ -1123,6 +1123,20 @@ export function ProvidersSection() {
   >(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  // React state 负责渲染反馈；ref 才是同一事件循环内立即生效的互斥锁，防止双击在
+  // disabled 状态提交到 DOM 前启动两条刷新。
+  const refreshingProviderIdRef = useRef<string | null>(null);
+  const beginProviderRefresh = useCallback((providerId: string): boolean => {
+    if (refreshingProviderIdRef.current !== null) return false;
+    refreshingProviderIdRef.current = providerId;
+    setRefreshingProviderId(providerId);
+    return true;
+  }, []);
+  const finishProviderRefresh = useCallback((providerId: string): void => {
+    if (refreshingProviderIdRef.current !== providerId) return;
+    refreshingProviderIdRef.current = null;
+    setRefreshingProviderId(null);
+  }, []);
 
   // 本机 CLI 扫描:挂载时一次(失败静默空数组;检测建议是增强,不是依赖)。
   useEffect(() => {
@@ -1258,8 +1272,7 @@ export function ProvidersSection() {
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
-      if (refreshingProviderId !== null) return;
-      setRefreshingProviderId(p.id);
+      if (!beginProviderRefresh(p.id)) return;
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
@@ -1295,17 +1308,16 @@ export function ProvidersSection() {
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
-        setRefreshingProviderId(null);
+        finishProviderRefresh(p.id);
       }
     },
-    [refetch, refreshingProviderId, t],
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
   const handleRefreshBuiltinModels = useCallback(
     async (p: ProviderView) => {
-      if (!isBuiltinRefreshableProviderId(p.id) || refreshingProviderId !== null) return;
-      setRefreshingProviderId(p.id);
+      if (!isBuiltinRefreshableProviderId(p.id) || !beginProviderRefresh(p.id)) return;
       try {
         await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
         toast.success(t('settings.providers.models.refreshDone'));
@@ -1313,10 +1325,10 @@ export function ProvidersSection() {
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
-        setRefreshingProviderId(null);
+        finishProviderRefresh(p.id);
       }
     },
-    [refetch, refreshingProviderId, t],
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
   );
 
   // 详情头部按供应商类型分派(鉴权逻辑与重构前一致)。

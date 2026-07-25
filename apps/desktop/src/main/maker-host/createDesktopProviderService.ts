@@ -23,6 +23,7 @@ import {
   buildUserProvider,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
+  loadCatalogWithSource,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -245,8 +246,11 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
   if (catalogRefreshInflight) return catalogRefreshInflight;
-  const flight = loadCatalog(buildSource(), io)
-    .then((catalog) => {
+  const flight = loadCatalogWithSource(buildSource(), io)
+    .then(({ catalog, source }) => {
+      if (source === 'bundled') {
+        throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
+      }
       setActiveCatalog(catalog);
       return catalog;
     })

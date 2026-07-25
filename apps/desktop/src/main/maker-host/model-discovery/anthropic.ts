@@ -453,7 +453,9 @@ async function applyModels(
     [...normalizedExplicitEffortIds].some((id) => !explicitEffortModelIds.has(id)) ||
     normalizedExplicitFastModeIds.size !== explicitFastModeModelIds.size ||
     [...normalizedExplicitFastModeIds].some((id) => !explicitFastModeModelIds.has(id));
-  if (!modelsChanged && !capabilityProvenanceChanged) return true;
+  if (!modelsChanged && !capabilityProvenanceChanged) {
+    return generationCanApply(generation, models);
+  }
   lastApplied = models;
   explicitEffortModelIds.clear();
   for (const id of normalizedExplicitEffortIds) explicitEffortModelIds.add(id);
