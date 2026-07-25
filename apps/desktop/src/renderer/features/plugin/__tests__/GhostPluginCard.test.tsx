@@ -58,7 +58,7 @@ describe('GhostPluginCard', () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it('surfaces the market update state with a badge, target version, and direct action', () => {
+  it('surfaces the market update state with a badge and a direct update action', () => {
     const onAction = vi.fn();
     const onUpdate = vi.fn();
     render(

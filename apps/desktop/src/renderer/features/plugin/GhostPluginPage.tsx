@@ -526,6 +526,8 @@ export function GhostPluginPage() {
 
   const handleSelectMarket = useCallback(
     async (pluginId: string) => {
+      // 与 handleMarketUpdate 共用同一互斥位:更新进行中不再叠加其它市场操作。
+      if (marketBusyId !== null) return;
       const requestId = ++marketDetailRequestRef.current;
       setMarketBusyId(pluginId);
       try {
@@ -536,10 +538,10 @@ export function GhostPluginPage() {
           toast.error(t(pluginMarketErrorKey(error)));
         }
       } finally {
-        if (requestId === marketDetailRequestRef.current) setMarketBusyId(null);
+        setMarketBusyId((current) => (current === pluginId ? null : current));
       }
     },
-    [t],
+    [marketBusyId, t],
   );
 
   const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
@@ -573,6 +575,8 @@ export function GhostPluginPage() {
 
   const handleInstallFromMarket = useCallback(async () => {
     if (!marketDetail) return;
+    // 与 handleMarketUpdate 共用同一互斥位:其它市场操作进行中不叠加安装。
+    if (marketBusyId !== null) return;
     const confirmed = await confirm({
       title: t('settings.ghosts.market.installConfirmTitle', {
         name: marketDetail.name,
@@ -597,9 +601,9 @@ export function GhostPluginPage() {
     } catch (error) {
       toast.error(t(pluginMarketErrorKey(error)));
     } finally {
-      setMarketBusyId(null);
+      setMarketBusyId((current) => (current === marketDetail.pluginId ? null : current));
     }
-  }, [confirm, marketDetail, refreshMarket, t]);
+  }, [confirm, marketBusyId, marketDetail, refreshMarket, t]);
 
   if (marketDetail) {
     return (
