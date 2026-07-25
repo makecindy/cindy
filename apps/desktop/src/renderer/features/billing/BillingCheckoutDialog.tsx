@@ -14,7 +14,6 @@ interface BillingCheckoutDialogProps {
   onClose: () => void;
   onRefresh: () => void;
   onRetry: () => void;
-  onCancel: () => void;
 }
 
 function actionOf(state: BillingCheckoutState) {
@@ -26,7 +25,6 @@ export function BillingCheckoutDialog({
   onClose,
   onRefresh,
   onRetry,
-  onCancel,
 }: BillingCheckoutDialogProps) {
   const { t } = useTranslation();
   const action = actionOf(state);
@@ -85,10 +83,6 @@ export function BillingCheckoutDialog({
     (state.error && state.intent !== null && state.order === null && state.subscription === null) ||
     (state.kind === 'TOPUP' &&
       (state.order?.status === 'FAILED' || state.order?.status === 'EXPIRED'));
-  const canCancel =
-    state.kind === 'TOPUP' &&
-    state.order !== null &&
-    (state.order.status === 'CREATED' || state.order.status === 'PENDING');
 
   return (
     <Dialog.Root
@@ -220,18 +214,7 @@ export function BillingCheckoutDialog({
             )}
           </div>
 
-          <div className="flex min-h-16 items-center justify-between gap-3 border-t border-[var(--border-default)] px-6 py-3">
-            <div>
-              {canCancel && (
-                <button
-                  type="button"
-                  onClick={onCancel}
-                  className="h-9 rounded-full px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
-                >
-                  {t('billing.actions.cancelPayment')}
-                </button>
-              )}
-            </div>
+          <div className="flex min-h-16 items-center justify-end gap-3 border-t border-[var(--border-default)] px-6 py-3">
             <div className="flex items-center gap-2">
               {state.phase === 'AWAITING_PAYMENT' && (
                 <button

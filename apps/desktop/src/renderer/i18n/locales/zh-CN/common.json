@@ -7225,7 +7225,6 @@
       "retry": "重试",
       "pay": "确认并支付",
       "refresh": "刷新状态",
-      "cancelPayment": "取消支付",
       "close": "关闭"
     },
     "catalog": {

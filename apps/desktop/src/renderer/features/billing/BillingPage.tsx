@@ -756,7 +756,6 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         onClose={checkout.close}
         onRefresh={() => void checkout.refreshActive()}
         onRetry={() => void checkout.retry()}
-        onCancel={() => void checkout.cancel()}
       />
 
       <PlanChangeTargetDialog

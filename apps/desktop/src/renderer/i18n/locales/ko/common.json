@@ -7225,7 +7225,6 @@
       "retry": "다시 시도",
       "pay": "확인 및 결제",
       "refresh": "상태 새로고침",
-      "cancelPayment": "결제 취소",
       "close": "닫기"
     },
     "catalog": {
