@@ -240,6 +240,11 @@ export function UnifiedModelList({
   const agentCounts = useMemo(() => countModelsByAgent(provider), [provider, visibilityVersion]);
   const totalModelsAcrossAgents = agentCounts.reduce((sum, count) => sum + count.total, 0);
   const allOn = totalModelsAcrossAgents > 0 && agentCounts.every((count) => count.on === count.total);
+  const refreshLabel = t(
+    refreshing
+      ? 'settings.providers.models.refreshingAria'
+      : 'settings.providers.models.refreshAria',
+  );
 
   /** 单开关:一次写该行全部可用 agent(分歧行拨动即归一)。写入用各 agent 的**真实模型 id**
    *  (桥接投影行两端 id 不同:chatgpt/gpt-5.5 vs gpt-5.5),不能用规范化后的 row.id。 */
@@ -301,12 +306,8 @@ export function UnifiedModelList({
             onClick={onRefresh}
             disabled={refreshing || refreshDisabled}
             aria-busy={refreshing}
-            aria-label={t(
-              refreshing
-                ? 'settings.providers.models.refreshingAria'
-                : 'settings.providers.models.refreshAria',
-            )}
-            title={t('settings.providers.models.refreshAria')}
+            aria-label={refreshLabel}
+            title={refreshLabel}
             className={cn(
               'flex h-7 w-7 shrink-0 select-none items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
               (refreshing || refreshDisabled) && 'cursor-not-allowed opacity-60',

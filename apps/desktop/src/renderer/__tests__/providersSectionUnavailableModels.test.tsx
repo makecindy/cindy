@@ -184,6 +184,11 @@ describe('ProvidersSection — 双栏管理', () => {
       await Promise.resolve();
     });
     expect(refreshBuiltinModelsSpy).toHaveBeenCalledTimes(1);
+    const refreshingButton = screen.getByRole('button', {
+      name: 'settings.providers.models.refreshingAria',
+    });
+    expect(refreshingButton.getAttribute('title'))
+      .toBe('settings.providers.models.refreshingAria');
 
     await act(async () => {
       resolveRefresh({ ok: true, providerId: 'xd' });

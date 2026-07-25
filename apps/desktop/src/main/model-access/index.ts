@@ -31,7 +31,10 @@ import {
   type CredentialsPayload,
   type CredentialsSync,
 } from './credentialsSync.js';
-import { waitForModelsSyncRefresh } from './modelsSyncRefresh.js';
+import {
+  ensureCredentialsReadyForModelsRefresh,
+  waitForModelsSyncRefresh,
+} from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 export { isModelAccessReady } from './readiness.js';
 
@@ -248,14 +251,15 @@ export function getModelAccessStatus(): ModelAccessStatus {
 }
 
 /**
- * 设置页手动刷新：复用凭据 retry 状态机，并等待它触发的同源 `/models` single-flight
- * 真正结束。凭据或模型请求任一失败都 reject，Renderer 才不会误报“已刷新”。
+ * 设置页手动刷新：已有 ready 凭据时直接刷新 `/models`；只有凭据不可用时才复用
+ * retry 状态机。随后等待同源 `/models` single-flight 真正结束。凭据或模型请求
+ * 任一失败都 reject，Renderer 才不会误报“已刷新”。
  */
 export async function refreshXdGatewayModels(): Promise<void> {
   if (!getAppCapabilities().canUseCindyGateway) {
     throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
   }
-  const status = await getSync().retry();
+  const status = await ensureCredentialsReadyForModelsRefresh(getSync());
   if (status.state !== 'ok') {
     throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI credentials are not ready.');
   }
