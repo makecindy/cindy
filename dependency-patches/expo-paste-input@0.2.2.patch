@@ -159,7 +159,7 @@ index 4c430a252ef3e938622e6c56421ed283c6167913..4d5c561a5d117e7459cb0f83ca1c213c
      type: "unsupported";
  };
 diff --git a/ios/ExpoPasteInputView.swift b/ios/ExpoPasteInputView.swift
-index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb491bab9386 100644
+index 39b2302ed42bdd56db6084e333b9581e08c18689..4479d6d3dd64350355008689871132d893d2716f 100644
 --- a/ios/ExpoPasteInputView.swift
 +++ b/ios/ExpoPasteInputView.swift
 @@ -38,6 +38,8 @@ class ExpoPasteInputView: ExpoView {
@@ -171,7 +171,7 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
    private let gifTypes: Set<String> = ["com.compuserve.gif", "public.gif", "image/gif"]
    private let webpTypes: Set<String> = ["org.webmproject.webp", "public.webp", "image/webp"]
    // Track which classes have been swizzled (once per class, never unswizzle)
-@@ -145,6 +147,19 @@ class ExpoPasteInputView: ExpoView {
+@@ -145,6 +147,27 @@ class ExpoPasteInputView: ExpoView {
        originalAdaptiveImageGlyphSupport = nil
      }
  
@@ -183,15 +183,23 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
 +    // This must be an empty array — a UIBarButtonItemGroup with no items
 +    // hides the buttons but keeps the bar itself taking up space. Reported on
 +    // iOS 27; does not reproduce on the iOS 26.5 iPhone simulator.
-+    originalLeadingBarButtonGroups = view.inputAssistantItem.leadingBarButtonGroups
-+    originalTrailingBarButtonGroups = view.inputAssistantItem.trailingBarButtonGroups
-+    view.inputAssistantItem.leadingBarButtonGroups = []
-+    view.inputAssistantItem.trailingBarButtonGroups = []
++    //
++    // iPhone only: on iPad the shortcuts bar is a permanent part of the
++    // keyboard and carries real editing affordances (undo/redo, paste,
++    // formatting), so clearing it there would take away working functionality
++    // rather than an empty row. restoreTextInput() keys off the saved groups
++    // being non-nil, so skipping the capture here also skips the restore.
++    if UIDevice.current.userInterfaceIdiom == .phone {
++      originalLeadingBarButtonGroups = view.inputAssistantItem.leadingBarButtonGroups
++      originalTrailingBarButtonGroups = view.inputAssistantItem.trailingBarButtonGroups
++      view.inputAssistantItem.leadingBarButtonGroups = []
++      view.inputAssistantItem.trailingBarButtonGroups = []
++    }
 +
      if let textView = view as? UITextView {
        observeTextViewChanges(for: textView)
      } else {
-@@ -162,6 +177,17 @@ class ExpoPasteInputView: ExpoView {
+@@ -162,6 +185,17 @@ class ExpoPasteInputView: ExpoView {
      }
      originalAdaptiveImageGlyphSupport = nil
  
@@ -209,7 +217,7 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
      if let textView = view as? UITextView,
         observedTextView === textView {
        stopObservingTextView()
-@@ -252,77 +278,20 @@ class ExpoPasteInputView: ExpoView {
+@@ -252,77 +286,20 @@ class ExpoPasteInputView: ExpoView {
            }
            
            let pasteboard = UIPasteboard.general
@@ -301,7 +309,7 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
              return // Don't call original paste for images
            }
            
-@@ -550,7 +519,12 @@ class ExpoPasteInputView: ExpoView {
+@@ -550,12 +527,80 @@ class ExpoPasteInputView: ExpoView {
      emitImagesAsync(for: mediaPayloads)
    }
  
@@ -311,14 +319,19 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
 +  // happen on the background queue.
    private func emitImagesAsync(for payloads: [MediaPayload]) {
 +    emitImagesLoading(count: payloads.count)
-     mediaProcessingQueue.async { [weak self] in
-       guard let self else {
-         return
-@@ -564,7 +538,70 @@ class ExpoPasteInputView: ExpoView {
-         }
- 
-         if uris.isEmpty {
--          self.handleUnsupportedPaste()
++    mediaProcessingQueue.async { [weak self] in
++      guard let self else {
++        return
++      }
++
++      let uris = self.temporaryFileURIs(for: payloads)
++
++      DispatchQueue.main.async { [weak self] in
++        guard let self else {
++          return
++        }
++
++        if uris.isEmpty {
 +          // A placeholder was already emitted — resolve it as failed instead
 +          // of the generic unsupported event so JS can retract the cards.
 +          self.emitImagesLoadFailed()
@@ -361,11 +374,11 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
 +    // UIPasteboard keeps no history, so the original data is gone — resolve
 +    // the placeholder as failed instead of mis-attaching the wrong image.
 +    let capturedChangeCount = UIPasteboard.general.changeCount
-+    mediaProcessingQueue.async { [weak self] in
-+      guard let self else {
-+        return
-+      }
-+
+     mediaProcessingQueue.async { [weak self] in
+       guard let self else {
+         return
+       }
+ 
 +      guard UIPasteboard.general.changeCount == capturedChangeCount else {
 +        DispatchQueue.main.async { [weak self] in
 +          self?.emitImagesLoadFailed()
@@ -374,19 +387,19 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
 +      }
 +
 +      let payloads = self.collectPasteboardMediaPayloads()
-+      let uris = self.temporaryFileURIs(for: payloads)
-+
-+      DispatchQueue.main.async { [weak self] in
-+        guard let self else {
-+          return
-+        }
-+
-+        if uris.isEmpty {
+       let uris = self.temporaryFileURIs(for: payloads)
+ 
+       DispatchQueue.main.async { [weak self] in
+@@ -564,7 +609,7 @@ class ExpoPasteInputView: ExpoView {
+         }
+ 
+         if uris.isEmpty {
+-          self.handleUnsupportedPaste()
 +          self.emitImagesLoadFailed()
            return
          }
  
-@@ -700,8 +737,11 @@ class ExpoPasteInputView: ExpoView {
+@@ -700,8 +745,11 @@ class ExpoPasteInputView: ExpoView {
      return true
    }
    
@@ -400,7 +413,7 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
      let pasteboard = UIPasteboard.general
      
      let staticImageTypes = [
-@@ -832,15 +872,7 @@ class ExpoPasteInputView: ExpoView {
+@@ -832,15 +880,7 @@ class ExpoPasteInputView: ExpoView {
        staticImagePayloads.append(.image(image))
      }
      
@@ -417,7 +430,7 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
    }
    
    /// Detects if the given data is a GIF by checking for GIF87a or GIF89a header
-@@ -922,6 +954,23 @@ class ExpoPasteInputView: ExpoView {
+@@ -922,6 +962,23 @@ class ExpoPasteInputView: ExpoView {
      ])
    }
  
@@ -441,7 +454,7 @@ index 39b2302ed42bdd56db6084e333b9581e08c18689..ac817662d5bf8b3f475f0c2ec954eb49
    private func temporaryFileURIs(for payloads: [MediaPayload]) -> [String] {
      var uris: [String] = []
  
-@@ -1013,15 +1062,6 @@ class ExpoPasteInputView: ExpoView {
+@@ -1013,15 +1070,6 @@ class ExpoPasteInputView: ExpoView {
      stopMonitoring()
      stopObservingTextView()
    }
