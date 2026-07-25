@@ -4,7 +4,7 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 
 import { CodexAgent } from './index.js';
-import { Method } from './app-server/protocol.js';
+import { JSONRPC_ERROR_CODE, Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
 import type { AgentDeps } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -3243,7 +3243,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     const transport = createdTransports[0];
     expect(transport).toBeDefined();
 
-    await handle.close();
+    await handle.close({ releaseRuntime: true });
 
     const requests = transport!.lines
       .map((line) => JSON.parse(line) as { method?: string; params?: unknown });
@@ -3273,10 +3273,25 @@ describe('CodexAgent MCP thread context hooks', () => {
       vendorOptions: { orcaRole: 'worker' },
     });
 
-    await expect(handle.close()).rejects.toThrow('thread archive boom');
-    await expect(handle.close()).resolves.toBeUndefined();
+    await expect(handle.close({ releaseRuntime: true })).rejects.toThrow('thread archive boom');
+    await expect(handle.close({ releaseRuntime: true })).resolves.toBeUndefined();
 
     expect(host.archiveThread).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not archive a Worker thread during a generic resumable close', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-generic-close',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker' },
+    });
+
+    await handle.close();
+
+    expect(host.archiveThread).not.toHaveBeenCalled();
   });
 
   it('unarchives a persistently released Worker before thread/resume', async () => {
@@ -3322,6 +3337,36 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(host.unarchiveThread).toHaveBeenCalledOnce();
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
     await agent.dispose();
+  });
+
+  it('resumes a Worker with a legacy pre-archive release marker', async () => {
+    const onCodexThreadUnarchived = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive) {
+        throw Object.assign(
+          new Error('thread is not archived'),
+          { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+        );
+      }
+      return undefined;
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-worker-resume-legacy-marker',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174004',
+      vendorOptions: { orcaRole: 'worker', orcaRuntimeReleased: true },
+    });
+
+    expect(host.unarchiveThread).toHaveBeenCalledOnce();
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    expect(onCodexThreadUnarchived).toHaveBeenCalledWith({
+      sessionId: 'session-worker-resume-legacy-marker',
+      threadId: '123e4567-e89b-12d3-a456-426614174004',
+    });
+    await handle.close();
   });
 
   it('persists a successful Worker unarchive before a failing thread/resume', async () => {

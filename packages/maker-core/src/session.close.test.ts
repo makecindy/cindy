@@ -73,11 +73,13 @@ describe('Session close lifecycle', () => {
       logger: createLogger() as never,
     });
 
-    await expect(session.closeIfIdle()).rejects.toThrow('archive failed');
+    await expect(session.closeIfIdle({ releaseRuntime: true })).rejects.toThrow('archive failed');
     expect(session.getStatus()).toBe('active');
 
-    await expect(session.closeIfIdle()).resolves.toBe(true);
+    await expect(session.closeIfIdle({ releaseRuntime: true })).resolves.toBe(true);
     expect(session.getStatus()).toBe('closed');
     expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(1, { releaseRuntime: true });
+    expect(close).toHaveBeenNthCalledWith(2, { releaseRuntime: true });
   });
 });

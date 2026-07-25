@@ -147,6 +147,7 @@ import {
   markWorkersStatusByTeam,
   markWorkerIdleIfStatus,
   restoreWorkerDoneIfIdle,
+  restoreWorkerStatusIfIdle,
   reconcileInactiveTeamWorkersForLead,
   releaseWorkerCreationReservation,
   removeWorker,
@@ -5264,7 +5265,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
           });
         }
         try {
-          await maker.closeSession(w.sessionId);
+          await maker.closeSession(w.sessionId, { releaseRuntime: true });
         } catch (err) {
           log.warn('disableOrca: closeSession failed', {
             sessionId: w.sessionId, err: err instanceof Error ? err.message : String(err),
@@ -5401,17 +5402,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     },
     markWorkerIdleIfStatus,
     restoreWorkerDoneIfIdle,
+    restoreWorkerStatusIfIdle,
     closeWorkerSession: async (sessionId) => {
       const sess = maker.getSession(sessionId);
       if (sess) {
         await sess.abort();
       }
-      await maker.closeSession(sessionId);
+      await maker.closeSession(sessionId, { releaseRuntime: true });
     },
     closeWorkerSessionIfIdle: async (sessionId) => {
       if (sendToSessionLocks.has(sessionId)) return false;
       const sess = maker.getSession(sessionId);
-      return sess ? sess.closeIfIdle() : true;
+      return sess ? sess.closeIfIdle({ releaseRuntime: true }) : true;
     },
     hasPendingWorkerInput: async (sessionId) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
@@ -5557,7 +5559,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     },
     closeWorkerSession: async (sessionId) => {
       if (!maker.getSession(sessionId)) return;
-      await maker.closeSession(sessionId);
+      await maker.closeSession(sessionId, { releaseRuntime: true });
     },
     archiveWorkerSession: archiveSingleWorkerSession,
     forgetWorkerSession: forgetKnownOrcaWorkerSession,
@@ -5628,7 +5630,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     rollbackCreatedWorker: async ({ workerId, workerSessionId }) => {
       const workerSession = maker.getSession(workerSessionId);
       if (workerSession) {
-        await maker.closeSession(workerSessionId).catch(() => undefined);
+        await maker.closeSession(workerSessionId, { releaseRuntime: true }).catch(() => undefined);
       }
       forgetKnownOrcaWorkerSession(workerSessionId);
       await archiveSingleWorkerSession(workerSessionId).catch(() => undefined);
@@ -5711,7 +5713,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     closeSessionIfIdle: async (sessionId) => {
       const session = maker.getSession(sessionId);
       if (!session) return 'already-missing';
-      return (await session.closeIfIdle()) ? 'closed' : 'busy';
+      return (await session.closeIfIdle({ releaseRuntime: true })) ? 'closed' : 'busy';
     },
     broadcastWorkerChanged: (leadSessionId) => {
       broadcastToAllWindows(MAKER_PUSH.ORCA_WORKER_CHANGED, { leadSessionId });

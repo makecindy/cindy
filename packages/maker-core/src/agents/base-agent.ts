@@ -634,6 +634,11 @@ export interface BackgroundTaskSnapshot {
   title?: string;
 }
 
+/** Provider-neutral close intent used by lifecycle owners that release a dormant runtime. */
+export interface AgentSessionCloseOptions {
+  releaseRuntime?: boolean;
+}
+
 /**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
@@ -691,8 +696,8 @@ export interface AgentSessionHandle {
    */
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
-  /** 关闭会话，清理子进程 */
-  close(): Promise<void>;
+  /** 关闭本地会话；releaseRuntime 仅用于显式的无损 dormant release。 */
+  close(options?: AgentSessionCloseOptions): Promise<void>;
 
   /**
    * Detach from a long-lived remote session without terminating the upstream

@@ -36,7 +36,12 @@ import type {
 } from './types/events.js';
 import { isTerminalAgentErrorEvent } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
-import type { AgentSessionHandle, BackgroundTaskSnapshot, SendOptions } from './agents/base-agent.js';
+import type {
+  AgentSessionCloseOptions,
+  AgentSessionHandle,
+  BackgroundTaskSnapshot,
+  SendOptions,
+} from './agents/base-agent.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -367,11 +372,11 @@ export class Session {
     return this.handle.listBackgroundTasks?.() ?? [];
   }
 
-  close(): Promise<void> {
+  close(options?: AgentSessionCloseOptions): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
-    return this.startClose();
+    return this.startClose(options);
   }
 
   /**
@@ -379,15 +384,15 @@ export class Session {
    * close reservation are synchronous, so a concurrent send either wins first
    * and keeps the session open, or observes closePromise and is rejected.
    */
-  closeIfIdle(): Promise<boolean> {
+  closeIfIdle(options?: AgentSessionCloseOptions): Promise<boolean> {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
       return Promise.resolve(false);
     }
-    return this.startClose().then(() => true);
+    return this.startClose(options).then(() => true);
   }
 
-  private startClose(): Promise<void> {
-    const pending = this.performClose();
+  private startClose(options?: AgentSessionCloseOptions): Promise<void> {
+    const pending = this.performClose(options);
     const tracked = pending.catch((error: unknown) => {
       // A failed Worker archive must leave its runtime reachable so the idle
       // watcher can retry instead of persisting a false "released" state.
@@ -398,10 +403,10 @@ export class Session {
     return tracked;
   }
 
-  private async performClose(): Promise<void> {
+  private async performClose(options?: AgentSessionCloseOptions): Promise<void> {
     this.cancelSendReservation(this.sendReservation);
     try {
-      await this.handle.close();
+      await this.handle.close(options);
     } catch (error) {
       // Do not transition to closed on a failed teardown: callers that rely on
       // closeIfIdle() need the still-live Session for a safe retry.

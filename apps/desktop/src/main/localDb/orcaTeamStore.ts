@@ -499,11 +499,19 @@ export async function markWorkerIdleIfStatus(
 
 /** Restores a raced done acknowledgement only while the worker is still idle. */
 export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean> {
+  return restoreWorkerStatusIfIdle(workerId, 'done');
+}
+
+/** Roll back a persistence-first runtime release only while the Worker is still idle. */
+export async function restoreWorkerStatusIfIdle(
+  workerId: string,
+  status: Exclude<OrcaWorkerStatus, 'idle'>,
+): Promise<boolean> {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const result = await db
     .update(orcaWorkers)
-    .set({ status: 'done', idleSince: null, updatedAt: now })
+    .set({ status, idleSince: null, updatedAt: now })
     .where(and(eq(orcaWorkers.id, workerId), eq(orcaWorkers.status, 'idle')))
     .run();
   return result.changes > 0;

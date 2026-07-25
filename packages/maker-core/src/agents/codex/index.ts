@@ -101,6 +101,7 @@ import {
   resolveEffectiveCredentialModeFromAuthSource,
 } from '../credential-mode.js';
 import {
+  JSONRPC_ERROR_CODE,
   Method,
   type AskForApproval,
   type ApprovalsReviewer,
@@ -2464,11 +2465,27 @@ export class CodexAgent extends BaseAgent {
             resumeSessionId: releasedThreadId,
           });
           assertCurrentHost('thread/unarchive');
-          // idle_since is written only after thread/archive succeeds, so a
-          // failed restore must remain retryable. Do not hide timeouts,
+          // A failed restore must remain retryable. Do not hide timeouts,
           // transport failures, or temporary server errors behind a resume
           // request that is guaranteed to fail while the thread is archived.
-          await host.unarchiveThread(releasedThreadId);
+          try {
+            await host.unarchiveThread(releasedThreadId);
+          } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error
+              ? error.code
+              : undefined;
+            // PR #340 wrote idle_since after thread/unsubscribe. A Worker that
+            // was already dormant before this archive-based release shipped
+            // therefore has a legacy marker but no archived Codex thread.
+            // Codex reports that state mismatch as structured INVALID_REQUEST.
+            // Only that deterministic compatibility case may continue; timeout
+            // and transport/server failures still block thread/resume.
+            if (code !== JSONRPC_ERROR_CODE.INVALID_REQUEST) throw error;
+            log.warn('thread/unarchive rejected legacy Worker release marker; continuing resume', {
+              resumeSessionId: releasedThreadId,
+              code,
+            });
+          }
           // thread/unarchive is not idempotent. Persist its success before
           // thread/resume so a temporary resume failure does not cause the next
           // startup to unarchive the already-restored thread again.
@@ -4383,12 +4400,16 @@ export class CodexAgent extends BaseAgent {
         return currentTurnId;
       },
 
-      async close() {
+      async close(options) {
         if (closed) return;
-        // Worker idle release must reclaim the per-thread MCP/runtime process.
-        // unsubscribe only drops this client's subscription and leaves that
-        // runtime alive until Codex's long unload delay elapses.
-        if (vo.orcaRole === 'worker' && !skipIfStaleHost('thread/archive')) {
+        // Only an explicit dormant runtime release archives a Worker thread.
+        // Generic resumable closes (/clear, auth retry, rehydrate) must keep the
+        // thread directly resumable and therefore use subscription release only.
+        if (
+          vo.orcaRole === 'worker' &&
+          options?.releaseRuntime === true &&
+          !skipIfStaleHost('thread/archive')
+        ) {
           try {
             await host.archiveThread(threadId);
             assertCurrentHost('thread/archive');

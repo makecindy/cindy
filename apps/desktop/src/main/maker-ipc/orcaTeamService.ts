@@ -186,6 +186,10 @@ export interface OrcaTeamServiceDeps {
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
+  restoreWorkerStatusIfIdle(
+    workerId: string,
+    status: Exclude<OrcaWorkerStatus, 'idle'>,
+  ): Promise<boolean>;
   closeWorkerSession(sessionId: string): Promise<void>;
   /** 与 Session.send reservation 原子互斥；false 表示 direct send/turn 已先取得会话。 */
   closeWorkerSessionIfIdle(sessionId: string): Promise<boolean>;
@@ -740,11 +744,26 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
       if (!params.expectedStatus) {
         try {
+          // Persist first so there is no close-success/write-failure window
+          // where an archived runtime still looks live to the next dispatch.
+          await deps.markWorkerIdle(worker.id);
+        } catch (error) {
+          return workerIdlePersistenceFailure('idleWorker', worker.id, error);
+        }
+        try {
           await deps.closeWorkerSession(worker.sessionId);
         } catch (error) {
+          try {
+            await deps.restoreWorkerStatusIfIdle(worker.id, worker.status);
+          } catch (rollbackError) {
+            deps.log.warn('idleWorker: failed to roll back worker idle state', {
+              workerId: worker.id,
+              err: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+            });
+          }
+          deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           return workerRuntimeCloseFailure('idleWorker', worker.sessionId, error);
         }
-        await deps.markWorkerIdle(worker.id);
         clearRuntimeState(worker.sessionId);
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
         return { ok: true, workerId: worker.id };
@@ -982,6 +1001,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       ok: false,
       errorCode: 'INTERNAL',
       message: `${owner}: failed to release worker runtime: ${message}`,
+    };
+  }
+
+  function workerIdlePersistenceFailure(owner: string, workerId: string, error: unknown): OrcaOkResult {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log.warn(`${owner}: persist worker idle state failed`, {
+      workerId,
+      err: message,
+    });
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `${owner}: failed to persist worker idle state: ${message}`,
     };
   }
 

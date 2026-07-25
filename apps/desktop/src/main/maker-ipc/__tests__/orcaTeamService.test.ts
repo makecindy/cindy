@@ -126,6 +126,7 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
           ? {
               ...worker,
               status: 'idle',
+              idleSince: '2026-07-25T10:00:00.000Z',
             }
           : worker
       ));
@@ -139,6 +140,21 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
           ? {
               ...item,
               status: 'idle',
+            }
+          : item
+      ));
+      return true;
+    }),
+    restoreWorkerStatusIfIdle: vi.fn(async (workerId, status) => {
+      const worker = workers.find((item) => item.id === workerId);
+      if (!worker || worker.status !== 'idle') return false;
+      calls.push(`restoreWorkerStatusIfIdle:${status}`);
+      workers = workers.map((item) => (
+        item.id === workerId
+          ? {
+              ...item,
+              status,
+              idleSince: null,
             }
           : item
       ));
@@ -948,7 +964,7 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual(['[Auto-bridged: worker 完成但未调 send_to_lead]\n\n部分输出']);
   });
 
-  it('closes the worker runtime before marking it idle and clearing bridge state', async () => {
+  it('persists the idle marker before closing the worker runtime and clearing bridge state', async () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));
 
@@ -958,8 +974,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(calls).toEqual([
-      'closeWorkerSession:worker-session-1',
       'markWorkerIdle',
+      'closeWorkerSession:worker-session-1',
       'broadcastOrcaWorkerChanged',
     ]);
   });
@@ -1205,8 +1221,8 @@ describe('OrcaTeamService', () => {
 
     expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
     expect(calls).toEqual([
-      'closeWorkerSession:worker-session-1',
       'markWorkerIdle',
+      'closeWorkerSession:worker-session-1',
       'broadcastOrcaWorkerChanged',
     ]);
   });
@@ -1295,7 +1311,7 @@ describe('OrcaTeamService', () => {
     expect(calls).toEqual([]);
   });
 
-  it('does not mark a worker idle when closing its runtime fails', async () => {
+  it('rolls back a manual idle marker when closing its runtime fails', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
       closeWorkerSession: vi.fn(async (sessionId) => {
         calls.push(`closeWorkerSession:${sessionId}`);
@@ -1310,13 +1326,46 @@ describe('OrcaTeamService', () => {
       message: 'idleWorker: failed to release worker runtime: close failed',
     });
 
-    expect(calls).toEqual(['closeWorkerSession:worker-session-1']);
+    expect(calls).toEqual([
+      'markWorkerIdle',
+      'closeWorkerSession:worker-session-1',
+      'restoreWorkerStatusIfIdle:running',
+      'broadcastOrcaWorkerChanged',
+    ]);
     expect(getWorker().status).toBe('running');
-    expect(deps.markWorkerIdle).not.toHaveBeenCalled();
-    expect(deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
+    expect(getWorker().idleSince).toBeNull();
+    expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
+    expect(deps.restoreWorkerStatusIfIdle).toHaveBeenCalledWith('worker-1', 'running');
+    expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledOnce();
     expect(deps.log.warn).toHaveBeenCalledWith('idleWorker: close worker session failed', {
       sessionId: 'worker-session-1',
       err: 'close failed',
+    });
+  });
+
+  it('does not close a manual idle Worker when persisting its release marker fails', async () => {
+    const { calls, deps, getWorker, service, setWorker } = createDeps({
+      markWorkerIdle: vi.fn(async () => {
+        throw new Error('db unavailable');
+      }),
+    });
+    setWorker(createWorker({ status: 'running' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: 'idleWorker: failed to persist worker idle state: db unavailable',
+    });
+
+    expect(calls).toEqual([]);
+    expect(getWorker().status).toBe('running');
+    expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith('idleWorker: persist worker idle state failed', {
+      workerId: 'worker-1',
+      err: 'db unavailable',
     });
   });
 
