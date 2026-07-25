@@ -135,11 +135,13 @@ export function groupModelsForDisplay<T extends DisplayModel>(
 }
 
 /**
- * 骨折版(网关 85% off 低价路由)判定 —— 目录 `group === 'gpt-budget'` 优先,
- * `codex/` 前缀兜底(网关旧数据可能没标 group)。替代 4 处独立的前缀判断。
+ * 骨折版(网关 85% off 低价路由)判定 —— 与 groupOf 同一「数据优先」契约:目录带**合法**
+ * `group` 时徽章完全跟 group 走(显式非 budget 分组不再被 `codex/` 前缀 override,否则会
+ * 出现「显示 budget 徽章却归入非 budget 分组」的自相矛盾,2026-07 Greptile review);
+ * group 缺失/未知时才用前缀兜底(网关旧数据可能没标 group)。替代 4 处独立的前缀判断。
  */
 export function isBudgetModel(model: { id: string; group?: string }): boolean {
-  if (model.group === 'gpt-budget') return true;
+  if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group === 'gpt-budget';
   return model.id.startsWith('codex/');
 }
 

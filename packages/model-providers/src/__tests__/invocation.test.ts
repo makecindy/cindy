@@ -400,3 +400,112 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     expect(r.effort).toBe('low');
   });
 });
+
+// ── 2026-07 review 修正的行为锁(#433 第二轮) ─────────────────────────────────
+
+describe('resolveModelInvocation — 空权限档位表不放宽(Greptile P2 + codex P1 同点)', () => {
+  it('显式档 + 空档位表 → 原样保留,绝不落场景默认 bypass', () => {
+    const r = resolveModelInvocation(
+      { permissionMode: 'acceptEdits' },
+      SCENARIO,
+      ctx({ getPermissionModes: () => [] }),
+    );
+    expect(r.permissionMode).toBe('acceptEdits');
+    expect(r.fallbacksApplied).toContain('permission:modes-unavailable');
+  });
+
+  it('无显式档 + 空档位表 → 场景默认(该分支语义不变)', () => {
+    const r = resolveModelInvocation({}, SCENARIO, ctx({ getPermissionModes: () => [] }));
+    expect(r.permissionMode).toBe('bypassPermissions');
+  });
+});
+
+describe('resolveModelInvocation — explicitModelPolicy(Orca 严格拒绝语义)', () => {
+  const STRICT = { ...SCENARIO, explicitModelPolicy: 'reject' as const };
+
+  it('显式模型经校验不可用 → rejected 置位;其余字段仍按回落链合成(纯诊断)', () => {
+    const r = resolveModelInvocation({ model: 'gone-model' }, STRICT, ctx());
+    expect(r.rejected).toEqual({
+      field: 'model',
+      value: 'gone-model',
+      reason: 'explicit-model-unavailable',
+    });
+    expect(r.fallbacksApplied).toContain('model:explicit-rejected');
+    expect(r.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('显式模型可用 → 不触发 rejected', () => {
+    const r = resolveModelInvocation({ model: 'claude-opus-5' }, STRICT, ctx());
+    expect(r.rejected).toBeUndefined();
+  });
+
+  it('目录与 caps 全不可用 → 未经校验采纳显式值,不触发 rejected', () => {
+    const r = resolveModelInvocation({ model: 'gone-model' }, STRICT, ctx({ providers: null }));
+    expect(r.rejected).toBeUndefined();
+    expect(r.model).toBe('gone-model');
+    expect(r.fallbacksApplied).toContain('model:explicit-unverified');
+  });
+
+  it("缺省策略('fallback')下不可用显式模型静默落场景默认(IM/hook 历史语义,不变)", () => {
+    const r = resolveModelInvocation({ model: 'gone-model' }, SCENARIO, ctx());
+    expect(r.rejected).toBeUndefined();
+    expect(r.model).toBe('claude-sonnet-4-6');
+  });
+});
+
+describe('resolveModelInvocation — 显式 agent 无可用模型时回落能跑的 agent(IM pickModel 语义)', () => {
+  it('显式 codex 零可用模型、场景默认 claude-code 有 → 回落并记录', () => {
+    // isVisible 把 codex 模型全部藏掉 → codex available=[](非 null)
+    const r = resolveModelInvocation(
+      { agentKind: 'codex' },
+      SCENARIO,
+      ctx({ isVisible: (_pid, m) => !m.id.startsWith('gpt') && !m.id.startsWith('codex/') }),
+    );
+    expect(r.agentKind).toBe('claude-code');
+    expect(r.fallbacksApplied).toContain('agent:model-less-fallback');
+    expect(r.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('场景默认 agent 同样无模型 → 保持显式选择(回落无意义)', () => {
+    const r = resolveModelInvocation(
+      { agentKind: 'codex' },
+      SCENARIO,
+      ctx({ isVisible: () => false }),
+    );
+    expect(r.agentKind).toBe('codex');
+    expect(r.fallbacksApplied).not.toContain('agent:model-less-fallback');
+  });
+
+  it('能力数据不可用(available=null)→ 不猜,维持显式 agent', () => {
+    const r = resolveModelInvocation(
+      { agentKind: 'codex' },
+      SCENARIO,
+      ctx({ providers: null }),
+    );
+    expect(r.agentKind).toBe('codex');
+    expect(r.fallbacksApplied).not.toContain('agent:model-less-fallback');
+  });
+});
+
+describe('resolveModelInvocation — providerId 校验含 per-provider 可见性(codex review)', () => {
+  it('模型经他源可用、点名来源被 isVisible 排除 → 回默认路由,不绕过来源级契约', () => {
+    // claude-opus-5 在 anthropic 可见、在 xd 被隐藏;显式点名 xd 不能放行
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5', providerId: 'xd' },
+      SCENARIO,
+      ctx({ isVisible: (pid, m) => !(pid === 'xd' && m.id === 'claude-opus-5') }),
+    );
+    expect(r.model).toBe('claude-opus-5');
+    expect(r.providerId).toBeNull();
+    expect(r.fallbacksApplied).toContain('provider:default-route');
+  });
+
+  it('点名来源可见 → 照常保留(既有语义不变)', () => {
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5', providerId: 'xd' },
+      SCENARIO,
+      ctx({ isVisible: () => true }),
+    );
+    expect(r.providerId).toBe('xd');
+  });
+});

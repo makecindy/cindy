@@ -305,6 +305,36 @@ describe('deriveModelList options', () => {
     });
     expect(rows.some((m) => m.id === 'hidden-model')).toBe(true);
   });
+
+  // 2026-07 codex review: 选中 (provider, model) 排在 rail 后位时,不能被前位供应商的
+  // 同 id 首见行去重掉 —— 否则 flat 列表带着**错误来源**的溯源与徽章(选订阅版显示成
+  // 托管版同款事故形状)。选中行原位替换首见行:位置守首见槽(顺序契约),溯源归选中方。
+  it('keepSelected 点名后位供应商时,选中行替换首见行而非被 first-wins 丢弃', () => {
+    const rows = deriveModelList({
+      providers: fixtureProviders(),
+      agent: 'claude-code',
+      providerScope: 'connected-for-agent',
+      keepSelected: { providerId: 'xd', modelId: 'claude-opus-5' },
+    });
+    const opusRows = rows.filter((m) => m.id === 'claude-opus-5');
+    expect(opusRows).toHaveLength(1);
+    // anthropic 先见,但选中方是 xd → 溯源必须是 xd(managed),不是 anthropic(subscription)
+    expect(opusRows[0].sourceProviderId).toBe('xd');
+    expect(opusRows[0].sourceAccess).toEqual({ kind: 'managed' });
+    // 位置守首见槽:仍是列表第一行(anthropic 段位),顺序契约不因替换漂移
+    expect(rows[0].id).toBe('claude-opus-5');
+  });
+
+  it('keepSelected 点名首见供应商本身时行为不变(不触发替换)', () => {
+    const rows = deriveModelList({
+      providers: fixtureProviders(),
+      agent: 'claude-code',
+      providerScope: 'connected-for-agent',
+      keepSelected: { providerId: 'anthropic', modelId: 'claude-opus-5' },
+    });
+    const opus = rows.find((m) => m.id === 'claude-opus-5');
+    expect(opus?.sourceProviderId).toBe('anthropic');
+  });
 });
 
 describe('溯源字段键集锁(visibleModelUnion 薄壳的 wire 安全前提)', () => {

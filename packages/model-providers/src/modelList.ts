@@ -126,17 +126,30 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
   for (const provider of resolveRail(providers, agent, providerScope)) {
     if (excludeProvider?.(provider)) continue;
     for (const m of provider.models[agent] ?? []) {
-      if (dedupe === 'first-wins' && seen.has(m.id)) continue;
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
       if (!selected && isVisible && !isVisible(provider.id, m)) continue;
-      if (dedupe === 'first-wins') seen.add(m.id);
       const entry: ModelListEntry = {
         ...m,
         sourceProviderId: provider.id,
         sourceConnected: provider.connected,
       };
       if (provider.access !== undefined) entry.sourceAccess = provider.access;
+      if (dedupe === 'first-wins') {
+        if (seen.has(m.id)) {
+          // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
+          // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
+          // 用选中行**原位替换**首见行(位置守首见槽,输出顺序契约不变)。
+          if (selected) {
+            const i = out.findIndex((e) => e.id === m.id);
+            if (i !== -1 && !matchesSelected(keepSelected, out[i].sourceProviderId, out[i].id)) {
+              out[i] = entry;
+            }
+          }
+          continue;
+        }
+        seen.add(m.id);
+      }
       out.push(entry);
     }
   }

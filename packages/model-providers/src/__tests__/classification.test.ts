@@ -116,6 +116,14 @@ describe('isBudgetModel — 目录 group 优先,codex/ 前缀兜底', () => {
     expect(isBudgetModel({ id: 'codex/gpt-5.5' })).toBe(true);
     expect(isBudgetModel({ id: 'gpt-5.5' })).toBe(false);
   });
+  // 与 groupOf 同一「数据优先」契约(2026-07 Greptile review):目录显式给出合法的
+  // 非 budget 分组时,前缀不再 override —— 否则徽章显示 budget、分组却归非 budget,自相矛盾。
+  it('codex/ 前缀 + 合法非 budget 分组 → 尊重目录,不打 budget 徽章', () => {
+    expect(isBudgetModel({ id: 'codex/gpt-5.5', group: 'gpt' })).toBe(false);
+  });
+  it('codex/ 前缀 + 未知 group 值 → 视同缺失,前缀兜底(与 groupOf 的未知回退一致)', () => {
+    expect(isBudgetModel({ id: 'codex/gpt-5.5', group: 'not-a-category' })).toBe(true);
+  });
 });
 
 describe('modelBadges — 徽章唯一口径', () => {

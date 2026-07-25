@@ -115,7 +115,12 @@ export function effortRank(e: Effort): number {
 /** 取一组 effort 里的最低档;空 → null。(title-one-shot 的 EFFORT_RANK/lowestEffort 收口。) */
 export function lowestEffort(efforts: readonly Effort[]): Effort | null {
   if (!efforts.length) return null;
-  return [...efforts].sort((a, b) => effortRank(a) - effortRank(b))[0];
+  // 线性取最小(严格小于:平级保留先出现者,与原 copy+稳定 sort 语义一致,省 O(n log n)+拷贝)。
+  let best = efforts[0];
+  for (const e of efforts) {
+    if (effortRank(e) < effortRank(best)) best = e;
+  }
+  return best;
 }
 
 /**

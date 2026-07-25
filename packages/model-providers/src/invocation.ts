@@ -57,6 +57,16 @@ export interface ScenarioDefaults {
   /** 场景默认来源(如 IM 草稿的 providerId);与显式值同样要过收敛校验。 */
   providerIdFor?: (agent: AgentKind, modelId: string) => string | null;
   fastMode?: boolean;
+  /**
+   * 显式模型经目录/caps 校验确认不可用时的策略:
+   *   - 'fallback'(默认)= 落场景默认链继续派发 —— IM/hook 无人值守历史语义(宁可换模型
+   *     也要把会话建起来);
+   *   - 'reject' = 在返回值标记 `rejected`,调用方**不得**用合成结果开工 —— Orca
+   *     resolveWorkerConfig 语义(用户点名模型跑 worker,静默换模型 = 花错钱,必须拒绝)。
+   * 仅在目录/caps 可用且显式模型确实不在清单时生效;目录全不可用时显式值未经校验直接
+   * 采纳('model:explicit-unverified'),不触发 reject。
+   */
+  explicitModelPolicy?: 'fallback' | 'reject';
 }
 
 /** 目录上下文。providers=null = 目录不可用 → capabilities 兜底 + providerId 透传降级。 */
@@ -84,6 +94,11 @@ export interface ResolvedInvocation {
    * 'permission:strictest-fallback')。调用方打日志用,不参与任何逻辑。
    */
   fallbacksApplied: readonly string[];
+  /**
+   * `explicitModelPolicy: 'reject'` 且显式模型经校验不可用时置位。置位时其余字段仍按
+   * 回落链合成(纯诊断价值,便于日志说明"本来会跑什么"),但调用方**不得**据此开工。
+   */
+  rejected?: { field: 'model'; value: string; reason: 'explicit-model-unavailable' };
 }
 
 interface AvailableModel {
@@ -139,26 +154,53 @@ export function resolveModelInvocation(
     if (prefs.agentKind != null) fallbacks.push('agent:scenario-default');
   }
 
+  // 1b. 显式 agent 合法但目录/caps 证实它**一个可用模型都没有**,而场景默认 agent 有 →
+  //     回落到能跑的 agent。这是 IM resolveImSessionDefaults.pickModel 的现行语义(codex
+  //     review):不回落的话会合成一个「无可执行来源」的会话,比换 agent 更糟。
+  //     清单为 null(能力数据不可用)时不猜,维持显式选择。
+  let available = availableModelsFor(agentKind, ctx);
+  if (
+    isKnownAgent(prefs.agentKind) &&
+    agentKind !== scenario.agentKind &&
+    available !== null &&
+    available.length === 0
+  ) {
+    const scenarioAvailable = availableModelsFor(scenario.agentKind, ctx);
+    if (scenarioAvailable !== null && scenarioAvailable.length > 0) {
+      agentKind = scenario.agentKind;
+      available = scenarioAvailable;
+      fallbacks.push('agent:model-less-fallback');
+    }
+  }
+
   // 2. model。
-  const available = availableModelsFor(agentKind, ctx);
   const has = (id: string | null | undefined): id is string =>
     !!id && (available === null || available.some((m) => m.id === id));
   const scenarioModel = scenario.modelFor(agentKind);
   let model: string;
+  let rejected: ResolvedInvocation['rejected'];
   if (has(prefs.model)) {
     model = prefs.model;
     // 目录与 caps 全不可用时 has() 放行一切 —— 值被采纳但未经校验,记入诊断轨迹。
     if (available === null) fallbacks.push('model:explicit-unverified');
-  } else if (has(scenarioModel)) {
-    model = scenarioModel;
-    if (prefs.model != null) fallbacks.push('model:scenario-default');
-    if (available === null) fallbacks.push('model:scenario-default-unverified');
-  } else if (available !== null && available.length > 0) {
-    model = available[0].id;
-    fallbacks.push('model:first-available');
   } else {
-    model = scenarioModel;
-    fallbacks.push('model:scenario-default-unverified');
+    // 显式模型经校验确认不可用(available 必非 null,否则上分支已放行):按策略标记拒绝。
+    // 其余字段照常合成 —— rejected 是给调用方的硬信号,不是让链条中断。
+    if (prefs.model != null && scenario.explicitModelPolicy === 'reject') {
+      rejected = { field: 'model', value: prefs.model, reason: 'explicit-model-unavailable' };
+      fallbacks.push('model:explicit-rejected');
+    }
+    if (has(scenarioModel)) {
+      model = scenarioModel;
+      if (prefs.model != null) fallbacks.push('model:scenario-default');
+      if (available === null) fallbacks.push('model:scenario-default-unverified');
+    } else if (available !== null && available.length > 0) {
+      model = available[0].id;
+      fallbacks.push('model:first-available');
+    } else {
+      model = scenarioModel;
+      fallbacks.push('model:scenario-default-unverified');
+    }
   }
 
   // 3. effort。requested 槽位是**两级候选**: 显式档非法时先试场景默认档(hook 的
@@ -195,9 +237,18 @@ export function resolveModelInvocation(
       providerId = requestedProvider;
       fallbacks.push('provider:unverified-passthrough');
     } else {
-      const usable = connectedProvidersForAgent([...ctx.providers], agentKind).some(
-        (p) => p.id === requestedProvider && providerOffersModel(p, model, agentKind),
+      // 「真实提供」必须含 per-provider 可见性:同一模型在 B 可见、在 A 被用户隐藏时,
+      // 显式点名 A 不能只靠「已连接 + 目录含该模型」就放行 —— 那会绕过 isVisible 的
+      // 来源级契约,路由到用户明确排除的来源(codex review)。
+      const providerView = connectedProvidersForAgent([...ctx.providers], agentKind).find(
+        (p) => p.id === requestedProvider,
       );
+      const catalogModel = providerView?.models[agentKind]?.find((m) => m.id === model);
+      const usable =
+        providerView !== undefined &&
+        catalogModel !== undefined &&
+        providerOffersModel(providerView, model, agentKind) &&
+        (!ctx.isVisible || ctx.isVisible(providerView.id, catalogModel));
       if (usable) {
         providerId = requestedProvider;
       } else {
@@ -209,13 +260,19 @@ export function resolveModelInvocation(
 
   // 5. permissionMode: 显式且支持 > 显式但不支持时回落该 agent **最严**档 > 场景默认。
   //    (安全方向硬要求,见文件头;permissionModes 未注入时无从校验,显式值原样放行。)
+  //    **空档位表 = 能力数据异常,同「未注入」处理,显式值原样保留** —— 此前空表会落
+  //    scenario.permissionMode(常为 bypass),把显式限制静默放宽,与本函数的安全保证
+  //    正相反(Greptile + codex review 同点)。
   const supportedModes = ctx.getPermissionModes?.(agentKind);
   let permissionMode: string;
   if (prefs.permissionMode != null) {
-    if (!supportedModes || supportedModes.includes(prefs.permissionMode)) {
+    if (!supportedModes || supportedModes.length === 0) {
+      permissionMode = prefs.permissionMode;
+      if (supportedModes) fallbacks.push('permission:modes-unavailable');
+    } else if (supportedModes.includes(prefs.permissionMode)) {
       permissionMode = prefs.permissionMode;
     } else {
-      permissionMode = supportedModes[0] ?? scenario.permissionMode;
+      permissionMode = supportedModes[0];
       fallbacks.push('permission:strictest-fallback');
     }
   } else {
@@ -226,5 +283,14 @@ export function resolveModelInvocation(
   //    由派发端在确定最终 (providerId, model) 后另行叠加 —— 本函数不越权猜)。
   const fastMode = prefs.fastMode ?? scenario.fastMode ?? false;
 
-  return { agentKind, model, effort, providerId, permissionMode, fastMode, fallbacksApplied: fallbacks };
+  return {
+    agentKind,
+    model,
+    effort,
+    providerId,
+    permissionMode,
+    fastMode,
+    fallbacksApplied: fallbacks,
+    ...(rejected !== undefined ? { rejected } : {}),
+  };
 }
