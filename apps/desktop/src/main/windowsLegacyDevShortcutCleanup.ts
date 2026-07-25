@@ -125,7 +125,12 @@ export function parseWindowsShortcut(buffer: Buffer): LegacyShortcutDetails | nu
       // VolumeIDAndLocalBasePath present.
       let base = '';
       let suffix = '';
-      if (headerSize >= 0x24 && linkInfoStart + 36 <= buffer.length) {
+      // The two unicode offset fields live at bytes [28,36) of the LinkInfo
+      // header; only read them when the header (and thus the LinkInfo block,
+      // whose size was already validated) actually extends that far. Guarding on
+      // linkInfoEnd — not the whole buffer — keeps a bogus headerSize from making
+      // us read the following StringData section as offset fields.
+      if (headerSize >= 0x24 && linkInfoStart + 36 <= linkInfoEnd) {
         const baseAbsUnicode = inStructAbs(buffer.readUInt32LE(linkInfoStart + 28));
         const suffixAbsUnicode = inStructAbs(buffer.readUInt32LE(linkInfoStart + 32));
         if (baseAbsUnicode >= 0) base = decodeNullTerminated(buffer, baseAbsUnicode, true, linkInfoEnd);

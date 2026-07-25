@@ -120,15 +120,38 @@ function runNativeProcessSnapshot(): Promise<IProcessInfo[]> {
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
-  // Issue this native call only after any previous enumeration drains. The chain
-  // advances when the native callback fires (or errors), NOT when the timeout
-  // below resolves, so a timed-out scan can never leave a request in flight that
-  // poisons the next one.
-  const nativeCall = nativeSnapshotChain.then(
-    () => runNativeProcessSnapshot(),
-    () => runNativeProcessSnapshot(),
-  );
+  // Phase 1 — wait for any in-flight native enumeration to drain before issuing
+  // ours. The package hands every callback queued during one enumeration the
+  // SAME snapshot and only clears `requestInProgress` after that callback drains,
+  // so a call issued while a prior one is running would receive its (stale) list.
+  // We cap the wait and, on expiry, return [] WITHOUT calling getAllProcesses —
+  // enqueuing then would coalesce onto the stale in-flight scan.
+  const previous = nativeSnapshotChain;
+  const drained = await Promise.race([
+    previous.then(
+      () => true,
+      () => true,
+    ),
+    delay(WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS).then(() => false),
+  ]);
+  if (!drained) {
+    log.debug('windows process snapshot timed out waiting for prior scan', {
+      timeoutMs: WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS,
+    });
+    return [];
+  }
+
+  // Phase 2 — the prior enumeration has drained (`requestInProgress` is false),
+  // so this issues a FRESH native scan. Its deadline is armed only now, so time
+  // spent waiting in phase 1 does not eat into this scan's budget (otherwise a
+  // slow prior scan could make quit resolve [] before its fresh scan even runs,
+  // missing the live Claude tree right before transport teardown).
+  const nativeCall = runNativeProcessSnapshot();
   nativeSnapshotChain = nativeCall.then(
     () => undefined,
     () => undefined,

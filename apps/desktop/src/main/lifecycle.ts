@@ -120,21 +120,27 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
   // 保证退出始终可推进; 个体任务的取消/降级由 disposer 自己负责。
   for (const d of registry.filter((x) => x.phase === 'pre-async')) {
     let timer: NodeJS.Timeout | undefined;
+    // Settle the disposer to 'done' whether it resolves or rejects, and catch
+    // here — the timeout may win the race below while the disposer is still
+    // pending, and a late rejection would otherwise surface as an
+    // unhandledRejection (process warning / possible crash).
+    const disposer = Promise.resolve()
+      .then(() => d.fn())
+      .then(
+        () => 'done' as const,
+        (err) => {
+          log.error(`pre-async disposer "${d.name}" threw`, err);
+          return 'done' as const;
+        },
+      );
     try {
       const timedOut = new Promise<'timeout'>((resolve) => {
         timer = setTimeout(() => resolve('timeout'), timeoutMs);
       });
-      const outcome = await Promise.race([
-        Promise.resolve()
-          .then(() => d.fn())
-          .then(() => 'done' as const),
-        timedOut,
-      ]);
+      const outcome = await Promise.race([disposer, timedOut]);
       if (outcome === 'timeout') {
         log.warn(`pre-async disposer "${d.name}" timed out after ${timeoutMs}ms — proceeding`);
       }
-    } catch (err) {
-      log.error(`pre-async disposer "${d.name}" threw`, err);
     } finally {
       if (timer) clearTimeout(timer);
     }
