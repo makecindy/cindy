@@ -4,8 +4,12 @@
  * 语义对齐 slack-hook-server bot.ts 的 /model 卡校准(两个渠道编辑同一份
  * 数据, 联动规则必须一致, 规则 9 用代码保证确定性):
  *   - 换 agent: 偏好是 (agentKind, model) 配对, 换组即清 model/effort;
- *     原权限档不被新 agent 支持时一并清空(防 desktop 派发侧静默回落
- *     bypass 造成意外放宽); agent 置 null(跟随默认)时全部清空。
+ *     agent 置 null(跟随默认)时同样整组清空。
+ *     **权限档一律原样保留, 永不清空** —— 清空 = 无显式偏好 = 派发侧的
+ *     bypassPermissions 历史默认, 等于「选了更严的档, 切个 agent 就被静默
+ *     放宽成完全访问」(2026-07 安全修正; 旧实现在此清空, 注释却声称是为了
+ *     防这件事)。兼容性统一交给 resolveEffectivePermissionMode 与 main 侧
+ *     defaults.ts 收紧到该 agent 最严档, 显示与派发同口径。
  *   - 换 model: 随手写入 agentKind 配对; 原 effort 不被新模型支持时校准到
  *     该模型默认档(无默认档则清空)。
  *   - 换 effort / permission: 单字段直写(选项列表已按当前 agent/model

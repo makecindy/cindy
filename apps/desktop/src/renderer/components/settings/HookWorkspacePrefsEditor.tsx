@@ -483,6 +483,15 @@ export function WorkspacePrefsEditor({
           // 能力清单未就绪才禁用; agent 未显式设置时也可直接选模型(随手把
           // agent 显式配对写入, 与 Slack 卡「选中模型即落 (agent, model)」同规则)
           disabled={disabled || effAgentCaps === null || eff.agentKind.id === null}
+          // 这一行的 modelId 可能是**解析出来的继承值**(prefs.model 为 null 时来自 IM
+          // 新会话默认), 点它的语义是「把继承值钉成本目录的显式偏好」, 必须照常回调 ——
+          // 否则用户点了没反应, 之后上游默认一变这条偏好就被静默改掉。
+          reselectEmitsChange
+          // 已存模型不在可见清单(被隐藏 / 供应商断开 / 目录下架)时显示裸 id 而非
+          // 「选择模型」占位符: 占位符会把「存过但当前不可用」显示成「没选过」, 用户
+          // 既看不到自己存的是什么、也无从判断为何 bot 用的不是它。与本组件接管前
+          // (PrefsSelect 的 modelLabel 回落裸 id)行为一致; 派发侧另有回落并记日志。
+          unknownModelLabel={(id) => id}
           onModelChange={applyModel}
           onEffortChange={(next) => {
             if (next !== prefs.effort) state.applyPatch(alias, { effort: next });

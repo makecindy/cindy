@@ -93,6 +93,10 @@ export function VendorSegmentedSwitcher({
             type="button"
             role="tab"
             aria-selected={isActive}
+            // 容器上的 pointer-events-none 只挡鼠标, 键盘仍能 Tab 到这里按 Enter ——
+            // 在设置页的只读态(未连接/未绑定)或写入在途时会绕过禁用直接触发 onChange。
+            // 原生 disabled 同时移出 tab 序并阻断激活, 是唯一可靠的门。
+            disabled={disabled}
             // 阻止 mousedown 抢焦点 —— 否则点 tab 时下方 ChatInput 的 :focus-within
             // 边框会瞬间掉到非聚焦色。键盘 Tab 仍可正常 focus 本按钮（preventDefault
             // 只阻断鼠标路径），无障碍不受影响。

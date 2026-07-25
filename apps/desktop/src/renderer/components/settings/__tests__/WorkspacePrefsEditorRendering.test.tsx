@@ -41,6 +41,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     disabled?: boolean;
     onProviderChange?: (providerId: string | null, modelId?: string) => void;
     onModelChange: (modelId: string) => void;
+    reselectEmitsChange?: boolean;
+    unknownModelLabel?: (modelId: string) => string;
   }) => (
     <div
       data-testid="model-selector"
@@ -52,6 +54,9 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       // onProviderChange 是「供应商分段模式」的开关(ModelSelector 内部
       // sourcesEnabled = !!onProviderChange),这里暴露出来供断言。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
+      data-reselect-emits={String(props.reselectEmitsChange === true)}
+      // 未知模型的 trigger 文案由调用方给出;这里回放它对一个不存在的 id 的结果。
+      data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
       onClick={() => props.onModelChange('gpt-5.5')}
     />
   ),
@@ -147,6 +152,44 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     });
   });
 
+  // 这一行的「当前模型」可能是从 IM 新会话默认解析出来的继承值(prefs.model === null)。
+  // ModelSelector 默认把「点当前选中行」当无操作,于是用户点了没反应、之后上游默认一变
+  // 这条偏好就被静默改掉 —— 必须开 reselectEmitsChange 才能把继承值钉成显式值。
+  it('允许把继承来的模型钉成显式偏好(reselectEmitsChange)', () => {
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
+    expect(screen.getByTestId('model-selector').getAttribute('data-reselect-emits')).toBe('true');
+  });
+
+  it('继承态(prefs.model=null)下点当前模型仍写入显式偏好', () => {
+    render(
+      <WorkspacePrefsEditor
+        alias="cindy"
+        state={stateWith({
+          prefsFor: () => ({
+            workspace: 'cindy',
+            model: null, // 跟随默认
+            effort: null,
+            agentKind: null,
+            permissionMode: null,
+          }),
+        })}
+      />,
+    );
+
+    screen.getByTestId('model-selector').click();
+
+    expect(applyPatch).toHaveBeenCalledWith('cindy', expect.objectContaining({ model: 'gpt-5.5' }));
+  });
+
+  // 已存模型被隐藏 / 供应商断开 / 目录下架时,占位符「选择模型」会把「存过但不可用」
+  // 显示成「没选过」,用户既看不到自己存的是什么、也无从判断 bot 为何没用它。
+  it('已存模型不在可见清单时显示裸 id 而非占位符', () => {
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
+    expect(screen.getByTestId('model-selector').getAttribute('data-unknown-label')).toBe(
+      'ghost-model-1',
+    );
+  });
+
   it('effort 并进模型选择器,不再有独立控件', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
 
@@ -187,6 +230,26 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     );
     expect(screen.getByTestId('model-selector').getAttribute('data-disabled')).toBe('true');
     expect(screen.getByTestId('permission-selector').getAttribute('data-disabled')).toBe('true');
+  });
+
+  // 容器上的 pointer-events-none 只挡鼠标:键盘仍能 Tab 到 tab 按钮并按 Enter,
+  // 在只读态(未连接/未绑定)或写入在途时绕过禁用触发 applyPatch。必须是原生 disabled。
+  it('禁用态的 agent 分段在按钮级禁用,键盘也进不去', () => {
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ editable: false })} />);
+
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.length).toBe(2);
+    for (const tab of tabs) expect((tab as HTMLButtonElement).disabled).toBe(true);
+
+    tabs.find((t) => t.getAttribute('aria-selected') === 'false')?.click();
+    expect(applyPatch).not.toHaveBeenCalled();
+  });
+
+  it('写入在途时同样按钮级禁用', () => {
+    render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ pendingWs: 'cindy' })} />);
+    for (const tab of screen.getAllByRole('tab')) {
+      expect((tab as HTMLButtonElement).disabled).toBe(true);
+    }
   });
 
   it('写入在途的目录同样整行禁用', () => {

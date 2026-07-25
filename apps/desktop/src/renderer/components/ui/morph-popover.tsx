@@ -442,6 +442,9 @@ export function MorphPopover({
           <div
             ref={panelRef}
             data-state="closed"
+            // 停靠侧外显:本组件按请求侧钳高、不做碰撞翻转,选错侧会开成截断/零高,
+            // 而 jsdom 无布局引擎测不出几何 —— 暴露出来让调用方的选侧决策可被断言。
+            data-morph-side={side}
             role="group"
             aria-label={panelAriaLabel}
             tabIndex={-1}

@@ -15,9 +15,17 @@
  * "偏好过期"(模型下架 / agent 换代)的窗口里。
  *
  * permissionMode 例外: IM 草稿默认没有权限概念, 取值链是「显式且该 agent
- * 支持 > 'bypassPermissions'」—— bypass 是 hook 无人值守的历史默认, 非法
- * 收紧值回落 bypass 而非更严档(server 侧渲染/校准已双保险, 走到这里只剩
- * 极小的"偏好过期"窗口)。
+ * 支持 > 显式但不支持时回落该 agent **最严**档 > 从未填显式档时
+ * 'bypassPermissions'」。
+ *
+ * 「不支持时只能更严不能更宽」是安全方向的硬要求(2026-07 修正; 旧实现在此
+ * 回落 bypass): 用户填过显式档 = 明确表达过「不要默认的完全访问」, 换 agent
+ * 后原档不被支持(如 Claude 的 acceptEdits / plan 在 Codex 上不存在)时若回落
+ * bypassPermissions, 等于选了更严的档反而被静默放宽成完全访问 —— 而这是无人
+ * 值守的 IM 派发链路, 没有人在旁边确认。capabilities 的 permissionModes 一律
+ * 按**从严到宽**声明(claude-code: ask/acceptEdits/auto/bypassPermissions;
+ * codex: ask/auto/bypassPermissions), 故取 [0] 即最严档。
+ * 「从未填显式档 → bypassPermissions」的无人值守历史默认保持不变。
  *
  * 纯函数 + 注入依赖(规则 14), Electron / maker 绑定在 session-runner 组装。
  */

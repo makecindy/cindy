@@ -309,6 +309,17 @@ interface ModelSelectorProps {
   /** 可选的列表首行兜底值，例如“不指定（使用原逻辑）”。 */
   fallbackOption?: { active: boolean; label: string; onSelect: () => void };
   /**
+   * 点击**当前已选中**的行时照常回调 onModelChange / onProviderChange（默认 false = 收起了事）。
+   * 供「当前值是解析出的继承值、点一下才落成显式值」的调用方（IM 工作目录偏好）使用；
+   * 会话场景不要开——那里 modelId 本就是已持久化的值，重选自己是纯无操作。
+   */
+  reselectEmitsChange?: boolean;
+  /**
+   * modelId 非空但不在可见清单时的 trigger 文案（默认落「选择模型」占位符）。
+   * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
+   */
+  unknownModelLabel?: (modelId: string) => string;
+  /**
    * session-agent-switch:会话内显式两步切换引擎(先选 Agent,再选模型)。
    * 传入后列表顶部渲染 Claude / Codex 分段;切到非当前引擎的 tab 进入「浏览目标
    * 引擎模型」态(带提示行),此时点模型行调 onSwitch(而非 onModelChange),由调用方
@@ -360,6 +371,8 @@ interface ModelSelectorContentProps {
   followSession?: { active: boolean; label: string; onFollow: () => void };
   /** 是否显示模型的 effort / Fast 编辑入口。 */
   configurationEnabled?: boolean;
+  /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
+  reselectEmitsChange?: boolean;
   /** Morph 原位展开时，要求真实 pointer move 后才展示行级配置，避免静止光标误触。 */
   pointerRevealRequiresIntent?: boolean;
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
@@ -399,6 +412,7 @@ export function ModelSelectorContent({
   onNavigateToProviders,
   followSession,
   configurationEnabled = true,
+  reselectEmitsChange = false,
   pointerRevealRequiresIntent = false,
   agentSwitch,
 }: ModelSelectorContentProps) {
@@ -806,6 +820,14 @@ export function ModelSelectorContent({
       return;
     }
     if (isSelectedRow(providerId, id)) {
+      // 默认:重选当前行 = 无操作,直接收起(会话场景点自己没有意义)。
+      // reselectEmitsChange:调用方的「当前值」可能是**解析出来的继承值**而非已持久化的
+      // 显式值(IM 工作目录偏好),这时点当前行的语义是「把继承值钉成显式值」,必须照常回调,
+      // 否则用户点了没反应、之后上游默认一变这条偏好就被静默改掉。
+      if (reselectEmitsChange) {
+        if (sections && providerId) onProviderChange?.(providerId, id);
+        else onModelChange(id);
+      }
       onDismiss?.();
       return;
     }
@@ -1390,6 +1412,8 @@ export function ModelSelector({
   popoverSide = 'top',
   configurationEnabled = true,
   fallbackOption,
+  reselectEmitsChange = false,
+  unknownModelLabel,
   currentProviderId,
   sourceDisconnected = false,
   onProviderChange,
@@ -1451,9 +1475,15 @@ export function ModelSelector({
   );
 
   const currentModel = visibleModels.find((m) => m.id === modelId);
+  // 已保存的模型不在可见清单里(被隐藏 / 供应商断开 / 目录下架)时,默认落到「选择模型」
+  // 占位符 —— 对会话是对的(没选过),但对「展示一条已持久化偏好」的调用方是信息丢失:
+  // 用户既看不到自己存的是什么,也看不到实际会跑什么。unknownModelLabel 让这类调用方
+  // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
-    : (currentModel?.displayName ?? t('newChat.modelSelector.trigger.placeholder'));
+    : (currentModel?.displayName ??
+      (modelId && unknownModelLabel ? unknownModelLabel(modelId) : null) ??
+      t('newChat.modelSelector.trigger.placeholder'));
   const efforts = currentModel?.efforts ?? [];
 
   const currentAgentKind: AgentKind | null = useMemo(() => {
@@ -1789,6 +1819,7 @@ export function ModelSelector({
       onProviderChange={onProviderChange}
       onNavigateToProviders={onNavigateToProviders}
       configurationEnabled={configurationEnabled}
+      reselectEmitsChange={reselectEmitsChange}
       pointerRevealRequiresIntent={morphEnabled}
       agentSwitch={contentAgentSwitch}
       followSession={

@@ -163,6 +163,11 @@ export function PermissionSelector({
       panelWidth={300}
       panelClassName="p-2"
       panelAriaLabel={t('newChat.permissionSelector.listAria')}
+      // 停靠侧:composer chip 恒向上(底部工具栏,上方才有空间);field 恒向下
+      // (设置页字段上方通常贴着卡片标题)。MorphPopover 是按请求侧的可用空间
+      // 钳高、不做碰撞翻转的(morph-popover.tsx:176-180), 所以这里必须按形态
+      // 选对侧 —— 靠近视口顶部的设置行若沿用 side='top' 会开成截断/零高。
+      side={isFieldTrigger ? 'bottom' : 'top'}
       // field 形态从设置页输入面生长(chip 形态仍从 composer 胶囊面生长)。
       startBg={isFieldTrigger ? 'var(--settings-input-bg)' : 'var(--composer-pill-bg)'}
       startBorderColor="var(--border-default)"

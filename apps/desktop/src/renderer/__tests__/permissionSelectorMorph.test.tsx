@@ -147,6 +147,25 @@ describe('PermissionSelector triggerVariant', () => {
     expect(getTrigger().className).toContain('h-9');
   });
 
+  // MorphPopover 按「请求侧的可用空间」钳高、不做碰撞翻转,所以形态必须选对停靠侧:
+  // composer chip 在底部工具栏 → 向上;设置页 field 上方常贴着卡片标题 → 向下,
+  // 否则靠近视口顶部的设置行会把菜单开成截断 / 零高。
+  it('chip 向上开、field 向下开(MorphPopover 不做碰撞翻转)', async () => {
+    const { unmount } = renderSelector();
+    fireEvent.click(getTrigger());
+    const chipPanel = await screen.findByRole('listbox');
+    expect(chipPanel.closest('[data-morph-side]')?.getAttribute('data-morph-side') ?? 'top').toBe(
+      'top',
+    );
+    unmount();
+    cleanup();
+
+    renderSelector({ triggerVariant: 'field' });
+    fireEvent.click(getTrigger());
+    const fieldPanel = await screen.findByRole('listbox');
+    expect(fieldPanel.closest('[data-morph-side]')?.getAttribute('data-morph-side')).toBe('bottom');
+  });
+
   it('field 形态仍走同一份选项列表与危险档配色', async () => {
     const { onChange } = renderSelector({ triggerVariant: 'field' });
     fireEvent.click(getTrigger());
