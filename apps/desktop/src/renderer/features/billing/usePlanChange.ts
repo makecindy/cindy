@@ -94,6 +94,8 @@ export function usePlanChange(
   const stateRef = useRef(state);
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
+  // 会话代次：切换账号或重新挂载后，旧账号/旧会话的迟到响应不得覆盖新状态。
+  const sessionRef = useRef(0);
   const settledNotifiedRef = useRef(new Set<string>());
   const onSettledRef = useRef(onSettled);
   stateRef.current = state;
@@ -117,10 +119,11 @@ export function usePlanChange(
   const applyChange = useCallback(
     (
       change: BillingPlanChange,
+      session: number,
       options?: { targetPlan?: PlanChangeTargetSnapshot | null; open?: boolean },
     ) => {
+      if (!mountedRef.current || session !== sessionRef.current) return;
       notifySettled(change);
-      if (!mountedRef.current) return;
       setState((current) => ({
         open: options?.open ?? current.open,
         phase: phaseForPlanChange(change),
@@ -148,6 +151,7 @@ export function usePlanChange(
     async (targetOfferCode: string, targetPlan: PlanChangeTargetSnapshot | null) => {
       if (!accountId || inFlightRef.current) return;
       // 每次重新选择目标都是新的结算会话：新幂等键，服务端自动撤销旧未完成变更。
+      const session = sessionRef.current;
       const idempotencyKey = newBillingIdempotencyKey('plan-change');
       setState({
         open: true,
@@ -160,11 +164,11 @@ export function usePlanChange(
       });
       await withRequestLock(async () => {
         try {
-          applyChange(await billingApi.quotePlanChange(targetOfferCode, idempotencyKey), {
+          applyChange(await billingApi.quotePlanChange(targetOfferCode, idempotencyKey), session, {
             targetPlan,
           });
         } catch (error) {
-          if (mountedRef.current) {
+          if (mountedRef.current && session === sessionRef.current) {
             setState((current) => ({
               ...current,
               phase: 'FAILED',
@@ -183,6 +187,7 @@ export function usePlanChange(
     if (!current.planChange || current.planChange.status !== 'QUOTED' || inFlightRef.current)
       return;
     const change = current.planChange;
+    const session = sessionRef.current;
     setState((value) => ({
       ...value,
       phase: 'CONFIRMING',
@@ -191,7 +196,7 @@ export function usePlanChange(
     }));
     await withRequestLock(async () => {
       try {
-        applyChange(await billingApi.confirmPlanChange(change.planChangeId));
+        applyChange(await billingApi.confirmPlanChange(change.planChangeId), session);
       } catch {
         // The confirm may have landed server-side even though the response was
         // lost. Re-read the change before restoring anything local, so a
@@ -202,9 +207,9 @@ export function usePlanChange(
         } catch {
           // Fall back to the pre-request snapshot below.
         }
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || session !== sessionRef.current) return;
         if (latest) {
-          applyChange(latest);
+          applyChange(latest, session);
           if (latest.status === change.status) {
             setState((value) => ({ ...value, error: true }));
           }
@@ -227,11 +232,14 @@ export function usePlanChange(
     const current = stateRef.current;
     if (!current.planChange) return;
     const planChangeId = current.planChange.planChangeId;
+    const session = sessionRef.current;
     await withRequestLock(async () => {
       try {
-        applyChange(await billingApi.refreshPlanChange(planChangeId));
+        applyChange(await billingApi.refreshPlanChange(planChangeId), session);
       } catch {
-        if (mountedRef.current) setState((value) => ({ ...value, error: true }));
+        if (mountedRef.current && session === sessionRef.current) {
+          setState((value) => ({ ...value, error: true }));
+        }
       }
     });
   }, [applyChange, withRequestLock]);
@@ -240,11 +248,14 @@ export function usePlanChange(
   const cancelChange = useCallback(
     async (planChangeId: string) => {
       if (inFlightRef.current) return;
+      const session = sessionRef.current;
       await withRequestLock(async () => {
         try {
-          applyChange(await billingApi.cancelPlanChange(planChangeId));
+          applyChange(await billingApi.cancelPlanChange(planChangeId), session);
         } catch {
-          if (mountedRef.current) setState((value) => ({ ...value, error: true }));
+          if (mountedRef.current && session === sessionRef.current) {
+            setState((value) => ({ ...value, error: true }));
+          }
         }
       });
     },
@@ -263,6 +274,7 @@ export function usePlanChange(
     // 套餐变更会话只属于当前打开的 Dialog：切换账号或重新挂载都从空状态开始，
     // 不从本地存储或服务端恢复历史二维码。
     mountedRef.current = true;
+    sessionRef.current += 1;
     settledNotifiedRef.current = new Set();
     setState(INITIAL_STATE);
     return () => {

@@ -62,9 +62,11 @@ export function useBillingCheckout(accountId: string | null) {
   const [state, setState] = useState<BillingCheckoutState>(INITIAL_STATE);
   const stateRef = useRef(state);
   const mountedRef = useRef(true);
-  const inFlightRef = useRef(false);
   // 会话代次：close/切换账号使当前会话失效，迟到的异步响应不得重开已结束的会话。
   const sessionRef = useRef(0);
+  // 请求锁按会话持有：记录在途请求所属代次。旧会话的在途请求不阻断新会话发起，
+  // 且其结束时不会误释放新会话已持有的锁。
+  const inFlightRef = useRef<number | null>(null);
   stateRef.current = state;
 
   const applyOrder = useCallback(
@@ -109,19 +111,19 @@ export function useBillingCheckout(accountId: string | null) {
     setState((value) => ({ ...value, error: true }));
   }, []);
 
-  const withRequestLock = useCallback(async (request: () => Promise<void>) => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+  const withRequestLock = useCallback(async (session: number, request: () => Promise<void>) => {
+    if (inFlightRef.current === session) return;
+    inFlightRef.current = session;
     try {
       await request();
     } finally {
-      inFlightRef.current = false;
+      if (inFlightRef.current === session) inFlightRef.current = null;
     }
   }, []);
 
   const startTopup = useCallback(
     async (request: CreateBillingTopupRequest) => {
-      if (!accountId || inFlightRef.current) return;
+      if (!accountId || inFlightRef.current === sessionRef.current) return;
       const session = ++sessionRef.current;
       const intent: BillingCheckoutIntent = {
         kind: 'TOPUP',
@@ -137,7 +139,7 @@ export function useBillingCheckout(accountId: string | null) {
         subscription: null,
         error: false,
       });
-      await withRequestLock(async () => {
+      await withRequestLock(session, async () => {
         try {
           applyOrder(await billingApi.createTopup(request, intent.idempotencyKey), intent, session);
         } catch {
@@ -150,7 +152,7 @@ export function useBillingCheckout(accountId: string | null) {
 
   const startSubscription = useCallback(
     async (request: CreateBillingSubscriptionRequest) => {
-      if (!accountId || inFlightRef.current) return;
+      if (!accountId || inFlightRef.current === sessionRef.current) return;
       const session = ++sessionRef.current;
       const intent: BillingCheckoutIntent = {
         kind: 'SUBSCRIPTION',
@@ -166,7 +168,7 @@ export function useBillingCheckout(accountId: string | null) {
         subscription: null,
         error: false,
       });
-      await withRequestLock(async () => {
+      await withRequestLock(session, async () => {
         try {
           applySubscription(
             await billingApi.createSubscription(request, intent.idempotencyKey),
@@ -182,9 +184,9 @@ export function useBillingCheckout(accountId: string | null) {
   );
 
   const refreshActive = useCallback(async () => {
-    await withRequestLock(async () => {
+    const session = sessionRef.current;
+    await withRequestLock(session, async () => {
       const current = stateRef.current;
-      const session = sessionRef.current;
       try {
         if (current.kind === 'TOPUP' && current.order) {
           const order =
@@ -208,7 +210,7 @@ export function useBillingCheckout(accountId: string | null) {
   }, [applyOrder, applySubscription, flagError, withRequestLock]);
 
   const retry = useCallback(async () => {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current === sessionRef.current) return;
     const current = stateRef.current;
     if (current.error && current.intent?.kind === 'TOPUP_RETRY') {
       await startTopupRetryWithIntent(current.intent);
@@ -228,7 +230,7 @@ export function useBillingCheckout(accountId: string | null) {
       const intent = current.intent;
       const session = sessionRef.current;
       setState((value) => ({ ...value, phase: 'CREATING', error: false }));
-      await withRequestLock(async () => {
+      await withRequestLock(session, async () => {
         try {
           applyOrder(
             await billingApi.createTopup(intent.request, intent.idempotencyKey),
@@ -245,7 +247,7 @@ export function useBillingCheckout(accountId: string | null) {
       const intent = current.intent;
       const session = sessionRef.current;
       setState((value) => ({ ...value, phase: 'CREATING', error: false }));
-      await withRequestLock(async () => {
+      await withRequestLock(session, async () => {
         try {
           applySubscription(
             await billingApi.createSubscription(intent.request, intent.idempotencyKey),
@@ -274,7 +276,7 @@ export function useBillingCheckout(accountId: string | null) {
       subscription: null,
       error: false,
     });
-    await withRequestLock(async () => {
+    await withRequestLock(session, async () => {
       try {
         applyOrder(
           await billingApi.retryTopup(intent.orderId, intent.idempotencyKey),
@@ -291,7 +293,7 @@ export function useBillingCheckout(accountId: string | null) {
     const current = stateRef.current;
     if (current.kind !== 'TOPUP' || !current.order) return;
     const session = sessionRef.current;
-    await withRequestLock(async () => {
+    await withRequestLock(session, async () => {
       try {
         applyOrder(await billingApi.cancelTopup(current.order!.orderId), current.intent, session);
       } catch {
