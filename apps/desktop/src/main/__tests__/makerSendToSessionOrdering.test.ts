@@ -562,7 +562,7 @@ describe('sendToSession ordering', () => {
     expect(manualBlock).not.toContain('sendToSession');
   });
 
-  it('marks worker idle and clears auto-bridge state before aborting worker sessions', () => {
+  it('persists worker idle before runtime release and clears auto-bridge state afterward', () => {
     const serviceIdleBlock = extractBetween(
       orcaTeamServiceSource,
       "async function idleWorker(params: { callerLeadSessionId: string; workerId: string; expectedStatus?: 'done' }): Promise<OrcaOkResult> {",
@@ -573,17 +573,31 @@ describe('sendToSession ordering', () => {
       'const orcaTeamService = createOrcaTeamService({',
       '  });\n  orcaTeamServiceForEvents = orcaTeamService;',
     );
+    const manualIdleBlock = extractBetween(
+      serviceIdleBlock,
+      'if (!params.expectedStatus) {',
+      'const didIdle = await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus);',
+    );
+    const acknowledgedIdleBlock = extractBetween(
+      serviceIdleBlock,
+      'const didIdle = await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus);',
+      'if (!params.expectedStatus) return performIdle(found);',
+    );
 
     expect(source).toContain('registerOrcaWorkerControlHandlers(createElectronIpcHandlerRegistry(), {');
     expect(source).toContain('idleWorker: (params) => orcaTeamService.idleWorker(params),');
     expect(serviceIdleBlock).toContain('clearRuntimeState(worker.sessionId);');
     expect(serviceIdleBlock).toContain('await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)');
     expect(serviceIdleBlock).toContain('await deps.markWorkerIdle(worker.id)');
+    expect(serviceIdleBlock).toContain('await deps.restoreWorkerStatusIfIdle(worker.id, worker.status)');
     expect(serviceIdleBlock).toContain('await deps.hasPendingWorkerInput(worker.sessionId)');
     expect(serviceIdleBlock).toContain('deps.hasSendToSessionLock(worker.sessionId)');
-    expect(serviceIdleBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');");
-    expectOrder(serviceIdleBlock, 'await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)', 'clearRuntimeState(worker.sessionId);');
-    expectOrder(serviceIdleBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');");
+    expect(serviceIdleBlock).toContain('await deps.closeWorkerSession(worker.sessionId)');
+    expect(serviceIdleBlock).toContain('await deps.closeWorkerSessionIfIdle(worker.sessionId)');
+    expectOrder(manualIdleBlock, 'await deps.markWorkerIdle(worker.id)', 'await deps.closeWorkerSession(worker.sessionId)');
+    expectOrder(manualIdleBlock, 'await deps.closeWorkerSession(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
+    expectOrder(acknowledgedIdleBlock, 'await deps.markWorkerIdleIfStatus(worker.id, params.expectedStatus)', 'await deps.closeWorkerSessionIfIdle(worker.sessionId)');
+    expectOrder(acknowledgedIdleBlock, 'await deps.closeWorkerSessionIfIdle(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
 
     expect(serviceDepsBlock).toContain('if (sendToSessionLocks.has(sessionId)) return false;');
     expect(serviceDepsBlock).toContain('await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);');
@@ -607,11 +621,11 @@ describe('sendToSession ordering', () => {
     expectOrder(disableBlock, 'orcaTeamService.clearAutoBridgeState(w.sessionId);', 'await sess.abort();');
     expect(source).toContain('archiveWorker: (params) => orcaTeamService.archiveWorker(params),');
     expect(serviceArchiveBlock).toContain('clearRuntimeState(worker.sessionId);');
-    expect(serviceArchiveBlock).toContain("await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
+    expect(serviceArchiveBlock).toContain('await deps.closeWorkerSession(worker.sessionId)');
     expect(serviceArchiveBlock).toContain('await deps.archiveWorkerSession(worker.sessionId);');
     expect(serviceArchiveBlock).toContain("await deps.updateWorkerStatus(worker.id, 'done');");
-    expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');");
-    expectOrder(serviceArchiveBlock, "await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');", 'await deps.archiveWorkerSession(worker.sessionId);');
+    expectOrder(serviceArchiveBlock, 'await deps.closeWorkerSession(worker.sessionId)', 'clearRuntimeState(worker.sessionId);');
+    expectOrder(serviceArchiveBlock, 'clearRuntimeState(worker.sessionId);', 'await deps.archiveWorkerSession(worker.sessionId);');
     expectOrder(serviceArchiveBlock, 'await deps.archiveWorkerSession(worker.sessionId);', "await deps.updateWorkerStatus(worker.id, 'done');");
   });
 

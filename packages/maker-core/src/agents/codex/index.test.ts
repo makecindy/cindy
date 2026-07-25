@@ -3369,6 +3369,40 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('retries release-marker persistence after Worker unarchive already succeeded', async () => {
+    let unarchiveAttempts = 0;
+    const onCodexThreadUnarchived = vi.fn()
+      .mockRejectedValueOnce(new Error('release marker persistence failed'))
+      .mockResolvedValueOnce(undefined);
+    const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadUnarchive && ++unarchiveAttempts === 2) {
+        throw Object.assign(
+          new Error('thread is not archived'),
+          { code: JSONRPC_ERROR_CODE.INVALID_REQUEST },
+        );
+      }
+      return undefined;
+    });
+    const startOptions = {
+      sessionId: 'session-worker-resume-marker-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174005',
+      vendorOptions: { orcaRole: 'worker' as const, orcaRuntimeReleased: true },
+    };
+
+    await expect(agent.startSession(startOptions))
+      .rejects.toThrow('release marker persistence failed');
+
+    const handle = await agent.startSession(startOptions);
+
+    expect(host.unarchiveThread).toHaveBeenCalledTimes(2);
+    expect(onCodexThreadUnarchived).toHaveBeenCalledTimes(2);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(1);
+    await handle.close();
+  });
+
   it('persists a successful Worker unarchive before a failing thread/resume', async () => {
     const onCodexThreadUnarchived = vi.fn(async () => undefined);
     const agent = new CodexAgent(createDeps({}, { onCodexThreadUnarchived }));

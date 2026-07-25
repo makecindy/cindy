@@ -496,7 +496,7 @@ export class AppServerHost {
     return this.client.request<R>(method, params);
   }
 
-  /** Release one thread's live runtime without archiving or deleting its history. */
+  /** Drop this client's thread subscription without changing the thread lifecycle state. */
   async unsubscribeThread(threadId: string): Promise<void> {
     const client = this.client;
     if (!client) return;
