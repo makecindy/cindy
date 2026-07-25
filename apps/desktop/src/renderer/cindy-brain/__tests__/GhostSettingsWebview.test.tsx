@@ -55,21 +55,25 @@ function renderSettings(settingsHeight?: number) {
   if (!webview) throw new Error('Expected settings webview');
   webview.dispatchEvent(new Event('dom-ready'));
 
-  return { executeJavaScript };
+  const host = view.container.querySelector<HTMLElement>('[data-ghost-webview]');
+  if (!host) throw new Error('Expected settings webview host');
+
+  return { executeJavaScript, host };
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
   it('does not inject responsive width rules into fixed-height guests', async () => {
-    const { executeJavaScript } = renderSettings(360);
+    const { executeJavaScript, host } = renderSettings(360);
 
     await waitFor(() => expect(executeJavaScript).toHaveBeenCalledWith('void 0'));
     expect(
       executeJavaScript.mock.calls.some(([script]) => String(script).includes('__xdt_settings_w')),
     ).toBe(false);
+    expect(host.classList.contains('overflow-hidden')).toBe(false);
   });
 
   it('keeps responsive containment for auto-height guests', async () => {
-    const { executeJavaScript } = renderSettings();
+    const { executeJavaScript, host } = renderSettings();
 
     await waitFor(() =>
       expect(
@@ -78,5 +82,6 @@ describe('GhostSettingsWebview layout ownership', () => {
         ),
       ).toBe(true),
     );
+    expect(host.classList.contains('overflow-hidden')).toBe(true);
   });
 });

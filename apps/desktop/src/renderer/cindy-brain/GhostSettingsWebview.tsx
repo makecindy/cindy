@@ -421,7 +421,10 @@ function SettingsWebviewBody({
     <div
       ref={hostRef}
       data-ghost-webview
-      className="relative flex min-w-0 w-full max-w-full overflow-hidden"
+      className={cn(
+        'relative flex w-full min-w-0 max-w-full',
+        fixedHeight === undefined && 'overflow-hidden',
+      )}
       style={{ height: fixedHeight ?? autoHeight }}
     >
       {/* 首帧快照(上层盖住透明装载期的 webview;pointer-events 穿透,撤图前
