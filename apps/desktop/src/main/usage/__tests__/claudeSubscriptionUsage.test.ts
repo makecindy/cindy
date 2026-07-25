@@ -343,6 +343,20 @@ describe('isClaudeSubscriptionAlerting', () => {
     expect(isClaudeUsageWindowAlerting(undefined)).toBe(false);
     expect(isClaudeUsageWindowAlerting({ utilization: 87, severity: 'warning' })).toBe(true);
   });
+
+  it('ignores non-finite utilization instead of treating it as exhausted', () => {
+    // 持久化快照是 JSON.parse 后直接断言的, 不重新校验字段: 脏值不能被 clampPercent
+    // 夹成 100 而误判额度耗尽。severity 缺失时一律不告警。
+    expect(isClaudeUsageWindowAlerting({ utilization: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(isClaudeUsageWindowAlerting({ utilization: Number.NaN })).toBe(false);
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: Number.POSITIVE_INFINITY } },
+      'claude-opus-5',
+    )).toBe(false);
+    // 脏 utilization 不影响 severity 这条独立判据
+    expect(isClaudeUsageWindowAlerting({ utilization: Number.NaN, severity: 'warning' }))
+      .toBe(true);
+  });
 });
 
 describe('fetchClaudeSubscriptionUsageSnapshot', () => {

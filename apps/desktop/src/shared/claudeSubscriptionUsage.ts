@@ -366,13 +366,21 @@ export function matchScopedWindowForModel(
  */
 const WINDOW_ALERT_UTILIZATION_PERCENT = 90;
 
-/** 单个窗口告警:剩余水位见底,或服务端 severity 明确非 normal。 */
+/**
+ * 单个窗口告警:剩余水位见底,或服务端 severity 明确非 normal。
+ *
+ * utilization 走 Number.isFinite 而不只是 typeof —— 与本文件其它调用点同口径。解析层
+ * (toFiniteNumber / parseHeaderUtilization)本就只放行有限数, 但持久化快照是 JSON.parse
+ * 后直接断言成 snapshot 的(见 usageBroadcaster hydration), 不重新校验字段; 万一有脏值
+ * 滑进来, +Infinity 会被 clampPercent 夹成 100 并误判成额度耗尽而染红。
+ */
 export function isClaudeUsageWindowAlerting(
   window: ClaudeUsageWindow | null | undefined,
 ): boolean {
   if (!window) return false;
   if (
     typeof window.utilization === 'number'
+    && Number.isFinite(window.utilization)
     && clampPercent(window.utilization) >= WINDOW_ALERT_UTILIZATION_PERCENT
   ) {
     return true;
