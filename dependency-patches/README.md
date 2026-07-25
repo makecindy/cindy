@@ -10,7 +10,7 @@
 
 | 依赖 | 用途 |
 | --- | --- |
-| `expo-paste-input@0.2.2` | 优化移动端粘贴图片的处理时序，将耗时的解码、压缩和写盘移出 UI 线程，并补充加载中与失败事件。 |
+| `expo-paste-input@0.2.2` | 优化移动端粘贴图片的处理时序，将耗时的解码、压缩和写盘移出 UI 线程，并补充加载中与失败事件；同时在 iPhone 上清空被接管输入框的 iOS `inputAssistantItem`，去掉系统在键盘上方多挂的一条只有禁用态上下箭头和「完成」的表单导航条（iPad 的辅助条含撤销／重做／粘贴等实际功能，保持不动）。 |
 | `harmonyos-sans-sc-webfont-splitted` | 移除依赖按语言全局覆盖 `font-family` 的规则，由 Cindy 自己决定界面字体。 |
 | `react-native@0.85.3` | 回移 Yoga 对 `display: none` 与 `display: contents` 测量过程的布局状态修复，避免 Fabric 布局阶段因错误的 owner 关系触发断言崩溃（上游 `6fa330693fba313a2fe1121545c1efd558b60983`、`2546ce4d8219050fcd1bf432c7c830c9fd70c9af`）。移动端 iOS 通过 `expo-build-properties` 的 `buildReactNativeFromSource` 编译该补丁，不能改回预编译 RN Core。 |
 | `react-native-uitextview@2.2.0` | 修复 iOS 长文本渲染闪烁、布局性能、文本选择与选择手柄滚动等问题，并支持自定义选择菜单操作。 |

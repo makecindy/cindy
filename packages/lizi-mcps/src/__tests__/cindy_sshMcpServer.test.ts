@@ -7,7 +7,7 @@
  *  2. e2e smoke：真 McpServer + InMemoryTransport，走通 list_tools → call_tool。
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -408,14 +408,13 @@ describe('registry semantics', () => {
   });
 });
 
-// ── runtime plugin gate (tool-call 时刻,PR #874 review:Codex bridge 空 ctx) ──
+// ── session-stable plugin policy ───────────────────────────────────────────
 
-describe('runtime plugin gate via isEnabledForWorkdir', () => {
+describe('session-stable plugin policy', () => {
   async function makeServerClient(
     deps: SshMcpDeps,
-    sessionCtx?: { agentKind: 'claude-code' | 'codex'; workingDir: string },
   ): Promise<{ client: Client; cleanup: () => Promise<void> }> {
-    const server = createSshMcpServer(deps, sessionCtx);
+    const server = createSshMcpServer(deps);
     const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'gate-test-client', version: '0.0.0' });
     await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
@@ -428,51 +427,18 @@ describe('runtime plugin gate via isEnabledForWorkdir', () => {
     };
   }
 
-  it('disabled workdir → call_tool returns PLUGIN_DISABLED without touching registry', async () => {
-    const { pool, execCalls } = makeFakePool([snapshot({ id: 'web-1' })]);
-    const { deps } = makeDeps(pool, { isEnabledForWorkdir: () => false });
-    const { client, cleanup } = await makeServerClient(deps, {
-      agentKind: 'claude-code',
-      workingDir: 'E:/proj',
-    });
-
-    const result = await client.callTool({
-      name: 'call_tool',
-      arguments: { name: 'ssh_exec', args: { host: 'web-1', command: 'true' } },
-    });
-    const payload = JSON.parse(
-      (result.content as Array<{ type: string; text: string }>)[0].text,
-    ) as Record<string, unknown>;
-    expect(payload.errorCode).toBe('PLUGIN_DISABLED');
-    expect(execCalls).toHaveLength(0);
-    await cleanup();
-  });
-
-  it('passes the closure workingDir to the gate; empty workingDir maps to undefined', async () => {
-    const seen: Array<string | undefined> = [];
-    const { pool } = makeFakePool([snapshot({ id: 'web-1' })]);
-    const { deps } = makeDeps(pool, {
-      isEnabledForWorkdir: (wd) => {
-        seen.push(wd);
-        return true;
-      },
-    });
-
-    const bound = await makeServerClient(deps, { agentKind: 'claude-code', workingDir: 'E:/proj' });
-    await bound.client.callTool({ name: 'call_tool', arguments: { name: 'ssh_list_hosts', args: {} } });
-    await bound.cleanup();
-
-    const unbound = await makeServerClient(deps); // 无 sessionCtx = Codex bridge 构建期形态
-    await unbound.client.callTool({ name: 'call_tool', arguments: { name: 'ssh_list_hosts', args: {} } });
-    await unbound.cleanup();
-
-    expect(seen).toEqual(['E:/proj', undefined]);
-  });
-
-  it('gate absent (deps 未注入) keeps legacy pass-through', async () => {
+  it('does not re-read host plugin settings after the server is created', async () => {
     const { pool } = makeFakePool([snapshot({ id: 'web-1' })]);
     const { deps } = makeDeps(pool);
-    const { client, cleanup } = await makeServerClient(deps);
+    const liveGate = vi.fn(() => false);
+    // Simulate the legacy host dependency without adding it back to SshMcpDeps.
+    // A running server must rely on the policy frozen by its host runtime.
+    const legacyDeps = {
+      ...deps,
+      isEnabledForWorkdir: liveGate,
+    };
+    const { client, cleanup } = await makeServerClient(legacyDeps);
+
     const result = await client.callTool({
       name: 'call_tool',
       arguments: { name: 'ssh_list_hosts', args: {} },
@@ -481,6 +447,7 @@ describe('runtime plugin gate via isEnabledForWorkdir', () => {
       (result.content as Array<{ type: string; text: string }>)[0].text,
     ) as { ok: boolean };
     expect(payload.ok).toBe(true);
+    expect(liveGate).not.toHaveBeenCalled();
     await cleanup();
   });
 });

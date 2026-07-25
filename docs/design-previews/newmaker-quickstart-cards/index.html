@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>New Maker 快捷入口卡片 · 可交互 Demo</title>
+<!-- 内嵌真值:由 `node scripts/truth.mjs --demo <dir> --embed` 写入,禁止手改。 -->
+<script id="qa-truth" type="application/json">{"adaptive":{"samples":[{"h":700,"probes":{"card0":{"h":84,"w":448},"input":{"w":448},"quickstarts":{"w":448}},"w":480},{"h":700,"probes":{"card0":{"h":84,"w":508},"input":{"w":508},"quickstarts":{"w":508}},"w":540},{"h":700,"probes":{"card0":{"h":84,"w":527},"input":{"w":527},"quickstarts":{"w":527}},"w":559},{"h":700,"probes":{"card0":{"h":112,"w":242},"input":{"w":496},"quickstarts":{"w":496}},"w":560},{"h":700,"probes":{"card0":{"h":112,"w":242.5},"input":{"w":497},"quickstarts":{"w":497}},"w":561},{"h":700,"probes":{"card0":{"h":112,"w":282},"input":{"w":576},"quickstarts":{"w":576}},"w":640},{"h":700,"probes":{"card0":{"h":112,"w":302},"input":{"w":616},"quickstarts":{"w":616}},"w":680},{"h":700,"probes":{"card0":{"h":112,"w":311.5},"input":{"w":635},"quickstarts":{"w":635}},"w":699},{"h":700,"probes":{"card0":{"h":112,"w":312},"input":{"w":636},"quickstarts":{"w":636}},"w":700},{"h":700,"probes":{"card0":{"h":112,"w":314},"input":{"w":640},"quickstarts":{"w":640}},"w":720},{"h":700,"probes":{"card0":{"h":112,"w":343.5},"input":{"w":699},"quickstarts":{"w":699}},"w":779},{"h":700,"probes":{"card0":{"h":112,"w":166},"input":{"w":700},"quickstarts":{"w":700}},"w":780},{"h":700,"probes":{"card0":{"h":112,"w":166.25},"input":{"w":701},"quickstarts":{"w":701}},"w":781},{"h":700,"probes":{"card0":{"h":112,"w":221},"input":{"w":920},"quickstarts":{"w":920}},"w":1000},{"h":700,"probes":{"card0":{"h":112,"w":295.75},"input":{"w":1219},"quickstarts":{"w":1219}},"w":1299},{"h":700,"probes":{"card0":{"h":112,"w":296},"input":{"w":1220},"quickstarts":{"w":1220}},"w":1300},{"h":900,"probes":{"card0":{"h":112,"w":296},"input":{"w":1220},"quickstarts":{"w":1220}},"w":1440}]},"card":{"borderPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"className border → 1px","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":1},"gapPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"className gap-1 → 4px(Tailwind spacing 1 = 0.25rem)","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":4},"gridGapPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"grid gap-3 → 12px","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":12},"iconCirclePx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"className h-8 w-8 → 32px icon 圆圈","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":32},"iconGlyphPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"Icon size={16} → 16px glyph","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":16},"labelFontPx":{"provenance":{"hash":"fe6f62619ba903fc76270b68979232bda870f575bdd0ca97bda2087a29e6f4e7","locator":"text-13 = var(--text-13) = 13px(globals.css)","source":"../../../apps/desktop/src/renderer/styles/globals.css"},"value":13},"labelLinePx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"className leading-[16px] → 16px","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":16},"minHNarrowPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"narrow 档 min-h-[84px]","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":84},"minHNormalPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"常态 min-h-[112px]","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":112},"padNarrowPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"narrow 档 p-3 → 12px","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":12},"padNormalPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"常态 p-4 → 16px","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":16},"radiusPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"className rounded-xl → 12px(与输入框统一,见代码注释)","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":12}},"cards":[{"icon":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].icon=SearchCode","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"SearchCode"},"key":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].key='explore'","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"explore"},"labels":{"en":{"provenance":{"hash":"2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd","locator":"newChat.createAgent.quickStarts.explore","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Explore and understand code"},"ja":{"provenance":{"hash":"5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192","locator":"newChat.createAgent.quickStarts.explore","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"コードを探索して理解"},"ko":{"provenance":{"hash":"b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0","locator":"newChat.createAgent.quickStarts.explore","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"코드 탐색 및 이해"},"zh-CN":{"provenance":{"hash":"56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48","locator":"newChat.createAgent.quickStarts.explore","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"探索并理解代码"}}},{"icon":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].icon=Code2","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"Code2"},"key":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].key='build'","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"build"},"labels":{"en":{"provenance":{"hash":"2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd","locator":"newChat.createAgent.quickStarts.build","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Build a feature, app, or tool"},"ja":{"provenance":{"hash":"5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192","locator":"newChat.createAgent.quickStarts.build","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"新機能、アプリ、ツールを構築"},"ko":{"provenance":{"hash":"b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0","locator":"newChat.createAgent.quickStarts.build","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"새 기능, 앱 또는 도구 만들기"},"zh-CN":{"provenance":{"hash":"56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48","locator":"newChat.createAgent.quickStarts.build","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"构建新功能、应用或工具"}}},{"icon":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].icon=MessageSquareCode","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"MessageSquareCode"},"key":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].key='review'","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"review"},"labels":{"en":{"provenance":{"hash":"2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd","locator":"newChat.createAgent.quickStarts.review","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Review code and suggest changes"},"ja":{"provenance":{"hash":"5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192","locator":"newChat.createAgent.quickStarts.review","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"コードをレビューして修正を提案"},"ko":{"provenance":{"hash":"b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0","locator":"newChat.createAgent.quickStarts.review","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"코드 검토 및 수정 제안"},"zh-CN":{"provenance":{"hash":"56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48","locator":"newChat.createAgent.quickStarts.review","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"审查代码并提出修改建议"}}},{"icon":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].icon=Hammer","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"Hammer"},"key":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"createAgentQuickStarts[].key='fix'","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":"fix"},"labels":{"en":{"provenance":{"hash":"2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd","locator":"newChat.createAgent.quickStarts.fix","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Fix issues and failures"},"ja":{"provenance":{"hash":"5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192","locator":"newChat.createAgent.quickStarts.fix","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"問題や失敗を修正"},"ko":{"provenance":{"hash":"b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0","locator":"newChat.createAgent.quickStarts.fix","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"문제와 실패 수정"},"zh-CN":{"provenance":{"hash":"56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48","locator":"newChat.createAgent.quickStarts.fix","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"修复问题和失败"}}}],"colors":{"dark":{"cardBg":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-bg').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#312F2F"},"cardBgHover":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-bg-hover').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#3B3A3A"},"cardBorder":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-border').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#434343"},"cardText":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-text').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#D4D4D4"},"icon":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-icon').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#D4D4D4"},"iconBg":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-icon-bg').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#2A2828"},"textSecondary":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('text-secondary').dark","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#a3a3a3"}},"light":{"cardBg":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-bg').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#F8F8F8"},"cardBgHover":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-bg-hover').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#FCFCFC"},"cardBorder":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-border').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#DCDFE3"},"cardText":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-text').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#3C3F43"},"icon":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-icon').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#3C3F43"},"iconBg":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('create-agent-quick-card-icon-bg').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#EDEDED"},"textSecondary":{"provenance":{"hash":"2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f","locator":"registerColor('text-secondary').light","source":"../../../apps/desktop/src/renderer/themes/colors.ts"},"value":"#737373"}}},"layout":{"autoCompactThresholdPx":{"provenance":{"hash":"a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e","locator":"AUTO_COMPACT_THRESHOLD","source":"../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"},"value":700},"colBreak1Px":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"isDraftNarrow = draftContentWidth \u003c 560(1↔2 列 + narrow 档)","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":560},"colBreak2Px":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"isDraftMedium = draftContentWidth \u003c 700(2↔4 列)","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":700},"compactMessagePadPx":{"provenance":{"hash":"a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e","locator":"COMPACT_MESSAGE_PAD","source":"../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"},"value":20},"defaultMessagePadPx":{"provenance":{"hash":"a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e","locator":"DEFAULT_MESSAGE_PAD","source":"../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"},"value":50},"inputOutsetPx":{"provenance":{"hash":"a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e","locator":"INPUT_OUTSET","source":"../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"},"value":20},"mainPadNarrowPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"main narrow px-4 → 16px/侧","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":16},"mainPadNormalPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"main 常态 px-8 → 32px/侧","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":32},"maxMessageWidthPx":{"provenance":{"hash":"a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e","locator":"MAX_MESSAGE_WIDTH","source":"../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"},"value":1200},"minWidthFloorPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"useProportionalWidth(914,{minWidth:640})","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":640}},"section":{"titleFontPx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"section 标题 text-[14px]","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":14},"titleLinePx":{"provenance":{"hash":"647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb","locator":"section 标题 leading-[18px]","source":"../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"},"value":18},"titles":{"en":{"provenance":{"hash":"2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd","locator":"newChat.createAgent.quickStart","source":"../../../apps/desktop/src/renderer/i18n/locales/en/common.json"},"value":"Quick start"},"ja":{"provenance":{"hash":"5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192","locator":"newChat.createAgent.quickStart","source":"../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"},"value":"クイックスタート"},"ko":{"provenance":{"hash":"b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0","locator":"newChat.createAgent.quickStart","source":"../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"},"value":"빠른 시작"},"zh-CN":{"provenance":{"hash":"56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48","locator":"newChat.createAgent.quickStart","source":"../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"},"value":"快速开始"}}}}</script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans", "Noto Sans CJK", "Malgun Gothic", Segoe UI, Roboto, sans-serif;
+    background: #ececec; color: #1e1e1e; -webkit-font-smoothing: antialiased;
+  }
+  /* ---------- chrome ---------- */
+  .chrome { padding: 14px 20px 10px; border-bottom: 1px solid #d8d8d8; background: #f6f6f6; }
+  .chrome h1 { font-size: 15px; margin: 0 0 6px; display: flex; align-items: center; gap: 10px; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #e2e8f0; color: #334155; }
+  .summary { font-size: 12px; color: #555; line-height: 1.5; }
+  .summary b { color: #333; }
+  .switchers { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+  .seg { display: flex; align-items: center; gap: 4px; }
+  .seg .lbl { font-size: 11px; color: #888; margin-right: 2px; }
+  .seg button {
+    font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid #cfcfcf; background: #fff;
+    color: #333; border-radius: 7px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: #1e1e1e; color: #fff; border-color: #1e1e1e; }
+  /* ---------- stage / frame ---------- */
+  .stage { padding: 24px; overflow: auto; }
+  .frame {
+    position: relative; margin: 0; border-radius: 12px; overflow: hidden;
+    background: var(--frame-bg); color: var(--frame-fg);
+    box-shadow: 0 10px 40px rgba(0,0,0,.18);
+    transition: none;
+  }
+  .frame[data-mode="light"] { --frame-bg: #ffffff; --frame-fg: #1e1e1e; }
+  .frame[data-mode="dark"]  { --frame-bg: #1e1e1e; --frame-fg: #e6e6e6; }
+  .frame-badge {
+    position: absolute; right: 8px; bottom: 8px; z-index: 5; pointer-events: none;
+    font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    background: rgba(0,0,0,.55); color: #fff; font-variant-numeric: tabular-nums;
+  }
+  .handle-r, .handle-b, .handle-br { position: absolute; z-index: 6; background: transparent; }
+  .handle-r  { top: 0; right: 0; width: 10px; height: 100%; cursor: ew-resize; }
+  .handle-b  { left: 0; bottom: 0; width: 100%; height: 10px; cursor: ns-resize; }
+  .handle-br { right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+  .handle-br::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid rgba(128,128,128,.7); border-bottom: 2px solid rgba(128,128,128,.7); }
+
+  /* ---------- New Maker 帧内(高保真) ---------- */
+  .qa-main { width: 100%; padding: var(--main-pt) var(--main-px) 40px; }
+  .qa-brand { text-align: center; font-weight: 700; letter-spacing: 2px; font-size: 26px; color: var(--frame-fg); margin-bottom: 22px; opacity: .9; }
+  .qa-column { width: 100%; max-width: var(--column-max); margin: 0 auto; }
+  .qa-input {
+    width: 100%; min-height: 92px; border-radius: 12px; border: 1px solid var(--card-border);
+    background: var(--card-bg); padding: 12px 14px; display: flex; align-items: flex-start;
+    color: var(--frame-fg);
+  }
+  .qa-input .ph { color: var(--text-secondary); font-size: 14px; }
+  .qa-input .txt { font-size: 14px; white-space: pre-wrap; }
+  .qa-quickstarts { width: 100%; margin-top: 42px; }
+  .qa-section-title { font-size: var(--title-font); line-height: 18px; font-weight: 500; color: var(--text-secondary); margin: 0 2px 10px; }
+  .qa-grid { display: grid; width: 100%; gap: var(--grid-gap); grid-template-columns: var(--grid-cols); }
+  .qa-card {
+    display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between;
+    gap: var(--card-gap);
+    border-radius: var(--card-radius); border: var(--card-border-w) solid var(--card-border);
+    background: var(--card-bg); color: var(--card-text);
+    min-height: var(--card-minh); padding: var(--card-pad);
+    text-align: left; cursor: pointer; font: inherit; transition: background-color .12s;
+  }
+  .qa-card:hover { background: var(--card-bg-hover); }
+  .qa-card-icon {
+    display: grid; place-items: center; flex: 0 0 auto;
+    width: var(--icon-size); height: var(--icon-size); border-radius: 999px;
+    background: var(--icon-bg); color: var(--icon);
+  }
+  .qa-card-icon svg { width: var(--icon-glyph); height: var(--icon-glyph); }
+  .qa-card-label { width: 100%; min-width: 0; font-size: var(--label-font); line-height: 16px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <h1>New Maker 快捷入口卡片 · 可交互 Demo <span class="badge" id="prBadge">PR</span></h1>
+    <div class="summary" id="summary"></div>
+    <div class="switchers" id="switchers"></div>
+  </div>
+  <div class="stage">
+    <div class="frame" data-mode="light" id="frame">
+      <div class="qa-main" id="main">
+        <div class="qa-brand">CINDY</div>
+        <div class="qa-column" id="column">
+          <div class="qa-input" id="qaInput"><span class="ph" id="inputPh"></span><span class="txt" id="inputTxt"></span></div>
+          <div class="qa-quickstarts" id="quickstarts">
+            <div class="qa-section-title" id="sectionTitle"></div>
+            <div class="qa-grid" id="grid"></div>
+          </div>
+        </div>
+      </div>
+      <div class="handle-r" data-h="r"></div>
+      <div class="handle-b" data-h="b"></div>
+      <div class="handle-br" data-h="br"></div>
+      <div class="frame-badge" id="frameBadge"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  // ---------- 读内嵌真值并解包 ----------
+  const RAW = JSON.parse(document.getElementById('qa-truth').textContent || '{}');
+  function unwrap(x) {
+    if (x && typeof x === 'object' && !Array.isArray(x) && Object.prototype.hasOwnProperty.call(x, 'value')) return x.value;
+    if (Array.isArray(x)) return x.map(unwrap);
+    if (x && typeof x === 'object') { const o = {}; for (const k in x) o[k] = unwrap(x[k]); return o; }
+    return x;
+  }
+  const T = unwrap(RAW);
+  const L = T.layout || {};
+  const cards = T.cards || [];
+  const C = T.card || {};
+
+  // ---------- lucide 简化图标(stroke=currentColor,color=var(--icon)) ----------
+  const ICONS = {
+    SearchCode: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 9-2 2 2 2"/><path d="m13 13 2-2-2-2"/><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+    Code2: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>',
+    MessageSquareCode: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 7.5 8 10l2 2.5"/><path d="m14 7.5 2 2.5-2 2.5"/><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    Hammer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 12-8.4 8.4a2.1 2.1 0 0 1-3-3L12 9"/><path d="M17.6 6.8 22 2.4"/><path d="m21.6 10.4-4-4"/><path d="M13 3 8 8l3 3 5-5z"/></svg>',
+  };
+  const PLACEHOLDER = { 'zh-CN': '给 Cindy 一个任务…', en: 'Give Cindy a task…', ja: 'Cindy にタスクを…', ko: 'Cindy에게 작업을…' };
+
+  // ---------- 偏好 / 状态 ----------
+  const NAME = 'cindy-newmaker-cards-hifi';
+  const STORAGE_KEY = 'qa-hifi:' + NAME + ':prefs';
+  const DEFAULT_PREFS = { plat: 'desk', region: 'na', os: 'desktop', mode: 'light', lang: 'zh-CN' };
+  const PREF_KEYS = ['plat', 'region', 'os', 'mode', 'lang'];
+  let prefs = { ...DEFAULT_PREFS };
+  let step = 'id';       // 'id' | 'filled'
+  let draftText = '';    // 输入框内容(点卡片后 = 该卡文案)
+  let frameW = 1000, frameH = 700;
+
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) { const p = JSON.parse(raw); for (const k of PREF_KEYS) if (typeof p[k] === 'string') prefs[k] = p[k]; }
+    } catch (e) {}
+  }
+  function savePrefs() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs)); } catch (e) {} }
+
+  // ---------- 产品布局公式(复刻 useProportionalWidth.compute + 草稿页断点) ----------
+  function inputWidthFor(cw) {
+    const useCompact = cw < L.autoCompactThresholdPx;
+    const pad = useCompact ? L.compactMessagePadPx : L.defaultMessagePadPx;
+    const msgAvail = Math.max(0, cw - 2 * pad);
+    const msg = Math.min(L.maxMessageWidthPx, msgAvail);
+    let input = msg + L.inputOutsetPx;
+    if (L.minWidthFloorPx > input) input = Math.min(L.minWidthFloorPx, cw);
+    return input;
+  }
+  function computeLayout(cw) {
+    const input = inputWidthFor(cw);
+    const narrow = input < L.colBreak1Px;               // <560 → 1 列 + narrow 档
+    const cols = input < L.colBreak1Px ? 1 : input < L.colBreak2Px ? 2 : 4;
+    return { input, narrow, cols };
+  }
+
+  // ---------- 主题 token(从 truth 注入 CSS 变量,杜绝手抄漂移) ----------
+  function applyThemeVars() {
+    const frame = document.getElementById('frame');
+    const c = (T.colors && T.colors[prefs.mode]) || {};
+    frame.setAttribute('data-mode', prefs.mode);
+    frame.style.setProperty('--card-bg', c.cardBg);
+    frame.style.setProperty('--card-border', c.cardBorder);
+    frame.style.setProperty('--card-text', c.cardText);
+    frame.style.setProperty('--icon-bg', c.iconBg);
+    frame.style.setProperty('--icon', c.icon);
+    frame.style.setProperty('--card-bg-hover', c.cardBgHover);
+    frame.style.setProperty('--text-secondary', c.textSecondary);
+  }
+  function applyGeometryVars() {
+    const frame = document.getElementById('frame');
+    frame.style.setProperty('--card-gap', C.gapPx + 'px');
+    frame.style.setProperty('--card-radius', C.radiusPx + 'px');
+    frame.style.setProperty('--card-border-w', C.borderPx + 'px');
+    frame.style.setProperty('--icon-size', C.iconCirclePx + 'px');
+    frame.style.setProperty('--icon-glyph', C.iconGlyphPx + 'px');
+    frame.style.setProperty('--label-font', C.labelFontPx + 'px');
+    frame.style.setProperty('--title-font', (T.section && T.section.titleFontPx) + 'px');
+    frame.style.setProperty('--grid-gap', C.gridGapPx + 'px');
+  }
+
+  // ---------- 渲染 ----------
+  function renderCards() {
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    for (const card of cards) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'qa-card';
+      btn.setAttribute('data-qa-card', card.key);
+      const icon = document.createElement('span');
+      icon.className = 'qa-card-icon';
+      icon.innerHTML = ICONS[card.icon] || '';
+      const label = document.createElement('span');
+      label.className = 'qa-card-label';
+      label.textContent = (card.labels && card.labels[prefs.lang]) || '';
+      btn.appendChild(icon); btn.appendChild(label);
+      btn.addEventListener('click', () => { fillFromCard(card); });
+      grid.appendChild(btn);
+    }
+  }
+  function renderTexts() {
+    document.getElementById('sectionTitle').textContent = (T.section && T.section.titles && T.section.titles[prefs.lang]) || '';
+    document.getElementById('inputPh').textContent = draftText ? '' : (PLACEHOLDER[prefs.lang] || '');
+    document.getElementById('inputTxt').textContent = draftText || '';
+  }
+  function applyLayout() {
+    const frame = document.getElementById('frame');
+    const main = document.getElementById('main');
+    const column = document.getElementById('column');
+    const { input, narrow, cols } = computeLayout(frameW);
+    frame.style.width = frameW + 'px';
+    frame.style.height = frameH + 'px';
+    main.style.setProperty('--main-px', (narrow ? L.mainPadNarrowPx : L.mainPadNormalPx) + 'px');
+    main.style.setProperty('--main-pt', (narrow ? 40 : 64) + 'px');
+    column.style.setProperty('--column-max', input + 'px');
+    frame.style.setProperty('--card-pad', (narrow ? C.padNarrowPx : C.padNormalPx) + 'px');
+    frame.style.setProperty('--card-minh', (narrow ? C.minHNarrowPx : C.minHNormalPx) + 'px');
+    document.getElementById('grid').style.setProperty('--grid-cols', 'repeat(' + cols + ', minmax(0, 1fr))');
+    const tier = cols === 1 ? '压缩档·1列' : cols === 2 ? '中档·2列' : '宽档·4列';
+    document.getElementById('frameBadge').textContent = frameW + '×' + frameH + ' · ' + tier + ' · input ' + Math.round(input);
+  }
+  function renderSwitchers() {
+    const groups = [
+      ['plat', '端', [['desk', 'Desktop']]],
+      ['region', '区域', [['na', '不区分']]],
+      ['os', '系统', [['desktop', 'Desktop']]],
+      ['mode', '主题', [['light', '亮'], ['dark', '暗']]],
+      ['lang', '语言', [['zh-CN', '中'], ['en', 'EN'], ['ja', '日'], ['ko', '한']]],
+    ];
+    const host = document.getElementById('switchers');
+    host.innerHTML = '';
+    for (const [key, lbl, opts] of groups) {
+      const seg = document.createElement('div'); seg.className = 'seg';
+      const l = document.createElement('span'); l.className = 'lbl'; l.textContent = lbl; seg.appendChild(l);
+      for (const [val, text] of opts) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = text;
+        b.setAttribute('data-qa-pref', key + ':' + val);
+        b.setAttribute('aria-pressed', String(prefs[key] === val));
+        b.addEventListener('click', () => setPref(key, val));
+        seg.appendChild(b);
+      }
+      host.appendChild(seg);
+    }
+  }
+  function render() {
+    applyThemeVars();
+    applyGeometryVars();
+    renderTexts();
+    renderCards();
+    applyLayout();
+    // 刷新 seg 高亮
+    for (const b of document.querySelectorAll('[data-qa-pref]')) {
+      const [k, v] = b.getAttribute('data-qa-pref').split(':');
+      b.setAttribute('aria-pressed', String(prefs[k] === v));
+    }
+  }
+
+  function setPref(key, val) {
+    if (!PREF_KEYS.includes(key)) return;
+    prefs[key] = val;
+    savePrefs();
+    render();
+  }
+  function fillFromCard(card) {
+    draftText = (card.labels && card.labels[prefs.lang]) || '';
+    step = 'filled';
+    render();
+  }
+
+  // ---------- resize(拖拽手柄 + __qa.resize 同一路径) ----------
+  const MIN_W = 480, MIN_H = 560;
+  function resize(w, h) {
+    frameW = Math.max(MIN_W, Math.round(Number(w) || 0));
+    frameH = Math.max(MIN_H, Math.round(Number(h) || 0));
+    applyLayout();
+  }
+  function initDrag() {
+    let active = null, sx = 0, sy = 0, sw = 0, sh = 0;
+    for (const h of document.querySelectorAll('[data-h]')) {
+      h.addEventListener('mousedown', (e) => {
+        active = h.getAttribute('data-h'); sx = e.clientX; sy = e.clientY; sw = frameW; sh = frameH;
+        e.preventDefault();
+      });
+    }
+    window.addEventListener('mousemove', (e) => {
+      if (!active) return;
+      let w = frameW, hh = frameH;
+      if (active === 'r' || active === 'br') w = sw + (e.clientX - sx);
+      if (active === 'b' || active === 'br') hh = sh + (e.clientY - sy);
+      resize(w, hh);
+    });
+    window.addEventListener('mouseup', () => { active = null; });
+  }
+
+  // ---------- 头部 meta ----------
+  function renderMeta() {
+    const meta = (RAW.meta) || {};
+    // meta 不带 provenance(它是 demo 元信息不是产品真值),这里直接从 spec 复述
+  }
+
+  // ---------- __qa 契约 ----------
+  window.__qa = {
+    current: () => step,
+    goto: (id) => {
+      if (id === 'id') { draftText = ''; step = 'id'; render(); return; }
+      if (id === 'filled') { draftText = (cards[0] && cards[0].labels[prefs.lang]) || ''; step = 'filled'; render(); return; }
+      throw new Error('unknown state: ' + id);
+    },
+    prefs: () => ({ ...prefs }),
+    scale: () => 1,
+    resize: (w, h) => resize(w, h),
+  };
+
+  // ---------- 启动 ----------
+  loadPrefs();
+  step = 'id';
+  draftText = '';
+  document.documentElement.lang = prefs.lang;
+  renderSwitchers();
+  render();
+  initDrag();
+  // 头部徽标 + 摘要(从 body 里静态填,或留给部署时可读)——摘要走 DOM 注入避免与 truth 混淆
+})();
+</script>
+<script>
+// 头部 PR 徽标 + 三段摘要:从静态常量填(demo 元信息,非产品真值,不进 truth/provenance)。
+(function () {
+  document.getElementById('prBadge').textContent = 'PR #369 · fix/newmaker-quickstart-card-layout';
+  document.getElementById('summary').innerHTML =
+    '<b>做了什么:</b> 快捷入口 4 卡改竖排(icon 固定左上、文字挪到卡片中下方与 icon 左对齐)+ 去 800px 封顶随输入框等比拉伸<br>' +
+    '<b>怎么做:</b> flex-col + justify-between(icon 顶、文字底,gap-1 兜底最小间距)/rounded-xl/min-h 不变;卡片区 w-full 填满内容列(= useProportionalWidth 的 inputWidth,与输入框同宽同缘);grid 按 inputWidth 断点 560/700 切 1/2/4 列<br>' +
+    '<b>怎么验收:</b> A/B/C/D/F 门 — truth 提取自源码 · 状态覆盖 · 4 语言无截断 · computed-style 绑定(4px·12px·13px·token)· 拉伸几何 oracle 比对';
+})();
+</script>
+</body>
+</html>

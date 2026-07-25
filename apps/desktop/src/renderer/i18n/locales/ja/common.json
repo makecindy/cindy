@@ -934,10 +934,6 @@
       }
     },
     "sessionImport": {
-      "linkedTitle": "ローカルセッションのリンク",
-      "linkedDescription": "ローカルの Claude Code / Codex 履歴を読み取り専用でスキャンします。Codex セッションは元の thread にリンクされ、履歴を再生せずにそのまま再開できます。Claude セッションはローカル履歴としてインポートされます。",
-      "linkSelected": "選択をリンク",
-      "linked": "リンク済み",
       "title": "ローカルセッションのインポート",
       "description": "ローカルの Claude Code / Codex 履歴を読み取り専用でスキャンします。リストでチェックしたセッションのみインポートされ、スキップされた内部セッションは表示されず、インポートもされません。",
       "scan": "スキャン",
@@ -978,7 +974,9 @@
         "scanFailed": "スキャンに失敗しました",
         "importFailed": "インポートに失敗しました",
         "imported": "インポート完了:新規 {{inserted}} 件、更新 {{updated}} 件"
-      }
+      },
+      "selectAll": "現在の絞り込み結果をすべて選択（{{count}}件）",
+      "selectedOutsideFilter": "（うち{{count}}件は現在の絞り込み対象外）"
     },
     "connections": {
       "codex": {
@@ -1731,6 +1729,15 @@
       "directControl": {
         "title": "自動操作コンピュータ",
         "description": "エージェントがウィンドウを調べ、UI を読み取り、クリックや入力を実行できます",
+        "status": {
+          "ready": "使用できます",
+          "needsPermission": "システム権限が必要です",
+          "notInstalled": "ドライバー未インストール",
+          "disabled": "オフ",
+          "checking": "権限を確認中…",
+          "setup": "権限を設定",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "コンピュータの直接操作を切り替える",
         "driverInfo": "コンピュータ自動操作はオープンソースの CUA Driver で提供されます。ローカルで動作し、画面の読み取りやクリック、入力などを行います。",
         "openSourceProject": "オープンソースプロジェクトを見る",
@@ -1748,14 +1755,25 @@
           "cancel": "後で"
         },
         "permissionGuide": {
-          "title": "システム権限の許可を待っています",
-          "description": "システム設定で CuaDriver に以下の権限を許可してください（権限リストで左のアイコンのアプリを探してください）。すべて許可されると自動的に続行します。",
-          "waiting": "許可待ち"
+          "waiting": "操作待ち",
+          "step": "コンピュータ操作を有効にする",
+          "completeEyebrow": "権限の設定完了",
+          "dragTitle": "CuaDriver を「{{permission}}」にドラッグ",
+          "turnOnAppTitle": "「{{permission}}」で CuaDriver をオンにする",
+          "dragHint": "ドラッグ",
+          "draggingTitle": "CuaDriver をドラッグ中",
+          "draggingHint": "「{{permission}}」の一覧にドロップ",
+          "appName": "CuaDriver",
+          "turnOnTitle": "「{{permission}}」をオンにする",
+          "turnOnDescription": "システム設定でこの権限をオンにしてください。Cindy が自動的に続行します。",
+          "readyTitle": "Computer Use の準備ができました",
+          "readyDescription": "必要なときに Cindy がこのコンピュータを操作できます。"
         },
         "permissions": {
-          "macosHint": "macOS では Cua Driver に「アクセシビリティ」と「画面収録」の基本権限が必要です。実際の使用中には、対象アプリや具体的な操作ごとに追加の確認が表示されることがあります。",
-          "accessibilityLabel": "CuaDriver アクセシビリティ",
-          "screenRecordingLabel": "CuaDriver 画面収録",
+          "title": "システム権限",
+          "macosHint": "コンピュータ操作には「アクセシビリティ」と「画面収録」が必要です。実際の使用中には、対象アプリや操作ごとに追加確認が表示されることがあります。",
+          "accessibilityLabel": "アクセシビリティ",
+          "screenRecordingLabel": "画面収録",
           "grant": "許可する",
           "accessibility": "アクセシビリティ：{{status}}",
           "screenRecording": "画面収録：{{status}}",
@@ -1767,6 +1785,8 @@
           "openAccessibility": "アクセシビリティ設定を開く",
           "openScreenRecording": "画面収録設定を開く",
           "recheck": "再確認",
+          "moreDetails": "詳細情報",
+          "hideDetails": "詳細を閉じる",
           "windowsHint": "Windows では追加のシステム権限は不要です。agent が作業している間は、対象アプリを現在のアクティブなデスクトップ上で表示したままにしてください。",
           "linuxHint": "Linux では macOS の TCC 権限は使いません。現在のデスクトップセッションでウィンドウ取得と入力自動化が許可されていることを確認してください。"
         },
@@ -1789,9 +1809,10 @@
           "disabled": "コンピュータの直接操作を無効にしました",
           "toggleFailed": "コンピュータの直接操作の切り替えに失敗しました",
           "installFailed": "cua-driver のインストールに失敗しました",
-          "permissionFailed": "cua-driver の権限付与が完了していません",
-          "permissionPending": "Cua Driver のシステム権限を完了すると、ここが自動で有効になります",
+          "permissionFailed": "コンピュータ操作の権限が完了していません",
+          "permissionPending": "2つのシステム権限を許可したら、ここに戻って「再確認」を押してください",
           "permissionSettingsOpened": "システム権限設定を開きました。許可が完了したら、ここに戻って「再チェック」を押してください。",
+          "permissionSettingsMonitoring": "システムの権限設定を開きました。権限を付与すると、状態は自動的に更新されます。",
           "openPermissionSettingsFailed": "システム権限設定を開けませんでした"
         }
       }
@@ -3088,11 +3109,15 @@
   "panelChrome": {
     "maximizeAria": "パネルを最大化",
     "restoreAria": "パネルのサイズを元に戻す",
-    "detachAria": "新しいウィンドウで開く"
+    "detachAria": "新しいウィンドウで開く",
+    "minimizeAria": "フローティングバブルに最小化"
   },
   "ghostPanelWindow": {
     "mergeBack": "メインウィンドウに戻す",
     "unavailable": "このプラグインパネルは現在利用できません"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "{{name}} パネルを元に戻す"
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",

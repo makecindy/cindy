@@ -1,0 +1,838 @@
+{
+  "adaptive": {
+    "samples": [
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 84,
+            "w": 448
+          },
+          "input": {
+            "w": 448
+          },
+          "quickstarts": {
+            "w": 448
+          }
+        },
+        "w": 480
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 84,
+            "w": 508
+          },
+          "input": {
+            "w": 508
+          },
+          "quickstarts": {
+            "w": 508
+          }
+        },
+        "w": 540
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 84,
+            "w": 527
+          },
+          "input": {
+            "w": 527
+          },
+          "quickstarts": {
+            "w": 527
+          }
+        },
+        "w": 559
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 242
+          },
+          "input": {
+            "w": 496
+          },
+          "quickstarts": {
+            "w": 496
+          }
+        },
+        "w": 560
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 242.5
+          },
+          "input": {
+            "w": 497
+          },
+          "quickstarts": {
+            "w": 497
+          }
+        },
+        "w": 561
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 282
+          },
+          "input": {
+            "w": 576
+          },
+          "quickstarts": {
+            "w": 576
+          }
+        },
+        "w": 640
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 302
+          },
+          "input": {
+            "w": 616
+          },
+          "quickstarts": {
+            "w": 616
+          }
+        },
+        "w": 680
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 311.5
+          },
+          "input": {
+            "w": 635
+          },
+          "quickstarts": {
+            "w": 635
+          }
+        },
+        "w": 699
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 312
+          },
+          "input": {
+            "w": 636
+          },
+          "quickstarts": {
+            "w": 636
+          }
+        },
+        "w": 700
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 314
+          },
+          "input": {
+            "w": 640
+          },
+          "quickstarts": {
+            "w": 640
+          }
+        },
+        "w": 720
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 343.5
+          },
+          "input": {
+            "w": 699
+          },
+          "quickstarts": {
+            "w": 699
+          }
+        },
+        "w": 779
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 166
+          },
+          "input": {
+            "w": 700
+          },
+          "quickstarts": {
+            "w": 700
+          }
+        },
+        "w": 780
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 166.25
+          },
+          "input": {
+            "w": 701
+          },
+          "quickstarts": {
+            "w": 701
+          }
+        },
+        "w": 781
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 221
+          },
+          "input": {
+            "w": 920
+          },
+          "quickstarts": {
+            "w": 920
+          }
+        },
+        "w": 1000
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 295.75
+          },
+          "input": {
+            "w": 1219
+          },
+          "quickstarts": {
+            "w": 1219
+          }
+        },
+        "w": 1299
+      },
+      {
+        "h": 700,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 296
+          },
+          "input": {
+            "w": 1220
+          },
+          "quickstarts": {
+            "w": 1220
+          }
+        },
+        "w": 1300
+      },
+      {
+        "h": 900,
+        "probes": {
+          "card0": {
+            "h": 112,
+            "w": 296
+          },
+          "input": {
+            "w": 1220
+          },
+          "quickstarts": {
+            "w": 1220
+          }
+        },
+        "w": 1440
+      }
+    ]
+  },
+  "card": {
+    "borderPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "className border → 1px",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 1
+    },
+    "gapPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "className gap-1 → 4px(Tailwind spacing 1 = 0.25rem)",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 4
+    },
+    "gridGapPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "grid gap-3 → 12px",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 12
+    },
+    "iconCirclePx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "className h-8 w-8 → 32px icon 圆圈",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 32
+    },
+    "iconGlyphPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "Icon size={16} → 16px glyph",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 16
+    },
+    "labelFontPx": {
+      "provenance": {
+        "hash": "fe6f62619ba903fc76270b68979232bda870f575bdd0ca97bda2087a29e6f4e7",
+        "locator": "text-13 = var(--text-13) = 13px(globals.css)",
+        "source": "../../../apps/desktop/src/renderer/styles/globals.css"
+      },
+      "value": 13
+    },
+    "labelLinePx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "className leading-[16px] → 16px",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 16
+    },
+    "minHNarrowPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "narrow 档 min-h-[84px]",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 84
+    },
+    "minHNormalPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "常态 min-h-[112px]",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 112
+    },
+    "padNarrowPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "narrow 档 p-3 → 12px",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 12
+    },
+    "padNormalPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "常态 p-4 → 16px",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 16
+    },
+    "radiusPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "className rounded-xl → 12px(与输入框统一,见代码注释)",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 12
+    }
+  },
+  "cards": [
+    {
+      "icon": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].icon=SearchCode",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "SearchCode"
+      },
+      "key": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].key='explore'",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "explore"
+      },
+      "labels": {
+        "en": {
+          "provenance": {
+            "hash": "2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Explore and understand code"
+        },
+        "ja": {
+          "provenance": {
+            "hash": "5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "コードを探索して理解"
+        },
+        "ko": {
+          "provenance": {
+            "hash": "b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "코드 탐색 및 이해"
+        },
+        "zh-CN": {
+          "provenance": {
+            "hash": "56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "探索并理解代码"
+        }
+      }
+    },
+    {
+      "icon": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].icon=Code2",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "Code2"
+      },
+      "key": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].key='build'",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "build"
+      },
+      "labels": {
+        "en": {
+          "provenance": {
+            "hash": "2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Build a feature, app, or tool"
+        },
+        "ja": {
+          "provenance": {
+            "hash": "5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "新機能、アプリ、ツールを構築"
+        },
+        "ko": {
+          "provenance": {
+            "hash": "b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "새 기능, 앱 또는 도구 만들기"
+        },
+        "zh-CN": {
+          "provenance": {
+            "hash": "56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "构建新功能、应用或工具"
+        }
+      }
+    },
+    {
+      "icon": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].icon=MessageSquareCode",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "MessageSquareCode"
+      },
+      "key": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].key='review'",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "review"
+      },
+      "labels": {
+        "en": {
+          "provenance": {
+            "hash": "2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Review code and suggest changes"
+        },
+        "ja": {
+          "provenance": {
+            "hash": "5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "コードをレビューして修正を提案"
+        },
+        "ko": {
+          "provenance": {
+            "hash": "b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "코드 검토 및 수정 제안"
+        },
+        "zh-CN": {
+          "provenance": {
+            "hash": "56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "审查代码并提出修改建议"
+        }
+      }
+    },
+    {
+      "icon": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].icon=Hammer",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "Hammer"
+      },
+      "key": {
+        "provenance": {
+          "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+          "locator": "createAgentQuickStarts[].key='fix'",
+          "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+        },
+        "value": "fix"
+      },
+      "labels": {
+        "en": {
+          "provenance": {
+            "hash": "2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+          },
+          "value": "Fix issues and failures"
+        },
+        "ja": {
+          "provenance": {
+            "hash": "5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+          },
+          "value": "問題や失敗を修正"
+        },
+        "ko": {
+          "provenance": {
+            "hash": "b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+          },
+          "value": "문제와 실패 수정"
+        },
+        "zh-CN": {
+          "provenance": {
+            "hash": "56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+          },
+          "value": "修复问题和失败"
+        }
+      }
+    }
+  ],
+  "colors": {
+    "dark": {
+      "cardBg": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-bg').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#312F2F"
+      },
+      "cardBgHover": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-bg-hover').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#3B3A3A"
+      },
+      "cardBorder": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-border').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#434343"
+      },
+      "cardText": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-text').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#D4D4D4"
+      },
+      "icon": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-icon').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#D4D4D4"
+      },
+      "iconBg": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-icon-bg').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#2A2828"
+      },
+      "textSecondary": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('text-secondary').dark",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#a3a3a3"
+      }
+    },
+    "light": {
+      "cardBg": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-bg').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#F8F8F8"
+      },
+      "cardBgHover": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-bg-hover').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#FCFCFC"
+      },
+      "cardBorder": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-border').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#DCDFE3"
+      },
+      "cardText": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-text').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#3C3F43"
+      },
+      "icon": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-icon').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#3C3F43"
+      },
+      "iconBg": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('create-agent-quick-card-icon-bg').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#EDEDED"
+      },
+      "textSecondary": {
+        "provenance": {
+          "hash": "2c147e3be64893a22ff8c25ef27377cc53c9c48166e73346628d81b9eb48442f",
+          "locator": "registerColor('text-secondary').light",
+          "source": "../../../apps/desktop/src/renderer/themes/colors.ts"
+        },
+        "value": "#737373"
+      }
+    }
+  },
+  "layout": {
+    "autoCompactThresholdPx": {
+      "provenance": {
+        "hash": "a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e",
+        "locator": "AUTO_COMPACT_THRESHOLD",
+        "source": "../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"
+      },
+      "value": 700
+    },
+    "colBreak1Px": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "isDraftNarrow = draftContentWidth < 560(1↔2 列 + narrow 档)",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 560
+    },
+    "colBreak2Px": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "isDraftMedium = draftContentWidth < 700(2↔4 列)",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 700
+    },
+    "compactMessagePadPx": {
+      "provenance": {
+        "hash": "a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e",
+        "locator": "COMPACT_MESSAGE_PAD",
+        "source": "../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"
+      },
+      "value": 20
+    },
+    "defaultMessagePadPx": {
+      "provenance": {
+        "hash": "a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e",
+        "locator": "DEFAULT_MESSAGE_PAD",
+        "source": "../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"
+      },
+      "value": 50
+    },
+    "inputOutsetPx": {
+      "provenance": {
+        "hash": "a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e",
+        "locator": "INPUT_OUTSET",
+        "source": "../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"
+      },
+      "value": 20
+    },
+    "mainPadNarrowPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "main narrow px-4 → 16px/侧",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 16
+    },
+    "mainPadNormalPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "main 常态 px-8 → 32px/侧",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 32
+    },
+    "maxMessageWidthPx": {
+      "provenance": {
+        "hash": "a49bd2b4690b2eeadea1245795f7d0d5edad897e0665e26e83a8e29db77be58e",
+        "locator": "MAX_MESSAGE_WIDTH",
+        "source": "../../../apps/desktop/src/renderer/hooks/useProportionalWidth.ts"
+      },
+      "value": 1200
+    },
+    "minWidthFloorPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "useProportionalWidth(914,{minWidth:640})",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 640
+    }
+  },
+  "section": {
+    "titleFontPx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "section 标题 text-[14px]",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 14
+    },
+    "titleLinePx": {
+      "provenance": {
+        "hash": "647d8dc4db4c943fcf5b8b9baae7d8a46282c840beb373f7122e34319c4e01fb",
+        "locator": "section 标题 leading-[18px]",
+        "source": "../../../apps/desktop/src/renderer/features/cc-agent/NewMakerDraftRoute.tsx"
+      },
+      "value": 18
+    },
+    "titles": {
+      "en": {
+        "provenance": {
+          "hash": "2d4a2fb9ebfba3e61f114aac8daaf2f17f5dbae698576745a7f99094999ebdbd",
+          "locator": "newChat.createAgent.quickStart",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
+        },
+        "value": "Quick start"
+      },
+      "ja": {
+        "provenance": {
+          "hash": "5d3174d330c785db010779e9f11a0d03e4509d61622d34e42c6ffc333555d192",
+          "locator": "newChat.createAgent.quickStart",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
+        },
+        "value": "クイックスタート"
+      },
+      "ko": {
+        "provenance": {
+          "hash": "b4bf6b63223b7b3249534291d017fac1e5e8aff10106080bd25b34020fc8f3c0",
+          "locator": "newChat.createAgent.quickStart",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
+        },
+        "value": "빠른 시작"
+      },
+      "zh-CN": {
+        "provenance": {
+          "hash": "56e57ceda408a46c6a115ee2662575d7cd09e02a7142529b90b6bdf4bfa61c48",
+          "locator": "newChat.createAgent.quickStart",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
+        },
+        "value": "快速开始"
+      }
+    }
+  }
+}

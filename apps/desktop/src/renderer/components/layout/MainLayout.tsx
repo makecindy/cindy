@@ -13,6 +13,7 @@ import { Sidebar } from '@/components/sidebar/Sidebar';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
+import { GhostPanelBubbleLayer } from '@/cindy-brain/GhostPanelBubbleLayer';
 import { ContentAvailableWidthProvider } from '@/layout/paneWidths';
 import {
   migrateLegacySidebarCollapsed,
@@ -1265,6 +1266,10 @@ export function MainLayout() {
             推送到本窗口,这里弹标准 ImageLightbox(整窗一份,纯监听无 UI)。
             sessionId = 当前聊天会话 → lightbox 里「发送到对话」可用。 */}
         <GhostMediaLightboxHost sessionId={rightSidebarSessionId ?? undefined} />
+        {/* 最小化插件面板的浮动气泡层(portal 到 body,z-[9900];点击气泡
+            恢复停靠,拖动换位并持久化)。设置页等接管态也保持在场——气泡是
+            被最小化面板的唯一恢复入口。 */}
+        <GhostPanelBubbleLayer />
         {/* Windows 顶层浮层 chrome：窗口控制按钮(min/max/close)，所有路由常驻
             （含设置页），永远钉在窗口角，开/关右栏都不动 —— 解决「右栏作为 <main>
             sibling 会把窗口按钮挤左」的问题。no-drag（按钮可点），周围窗口拖拽区由

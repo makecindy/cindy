@@ -2353,14 +2353,19 @@ export function handleStreamEvent(
         return next;
       });
 
-      const terminalData = event.data as
-        { plan?: unknown; raw?: { id?: unknown } } | null | undefined;
+      const terminalData =
+        event.data as { plan?: unknown; raw?: { id?: unknown; status?: unknown } } | null | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
-      const doneMessages =
-        event.source === 'codex'
-          ? applyCodexPlanSnapshotOnDone(cleanedMessages, terminalData?.plan, terminalTurnId)
-              .messages
-          : cleanedMessages;
+      const terminalTurnStatus =
+        typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
+      const doneMessages = event.source === 'codex'
+        ? applyCodexPlanSnapshotOnDone(
+            cleanedMessages,
+            terminalData?.plan,
+            terminalTurnId,
+            terminalTurnStatus,
+           ).messages
+         : cleanedMessages;
 
       // F1-a Option C: tool-result-image 孤儿 flush(turn 末残留 pendingFullText)已收口
       // main(messagePersistBroadcaster.flushOrphanToolResults),落库后经 onCreated append

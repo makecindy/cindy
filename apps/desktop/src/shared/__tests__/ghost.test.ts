@@ -6,6 +6,7 @@ import {
   diffGhostPermissionItems,
   ghostContentKeys,
   ghostExternalLinkUrls,
+  ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
   ghostPreviewUrlAllowed,
@@ -19,7 +20,10 @@ import {
   isValidGhostNetworkHostPattern,
   layoutWithGhostPanel,
   parseGhostPartition,
+  resolveGhostManifestLocale,
   validateGhostManifest,
+  validateGhostManifestLocaleResource,
+  withGhostResolvedLocale,
   type GhostManifest,
 } from '../ghost';
 import { createDefaultLayout, type SplitNode } from '../layoutTree';
@@ -212,6 +216,15 @@ describe('ghost · 清单校验', () => {
     expect(
       bothOff.ok && (bothOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
     ).toEqual({ maximize: false, detach: false });
+    const minimizeOff = withPanel({ systemButtons: { minimize: false } });
+    expect(
+      minimizeOff.ok &&
+        (minimizeOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ minimize: false });
+    const allOff = withPanel({ systemButtons: { maximize: false, detach: false, minimize: false } });
+    expect(
+      allOff.ok && (allOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ maximize: false, detach: false, minimize: false });
     expect(withPanel({ systemButtons: {} }).ok).toBe(true);
     expect(withPanel({ systemButtons: { maximize: true, detach: true } }).ok).toBe(true);
     // 非对象 / 未知键 / 非布尔值:收词明确拒绝(规则 9)
@@ -219,6 +232,8 @@ describe('ghost · 清单校验', () => {
     expect(withPanel({ systemButtons: { refresh: false } }).ok).toBe(false);
     expect(withPanel({ systemButtons: { maximize: 'no' } }).ok).toBe(false);
     expect(withPanel({ systemButtons: { detach: 0 } }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { minimize: 0 } }).ok).toBe(false);
+    expect(withPanel({ position: 'tab', systemButtons: { minimize: false } }).ok).toBe(false);
     // 页签形态没有标准头:声明即拒(与 minWidth/defaultFraction 同款语义)
     expect(withPanel({ position: 'tab', systemButtons: { maximize: false } }).ok).toBe(false);
     // 缺省(不声明)不产出字段
@@ -237,6 +252,251 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: '  ' }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), author: 'x'.repeat(65) }).ok).toBe(false);
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
+  });
+
+  it('locales 只接受宿主四种语言、安全 JSON 路径且必须提供英文', () => {
+    const valid = validateGhostManifest({
+      ...goodManifest(),
+      locales: {
+        en: 'locales/en.json',
+        'zh-CN': 'locales/zh-CN.json',
+        ja: 'locales/ja.json',
+        ko: 'locales/ko.json',
+      },
+    });
+    expect(valid.ok).toBe(true);
+    expect(valid.ok && valid.manifest.locales?.en).toBe('locales/en.json');
+
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { 'zh-CN': 'locales/zh-CN.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: '../en.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', fr: 'locales/fr.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'locales/en.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'Locales/EN.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'GHOST.JSON' },
+    }).ok).toBe(false);
+  });
+
+  it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
+    const parsed = validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'locales/ja.json' },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
+    expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
+    expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  it('locale 资源完整覆盖清单文案和全部工具，并按稳定 tool name 合并', () => {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'localized',
+      name: 'Base',
+      description: 'Base description',
+      whenToUse: 'Base routing',
+      version: '1.0.0',
+      entry: 'main.js',
+      slots: ['tool'],
+      tools: [
+        {
+          name: 'alpha',
+          description: 'Base alpha',
+          parameters: {
+            type: 'object',
+            title: 'Base arguments',
+            properties: {
+              query: {
+                type: 'string',
+                title: 'Base query',
+                description: 'Base query description',
+              },
+              mode: {
+                oneOf: [
+                  { const: 'fast', title: 'Base fast mode' },
+                  { const: 'safe', title: 'Base safe mode' },
+                ],
+              },
+            },
+          },
+        },
+        { name: 'beta', description: 'Base beta' },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const resource = validateGhostManifestLocaleResource({
+      name: 'Localized',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: {
+        beta: { description: 'Localized beta' },
+        alpha: {
+          description: 'Localized alpha',
+          parameters: {
+            '': { title: 'Localized arguments' },
+            '/properties/query': {
+              title: 'Localized query',
+              description: 'Localized query description',
+            },
+            '/properties/mode/oneOf/0': { title: 'Localized fast mode' },
+            '/properties/mode/oneOf/1': { title: 'Localized safe mode' },
+          },
+        },
+      },
+    }, parsed.manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
+      name: 'Localized',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: [
+        {
+          name: 'alpha',
+          description: 'Localized alpha',
+          parameters: {
+            title: 'Localized arguments',
+            properties: {
+              query: {
+                title: 'Localized query',
+                description: 'Localized query description',
+              },
+              mode: {
+                oneOf: [
+                  { title: 'Localized fast mode' },
+                  { title: 'Localized safe mode' },
+                ],
+              },
+            },
+          },
+        },
+        { name: 'beta', description: 'Localized beta' },
+      ],
+    });
+    expect(validateGhostManifestLocaleResource({
+      name: 'Incomplete',
+      description: 'Localized description',
+      whenToUse: 'Localized routing',
+      tools: { alpha: { description: 'Only one' } },
+    }, parsed.manifest).ok).toBe(false);
+  });
+
+  it('locale 资源完整覆盖宿主持有的面板、凭证、连接与 setup 标签', () => {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'localized-labels',
+      name: 'Base',
+      version: '1.0.0',
+      entry: 'main.js',
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'network', 'node'],
+      panel: { title: 'Base panel', html: 'panel.html' },
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{
+          key: 'api_key',
+          label: 'Base API key',
+          hint: 'Base secret hint',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }],
+        connections: [{
+          key: 'instance',
+          label: 'Base instance',
+          hint: 'Base connection hint',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }],
+      },
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [{
+          key: 'worker_key',
+          label: 'Base worker key',
+          hint: 'Base worker hint',
+          methods: ['run'],
+        }],
+      },
+      setup: {
+        requires: [{ anyOf: [{ kv: 'default_repo', label: 'Base repository' }] }],
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const resource = validateGhostManifestLocaleResource({
+      name: 'Localized',
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: {
+          api_key: { label: 'Localized API key', hint: 'Localized secret hint' },
+        },
+        connections: {
+          instance: { label: 'Localized instance', hint: 'Localized connection hint' },
+        },
+      },
+      node: {
+        secretBindings: {
+          worker_key: { label: 'Localized worker key', hint: 'Localized worker hint' },
+        },
+      },
+      setup: {
+        kv: {
+          default_repo: { label: 'Localized repository' },
+        },
+      },
+    }, parsed.manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: [{
+          key: 'api_key',
+          label: 'Localized API key',
+          hint: 'Localized secret hint',
+        }],
+        connections: [{
+          key: 'instance',
+          label: 'Localized instance',
+          hint: 'Localized connection hint',
+        }],
+      },
+      node: {
+        secretBindings: [{
+          key: 'worker_key',
+          label: 'Localized worker key',
+          hint: 'Localized worker hint',
+        }],
+      },
+      setup: {
+        requires: [{
+          anyOf: [{ kind: 'kv', key: 'default_repo', label: 'Localized repository' }],
+        }],
+      },
+    });
+    expect(validateGhostManifestLocaleResource({
+      name: 'Incomplete',
+      panel: { title: 'Localized panel' },
+    }, parsed.manifest).ok).toBe(false);
   });
 
   it('icon:可选包内相对路径,扩展名白名单;非法路径/扩展名 → 拒', () => {

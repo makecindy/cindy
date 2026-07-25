@@ -16,7 +16,7 @@ overrides:
 
 patchedDependencies:
   expo-paste-input@0.2.2:
-    hash: 53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8
+    hash: d3eb498564b85f9db254b4ccc74c3398d8f45706a8dd2e37f194f22992a00387
     path: dependency-patches/expo-paste-input@0.2.2.patch
   harmonyos-sans-sc-webfont-splitted:
     hash: 272e3ded46880ee2f9eaff39327b8465de6df4072271de03caf73950e6e57822
@@ -600,7 +600,7 @@ importers:
         version: 56.0.22(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@6.0.3)
       expo-paste-input:
         specifier: 0.2.2
-        version: 0.2.2(patch_hash=53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
+        version: 0.2.2(patch_hash=d3eb498564b85f9db254b4ccc74c3398d8f45706a8dd2e37f194f22992a00387)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       expo-router:
         specifier: ^56.2.11
         version: 56.2.15(600de089274a49ab6ec9549ee6c8284a)
@@ -17020,7 +17020,7 @@ snapshots:
       - supports-color
       - typescript
 
-  expo-paste-input@0.2.2(patch_hash=53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
+  expo-paste-input@0.2.2(patch_hash=d3eb498564b85f9db254b4ccc74c3398d8f45706a8dd2e37f194f22992a00387)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
     dependencies:
       expo: 56.0.16(bedb3dfb85b4bb5081482612eab0a2c6)
       react: 19.2.3

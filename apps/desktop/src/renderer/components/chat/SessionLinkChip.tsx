@@ -150,13 +150,25 @@ export function SessionLinkChip({ href, label, referenceMetadata }: SessionLinkC
     // A Markdown label is explicit author intent and must survive anchored
     // links even when no persisted reference metadata is available yet.
     const visibleMessageLabel = explicitLabel ?? messageLabel;
-    const messageContent = <QuoteChip quote={{ text: visibleMessageLabel }} />;
+    // 宽度上限只能加在 pill 这一侧:pill 和 summary 是同一 flex 行的两个 item,
+    // 把 240px 加在外层会让两者抢同一份宽度——summary 没有 nowrap,会被压到
+    // min-content(中文逐字换行)竖成一列,再把 pill 沿 stretch 拉成大椭圆。
+    const messageContent = (
+      <span className="inline-flex min-w-0 max-w-[min(240px,55vw)]">
+        <QuoteChip quote={{ text: visibleMessageLabel }} />
+      </span>
+    );
+    // summary 单行截断:窄气泡里退化成省略号,完整内容仍在 title / aria-label。
     const referenceSummary = referenceDetails.length > 0 ? (
-      <span data-session-reference-summary="" className="ml-1 text-[11px] text-[var(--text-tertiary)]">
+      <span
+        data-session-reference-summary=""
+        className="ml-1 min-w-0 truncate text-[11px] text-[var(--text-tertiary)]"
+      >
         {referenceDetails.join(' · ')}
       </span>
     ) : null;
-    const messageClass = 'inline-flex max-w-[min(240px,55vw)] align-middle';
+    // items-center 保证 pill 保持自身高度(不被 align-items: stretch 撑成椭圆)。
+    const messageClass = 'inline-flex max-w-full items-center align-middle';
     if (navigationMode === 'sidebar-embedded') {
       return (
         <span data-session-message-link="" title={tooltip} className={cn(messageClass, 'cursor-default')}>

@@ -67,6 +67,7 @@ import {
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
+import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
@@ -104,18 +105,31 @@ export function GhostPluginPage() {
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
   const marketRefreshRequestRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
-  const refreshMarket = useCallback(async () => {
+  const refreshMarket = useCallback(async (preserveOnError = false) => {
     const requestId = ++marketRefreshRequestRef.current;
     try {
       const snapshot = await window.electronAPI.pluginMarket.snapshot();
-      if (requestId === marketRefreshRequestRef.current) setMarketSnapshot(snapshot);
-    } catch (error) {
-      if (requestId === marketRefreshRequestRef.current) {
-        setMarketSnapshot({
-          items: [],
-          unavailableReason: error instanceof Error ? error.message : String(error),
-        });
+      if (requestId !== marketRefreshRequestRef.current) return;
+      // Main intentionally represents market outages as data so the initial page can render a
+      // non-blocking empty state. During icon renewal, convert that fulfilled unavailable result
+      // back into a failure: the catch path preserves the visible snapshot and the hook retries.
+      if (preserveOnError && snapshot.unavailableReason !== null) {
+        throw new Error(snapshot.unavailableReason);
       }
+      setMarketSnapshot(snapshot);
+    } catch (error) {
+      if (requestId !== marketRefreshRequestRef.current) return;
+      setMarketSnapshot((current) =>
+        preserveOnError && current
+          ? current
+          : {
+              items: [],
+              unavailableReason: error instanceof Error ? error.message : String(error),
+            },
+      );
+      // Background icon renewal keeps the current snapshot visible, but must still report
+      // failure to the renewal hook so it can schedule a bounded retry.
+      if (preserveOnError) throw error;
     }
   }, []);
   useEffect(() => {
@@ -510,6 +524,35 @@ export function GhostPluginPage() {
     [t],
   );
 
+  const refreshVisibleMarketDetail = useCallback(async (pluginId: string) => {
+    // A background icon renewal may observe navigation, but must never invalidate a
+    // user-initiated detail request by advancing its request generation.
+    const requestId = marketDetailRequestRef.current;
+    try {
+      const detail = await window.electronAPI.pluginMarket.detail(pluginId);
+      if (requestId !== marketDetailRequestRef.current) return;
+      setMarketDetail((current) => (current?.pluginId === pluginId ? detail : current));
+    } catch (error) {
+      // A background URL renewal must not close an otherwise usable detail page.
+      if (requestId === marketDetailRequestRef.current) throw error;
+    }
+  }, []);
+  const visibleMarketIcons = useMemo(
+    () => [...marketItems.map((item) => item.icon), marketDetail?.icon],
+    [marketDetail?.icon, marketItems],
+  );
+  const refreshVisibleMarketIcons = useCallback(async () => {
+    const refreshes: Promise<void>[] = [refreshMarket(true)];
+    if (marketDetail?.pluginId) {
+      refreshes.push(refreshVisibleMarketDetail(marketDetail.pluginId));
+    }
+    await Promise.all(refreshes);
+  }, [marketDetail?.pluginId, refreshMarket, refreshVisibleMarketDetail]);
+  const handleMarketIconLoadError = usePluginIconRefresh(
+    visibleMarketIcons,
+    refreshVisibleMarketIcons,
+  );
+
   const handleInstallFromMarket = useCallback(async () => {
     if (!marketDetail) return;
     const confirmed = await confirm({
@@ -550,6 +593,7 @@ export function GhostPluginPage() {
           setMarketDetail(null);
         }}
         onInstall={() => void handleInstallFromMarket()}
+        onIconLoadError={handleMarketIconLoadError}
       />
     );
   }
@@ -777,6 +821,7 @@ export function GhostPluginPage() {
                     item={item}
                     busy={marketBusyId === item.pluginId}
                     onSelect={() => void handleSelectMarket(item.pluginId)}
+                    onIconLoadError={handleMarketIconLoadError}
                   />
                 ))}
               </div>
@@ -805,10 +850,12 @@ function MarketPluginCard({
   item,
   busy,
   onSelect,
+  onIconLoadError,
 }: {
   item: PluginMarketItem;
   busy: boolean;
   onSelect: () => void;
+  onIconLoadError: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -831,6 +878,7 @@ function MarketPluginCard({
           iconDataUrl={item.icon?.url}
           iconId={item.ghostId}
           iconName={item.name}
+          onIconLoadError={onIconLoadError}
         />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
           <span className="flex min-w-0 items-center gap-2">

@@ -85,7 +85,9 @@ function PermRow({ item, badge }: { item: GhostPermissionItem; badge?: 'added' |
       <div className="min-w-0 flex-1">
         <div
           className={cn(
-            'text-13 leading-[1.5] text-[var(--confirm-desc)]',
+            // labelArgs 含作者可控 token(域名/工具名等无空格长串),同 hostDetail
+            // 一样必须可断行,否则顶破固定宽度的安装确认弹窗。
+            'break-words text-13 leading-[1.5] text-[var(--confirm-desc)]',
             badge === 'removed' && 'line-through',
           )}
         >
@@ -219,7 +221,7 @@ export function GhostTrustSummary({ trust }: { trust: GhostTrustInfo }) {
     <div className="mt-3 flex items-start gap-2 rounded-xl border border-[var(--border-default)] p-3">
       <Icon size={16} className="mt-0.5 shrink-0 text-[var(--text-secondary)]" aria-hidden="true" />
       <div className="min-w-0">
-        <p className="text-13 font-medium leading-5 text-[var(--confirm-desc)]">
+        <p className="break-words text-13 font-medium leading-5 text-[var(--confirm-desc)]">
           {t(`settings.ghosts.trust.${labelKey}`, {
             publisher: trust.publisherName ?? t('settings.ghosts.trust.unknownPublisher'),
           })}

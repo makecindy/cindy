@@ -6,10 +6,16 @@ import JSZip from 'jszip';
 
 import {
   GHOST_MANIFEST_FILE,
+  GHOST_LOCALE_MAX_BYTES,
+  ghostLocalePathFor,
   ghostIconMimeType,
   isValidGhostId,
+  resolveGhostManifestLocale,
   validateGhostManifest,
+  validateGhostManifestLocaleResource,
+  withGhostResolvedLocale,
   type GhostManifest,
+  type GhostManifestLocaleResource,
   type GhostTrustInfo,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -17,6 +23,7 @@ import {
   verifyGhostZipSignatures,
   type GhostTrustRegistry,
 } from './ghostSignature.js';
+import { isPathInsideDir } from './dirDeposit.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -49,6 +56,8 @@ export interface GhostManagerOptions {
   getRootDir: () => string;
   /** 装/卸成功后通知(index.ts 用它广播 ghosts:changed 到所有窗口)。 */
   onChanged?: (ghosts: InstalledGhost[]) => void;
+  /** 当前宿主语言；插件未提供时由 shared 契约固定回退英文。 */
+  getLocale?: () => string;
   /** Cindy 维护的发布者/审核公钥表；缺省为空，签名仍验完整性但不抬身份等级。 */
   trustRegistry?: GhostTrustRegistry;
   log?: GhostManagerLogger;
@@ -125,9 +134,10 @@ export class GhostManager {
       }
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
       const iconDataUrl = this.readInstalledIconDataUrl(dir, v.manifest);
+      const localizedManifest = this.readInstalledLocalizedManifest(dir, v.manifest);
       const trust = this.readInstalledTrust(dir);
       result.push({
-        manifest: v.manifest,
+        manifest: localizedManifest,
         dir,
         enabled: !fs.existsSync(path.join(dir, DISABLED_MARKER_FILE)),
         ...(trust ? { trust } : {}),
@@ -136,6 +146,48 @@ export class GhostManager {
     }
     result.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
     return result;
+  }
+
+  /**
+   * 读取当前宿主语言对应的 locale 文件。已安装目录被用户手工改坏时不让
+   * 整个插件消失：记录告警并回退原 manifest；正常安装路径已在 parse 阶段严验。
+   */
+  private readInstalledLocalizedManifest(dir: string, manifest: GhostManifest): GhostManifest {
+    const requestedLocale = this.options.getLocale?.();
+    const runtimeManifest = withGhostResolvedLocale(manifest, requestedLocale);
+    const localePath = ghostLocalePathFor(manifest, requestedLocale);
+    if (!localePath) return runtimeManifest;
+    const fallbackPath = manifest.locales?.en;
+    const candidates = [...new Set([localePath, fallbackPath].filter((value): value is string => Boolean(value)))];
+    for (const candidatePath of candidates) {
+      try {
+        const absPath = path.join(dir, ...candidatePath.split('/'));
+        const stat = fs.lstatSync(absPath);
+        if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
+          throw new Error(`locale 文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
+        }
+        const realDir = fs.realpathSync.native(dir);
+        const realLocalePath = fs.realpathSync.native(absPath);
+        if (!isPathInsideDir(realDir, realLocalePath)) {
+          throw new Error('locale 文件经软链解析后位于插件目录之外');
+        }
+        const raw = JSON.parse(fs.readFileSync(realLocalePath, 'utf8'));
+        const validated = validateGhostManifestLocaleResource(raw, manifest);
+        if (!validated.ok) throw new Error(validated.reason);
+        return resolveGhostManifestLocale(runtimeManifest, validated.resource);
+      } catch (err) {
+        this.options.log?.warn('ghost locale candidate invalid', {
+          id: manifest.id,
+          localePath: candidatePath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    this.options.log?.warn('ghost locale fallback to base manifest', {
+      id: manifest.id,
+      localePath,
+    });
+    return runtimeManifest;
   }
 
   /**
@@ -291,6 +343,26 @@ export class GhostManager {
     }
 
     const prefix = detectSingleTopFolderPrefix(allEntries.map((e) => e.name));
+    // ZIP 条目名在检查阶段区分大小写，但 Windows / 默认 macOS 解压落盘不区分。
+    // 折叠后撞同一路径会让后写条目覆盖先写条目（包括 ghost.json），必须在
+    // 读取清单前整体拒绝。
+    const seenEntryPaths = new Set<string>();
+    const aliasedEntry = allEntries.find((entry) => {
+      const rel = entry.name.slice(prefix.length).replace(/\/$/, '');
+      if (rel.length === 0) return false;
+      const folded = rel.toLowerCase();
+      if (seenEntryPaths.has(folded)) return true;
+      seenEntryPaths.add(folded);
+      return false;
+    });
+    if (aliasedEntry) {
+      return {
+        rejection: {
+          code: 'file-invalid',
+          reason: `压缩包含大小写折叠后重复的路径:${aliasedEntry.name.slice(prefix.length)}`,
+        },
+      };
+    }
     // 这两个点文件只属于主机：包若能自带它们，就可伪造停用状态或覆盖
     // 签名信任快照。大小写也折叠检查，避免在 Windows/macOS 上撞同一文件。
     const reservedHostFile = allEntries.find((entry) => {
@@ -350,6 +422,52 @@ export class GhostManager {
         },
       };
     }
+    let localizedManifest = withGhostResolvedLocale(v.manifest, this.options.getLocale?.());
+    if (v.manifest.locales !== undefined) {
+      const resources = new Map<string, GhostManifestLocaleResource>();
+      for (const localePath of Object.values(v.manifest.locales)) {
+        if (!localePath) continue;
+        const localeEntry = zip.file(`${prefix}${localePath}`);
+        if (!localeEntry) {
+          return {
+            rejection: {
+              code: 'file-invalid',
+              reason: `清单声明了 locale,但压缩包内缺少 ${localePath}`,
+            },
+          };
+        }
+        let localeRaw: unknown;
+        try {
+          localeRaw = JSON.parse(
+            (await readZipEntryBufferWithLimit(
+              localeEntry,
+              GHOST_LOCALE_MAX_BYTES,
+              `locale ${localePath}`,
+            )).toString('utf8'),
+          );
+        } catch {
+          return {
+            rejection: {
+              code: 'file-invalid',
+              reason: `locale 文件不是合法 JSON 或超过 ${GHOST_LOCALE_MAX_BYTES} 字节:${localePath}`,
+            },
+          };
+        }
+        const validated = validateGhostManifestLocaleResource(localeRaw, v.manifest);
+        if (!validated.ok) {
+          return {
+            rejection: {
+              code: 'file-invalid',
+              reason: `locale 文件不合格(${localePath}):${validated.reason}`,
+            },
+          };
+        }
+        resources.set(localePath, validated.resource);
+      }
+      const localePath = ghostLocalePathFor(v.manifest, this.options.getLocale?.());
+      const resource = localePath ? resources.get(localePath) : undefined;
+      if (resource) localizedManifest = resolveGhostManifestLocale(localizedManifest, resource);
+    }
     const maxUncompressedBytes = v.manifest.node
       ? MAX_NODE_UNCOMPRESSED_BYTES
       : MAX_BASIC_UNCOMPRESSED_BYTES;
@@ -407,7 +525,7 @@ export class GhostManager {
     }
 
     return {
-      manifest: v.manifest,
+      manifest: localizedManifest,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),

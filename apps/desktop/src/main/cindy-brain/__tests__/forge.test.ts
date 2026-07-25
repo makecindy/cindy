@@ -107,6 +107,89 @@ describe('packGhostDir', () => {
     });
   });
 
+  it('打包期校验 locale 文件存在、合法且完整，产物可按宿主语言 inspect', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      description: 'Base description',
+      locales: {
+        en: 'locales/en.json',
+        ja: 'locales/ja.json',
+      },
+    };
+    const locale = (name: string, description: string, tool: string) => JSON.stringify({
+      name,
+      description,
+      tools: { do_thing: { description: tool } },
+    });
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+      'locales/en.json': locale('Demo', 'English description', 'English tool'),
+      'locales/ja.json': locale('デモ', '日本語の説明', '日本語のツール'),
+    });
+    const packed = await packGhostDir(dir);
+    expect(packed.ok, JSON.stringify(packed)).toBe(true);
+    if (!packed.ok) return;
+    const manager = new GhostManager({
+      getRootDir: () => path.join(workDir, 'ghosts'),
+      getLocale: () => 'ja',
+    });
+    expect(await manager.inspect(packed.cindyPath)).toMatchObject({
+      manifest: {
+        name: 'デモ',
+        description: '日本語の説明',
+        resolvedLocale: 'ja',
+        tools: [{ name: 'do_thing', description: '日本語のツール' }],
+      },
+    });
+  });
+
+  it('Forge 在 locale 缺文件、坏 JSON 或缺译时直接拒绝', async () => {
+    const manifest = {
+      ...GOOD_MANIFEST,
+      locales: { en: 'locales/en.json' },
+    };
+    const missing = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+    });
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    await fs.promises.mkdir(path.join(missing, 'locales'), { recursive: true });
+    await fs.promises.writeFile(path.join(missing, 'locales', 'en.json'), '{ nope');
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    await fs.promises.writeFile(
+      path.join(missing, 'locales', 'en.json'),
+      JSON.stringify({ name: 'Demo', tools: {} }),
+    );
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    await fs.promises.rm(path.join(missing, 'locales'), { recursive: true, force: true });
+    await fs.promises.mkdir(path.join(missing, 'Locales'), { recursive: true });
+    await fs.promises.writeFile(
+      path.join(missing, 'Locales', 'EN.json'),
+      JSON.stringify({
+        name: 'Demo',
+        tools: { do_thing: { description: 'English tool' } },
+      }),
+    );
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('大小写不一致'),
+    });
+  });
+
   it('目录不存在 / 清单坏 / 声明的入口文件缺失 → 结构化拒绝', async () => {
     expect((await packGhostDir(path.join(workDir, 'nope'))).ok).toBe(false);
 
@@ -303,6 +386,10 @@ describe('FORGE_GUIDE', () => {
       'data-ghost-link',
       'cindy.request',
       'app-context',
+      'navigator.language',
+      'host-context-changed',
+      'locales/en.json',
+      '固定使用英文',
       'clientIdAlternatives',
       'cindy.fetch',
       'network 槽',
@@ -369,10 +456,13 @@ describe('FORGE_GUIDE', () => {
       'panel.position',
       '右侧栏页签',
       // 2026-07-25 标准头系统按钮:主机画标题条,systemButtons 逐个关
-      // (maximize 撑满 / detach 独立窗口);§2 样例与 §5 面板章节同步。
+      // (maximize 撑满 / detach 独立窗口 / minimize 气泡);§2 样例与 §5
+      // 面板章节同步。
       'systemButtons',
       '撑满内容区',
       '在独立窗口中打开',
+      'minimize',
+      '最小化为浮动气泡',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

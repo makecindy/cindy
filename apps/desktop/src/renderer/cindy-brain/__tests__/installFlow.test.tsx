@@ -143,6 +143,8 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
     expect(confirmWithCheckbox).toHaveBeenCalledWith(
       expect.objectContaining({
         checkboxLabel: 'settings.ghosts.installConfirm.enableNowOpenTab',
+        // 2026-07-25 起"立即开启"默认勾选:装入即带电,取消勾选才沉睡。
+        checkboxDefaultChecked: true,
       }),
     );
     expect(install).toHaveBeenCalledWith('/tmp/tab.cindy', {
@@ -190,7 +192,10 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
     await confirmAndInstallGhost('/tmp/dock.cindy', d);
 
     expect(confirmWithCheckbox).toHaveBeenCalledWith(
-      expect.objectContaining({ checkboxLabel: 'settings.ghosts.installConfirm.enableNow' }),
+      expect.objectContaining({
+        checkboxLabel: 'settings.ghosts.installConfirm.enableNow',
+        checkboxDefaultChecked: true,
+      }),
     );
     expect(openGhostTab).not.toHaveBeenCalled();
   });

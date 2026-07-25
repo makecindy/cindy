@@ -69,9 +69,15 @@ void bootstrapGitSafetySettingsFromMain();
 const view = new URLSearchParams(window.location.search).get('view');
 const isVoiceInputOverlay = view === 'voice-input-overlay';
 const isVoiceInputDictionaryToast = view === 'voice-input-dictionary-toast';
+const isComputerPermissionGuide = view === 'computer-permission-guide';
+const isComputerPermissionBackdrop = view === 'computer-permission-backdrop';
+const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissionBackdrop;
 document.documentElement.dataset.platform = window.electronAPI.platform;
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
+}
+if (isComputerPermissionView) {
+  document.documentElement.dataset.computerPermissionOverlay = 'true';
 }
 
 // Windows-only: emulate macOS `acceptFirstMouse: false` so a click that
@@ -79,7 +85,7 @@ if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
 // target. Skip on voice-input overlay windows — those are click-through
 // popups (focusable:false, acceptFirstMouse:true by design).
 const disposeSwallowActivationClick =
-  !isVoiceInputOverlay && !isVoiceInputDictionaryToast
+  !isVoiceInputOverlay && !isVoiceInputDictionaryToast && !isComputerPermissionView
     ? installSwallowActivationClick({
         window,
         platform: window.electronAPI?.platform ?? '',
@@ -122,6 +128,32 @@ if (!rootElement) {
 const root = createRoot(rootElement);
 
 void (async () => {
+  if (isComputerPermissionBackdrop) {
+    const { ComputerPermissionBackdrop } = await import(
+      './components/settings/ComputerPermissionGuideWindow'
+    );
+    root.render(
+      <ThemeProvider>
+        <ComputerPermissionBackdrop />
+      </ThemeProvider>,
+    );
+    return;
+  }
+
+  if (isComputerPermissionGuide) {
+    const { ComputerPermissionGuideWindow } = await import(
+      './components/settings/ComputerPermissionGuideWindow'
+    );
+    root.render(
+      <ThemeProvider>
+        <LocaleProvider>
+          <ComputerPermissionGuideWindow />
+        </LocaleProvider>
+      </ThemeProvider>,
+    );
+    return;
+  }
+
   if (isVoiceInputDictionaryToast) {
     const { VoiceInputDictionaryToast } = await import('./voice-input/VoiceInputDictionaryToast');
     root.render(

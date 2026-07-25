@@ -662,7 +662,7 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-openai-custom-tool');
   });
 
-  it('normalizes the Codex tool set to ByteDance Seed Responses capabilities', async () => {
+  it('normalizes requests to ByteDance Seed Responses capabilities', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -676,6 +676,7 @@ describe('codex proxy host', () => {
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
     let current: unknown = {
       model: 'bytedance-seed/seed-2.1-pro',
+      reasoning: { effort: 'high', summary: 'auto' },
       tools: [
         { type: 'function', name: 'exec_command' },
         { type: 'function', name: 'write_stdin' },
@@ -703,6 +704,7 @@ describe('codex proxy host', () => {
 
     expect(current).toEqual({
       model: 'bytedance-seed/seed-2.1-pro',
+      reasoning: { effort: 'high' },
       tools: [
         { type: 'function', name: 'exec_command' },
         { type: 'function', name: 'write_stdin' },
@@ -721,6 +723,17 @@ describe('codex proxy host', () => {
         { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
       ],
     });
+
+    let summaryOnlyReasoning: unknown = {
+      model: 'bytedance-seed/seed-2.1-pro',
+      reasoning: { summary: 'auto' },
+    };
+    for (const transform of transforms) {
+      const next = transform(summaryOnlyReasoning, ctx);
+      if (next !== null && next !== undefined) summaryOnlyReasoning = next;
+    }
+    expect(summaryOnlyReasoning).toEqual({ model: 'bytedance-seed/seed-2.1-pro' });
+
     clearSessionProvider('session-seed');
   });
 

@@ -934,10 +934,6 @@
       }
     },
     "sessionImport": {
-      "linkedTitle": "本地会话链接",
-      "linkedDescription": "只读扫描本机 Claude Code 与 Codex 历史。Codex 会话会链接到原 thread 并直接续聊，不会重放历史；Claude 会话仍作为本地历史导入。",
-      "linkSelected": "链接选中",
-      "linked": "已链接",
       "title": "本地会话导入",
       "description": "只读扫描本机 Claude Code 与 Codex 历史。只有列表里勾选的会话会被导入；已跳过的内部会话不会展示，也不会导入。",
       "scan": "扫描",
@@ -978,7 +974,9 @@
         "scanFailed": "扫描失败",
         "importFailed": "导入失败",
         "imported": "导入完成：新增 {{inserted}} 条，更新 {{updated}} 条"
-      }
+      },
+      "selectAll": "全选当前筛选结果（{{count}} 条）",
+      "selectedOutsideFilter": "（其中 {{count}} 条在当前筛选之外）"
     },
     "connections": {
       "codex": {
@@ -1731,6 +1729,15 @@
       "directControl": {
         "title": "自动操作电脑",
         "description": "让 agent 检查窗口、读取界面并点击或输入",
+        "status": {
+          "ready": "可以使用",
+          "needsPermission": "需要系统授权",
+          "notInstalled": "尚未安装驱动",
+          "disabled": "已关闭",
+          "checking": "正在检查权限…",
+          "setup": "设置权限",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "切换直接操作电脑",
         "driverInfo": "自动操作电脑由开源 CUA Driver 提供，运行在本机，用于读取屏幕并执行点击、输入等操作。",
         "openSourceProject": "查看开源项目",
@@ -1748,14 +1755,25 @@
           "cancel": "稍后再说"
         },
         "permissionGuide": {
-          "title": "等待系统授权",
-          "description": "请在系统设置中为 CuaDriver 开启以下权限（在权限列表里找到左侧图标对应的 App）。全部开启后这里会自动继续。",
-          "waiting": "待授权"
+          "waiting": "等待你开启",
+          "step": "打开自动操作电脑",
+          "completeEyebrow": "权限已完成",
+          "dragTitle": "将 CuaDriver 拖入「{{permission}}」",
+          "turnOnAppTitle": "在「{{permission}}」中打开 CuaDriver",
+          "dragHint": "拖拽",
+          "draggingTitle": "正在拖拽 CuaDriver",
+          "draggingHint": "放入「{{permission}}」列表",
+          "appName": "CuaDriver",
+          "turnOnTitle": "打开「{{permission}}」",
+          "turnOnDescription": "请在系统设置中打开这项权限。开启后，Cindy 会自动继续。",
+          "readyTitle": "Computer Use 已就绪",
+          "readyDescription": "现在可以让 Cindy 操作这台电脑。"
         },
         "permissions": {
-          "macosHint": "macOS 需要为 Cua Driver 授予「辅助功能」和「屏幕录制」核心权限。实际使用时，系统还可能按目标 App 或具体动作弹出额外确认。",
-          "accessibilityLabel": "CuaDriver 辅助功能",
-          "screenRecordingLabel": "CuaDriver 屏幕录制",
+          "title": "系统授权",
+          "macosHint": "电脑使用需要「辅助功能」和「屏幕录制」。实际使用时，macOS 仍可能按目标 App 或具体动作弹出额外确认。",
+          "accessibilityLabel": "辅助功能",
+          "screenRecordingLabel": "屏幕录制",
           "grant": "去授权",
           "accessibility": "辅助功能：{{status}}",
           "screenRecording": "屏幕录制：{{status}}",
@@ -1767,6 +1785,8 @@
           "openAccessibility": "打开辅助功能设置",
           "openScreenRecording": "打开屏幕录制设置",
           "recheck": "重新检查",
+          "moreDetails": "更多说明",
+          "hideDetails": "收起说明",
           "windowsHint": "Windows 不需要额外系统授权。使用时请保持目标应用在当前活动桌面中可见，agent 会接管前台操作。",
           "linuxHint": "Linux 不需要 macOS 的 TCC 授权；请确保当前桌面会话允许窗口读取和输入自动化。"
         },
@@ -1789,9 +1809,10 @@
           "disabled": "已禁用直接电脑控制",
           "toggleFailed": "切换直接电脑控制失败",
           "installFailed": "cua-driver 安装失败",
-          "permissionFailed": "cua-driver 授权未完成",
-          "permissionPending": "请完成 Cua Driver 的系统授权，然后此处会自动启用",
+          "permissionFailed": "电脑使用权限未完成",
+          "permissionPending": "请完成这两项系统权限，然后回到这里点击“重新检查”",
           "permissionSettingsOpened": "已打开系统权限设置。完成授权后，请回到这里点“重新检查”。",
+          "permissionSettingsMonitoring": "已打开系统权限设置。完成授权后，状态会自动更新。",
           "openPermissionSettingsFailed": "无法打开系统权限设置"
         }
       }
@@ -3088,11 +3109,15 @@
   "panelChrome": {
     "maximizeAria": "撑满内容区",
     "restoreAria": "还原面板大小",
-    "detachAria": "在独立窗口中打开"
+    "detachAria": "在独立窗口中打开",
+    "minimizeAria": "最小化为浮动气泡"
   },
   "ghostPanelWindow": {
     "mergeBack": "合并回主窗口",
     "unavailable": "该插件面板当前不可用"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "恢复 {{name}} 面板"
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",

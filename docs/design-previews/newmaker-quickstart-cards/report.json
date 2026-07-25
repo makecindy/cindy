@@ -1,0 +1,251 @@
+{
+  "ok": true,
+  "toolVersion": "qa-hifi-demo@2026-07-25-p0-hardening",
+  "demo": "cindy-newmaker-cards-hifi",
+  "inputHashes": {
+    "spec.json": "c123e8d31b9fe6e0e4ac530c6936be9250d550fb74ffbffae630e803b2d52fcc",
+    "truth.json": "57f870b8f33005b26c1ca0caae7b8c01c5401943eb929099d573590e2ef2616e",
+    "index.html": "bc3bb55d11dfe9e18c29bcaa80579e6d728082e32871aa590bbf296d5bb51a48",
+    "baselines": {
+      "declared": [],
+      "files": []
+    }
+  },
+  "statesResult": {
+    "total": 2,
+    "viaReachable": 2,
+    "tabOnly": 0
+  },
+  "coverage": {
+    "cases": [
+      {
+        "id": "zh-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "en-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "ja-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "ja"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "ko-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "ko"
+        },
+        "source": "verify.cases"
+      }
+    ]
+  },
+  "gateA": {
+    "name": "真值一致",
+    "pass": true,
+    "detail": "",
+    "provenance": "required",
+    "extractorDrift": "none"
+  },
+  "gateB": {
+    "name": "状态覆盖",
+    "pass": true,
+    "total": 8,
+    "passed": 8,
+    "failures": [],
+    "cases": [
+      {
+        "id": "zh-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "passed": 2,
+        "total": 2,
+        "failures": []
+      },
+      {
+        "id": "en-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "passed": 2,
+        "total": 2,
+        "failures": []
+      },
+      {
+        "id": "ja-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "ja"
+        },
+        "passed": 2,
+        "total": 2,
+        "failures": []
+      },
+      {
+        "id": "ko-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "ko"
+        },
+        "passed": 2,
+        "total": 2,
+        "failures": []
+      }
+    ]
+  },
+  "gateC": {
+    "name": "交互鲁棒",
+    "pass": true,
+    "checks": [
+      {
+        "id": "no-clip",
+        "pass": true,
+        "failures": []
+      },
+      {
+        "id": "persistence",
+        "pass": true,
+        "failures": []
+      }
+    ],
+    "cases": [
+      {
+        "id": "zh-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "en-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "ja-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "ja"
+        }
+      },
+      {
+        "id": "ko-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "ko"
+        }
+      }
+    ]
+  },
+  "gateD": {
+    "name": "渲染绑定",
+    "pass": true,
+    "total": 68,
+    "passed": 68,
+    "failures": [],
+    "cases": [
+      {
+        "id": "zh-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "en-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "ja-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "ja"
+        }
+      },
+      {
+        "id": "ko-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "ko"
+        }
+      }
+    ]
+  },
+  "gateF": {
+    "name": "适配还原",
+    "pass": true,
+    "total": 18,
+    "passed": 18,
+    "failures": [],
+    "cases": []
+  },
+  "generatedAt": "2026-07-24T21:00:41.416Z"
+}

@@ -843,6 +843,111 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('keeps synthetic completion when done precedes the initial plan DB row', () => {
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      persistId: 'plan-row-1',
+      event: {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Inspect', status: 'in_progress' },
+              { step: 'Patch', status: 'pending' },
+            ],
+          },
+        },
+      },
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'done',
+        source: 'codex',
+        data: {
+          raw: { id: 'turn-1', status: 'completed' },
+          plan: [
+            { step: 'Inspect', status: 'in_progress' },
+            { step: 'Patch', status: 'pending' },
+          ],
+        },
+      },
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:messages:created', {
+      sessionId: 's1',
+      message: {
+        ...message('plan-row-1', 's1'),
+        role: 'tool_use',
+        toolUseId: 'plan:turn-1',
+        content: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: {
+            plan: [
+              { step: 'Inspect', status: 'in_progress' },
+              { step: 'Patch', status: 'pending' },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(remoteSessionStore.getMessages('s1')[0].content).toMatchObject({
+      input: {
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Patch', status: 'completed' },
+        ],
+      },
+    });
+  });
+
+  it('does not let a delayed message window revert synthetic completion', () => {
+    const stalePlanRow = {
+      ...message('plan-row-1', 's1'),
+      role: 'tool_use' as const,
+      toolUseId: 'plan:turn-1',
+      content: {
+        toolUseId: 'plan:turn-1',
+        toolName: 'update_plan',
+        input: { plan: [{ step: 'Inspect', status: 'in_progress' }] },
+      },
+    };
+    remoteSessionStore.setMessages('s1', [stalePlanRow]);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      persistId: 'plan-row-1',
+      event: {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:turn-1',
+          toolName: 'update_plan',
+          input: { plan: [{ step: 'Inspect', status: 'in_progress' }] },
+        },
+      },
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'done',
+        source: 'codex',
+        data: {
+          raw: { id: 'turn-1', status: 'completed' },
+          plan: [{ step: 'Inspect', status: 'in_progress' }],
+        },
+      },
+    });
+
+    remoteSessionStore.setLatestMessageWindow('s1', [stalePlanRow]);
+
+    expect(remoteSessionStore.getMessages('s1')[0].content).toMatchObject({
+      input: { plan: [{ step: 'Inspect', status: 'completed' }] },
+    });
+  });
+
   it('finalizes pre-compact streaming rows and de-duplicates the same boundary replay', () => {
     vi.useFakeTimers();
     try {

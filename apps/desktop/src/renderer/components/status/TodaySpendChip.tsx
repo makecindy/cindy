@@ -66,6 +66,8 @@ import {
   type ClaudeSubscriptionUsageSnapshot,
 } from '@/hooks/useClaudeSubscriptionUsage';
 import {
+  hasAlertingClaudeSessionWindow,
+  isClaudeSubscriptionAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -524,22 +526,17 @@ function buildCodexTooltipNode(
 // 不到回退总周限并标注口径) · 本会话价值 $。tooltip 列全量窗口 (含非当前模型的
 // scoped 条目) + 套餐 + extra usage。utilization 语义 = 已用百分比 (0-100)。
 
-/** Claude 窗口 → 展示行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。 */
+/**
+ * Claude 窗口 → tooltip 行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。
+ * tooltip 的窗口行不做逐行高亮 (纯文本 tooltip), 告警只体现在 chip 配色与末尾的
+ * 「接近限额」行 —— 故这里不带 alerting 标记。
+ */
 interface ClaudeWindowUsage {
   label: string;
   used: string;
   remaining: string;
   /** tooltip 用的精确 reset 时间点;无数据 → null。 */
   resetAt: string | null;
-  /** 服务端 severity 非 normal, 或已打满 —— tooltip 高亮 / chip 变警示色的依据。 */
-  alerting: boolean;
-}
-
-function isClaudeWindowAlerting(window: ClaudeUsageWindow | null | undefined): boolean {
-  if (!window) return false;
-  if (clampPercent(window.utilization) >= 99.95) return true;
-  const severity = window.severity?.trim().toLowerCase();
-  return Boolean(severity && severity !== 'normal');
 }
 
 function toClaudeWindowUsage(
@@ -555,7 +552,6 @@ function toClaudeWindowUsage(
     used: formatPercent(usedPercent),
     remaining: formatPercent(100 - usedPercent),
     resetAt: formatResetAt(window.resetsAt),
-    alerting: isClaudeWindowAlerting(window),
   };
 }
 
@@ -632,26 +628,11 @@ function getClaudeChipWindows(
   return windows;
 }
 
-/**
- * chip 警示态: 只看影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 与 headers
- * 的整体 status —— 其它模型的窗口打满不限流当前会话, 只在 tooltip 里可见。
- * headers 源的窗口不带 severity, turn 内实时阶段「接近限额」只由整体 status 的
- * allowed_warning 表达, 因此 warning / rejected 都纳入告警 (rejected 在 tooltip
- * 文案分流里优先)。
- */
-function isClaudeSubscriptionAlerting(
-  snapshot: ClaudeSubscriptionUsageSnapshot | null,
-  modelId: string | null | undefined,
-): boolean {
-  if (!snapshot) return false;
-  const status = snapshot.rateLimitStatus?.trim().toLowerCase();
-  if (status === 'rejected' || status === 'allowed_warning') return true;
-  return (
-    isClaudeWindowAlerting(snapshot.fiveHour)
-    || isClaudeWindowAlerting(snapshot.sevenDay)
-    || isClaudeWindowAlerting(matchScopedWindowForModel(snapshot.scoped, modelId))
-  );
-}
+// 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
+// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts: isClaudeUsageWindowAlerting /
+// hasAlertingClaudeSessionWindow / isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
+// tooltip 不逐行高亮, 它比 chip 宽一档的那一档在 buildClaudeSubscriptionTooltipNode 里
+// (整体 status 的 allowed_warning 也出「接近限额」行)。
 
 function buildClaudeSubscriptionTooltipNode(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,
@@ -705,10 +686,13 @@ function buildClaudeSubscriptionTooltipNode(
     );
   }
 
+  // tooltip 比 chip 宽一档: allowed_warning (服务端综合全部窗口的模糊信号) 也提示 ——
+  // 上面刚列完全量窗口, 用户能自己看出是哪个窗口吃紧; chip 颜色不吃这个信号 (见
+  // isClaudeSubscriptionAlerting)。
   const status = snapshot.rateLimitStatus?.trim().toLowerCase();
   if (status === 'rejected') {
     lines.push(t('todaySpend.claude.limitRejected'));
-  } else if (isClaudeSubscriptionAlerting(snapshot, modelId)) {
+  } else if (status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)) {
     lines.push(t('todaySpend.claude.limitWarning'));
   }
 
@@ -1394,6 +1378,8 @@ export function TodaySpendChip({
 
   // Claude 订阅告警态: 影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 任一逼近 /
   // 打满, 或 headers 报 rejected → chip 变 error 色 (语义豁免色, 跨主题一致)。
+  // 其它模型的周限吃紧不染红 —— chip 上没有那一段, 红了也无从解释 (见
+  // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
   const claudeSubscriptionAlerting = isClaudeSubscription
     && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
 

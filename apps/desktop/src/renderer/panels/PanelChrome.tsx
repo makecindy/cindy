@@ -1,6 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { Maximize2, Minimize2, PictureInPicture2 } from 'lucide-react';
+import { Maximize2, Minimize2, Minus, PictureInPicture2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 
 import { usePanelMaximize } from '../layout/panelMaximize';
 
@@ -16,6 +19,8 @@ import { usePanelMaximize } from '../layout/panelMaximize';
  *
  * 右端系统按钮(一批,由引擎统一长出,面板作者无感;身份卡
  * panel.systemButtons 可逐个关闭):
+ *  - 「最小化为浮动气泡」(minimize):传 onMinimize 即得,点击把面板收成
+ *    可拖动的圆形气泡(状态在 renderer/lib/ghostPanelBubbleState.ts);
  *  - 「独立窗口」(detach):传 onDetach 即得,点击把面板抽进自己的 OS 窗口
  *    (状态机在 main 的 ghost-panel-window/controller.ts);
  *  - 「撑满内容区」(maximize):传 panelKind 即得,状态在 LayoutRoot 的
@@ -37,13 +42,28 @@ export interface PanelChromeProps {
   panelKind?: string;
   /** 传入即长出「独立窗口」系统按钮(排在撑满按钮左侧),点击回调归调用方。 */
   onDetach?: () => void;
+  /** 传入即长出「最小化为浮动气泡」系统按钮(排在独立窗口按钮左侧)。 */
+  onMinimize?: () => void;
 }
 
-export function PanelChrome({ title, actions, panelKind, onDetach }: PanelChromeProps): ReactNode {
+export function PanelChrome({
+  title,
+  actions,
+  panelKind,
+  onDetach,
+  onMinimize,
+}: PanelChromeProps): ReactNode {
   const { t } = useTranslation();
   const maximize = usePanelMaximize();
   const showMaximize = panelKind !== undefined && maximize !== null;
   const isMaximized = showMaximize && maximize.maximizedKind === panelKind;
+  // ChromeActions 按钮簇的窗口坐标(与 ChromeActions.tsx 的 x 同式):
+  // 面板顶带的 no-drag 洞必须钉在这里,见下方洞元素注释。
+  const { isMac, isFullscreen } = useMacFullscreen();
+  const chromeClusterX =
+    isMac && !isFullscreen
+      ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
+      : CHROME_ACTIONS_GEOMETRY.defaultLeft;
   return (
     <>
       {/* 窗口 chrome 让位带(§6 规则 3:顶部 46px 是系统领地,任何面板不得占用)。
@@ -53,7 +73,26 @@ export function PanelChrome({ title, actions, panelKind, onDetach }: PanelChrome
         aria-hidden
         className="h-[46px] shrink-0 border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
         style={{ WebkitAppRegion: 'drag' } as CSSProperties}
-      />
+      >
+        {/* ChromeActions 浮层按钮簇的 no-drag 洞:左栏折叠时本面板可能顶到窗口
+            最左,顶带会盖住左上角折叠/菜单按钮 —— Electron 拖拽区是纯几何
+            (drag 矩形减 no-drag 矩形)且挖洞只在 drag 元素后代上可靠生效,
+            浮层自身的 no-drag 不算数(同 Sidebar 顶行 / ContentHeader spacer)。
+            fixed 定位取窗口坐标:面板不在左上角时矩形与顶带不相交 = 几何
+            no-op,无需感知自己的列位;pointer-events:none 不挡命中(拖拽区
+            注册是几何计算,不依赖 DOM 事件)。 */}
+        <div
+          data-testid="panel-chrome-actions-hit-hole"
+          className="pointer-events-none fixed top-0 h-[46px]"
+          style={
+            {
+              left: chromeClusterX,
+              width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+              WebkitAppRegion: 'no-drag',
+            } as CSSProperties
+          }
+        />
+      </div>
       <div
         data-panel-drag-handle=""
         className="flex h-[36px] shrink-0 items-center justify-between gap-2 border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-3"
@@ -62,9 +101,19 @@ export function PanelChrome({ title, actions, panelKind, onDetach }: PanelChrome
         <div className="min-w-0 truncate text-[12px] font-medium text-[var(--text-secondary)]">
           {title}
         </div>
-        {(actions || showMaximize || onDetach) && (
+        {(actions || showMaximize || onDetach || onMinimize) && (
           <div className="flex shrink-0 items-center gap-0.5">
             {actions}
+            {onMinimize && (
+              <button
+                type="button"
+                aria-label={t('panelChrome.minimizeAria')}
+                onClick={onMinimize}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                <Minus size={14} />
+              </button>
+            )}
             {onDetach && (
               <button
                 type="button"

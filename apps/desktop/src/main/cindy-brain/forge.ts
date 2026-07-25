@@ -23,6 +23,7 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
 const MAX_BASIC_FILES = 256;
@@ -553,7 +554,18 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     }
     const manifest = v.manifest;
 
-    // 2) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
+    // 2) locale 资源必须真实、可解析且完整覆盖已声明字段。与装入侧使用
+    // 同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
+    const localeValidation = validateGhostLocaleResourcesInDirectory(dir, manifest);
+    if (!localeValidation.ok) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: localeValidation.reason,
+      };
+    }
+
+    // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
     const mustExist: string[] = [];
     if (manifest.entry) mustExist.push(manifest.entry);
     if (manifest.node?.entry) mustExist.push(manifest.node.entry);
@@ -568,17 +580,27 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       }
     }
 
-    // 3) 收集文件(递归,跳过开发残留),数量/体积设限。
+    // 4) 收集文件(递归,跳过开发残留),数量/体积设限。
     const files: Array<{ rel: string; abs: string }> = [];
     let totalBytes = 0;
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
+    const seenPackPaths = new Set<string>();
     const walk = async (cur: string, relBase: string): Promise<ForgePackResult | null> => {
       const entries = await fs.promises.readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         if (shouldSkip(e.name)) continue;
         const abs = path.join(cur, e.name);
         const rel = relBase ? `${relBase}/${e.name}` : e.name;
+        const foldedRel = rel.toLowerCase();
+        if (seenPackPaths.has(foldedRel)) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `源码目录含大小写折叠后重复的路径:${rel}`,
+          };
+        }
+        seenPackPaths.add(foldedRel);
         if (e.isDirectory()) {
           const bad = await walk(abs, rel);
           if (bad) return bad;
@@ -602,7 +624,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
 
-    // 4) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
+    // 5) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
     // 文件收集在写盘之前完成 + shouldSkip 跳过 *.cindy,自身产物不会进包;
     // 同名覆盖:同 id 同版本重打包语义上就是同一个包。
     const zip = new JSZip();
@@ -651,6 +673,11 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 my-ghost/
 ├── ghost.json    ← 身份卡(必须,zip 根部)
 ├── main.js       ← 电子脑:后台逻辑入口(声明了 tools/cindy 时必须)
+├── locales/      ← 可选:宿主驱动的清单文案翻译(声明 locales 时英文必须存在)
+│   ├── en.json
+│   ├── zh-CN.json
+│   ├── ja.json
+│   └── ko.json
 ├── node/
 │   └── worker.cjs ← 可选:随包 Node/stdio MCP 入口(声明 node 槽时必须,见 §4.12)
 ├── panel.html    ← 面板界面(声明了 panel.html 时必须)
@@ -668,6 +695,12 @@ my-ghost/
   "name": "我的意识",           // 展示名
   "description": "一句话说清这段意识是干嘛的(给人看:装入确认框/详情页)",  // 1–300 字
   "whenToUse": "需要生成图片、插画、配图、修图、P 图、改图时找我",  // 1–300 字,给模型看:进 agent 会话的意识花名册,是"用户不点名时 AI 能不能想起你"的关键。写成场景枚举,可反复调优;缺省时花名册回落用 description
+  "locales": {                 // 可选:插件只跟随宿主语言;不支持/缺失语言固定回退 en
+    "en": "locales/en.json",
+    "zh-CN": "locales/zh-CN.json",
+    "ja": "locales/ja.json",
+    "ko": "locales/ko.json"
+  },
   "version": "1.0.0",
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(确认框会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
@@ -686,12 +719,69 @@ my-ghost/
   // top/bottom 暂未支持(排期中)
   // panel.systemButtons(可选,仅停靠形态):标准头系统按钮开关,缺省全开、
   // 声明 false 逐个关闭。当前一批:maximize(撑满内容区)、detach(在独立
-  // 窗口中打开)。标题条本体恒由主机绘制、关不掉;未知键拒装;
-  // position:"tab" 时声明本字段拒装
+  // 窗口中打开)、minimize(最小化为浮动气泡)。标题条本体恒由主机绘制、
+  // 关不掉;未知键拒装;position:"tab" 时声明本字段拒装
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
 \`\`\`
+
+### 2.1 本地化资源(locales)
+
+插件语言**只跟随 Cindy 宿主当前语言**。不要读取 \`navigator.language\`、操作系统语言或
+浏览器偏好，也不要在插件内保存另一份语言选择。宿主当前支持
+\`zh-CN / en / ja / ko\`；插件没提供宿主当前语言时固定使用英文，因此只要声明
+\`locales\` 就必须提供 \`en\`。
+
+每个 locale JSON 完整覆盖清单中已有的可本地化字段；工具按稳定的 tool name 对齐，
+协议键、工具名和参数名不翻译：
+
+\`\`\`json
+{
+  "name": "My Plugin",
+  "description": "What this plugin does.",
+  "whenToUse": "Use it when ...",
+  "tools": {
+    "do_thing": {
+      "description": "Do the task and return the result.",
+      "parameters": {
+        "/properties/query": {
+          "title": "Query",
+          "description": "Describe what to search for."
+        }
+      }
+    }
+  },
+  "panel": { "title": "Plugin panel" },
+  "network": {
+    "secrets": {
+      "api_key": { "label": "API key", "hint": "Create one in account settings." }
+    },
+    "connections": {
+      "instance": { "label": "Service instance", "hint": "Enter the instance URL and token." }
+    }
+  },
+  "node": {
+    "secretBindings": {
+      "worker_key": { "label": "Worker key", "hint": "Used only by the local worker." }
+    }
+  },
+  "setup": {
+    "kv": {
+      "default_repo": { "label": "Default repository" }
+    }
+  }
+}
+\`\`\`
+
+若原清单声明了 \`description\`、\`whenToUse\`、\`tools\`、\`panel.title\`、
+\`network.secrets / connections\`、\`node.secretBindings\` 或 \`setup\` 的 kv 标签，
+每个 locale 文件都必须完整提供对应文案；凭证、连接、Node 凭证和 kv 项按稳定 key 对齐。
+工具参数 schema 中已有的 \`title / description\` 用 JSON Pointer 对齐（如
+\`/properties/query\`；根节点用空字符串 \`""\`），参数名、类型、枚举和协议结构不翻译。
+缺译、未知 key、多余字段、文件缺失、路径大小写与磁盘不一致、无效 JSON 或单文件超过
+64KB 都会在 Forge 打包期、内置播种期与安装期拒绝。清单列表、详情页、Panel 标题、
+安装/配置提示和 Agent 工具目录都消费同一份本地化结果。
 
 十三个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
@@ -999,12 +1089,13 @@ const r = await cindy.send({ type: 'cindy-request', kind: 'gen_image', prompt: '
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
-电子脑需要按宿主构建身份选择公开配置时,走只读 request。当前只暴露
-\`region: 'cn' | 'global'\`,不含登录态、路径、设备信息或凭证:
+电子脑需要按宿主构建身份或当前语言选择公开配置/界面文案时,走只读 request。当前只暴露
+\`region: 'cn' | 'global'\` 与 \`locale: 'zh-CN' | 'en' | 'ja' | 'ko'\`,
+不含登录态、路径、设备信息或凭证:
 
 \`\`\`js
 const r = await cindy.request({ kind: 'app-context' });
-// → { ok:true, context:{ region:'cn'|'global' } }
+// → { ok:true, context:{ region:'cn'|'global', locale:'zh-CN'|'en'|'ja'|'ko' } }
 \`\`\`
 
 \`settingsHtml\` / panel 没有 preload 桥,读取同一份上下文走同源只读端点:
@@ -1012,12 +1103,20 @@ const r = await cindy.request({ kind: 'app-context' });
 \`\`\`js
 const r = await (await fetch('/app-context')).json();
 const region = r.context.region;
+const locale = r.context.locale;
 \`\`\`
 
 region 只适合选择**已在 manifest 声明过**的公开配置。例如 broker OAuth
 可在 \`clientIdAlternatives\` 列出备用 ID,再由 settingsHtml 把选中的
 \`clientId\` 放进 \`/oauth/<key>/connect\` body;主机会做清单白名单复验。
 不要用 region 推断用户位置、语言或数据归属。
+
+\`locale\` 是插件语言的唯一事实来源。设置页、panel 和电子脑都只使用它；
+不要读取 \`navigator.language\`。宿主切换语言时，运行中的电子脑会收到
+\`{ type:'host-context-changed', ok:true, context:{ region, locale } }\`，可用
+\`BroadcastChannel\` 通知同插件的设置页/panel 重新读取 \`/app-context\` 并换文案。
+未运行的插件会在下次启动或页面重新装载时直接读到新语言。插件自身不支持该 locale 时
+必须选英文资源。
 
 ## 4.5 聊天卡片(card 槽,海报模式)
 
@@ -2146,13 +2245,15 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
   拒装。两种形态的面板代码完全一样(同一 panel.html,供片/主题/媒体规则不变),
   只是宿主容器不同;页签形态请把界面做成自适应宽度;
 - 停靠形态的**标题条(标准头)由主机绘制**:标题(\`panel.title\`)+ 一批系统
-  按钮(当前:「撑满内容区」与「在独立窗口中打开」——用户可把你的面板抽进
-  自己的 OS 窗口,关窗/合并即回停靠原位,面板代码零感知;后续新增的系统按钮
+  按钮(当前:「撑满内容区」、「在独立窗口中打开」——用户可把你的面板抽进
+  自己的 OS 窗口,关窗/合并即回停靠原位——以及「最小化为浮动气泡」——用户
+  可把面板收成一枚可拖动的圆形气泡悬浮在主窗最上层,点击气泡即回停靠原位,
+  气泡位置与最小化状态重启保留;三者面板代码全程零感知;后续新增的系统按钮
   也长在这里)。你的 panel.html 只画标题条以下的部分,**不要自己再画一条
   标题栏**。不想要某颗系统按钮时在身份卡声明
-  \`"systemButtons": { "maximize": false, "detach": false }\` 逐个关闭(缺省
-  全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 没有标准头,声明本
-  字段拒装);
+  \`"systemButtons": { "maximize": false, "detach": false, "minimize": false }\`
+  逐个关闭(缺省全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 没有
+  标准头,声明本字段拒装);
 - 与电子脑同源,用 \`BroadcastChannel('<自定名>')\` 通信(电子脑发,面板收);
 - 取自己的媒体:\`cindy-ghost://<id>/media/<指纹><后缀>\`(主机查账验归属,别人的图 404);
 - 重启回放:\`fetch('cindy-ghost://<id>/gallery')\` 返回本意识作品清单 \`[{src, caption}]\`;

@@ -259,6 +259,12 @@ const fanOutGhostPanelWindowStateChanged = createIpcFanOut('maker:ghost-panel-wi
 const fanOutBinaryDownloadProgress = createIpcFanOut('binary-download-progress');
 // Settings →「电脑使用」cua-driver 更新的下载进度(main 侧采样后广播)
 const fanOutComputerDriverUpdateProgress = createIpcFanOut('computer-driver-update-progress');
+const fanOutComputerPermissionGuideCancelled = createIpcFanOut(
+  'maker:computer:permission-guide-cancelled',
+);
+const fanOutComputerPermissionGuideStatusChanged = createIpcFanOut(
+  'maker:computer:permission-guide-status-changed',
+);
 const fanOutAppUpdateProgress = createIpcFanOut('app-update-progress');
 const fanOutAuthStateChange = createIpcFanOut('auth:state-change');
 const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
@@ -570,8 +576,10 @@ interface ComputerDriverStatus {
 interface ComputerDriverStatusOptions {
   includeDoctor?: boolean;
   forcePermissionProbe?: boolean;
+  skipPermissionProbe?: boolean;
   freshPermissionProbe?: boolean;
   bypassPermissionProbeCache?: boolean;
+  passivePermissionProbeOnly?: boolean;
 }
 
 type ComputerDriverPermissionPlatform = 'macos' | 'windows' | 'linux' | 'unsupported';
@@ -4591,12 +4599,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:status', options),
       installDriver: (): Promise<ComputerDriverInstallResult> =>
         ipcRenderer.invoke('maker:computer:install-driver'),
-      grantPermissions: (): Promise<ComputerDriverPermissionGrantResult> =>
-        ipcRenderer.invoke('maker:computer:grant-permissions'),
+      grantPermissions: (options?: {
+        showGuide?: boolean;
+        openedPaneUrl?: string;
+      }): Promise<ComputerDriverPermissionGrantResult> =>
+        ipcRenderer.invoke('maker:computer:grant-permissions', options),
       driverIcon: (): Promise<{ iconDataUrl: string | null }> =>
         ipcRenderer.invoke('maker:computer:driver-icon'),
+      permissionGuideStatus: (): Promise<ComputerDriverStatus> =>
+        ipcRenderer.invoke('maker:computer:permission-guide-status'),
+      startPermissionAppDrag: (iconDataUrl: string): void =>
+        ipcRenderer.send('maker:computer:permission-app-drag-start', { iconDataUrl }),
+      finishPermissionAppDrag: (didCopy: boolean): Promise<boolean> =>
+        ipcRenderer.invoke('maker:computer:permission-app-drag-end', { didCopy }),
       cancelPermissionGrant: (): Promise<{ cancelled: boolean }> =>
         ipcRenderer.invoke('maker:computer:cancel-permission-grant'),
+      onPermissionGuideCancelled: (callback: () => void): (() => void) =>
+        fanOutComputerPermissionGuideCancelled(callback),
+      onPermissionGuideStatusChanged: (
+        callback: (status: ComputerDriverStatus) => void,
+      ): (() => void) => fanOutComputerPermissionGuideStatusChanged(
+        (data: unknown) => callback(data as ComputerDriverStatus),
+      ),
       checkUpdate: (): Promise<ComputerDriverUpdateCheck> =>
         ipcRenderer.invoke('maker:computer:check-update'),
       updateDriver: (opts?: { joinOnly?: boolean }): Promise<ComputerDriverInstallResult> =>

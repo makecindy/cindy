@@ -255,6 +255,19 @@ function rememberLivePlanSnapshot(sessionId: string, snapshot: LivePlanSnapshot)
   if (snapshot.persistId) sessionSnapshots.set(`persist:${snapshot.persistId}`, snapshot);
 }
 
+function rememberLivePlanContent(
+  sessionId: string,
+  toolUseId: string,
+  content: Record<string, unknown>,
+): void {
+  const previous = livePlanSnapshots.get(sessionId)?.get(`tool:${toolUseId}`);
+  rememberLivePlanSnapshot(sessionId, {
+    content,
+    toolUseId,
+    ...(previous?.persistId ? { persistId: previous.persistId } : {}),
+  });
+}
+
 function overlayLivePlanSnapshot(sessionId: string, message: RemoteMessage): RemoteMessage {
   if (message.role !== 'tool_use') return message;
   const sessionSnapshots = livePlanSnapshots.get(sessionId);
@@ -267,6 +280,29 @@ function overlayLivePlanSnapshot(sessionId: string, message: RemoteMessage): Rem
   return snapshot
     ? { ...message, content: snapshot.content, toolUseId: snapshot.toolUseId }
     : message;
+}
+
+function completeLivePlanSnapshotOnDone(
+  sessionId: string,
+  snapshot: unknown,
+  turnId: string | null,
+  terminalStatus: string | null,
+): boolean {
+  if (!turnId) return false;
+  const toolUseId = `plan:${turnId}`;
+  const liveSnapshot = livePlanSnapshots.get(sessionId)?.get(`tool:${toolUseId}`);
+  if (!liveSnapshot) return false;
+
+  const completed = applyCodexPlanSnapshotOnDone(
+    [{ role: 'tool_use', toolUseId, content: liveSnapshot.content }],
+    snapshot,
+    turnId,
+    terminalStatus,
+  );
+  const content = completed.messages[0]?.content;
+  if (!completed.changed || !isRecord(content)) return false;
+  rememberLivePlanContent(sessionId, toolUseId, content);
+  return true;
 }
 
 /** End any pre-compaction streaming rows without changing the overall running turn. */
@@ -1691,20 +1727,33 @@ export const remoteSessionStore = {
         const data = isRecord(event.data) ? event.data : null;
         const rawTurn = isRecord(data?.raw) ? data.raw : null;
         const turnId = readString(rawTurn, 'id');
+        const turnStatus = readString(rawTurn, 'status');
         const currentMessages = messages.get(sessionId) ?? [];
-        const completed = applyCodexPlanSnapshotOnDone(currentMessages, data?.plan, turnId);
+        const completed = applyCodexPlanSnapshotOnDone(
+          currentMessages,
+          data?.plan,
+          turnId,
+          turnStatus,
+        );
+        completeLivePlanSnapshotOnDone(
+          sessionId,
+          data?.plan,
+          turnId,
+          turnStatus,
+        );
         terminalPlanChanged = completed.changed;
         if (completed.changed) {
           messages.set(sessionId, [...completed.messages]);
-          if (Array.isArray(data?.plan) && completed.toolUseId) {
-            rememberLivePlanSnapshot(sessionId, {
-              toolUseId: completed.toolUseId,
-              content: {
-                toolUseId: completed.toolUseId,
-                toolName: 'update_plan',
-                input: { plan: data.plan },
-              },
-            });
+          const completedMessage = completed.messages.find((message) => {
+            if (message.toolUseId === completed.toolUseId) return true;
+            return readString(message.content, 'toolUseId') === completed.toolUseId;
+          });
+          if (completed.toolUseId && isRecord(completedMessage?.content)) {
+            rememberLivePlanContent(
+              sessionId,
+              completed.toolUseId,
+              completedMessage.content,
+            );
           }
         }
       }

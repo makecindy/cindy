@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "name": "cindy-newmaker-cards-hifi",
+    "pr": 369,
+    "summary": {
+      "what": "New Maker 主界面「快速开始」4 张快捷入口卡片的竖排(icon 左上/文字中下)+ 等比拉伸布局改稿",
+      "how": "卡片改为竖排:icon 固定卡片左上(位置不变,距顶=距左=内边距),文字挪到卡片中下方、与 icon 左对齐(flex-col + justify-between);卡片区去掉 800px 封顶,随 useProportionalWidth 的 inputWidth 等比拉伸、与输入框同宽同缘;grid 按 inputWidth 断点 560/700 切 1/2/4 列,高度不变(narrow 84 / 常态 112)",
+      "accept": "A/B/C/D/F 五门:truth 提取自源码带 provenance / 状态覆盖 / 4 语言无截断 / computed-style 绑定(4px·12px·13px·主题 token) / 拉伸几何 oracle 比对(卡片宽随 inputWidth、与输入框同宽、高度恒定)"
+    }
+  },
+
+  "matrix": {
+    "platforms": ["desk"],
+    "regions": ["na"],
+    "systems": ["desktop"],
+    "themes": ["light", "dark"],
+    "langs": ["zh-CN", "en", "ja", "ko"]
+  },
+
+  "states": [
+    { "id": "id", "via": [{ "expect": "id" }] },
+    { "id": "filled", "via": [
+      { "click": "[data-qa-card='explore']" },
+      { "expect": "filled" }
+    ] }
+  ],
+
+  "verify": {
+    "cases": [
+      { "id": "zh-light", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "light", "lang": "zh-CN" } },
+      { "id": "en-dark",  "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark",  "lang": "en" } },
+      { "id": "ja-light", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "light", "lang": "ja" } },
+      { "id": "ko-dark",  "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark",  "lang": "ko" } }
+    ],
+    "noClip": [".qa-card-label", ".qa-section-title"],
+    "persistence": {
+      "via": [
+        { "click": "[data-qa-pref='mode:dark']" },
+        { "click": "[data-qa-pref='lang:ja']" }
+      ],
+      "expected": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark", "lang": "ja" },
+      "storageKey": "qa-hifi:cindy-newmaker-cards-hifi:prefs",
+      "reloads": 2,
+      "initialState": "id"
+    }
+  },
+
+  "bindings": [
+    { "sel": ".qa-card", "prop": "column-gap", "truth": "card.gapPx", "kind": "length" },
+    { "sel": ".qa-card", "prop": "border-top-left-radius", "truth": "card.radiusPx", "kind": "length" },
+    { "sel": ".qa-card", "prop": "border-top-width", "truth": "card.borderPx", "kind": "length" },
+    { "sel": ".qa-card-icon", "prop": "width", "truth": "card.iconCirclePx", "kind": "length" },
+    { "sel": ".qa-card-icon", "prop": "height", "truth": "card.iconCirclePx", "kind": "length" },
+    { "sel": ".qa-card-label", "prop": "font-size", "truth": "card.labelFontPx", "kind": "length" },
+    { "sel": ".qa-section-title", "prop": "font-size", "truth": "section.titleFontPx", "kind": "length" },
+
+    { "sel": ".qa-card", "prop": "background-color", "truth": "colors.light.cardBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
+    { "sel": ".qa-card", "prop": "border-top-color", "truth": "colors.light.cardBorder", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
+    { "sel": ".qa-card-label", "prop": "color", "truth": "colors.light.cardText", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
+    { "sel": ".qa-card-icon", "prop": "background-color", "truth": "colors.light.iconBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
+    { "sel": ".qa-section-title", "prop": "color", "truth": "colors.light.textSecondary", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
+
+    { "sel": ".qa-card", "prop": "background-color", "truth": "colors.dark.cardBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
+    { "sel": ".qa-card", "prop": "border-top-color", "truth": "colors.dark.cardBorder", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
+    { "sel": ".qa-card-label", "prop": "color", "truth": "colors.dark.cardText", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
+    { "sel": ".qa-card-icon", "prop": "background-color", "truth": "colors.dark.iconBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
+    { "sel": ".qa-section-title", "prop": "color", "truth": "colors.dark.textSecondary", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] }
+  ],
+
+  "adaptive": {
+    "min": { "w": 480, "h": 560 },
+    "sampleSizes": [
+      [480, 700], [540, 700], [559, 700], [560, 700], [561, 700],
+      [640, 700], [680, 700], [699, 700], [700, 700], [720, 700],
+      [779, 700], [780, 700], [781, 700], [1000, 700], [1299, 700],
+      [1300, 700], [1440, 900]
+    ],
+    "probes": [
+      { "id": "quickstarts", "sel": ".qa-quickstarts" },
+      { "id": "input", "sel": ".qa-input" },
+      { "id": "card0", "sel": ".qa-card" }
+    ],
+    "tolerancePx": 1
+  }
+}

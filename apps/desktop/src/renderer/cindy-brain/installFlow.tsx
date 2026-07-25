@@ -58,6 +58,7 @@ interface InstallFlowDeps {
     confirmText?: string;
     cancelText?: string;
     checkboxLabel: string;
+    checkboxDefaultChecked?: boolean;
   }) => Promise<{ ok: boolean; checked: boolean }>;
   /**
    * 当前右侧栏会话 id;无会话视图的入口(插件页)不传或返回 null。
@@ -167,8 +168,9 @@ export async function confirmAndInstallGhost(
         version: manifest.version,
       })
     : t('settings.ghosts.installConfirm.meta', { version: manifest.version });
-  // "立即开启"勾选(2026-07-09 Lizi 定案):默认不勾 = 装入即沉睡,
-  // 用户显式勾选才带电。装入 ≠ 授权运行。
+  // "立即开启"勾选(2026-07-25 Lizi 定案,改自 2026-07-09 的默认不勾):
+  // 默认勾选 = 装入即带电;用户显式取消勾选才装成沉睡。确认弹窗本身
+  // 仍是授权边界 —— 权限清单如实展示,点"装入"即同意运行。
   // tab 型插件(panel.position:'tab')在有会话可落时,勾选语义升级为
   // 「立即开启并打开页签」——文案与真实行为一致,无会话入口不许诺"打开"。
   const sidebarSessionId = deps.getSidebarSessionId?.() ?? null;
@@ -191,6 +193,7 @@ export async function confirmAndInstallGhost(
         ? 'settings.ghosts.installConfirm.enableNowOpenTab'
         : 'settings.ghosts.installConfirm.enableNow',
     ),
+    checkboxDefaultChecked: true,
   });
   if (!ok) return;
 

@@ -2311,13 +2311,15 @@ export function NewMakerDraftRoute() {
                           key={key}
                           type="button"
                           onClick={() => handleQuickStart(labelKey)}
-                          // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl);
-                          // 窄态横排 / 常态竖排自适应(#562)。
+                          // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl)。
+                          // 用户改稿 2026-07-25:两档统一竖排——icon 固定卡片左上(距顶/
+                          // 距左均等于 p-3/p-4 内边距),文字挪到卡片中下方、与 icon 左对齐
+                          // (flex-col + justify-between,icon 顶、文字底;gap-1 兜底竖向
+                          // 最小间距),取代原窄态横排 / 常态竖排自适应(#562)。
+                          // 卡片高度不变(narrow 84 / 常态 112)。
                           className={cn(
-                            'group rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
-                            isDraftNarrow
-                              ? 'flex min-h-[84px] items-center gap-3 p-3'
-                              : 'flex min-h-[112px] flex-col items-start gap-3 p-4',
+                            'group flex flex-col items-start justify-between gap-1 rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
+                            isDraftNarrow ? 'min-h-[84px] p-3' : 'min-h-[112px] p-4',
                           )}
                         >
                           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
@@ -2327,8 +2329,9 @@ export function NewMakerDraftRoute() {
                               className="text-[var(--create-agent-quick-card-icon)]"
                             />
                           </span>
-                          {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。 */}
-                          <span className="flex min-w-0 min-h-10 items-center text-13 font-semibold leading-[16px]">
+                          {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。
+                              竖排下占满卡片宽度、左对齐 icon,靠父列 justify-between 贴底。 */}
+                          <span className="w-full min-w-0 text-13 font-semibold leading-[16px]">
                             {t(labelKey)}
                           </span>
                         </button>

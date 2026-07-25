@@ -31,6 +31,12 @@ export interface ConfirmDialogProps {
   /** 设了就在底部加一个"下次不再提示"复选框,onConfirm 携带勾选状态回传。 */
   dontShowAgainLabel?: string;
   /**
+   * 复选框初始勾选态,缺省 false。"下次不再提示"类弹窗保持缺省;
+   * 业务复选框(confirmWithCheckbox)按调用方语义决定,如装意识的
+   * "立即开启"默认勾选。
+   */
+  checkboxDefaultChecked?: boolean;
+  /**
    * Radix AlertDialog 默认会自动聚焦 Cancel 按钮(为破坏性操作做的安全默认)。
    * 在"主按钮非破坏性、Cancel 仅是放弃"的场景(如"前往设置 / 取消"),
    * 把这个开关打开,让默认焦点落到主按钮,避免取消按钮天然带 focus ring。
@@ -66,6 +72,7 @@ export function ConfirmDialog({
   showCancel = true,
   tertiaryText,
   dontShowAgainLabel,
+  checkboxDefaultChecked = false,
   autoFocusConfirm,
   confirmDisabled = false,
   confirmVariant = 'default',
@@ -77,11 +84,11 @@ export function ConfirmDialog({
   const { t } = useTranslation();
   const resolvedConfirmText = confirmText ?? t('commonUi.confirmDialog.confirm');
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
-  // 每次打开复位,避免上一轮的勾选残留到下一次弹窗。
-  const [dontShowAgain, setDontShowAgain] = useState(false);
+  // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
+  const [dontShowAgain, setDontShowAgain] = useState(checkboxDefaultChecked);
   useEffect(() => {
-    if (open) setDontShowAgain(false);
-  }, [open]);
+    if (open) setDontShowAgain(checkboxDefaultChecked);
+  }, [open, checkboxDefaultChecked]);
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>

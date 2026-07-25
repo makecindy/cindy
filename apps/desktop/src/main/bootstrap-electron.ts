@@ -36,6 +36,7 @@ import {
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
 } from './devStartupStatus';
+import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -51,6 +52,18 @@ if (
   app.commandLine.appendSwitch('password-store', 'basic');
   safeStorage.setUsePlainTextEncryption(true);
 }
+
+// TapTap Maker 等站点的 WASM 多线程引擎依赖 SharedArrayBuffer。Chromium 把 SAB 锁在
+// crossOriginIsolated(COOP/COEP 响应头)之后,而 Electron 不实现 COOP 进程隔离——
+// 即便站点响应头正确,BrowserWindow / `<webview>` 里 crossOriginIsolated 恒为 false,
+// SAB 拿不到,RSB 内置浏览器里这类站点直接报"缺少运行时支持"(Electron 41.2.0 实测,
+// 真 Chrome 同页面为 true)。这里用 Chromium 官方 feature 开关无条件恢复 SAB 构造器,
+// TapTap Maker 桌面端(xdt-maker.exe)、VS Code 同款做法。风险面是向所有网页内容放开
+// 高精度共享内存计时器(Spectre 类),缓解依赖远程内容只跑在 webview-security.ts 强制
+// 加固的 webview 里(sandbox + webSecurity + 隔离分区,无 Node)。注意 appendSwitch
+// 同 key 后写覆盖前写:如需再加其他
+// enable-features,必须合并进同一次调用的逗号分隔值,不能另起一行。
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 
 // agentManager 已在 vendor 大扫除时退役。app 退出 / 崩溃路径走 maker.shutdown()
 // 一刀切 — 它内部按 (Layer 1) 关所有 session → (Layer 2) dispose 所有 agent (Codex
@@ -550,6 +563,7 @@ import { registerLayoutIpc } from './layout/index.js';
 import {
   getGhostManager,
   isGhostAvailableForActiveSession,
+  refreshGhostLocalization,
   registerGhostIpc,
   setGhostsChangedObserver,
   suspendAllGhosts,
@@ -1500,6 +1514,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshGhostLocalization();
   const mainWindow = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
@@ -5576,6 +5591,10 @@ app.on('ready', async () => {
   // 端点清单已就绪、IPC 已注册,此后 second-instance / activate 允许按需建窗。
   startupWindowCreationAllowed = true;
   createWindow();
+  // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
+  setTimeout(() => {
+    prewarmMacComputerPermissionGuideHelper();
+  }, 3_000);
   initUpdateService();
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
   initHeartbeatService();

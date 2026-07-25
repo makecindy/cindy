@@ -773,7 +773,9 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           type="button"
           onClick={() => handoff && setExpanded((v) => !v)}
           className={cn(
-            'flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)]',
+            // min-w-0(而非 shrink-0):自定义供应商的模型 id 可以很长,胶囊必须
+            // 能收缩、由内部模型名 truncate 让位,不许把整行顶出卡片宽度。
+            'flex min-w-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)]',
             'bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground',
             handoff && 'cursor-pointer hover:bg-[var(--msg-tool-card-bg)]',
           )}
@@ -785,7 +787,7 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
           {toModel && (
             <>
               <span className="opacity-50">·</span>
-              <span className="font-mono">{toModel}</span>
+              <span title={toModel} className="min-w-0 truncate font-mono">{toModel}</span>
             </>
           )}
           {Boolean(data?.resumed) && (

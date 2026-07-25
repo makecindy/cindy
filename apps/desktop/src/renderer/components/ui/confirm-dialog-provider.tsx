@@ -61,18 +61,24 @@ export interface ConfirmThreeOptions extends ConfirmOptions {
 export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontShowAgainKey' | 'dontShowAgainLabel'> {
   /** 复选框文案。复用 ConfirmDialog 的复选框管线,但不写 localStorage(纯本次语义)。 */
   checkboxLabel: string;
+  /** 复选框初始勾选态,缺省 false;每次弹出都复位到该值。 */
+  checkboxDefaultChecked?: boolean;
 }
 
 interface ConfirmDialogContextValue {
   confirm: (options: ConfirmOptions) => Promise<boolean>;
   /** 三状态 confirm — 用于「保存 / 不保存 / 取消」这类需要区分 cancel 与 negative 的场景。 */
   confirmThree: (options: ConfirmThreeOptions) => Promise<ConfirmThreeResult>;
-  /** 带业务复选框(每次弹出默认不勾;取消时 checked 恒为 false)。 */
+  /** 带业务复选框(初始勾选态由 checkboxDefaultChecked 决定,缺省不勾;取消时 checked 恒为 false)。 */
   confirmWithCheckbox: (options: ConfirmWithCheckboxOptions) => Promise<{ ok: boolean; checked: boolean }>;
 }
 
 interface QueueItem {
-  options: ConfirmOptions & { tertiaryText?: string; checkboxLabel?: string };
+  options: ConfirmOptions & {
+    tertiaryText?: string;
+    checkboxLabel?: string;
+    checkboxDefaultChecked?: boolean;
+  };
   resolve: (value: ConfirmThreeResult, dontShowAgain?: boolean) => void;
 }
 
@@ -244,6 +250,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
               ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'
               : currentItem.options.checkboxLabel
           }
+          checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
           onConfirm={handleConfirm}
           onTertiary={handleTertiary}
         />

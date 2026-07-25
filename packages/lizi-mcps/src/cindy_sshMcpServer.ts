@@ -31,16 +31,7 @@ import {
   registerSshHostStatusTool,
   registerSshListHostsTool,
 } from './ssh/index.js';
-import { resolveLiziMcpSessionContext } from './session-context.js';
-import type { LiziMcpSessionContext, SshMcpDeps } from './types.js';
-
-/** Per-session 上下文（与 SchedulerMcpSessionCtx 同形，当前仅用于日志归因）。 */
-export interface SshMcpSessionCtx {
-  agentKind: 'claude-code' | 'codex';
-  workingDir: string;
-  sessionId?: string;
-  vendorOptions?: Record<string, unknown>;
-}
+import type { SshMcpDeps } from './types.js';
 
 const D_LIST_TOOLS =
   '探索 cindy_ssh 可用工具（渐进式发现入口）。不传 category → 返回所有类目+每个类目工具数量。' +
@@ -57,7 +48,6 @@ const D_CALL_TOOL =
   '`SSH_CONNECT_FAILED` = 连接/执行失败；' +
   '`EXEC_TIMEOUT` = 命令超时（长任务改 nohup 后台跑再轮询）；' +
   '`INVALID_ARGS` = zod schema 校验失败（返回 schema 自纠）；' +
-  '`PLUGIN_DISABLED` = 当前项目已关闭 SSH Remote 插件，不要重试，转告用户去设置开启；' +
   '`INTERNAL` = 工具内部错误（如连接池不可用），不宜盲目重试，把 hint 转告用户。';
 
 const CATEGORY_ENUM = ['ssh'] as const;
@@ -115,8 +105,6 @@ function registerListToolsEntry(server: McpServer, registry: SshToolRegistry): v
 function registerCallToolEntry(
   server: McpServer,
   registry: SshToolRegistry,
-  deps: SshMcpDeps,
-  getSessionContext: () => LiziMcpSessionContext,
 ): void {
   server.tool(
     'call_tool',
@@ -128,20 +116,6 @@ function registerCallToolEntry(
       args: jsonObjectArg('工具参数（JSON 对象）。不确定 schema 时可先传 {} 触发错误反馈。'),
     },
     async ({ name, args }) => {
-      // 运行时插件门控:必须在 tool-call 时刻按真实会话 workingDir 判定,不能只
-      // 靠 host 层构建期检查——Codex 共享 bridge 以空 workingDir 构建 server,
-      // AsyncLocalStorage 在此刻才恢复真实 ctx,构建期检查会漏掉项目级禁用。
-      // 空 workingDir 时 host 回落全局开关判定(见 SshMcpDeps.isEnabledForWorkdir)。
-      if (deps.isEnabledForWorkdir) {
-        const ctx = getSessionContext();
-        const workingDir = ctx.workingDir.trim() !== '' ? ctx.workingDir : undefined;
-        if (!deps.isEnabledForWorkdir(workingDir)) {
-          return errorPayload(
-            'PLUGIN_DISABLED',
-            '当前项目已关闭 SSH Remote 插件(可在主界面侧边栏「插件」中开启,或在项目 .claude/settings.json 的 xdtMaker.builtinTools.ssh 中开启)。不要重试,转告用户如需使用请先开启。',
-          );
-        }
-      }
       return registry.call(name, args);
     },
   );
@@ -149,10 +123,7 @@ function registerCallToolEntry(
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
-export function createSshMcpServer(
-  deps: SshMcpDeps,
-  sessionCtx?: SshMcpSessionCtx,
-): McpServer {
+export function createSshMcpServer(deps: SshMcpDeps): McpServer {
   const server = new McpServer({
     name: 'cindy_ssh',
     version: '1.0.0',
@@ -160,22 +131,13 @@ export function createSshMcpServer(
 
   const registry = new SshToolRegistry();
 
-  // cc 路径取闭包 ctx;codex 路径由 AsyncLocalStorage 在工具调用时补回当前
-  // thread 的真实 ctx(共享 bridge 构建期 ctx 是空的)。
-  const fallbackCtx: LiziMcpSessionContext = sessionCtx ?? {
-    agentKind: 'claude-code',
-    workingDir: '',
-  };
-  const getSessionContext = (): LiziMcpSessionContext =>
-    resolveLiziMcpSessionContext(fallbackCtx);
-
   // 注册顺序 = list_tools 里的位次。读优先 → 写在后。
   registerSshListHostsTool(registry, deps);
   registerSshHostStatusTool(registry, deps);
   registerSshExecTool(registry, deps);
 
   registerListToolsEntry(server, registry);
-  registerCallToolEntry(server, registry, deps, getSessionContext);
+  registerCallToolEntry(server, registry);
 
   return server;
 }
