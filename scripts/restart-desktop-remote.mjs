@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDesktopUserDataRoot } from './dev-migration-policy.mjs';
 import { applyDesktopDevStartupConfig } from './shared/desktop-dev-region.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -391,17 +392,17 @@ function closeDarwinTerminalTtys(ttys) {
  * `-<名字>` 后缀,每个名字一条完全独立的沙箱。只在 dev 生效——主进程入口只在
  * 非 packaged 时应用该覆写。
  */
-function defaultIsolatedUserDataDir(isolationName) {
+export function defaultIsolatedUserDataDir(
+  isolationName,
+  {
+    env = process.env,
+    platform = process.platform,
+    homedir = os.homedir,
+  } = {},
+) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
   const dirName = `${BRAND_USER_DATA_DIR_NAME}-dev${isolationName ? `-${isolationName}` : ''}`;
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-    return path.join(appData, dirName);
-  }
-  if (process.platform === 'darwin') {
-    return path.join(process.env.HOME || '', 'Library', 'Application Support', dirName);
-  }
-  const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '', '.config');
-  return path.join(xdgConfig, dirName);
+  return pathApi.join(resolveDesktopUserDataRoot(env, platform, homedir), dirName);
 }
 
 function devScriptForMode(mode) {

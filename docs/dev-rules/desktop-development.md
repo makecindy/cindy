@@ -10,8 +10,8 @@
 Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域与隔离沙箱：
 
 ```bash
-pnpm restart:desktop:remote --region=cn --isolated=<名字>
-pnpm restart:desktop:remote --region=global --isolated=<名字>
+pnpm restart:desktop:remote --region=cn --isolated=cn-<名字>
+pnpm restart:desktop:remote --region=global --isolated=global-<名字>
 ```
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
@@ -36,7 +36,9 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
   数据」时用。**primary dev 的 migration 必须在 `--isolated` 沙箱里跑，不得连接共享 userData**
   （见 [`database-and-migrations.md`](database-and-migrations.md)）。沙箱（及任何 dev
   userData 覆写）内不触发首登旧数据迁移（mToc）：不探测老目录、不弹确认窗、不把正式
-  数据复制进沙箱。
+  数据复制进沙箱。dev 沙箱目录沿用既有的“按名字复用”契约，不自动按 region 改名；同一
+  机器同时开发 cn / global 时，名字必须分别使用 `cn-<名字>` / `global-<名字>`，避免两区
+  复用数据库和登录态。
 - `--passive`：共享 userData 的只读预览模式，本实例不执行 migration，也不自动触发 schedule；
   多开导致定时任务重复、需要让位给 primary 时用。共享 userData 的 passive 实例对
   userData 布局保持只读：不执行 owner-namespace 迁移（claim 推迟到下次独占启动），

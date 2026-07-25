@@ -15,7 +15,7 @@
  * 便于单元测试。packaged 版本一律返回"无覆写",线上零影响。
  */
 import { realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 
 /**
  * 沙箱名字白名单:字母数字下划线连字符、≤32。同时约束两件事——
@@ -139,15 +139,24 @@ export function shouldBlockSharedPrimaryDev(input: {
   schedulerPassive: boolean;
   isolated: boolean;
   userDataDirOverride?: string | null;
-  defaultUserDataDir?: string;
+  protectedUserDataDirs?: readonly string[];
 }): boolean {
-  if (input.isPackaged || input.schedulerPassive) return false;
+  if (input.isPackaged) return false;
+  const override = input.userDataDirOverride;
+  const overrideTargetsProtectedUserData = override
+    ? input.protectedUserDataDirs?.some((shared) =>
+        userDataPathsReferToSameDirectory({
+          candidate: override,
+          shared,
+        }),
+      ) === true
+    : false;
+  // A contradictory passive + isolated launch must fail before passive can
+  // bypass this guard: isolated mode would otherwise keep migrations enabled.
+  if (input.isolated && overrideTargetsProtectedUserData) return true;
+  if (input.schedulerPassive) return false;
   if (!input.isolated) return true;
-  if (!input.userDataDirOverride || !input.defaultUserDataDir) return false;
-  return userDataPathsReferToSameDirectory({
-    candidate: input.userDataDirOverride,
-    shared: input.defaultUserDataDir,
-  });
+  return false;
 }
 
 export function userDataPathsReferToSameDirectory(input: {
@@ -158,8 +167,9 @@ export function userDataPathsReferToSameDirectory(input: {
 }): boolean {
   const platform = input.platform ?? process.platform;
   const realpath = input.realpath ?? realpathSync.native;
+  const pathApi = platform === 'win32' ? win32 : posix;
   const canonicalize = (value: string): string => {
-    let canonical = resolve(value);
+    let canonical = pathApi.resolve(value);
     try {
       canonical = realpath(canonical);
     } catch {

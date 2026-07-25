@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+	defaultIsolatedUserDataDir,
 	devEnvPrefix,
 	isRepositoryDesktopDevProcess,
 	formatDesktopStartupFailure,
@@ -23,6 +24,36 @@ import {
 	buildDesktopRestartSteps,
 	runDesktopRestart,
 } from "../desktop-restart-runner.mjs";
+
+test("isolated userData uses an absolute OS config root when env vars are absent", () => {
+	assert.equal(
+		defaultIsolatedUserDataDir("feature", {
+			env: {},
+			platform: "linux",
+			homedir: () => "/home/dev",
+		}),
+		"/home/dev/.config/Cindy-dev-feature",
+	);
+	assert.equal(
+		defaultIsolatedUserDataDir("feature", {
+			env: {},
+			platform: "win32",
+			homedir: () => String.raw`C:\Users\dev`,
+		}),
+		String.raw`C:\Users\dev\AppData\Roaming\Cindy-dev-feature`,
+	);
+	for (const platform of ["linux", "win32"]) {
+		assert.throws(
+			() =>
+				defaultIsolatedUserDataDir("feature", {
+					env: {},
+					platform,
+					homedir: () => "",
+				}),
+			/cannot resolve an absolute OS userData root/,
+		);
+	}
+});
 
 function appleScriptLines(args) {
 	const lines = [];

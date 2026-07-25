@@ -299,13 +299,18 @@ describe('shouldBlockSharedPrimaryDev', () => {
   });
 
   it('isolated 声明不能把覆写目录指回正式版 userData', () => {
+    const protectedUserDataDirs = [
+      '/AppData/Cindy',
+      '/AppData/CindyGlobal',
+      '/AppData/xdt-maker',
+    ];
     expect(
       shouldBlockSharedPrimaryDev({
         isPackaged: false,
         schedulerPassive: false,
         isolated: true,
         userDataDirOverride: '/AppData/xdt-maker',
-        defaultUserDataDir: '/AppData/xdt-maker',
+        protectedUserDataDirs,
       }),
     ).toBe(true);
     expect(
@@ -314,14 +319,33 @@ describe('shouldBlockSharedPrimaryDev', () => {
         schedulerPassive: false,
         isolated: true,
         userDataDirOverride: '/AppData/xdt-maker-dev-feature',
-        defaultUserDataDir: '/AppData/xdt-maker',
+        protectedUserDataDirs,
       }),
     ).toBe(false);
   });
 
+  it('passive 不能放行 isolated 声明指回任何正式版或历史 userData', () => {
+    const protectedUserDataDirs = [
+      '/AppData/Cindy',
+      '/AppData/CindyGlobal',
+      '/AppData/xdt-maker',
+    ];
+    for (const userDataDirOverride of protectedUserDataDirs) {
+      expect(
+        shouldBlockSharedPrimaryDev({
+          isPackaged: false,
+          schedulerPassive: true,
+          isolated: true,
+          userDataDirOverride,
+          protectedUserDataDirs,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it('路径身份检查会解析符号链接并按大小写不敏感平台比较', () => {
-    const shared = join('/AppData', 'Cindy');
-    const linked = join('/AppData', 'release-link');
+    const shared = String.raw`C:\AppData\Cindy`;
+    const linked = String.raw`C:\AppData\release-link`;
     expect(
       userDataPathsReferToSameDirectory({
         candidate: linked,

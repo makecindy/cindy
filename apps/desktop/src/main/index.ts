@@ -71,6 +71,7 @@ installInvokeCapture();
 //   - --passive / XDT_SCHEDULER_PASSIVE:定时任务自动触发让位给同机另一实例。
 // 必须在 app 'ready' 前调用。仅 dev(非 packaged)生效,生产忽略,零线上影响。
 import { machineIdSync } from 'node-machine-id';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import {
   resolveDevCliFlags,
   shouldBlockSharedPrimaryDev,
@@ -89,17 +90,27 @@ const devFlags = resolveDevCliFlags({
   envSchedulerPassive: process.env.XDT_SCHEDULER_PASSIVE,
   envEndpointsCdn: process.env.XDT_ENDPOINTS_CDN,
 });
+const protectedUserDataDirs = [
+  defaultUserDataDir,
+  ...Array.from(
+    new Set([
+      ...Object.values(BRAND_IDENTITY.userDataDirNameByRegion),
+      ...BRAND_IDENTITY.legacyUserDataDirNames,
+    ]),
+  ).map((dirName) => path.join(app.getPath('appData'), dirName)),
+];
 if (shouldBlockSharedPrimaryDev({
   isPackaged: app.isPackaged,
   schedulerPassive: devFlags.schedulerPassive,
   isolated: devFlags.isolated,
   userDataDirOverride: devFlags.userDataDirOverride,
-  defaultUserDataDir,
+  protectedUserDataDirs,
 })) {
   stderr.write(
     '[cindy] Primary desktop dev cannot use shared Cindy userData because it may upgrade ' +
       'the release database and prevent an older release from opening it.\n' +
-      '[cindy] Restart with --isolated=<name>, or use --passive for a shared read-only preview.\n',
+      '[cindy] Restart with --isolated=<name>, or use --passive / --preserve-running ' +
+      'for a shared read-only preview.\n',
   );
   exit(1);
 }

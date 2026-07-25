@@ -1,9 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const DRIZZLE_PATH = 'apps/desktop/drizzle';
-const SHARED_USER_DATA_DIR_NAME = 'Cindy';
+// Mirrors BRAND_IDENTITY.userDataDirNameByRegion + legacyUserDataDirNames.
+// scripts/__tests__/brand-identity-sync.test.mjs prevents drift from the TS source.
+export const PROTECTED_USER_DATA_DIR_NAMES = Object.freeze([
+  'Cindy',
+  'CindyGlobal',
+  'CindyDev',
+  'xdt-maker',
+]);
 
 function git(repoRoot, args, { allowFailure = false } = {}) {
   const result = spawnSync('git', args, {
@@ -60,20 +68,54 @@ export function findUnmergedMigrationArtifacts(repoRoot) {
   };
 }
 
-function defaultSharedUserDataDir(env, platform) {
+export function resolveDesktopUserDataRoot(
+  env = process.env,
+  platform = process.platform,
+  homedir = os.homedir,
+) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const fallbackHome = () => {
+    try {
+      return homedir();
+    } catch {
+      return '';
+    }
+  };
+  let root;
   if (platform === 'win32') {
-    const appData = env.APPDATA || path.join(env.USERPROFILE || '', 'AppData', 'Roaming');
-    return path.join(appData, SHARED_USER_DATA_DIR_NAME);
+    if (env.APPDATA) {
+      root = env.APPDATA;
+    } else {
+      const home = env.USERPROFILE || fallbackHome();
+      root = home ? pathApi.join(home, 'AppData', 'Roaming') : '';
+    }
+  } else if (platform === 'darwin') {
+    const home = env.HOME || fallbackHome();
+    root = home ? pathApi.join(home, 'Library', 'Application Support') : '';
+  } else if (env.XDG_CONFIG_HOME) {
+    root = env.XDG_CONFIG_HOME;
+  } else {
+    const home = env.HOME || fallbackHome();
+    root = home ? pathApi.join(home, '.config') : '';
   }
-  if (platform === 'darwin') {
-    return path.join(env.HOME || '', 'Library', 'Application Support', SHARED_USER_DATA_DIR_NAME);
+  if (!root || !pathApi.isAbsolute(root)) {
+    throw new Error(
+      'cannot resolve an absolute OS userData root; set APPDATA/USERPROFILE on Windows, ' +
+        'HOME on macOS, or XDG_CONFIG_HOME/HOME on Linux',
+    );
   }
-  const xdgConfig = env.XDG_CONFIG_HOME || path.join(env.HOME || '', '.config');
-  return path.join(xdgConfig, SHARED_USER_DATA_DIR_NAME);
+  return root;
+}
+
+function defaultSharedUserDataDirs(env, platform, homedir) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const root = resolveDesktopUserDataRoot(env, platform, homedir);
+  return PROTECTED_USER_DATA_DIR_NAMES.map((dirName) => pathApi.join(root, dirName));
 }
 
 function canonicalUserDataPath(value, { platform, realpath }) {
-  let canonical = path.resolve(value);
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  let canonical = pathApi.resolve(value);
   try {
     canonical = realpath(canonical);
   } catch {
@@ -90,20 +132,26 @@ export function userDataOverrideTargetsSharedUserData(
   {
     platform = process.platform,
     realpath = realpathSync.native,
+    homedir = os.homedir,
   } = {},
 ) {
   if (!override?.trim()) return false;
   const options = { platform, realpath };
+  const candidate = canonicalUserDataPath(override, options);
+  return defaultSharedUserDataDirs(env, platform, homedir).some(
+    (shared) => candidate === canonicalUserDataPath(shared, options),
+  );
+}
+
+function declaresIsolatedUserData(argv, env) {
   return (
-    canonicalUserDataPath(override, options) ===
-    canonicalUserDataPath(defaultSharedUserDataDir(env, platform), options)
+    argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')) ||
+    env.XDT_ISOLATED === '1'
   );
 }
 
 export function usesIsolatedUserData(argv, env = process.env, options = {}) {
-  const declaredIsolated =
-    argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')) ||
-    env.XDT_ISOLATED === '1';
+  const declaredIsolated = declaresIsolatedUserData(argv, env);
   if (!declaredIsolated) return false;
   return !userDataOverrideTargetsSharedUserData(env.XDT_USER_DATA_DIR, env, options);
 }
@@ -130,7 +178,11 @@ export function assertSharedDevMigrationPolicy(
   env = process.env,
   options = {},
 ) {
-  if (usesIsolatedUserData(argv, env, options) || usesPassiveUserData(argv, env)) return;
+  const declaredIsolated = declaresIsolatedUserData(argv, env);
+  if (usesIsolatedUserData(argv, env, options)) return;
+  // Passive may share release data only when it is not also claiming isolated
+  // semantics. The contradictory combination would leave migrations enabled.
+  if (!declaredIsolated && usesPassiveUserData(argv, env)) return;
   throw new Error(
     'Primary desktop dev cannot migrate shared Cindy userData because it may upgrade the release database and prevent an older release from opening it.\n' +
       'Restart with --isolated=<name> for writable dev data, or use --passive / --preserve-running for a shared read-only preview.',

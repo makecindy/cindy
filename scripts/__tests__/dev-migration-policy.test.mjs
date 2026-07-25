@@ -124,15 +124,19 @@ test('a userData override alone cannot bypass shared primary protection', () => 
 test('an isolated declaration cannot point its override back to shared release userData', () => {
   const fixture = createFixture();
   try {
-    const sharedUserData = path.join(fixture.repo, 'Cindy');
-    const linkedUserData = path.join(fixture.repo, 'release-link');
+    const appData = String.raw`C:\Users\dev\AppData\Roaming`;
+    const sharedUserData = path.win32.join(appData, 'Cindy');
+    const linkedUserData = path.win32.join(appData, 'release-link');
     const env = {
-      APPDATA: fixture.repo,
+      APPDATA: appData,
       XDT_ISOLATED: '1',
       XDT_USER_DATA_DIR: sharedUserData,
     };
     assert.throws(
-      () => assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready'], env),
+      () =>
+        assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready'], env, {
+          platform: 'win32',
+        }),
       /may upgrade the release database and prevent an older release from opening/,
     );
     assert.throws(
@@ -149,6 +153,53 @@ test('an isolated declaration cannot point its override back to shared release u
         ),
       /may upgrade the release database and prevent an older release from opening/,
     );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('passive cannot bypass an isolated override targeting release userData', () => {
+  const fixture = createFixture();
+  try {
+    const appData = String.raw`C:\Users\dev\AppData\Roaming`;
+    assert.throws(
+      () =>
+        assertSharedDevMigrationPolicy(
+          fixture.repo,
+          ['--wait-ready', '--passive', '--isolated=feature'],
+          {
+            APPDATA: appData,
+            XDT_USER_DATA_DIR: path.win32.join(appData, 'Cindy'),
+          },
+          { platform: 'win32' },
+        ),
+      /may upgrade the release database and prevent an older release from opening/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('all current and legacy release userData directories are protected', () => {
+  const fixture = createFixture();
+  try {
+    const appData = String.raw`C:\Users\dev\AppData\Roaming`;
+    for (const dirName of ['Cindy', 'CindyGlobal', 'CindyDev', 'xdt-maker']) {
+      assert.throws(
+        () =>
+          assertSharedDevMigrationPolicy(
+            fixture.repo,
+            ['--wait-ready', '--isolated=feature'],
+            {
+              APPDATA: appData,
+              XDT_USER_DATA_DIR: path.win32.join(appData, dirName),
+            },
+            { platform: 'win32' },
+          ),
+        /may upgrade the release database and prevent an older release from opening/,
+        dirName,
+      );
+    }
   } finally {
     fixture.cleanup();
   }
