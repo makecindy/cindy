@@ -67,7 +67,20 @@
     "deviceId": "Device ID",
     "initializing": "Initializing",
     "authServer": "Auth Server",
-    "authRegion": "Sign-in Region"
+    "authRegion": "Sign-in Region",
+    "lastExit": "Last exit",
+    "lastExitNormal": "Normal",
+    "lastExitAbnormal": "Abnormal",
+    "exportCrashLog": "Export crash log",
+    "clearCrashLog": "Clear crash log",
+    "crashLogEmptyTitle": "No crash log",
+    "crashLogEmptyBody": "No crashes have been recorded yet.",
+    "shareUnavailableTitle": "Sharing unavailable",
+    "shareUnavailableBody": "This device can't share, or sharing was canceled.",
+    "clearCrashConfirmTitle": "Clear crash log",
+    "clearCrashConfirmBody": "Clear the recorded crash log? This can't be undone.",
+    "clearCrashConfirm": "Clear",
+    "clearCrashCancel": "Cancel"
   },
   "updateInfo": {
     "embedded": "With app package",

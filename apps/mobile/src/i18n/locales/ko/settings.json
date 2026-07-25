@@ -67,7 +67,20 @@
     "deviceId": "기기 ID",
     "initializing": "초기화 중",
     "authServer": "Auth Server",
-    "authRegion": "로그인 지역"
+    "authRegion": "로그인 지역",
+    "lastExit": "마지막 종료",
+    "lastExitNormal": "정상",
+    "lastExitAbnormal": "비정상",
+    "exportCrashLog": "충돌 로그 내보내기",
+    "clearCrashLog": "충돌 로그 지우기",
+    "crashLogEmptyTitle": "충돌 로그 없음",
+    "crashLogEmptyBody": "아직 기록된 충돌이 없습니다.",
+    "shareUnavailableTitle": "공유할 수 없음",
+    "shareUnavailableBody": "이 기기에서 공유할 수 없거나 공유가 취소되었습니다.",
+    "clearCrashConfirmTitle": "충돌 로그 지우기",
+    "clearCrashConfirmBody": "기록된 충돌 로그를 지우시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+    "clearCrashConfirm": "지우기",
+    "clearCrashCancel": "취소"
   },
   "updateInfo": {
     "embedded": "앱 패키지 포함",

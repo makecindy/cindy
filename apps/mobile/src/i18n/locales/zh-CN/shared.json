@@ -2,5 +2,15 @@
   "back": "返回",
   "syncing": "正在同步",
   "selectOption": "选择 {{label}}",
-  "closePanel": "关闭面板"
+  "closePanel": "关闭面板",
+  "crashScreen": {
+    "title": "应用遇到问题",
+    "body": "很抱歉,应用刚刚出错了。你可以导出日志发给我们,或重新载入应用。",
+    "exportLog": "导出日志",
+    "reload": "重新载入",
+    "emptyTitle": "暂无崩溃日志",
+    "emptyBody": "还没有记录到崩溃。",
+    "shareUnavailableTitle": "无法分享",
+    "shareUnavailableBody": "此设备不支持分享,或分享被取消。"
+  }
 }

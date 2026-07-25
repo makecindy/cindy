@@ -40,6 +40,8 @@ import {
 } from '@/components/StartupSplashOverlay';
 import { registerDevCacheMenu } from '@/debug/devCacheMenu';
 import { startJsStallWatchdog } from '@/debug/jsStallWatchdog';
+import { markBootPhase } from '@/debug/crashCapture';
+import { CrashBoundary } from '@/debug/CrashBoundary';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useResumeUpdateCheck } from '@/update/useResumeUpdateCheck';
@@ -68,6 +70,11 @@ function NavigationGate() {
   useEffect(() => {
     if (auth.initialized) releaseSplash();
   }, [auth.initialized, releaseSplash]);
+
+  // 崩溃面包屑:启动闸门链最后一道门。下次启动若未走到 ready 即判为异常退出。
+  useEffect(() => {
+    if (auth.initialized) markBootPhase('ready');
+  }, [auth.initialized]);
 
   useEffect(() => {
     if (!auth.initialized) return;
@@ -136,6 +143,10 @@ function AuthHandoffBridge() {
   const auth = useAuth();
   const handoff = useLoginHandoff();
   const dispatch = handoff.dispatch;
+  // 崩溃面包屑:auth 子树挂载即进入 auth 阶段(OTA 门之后、首屏渲染之前)。
+  useEffect(() => {
+    markBootPhase('auth');
+  }, []);
   useEffect(() => {
     if (!auth.initialized) return;
     dispatch({ type: 'auth-init', authenticated: auth.isAuthenticated });
@@ -151,7 +162,10 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
   const handoff = useLoginHandoff();
   const dispatchHandoff = handoff.dispatch;
   useEffect(() => {
-    if (otaReady) dispatchHandoff({ type: 'ota-ready' });
+    if (otaReady) {
+      dispatchHandoff({ type: 'ota-ready' });
+      markBootPhase('ota');
+    }
   }, [otaReady, dispatchHandoff]);
   // 自建变体:启动时检查整包更新(runtimeVersion 变化 → 引导跳 NPKG)。
   // 内部 IS_OTA_SELFHOST gate,EAS 包为 no-op。JS 热更由上面的门 + expo-updates 处理,与此互补。
@@ -203,6 +217,10 @@ function RootLayout() {
   // 回写 env live binding。拉不到 / 清单非法 → 错误屏等用户重试,无缓存与超时兜底;
   // __DEV__ 直接放行。ready 前 RootAfterEndpoints(含 OTA 门与业务树)不挂载。
   const endpointGate = useStartupEndpointGate();
+  // 崩溃面包屑:端点闸门就绪即进入 endpoints 阶段(冷启动第一道门)。
+  useEffect(() => {
+    if (endpointGate.status === 'ready') markBootPhase('endpoints');
+  }, [endpointGate.status]);
   // 所有 hook 已在上方调用,下面条件返回不违反 hooks 规则。
   // GestureHandlerRootView 必须在根部常驻(RNGH 官方要求;缺失时 Android 手势整体不响应)。
   // 各分支都包同一层,避免闸门状态切换时 root 重挂。
@@ -231,21 +249,25 @@ function RootLayout() {
   }
   return (
     <GestureHandlerRootView style={styles.gestureRoot}>
-      <SafeAreaProvider>
-        <ThemeProvider>
-          {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
-          <LocaleProvider>
-            {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
-            <MobileLoginHandoffProvider>
-              <EndpointHandoffBridge status={endpointGate.status} />
-              {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
-              <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
-                {body}
-              </StartupSplashOverlay>
-            </MobileLoginHandoffProvider>
-          </LocaleProvider>
-        </ThemeProvider>
-      </SafeAreaProvider>
+      {/* 崩溃兜底提到所有 Provider + splash 之上:才能抓到 Provider/闸门层自身的渲染
+          错误,且兜底屏不会被常驻 splash 覆盖(fallback 自包含,不依赖任何 Provider)。 */}
+      <CrashBoundary>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            {/* 语言 Provider 常驻 root:恢复持久化 override,覆盖含 (auth) 在内的全部屏幕 */}
+            <LocaleProvider>
+              {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
+              <MobileLoginHandoffProvider>
+                <EndpointHandoffBridge status={endpointGate.status} />
+                {/* 启动闸门全程共用这一个 splash 实例;端点错误屏需要交互时才隐藏它 */}
+                <StartupSplashOverlay hidden={endpointGate.status === 'error'}>
+                  {body}
+                </StartupSplashOverlay>
+              </MobileLoginHandoffProvider>
+            </LocaleProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </CrashBoundary>
     </GestureHandlerRootView>
   );
 }

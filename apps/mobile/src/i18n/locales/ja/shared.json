@@ -2,5 +2,15 @@
   "back": "戻る",
   "syncing": "同期しています",
   "selectOption": "{{label}} を選択",
-  "closePanel": "パネルを閉じる"
+  "closePanel": "パネルを閉じる",
+  "crashScreen": {
+    "title": "問題が発生しました",
+    "body": "申し訳ありません、アプリでエラーが発生しました。ログを書き出して送っていただくか、アプリを再読み込みしてください。",
+    "exportLog": "ログを書き出す",
+    "reload": "再読み込み",
+    "emptyTitle": "クラッシュログなし",
+    "emptyBody": "まだクラッシュは記録されていません。",
+    "shareUnavailableTitle": "共有できません",
+    "shareUnavailableBody": "この端末では共有できないか、共有がキャンセルされました。"
+  }
 }

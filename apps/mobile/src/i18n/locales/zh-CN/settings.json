@@ -67,7 +67,20 @@
     "deviceId": "设备 ID",
     "initializing": "初始化中",
     "authServer": "Auth Server",
-    "authRegion": "登录区域"
+    "authRegion": "登录区域",
+    "lastExit": "上次退出",
+    "lastExitNormal": "正常",
+    "lastExitAbnormal": "异常",
+    "exportCrashLog": "导出崩溃日志",
+    "clearCrashLog": "清空崩溃日志",
+    "crashLogEmptyTitle": "暂无崩溃日志",
+    "crashLogEmptyBody": "还没有记录到崩溃。",
+    "shareUnavailableTitle": "无法分享",
+    "shareUnavailableBody": "此设备不支持分享,或分享被取消。",
+    "clearCrashConfirmTitle": "清空崩溃日志",
+    "clearCrashConfirmBody": "确定要清空已记录的崩溃日志吗?此操作不可撤销。",
+    "clearCrashConfirm": "清空",
+    "clearCrashCancel": "取消"
   },
   "updateInfo": {
     "embedded": "随整包",

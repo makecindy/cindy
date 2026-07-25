@@ -2,5 +2,15 @@
   "back": "Back",
   "syncing": "Syncing",
   "selectOption": "Select {{label}}",
-  "closePanel": "Close panel"
+  "closePanel": "Close panel",
+  "crashScreen": {
+    "title": "Something went wrong",
+    "body": "Sorry, the app just ran into an error. You can export the log to send us, or reload the app.",
+    "exportLog": "Export log",
+    "reload": "Reload",
+    "emptyTitle": "No crash log",
+    "emptyBody": "No crashes have been recorded yet.",
+    "shareUnavailableTitle": "Sharing unavailable",
+    "shareUnavailableBody": "This device can't share, or sharing was canceled."
+  }
 }

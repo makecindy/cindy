@@ -7,6 +7,7 @@ import * as Updates from 'expo-updates';
 import { IS_OTA_SELFHOST, OTA_SERVER_BASE_URL, REVIEW_MODE } from '@/config/env';
 import { runStartupOtaUpdate } from './startupOtaUpdate';
 import { updateChannelRequestHeaders } from './canaryChannelStore';
+import { reloadWithMarker } from '@/debug/crashCapture';
 
 export function useStartupOtaGate(isCanary = false): boolean {
   // 仅自建变体 + 非 dev + expo-updates 运行时可用才走热更门;其余一律直接放行。
@@ -54,7 +55,9 @@ export function useStartupOtaGate(isCanary = false): boolean {
       configureUpdateUrl,
       checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
       fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
-      reloadAsync: () => Updates.reloadAsync(),
+      // 预期内主动重载(换到新 bundle):先写正常终态,避免下次启动把它误判成
+      // 「上次异常退出」。此刻 boot 面包屑通常停在 'endpoints'(OTA 门尚未 ready)。
+      reloadAsync: () => reloadWithMarker(() => Updates.reloadAsync()),
     }).then((outcome) => {
       // 'reloading' 时 app 正在重启,保持 loading 门直到重启;其余情况放行进 App。
       if (!cancelled && outcome !== 'reloading') setReady(true);

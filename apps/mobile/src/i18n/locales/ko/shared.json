@@ -2,5 +2,15 @@
   "back": "뒤로",
   "syncing": "동기화 중",
   "selectOption": "{{label}} 선택",
-  "closePanel": "패널 닫기"
+  "closePanel": "패널 닫기",
+  "crashScreen": {
+    "title": "문제가 발생했습니다",
+    "body": "죄송합니다. 앱에서 오류가 발생했습니다. 로그를 내보내 보내주시거나 앱을 다시 불러오세요.",
+    "exportLog": "로그 내보내기",
+    "reload": "다시 불러오기",
+    "emptyTitle": "충돌 로그 없음",
+    "emptyBody": "아직 기록된 충돌이 없습니다.",
+    "shareUnavailableTitle": "공유할 수 없음",
+    "shareUnavailableBody": "이 기기에서 공유할 수 없거나 공유가 취소되었습니다."
+  }
 }

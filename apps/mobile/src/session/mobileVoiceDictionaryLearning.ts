@@ -44,7 +44,11 @@ export function createMobileVoiceDictionaryLearningTracker(
   options: TrackerOptions,
 ): MobileVoiceDictionaryLearningTracker {
   const timeoutMs = options.timeoutMs ?? MOBILE_VOICE_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS;
-  const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+  // 回退包一层箭头,把返回类型钉成 Timer(=ReturnType<typeof setTimeout>):裸 setTimeout
+  // 在 @types/node + DOM 双 lib 下重载返回退化为 number | Timeout,直接 ?? 会污染 pendingTimer
+  // 的类型。运行时行为不变。
+  const setTimeoutFn: (callback: () => void, ms: number) => Timer =
+    options.setTimeoutFn ?? ((callback, ms) => setTimeout(callback, ms));
   const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
   let watch: Watch | null = null;
 

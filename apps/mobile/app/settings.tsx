@@ -5,6 +5,7 @@ import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
 import { Children, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
+  Alert,
   Image,
   Linking,
   Platform,
@@ -14,6 +15,7 @@ import {
   Switch,
   View,
 } from 'react-native';
+import * as Sharing from 'expo-sharing';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Check, ChevronDown, ChevronRight, X } from 'lucide-react-native';
@@ -47,6 +49,13 @@ import {
   writePushEnabled,
 } from '@/notifications/pushNotifications';
 import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
+import {
+  clearCrashLog,
+  getCrashLogFile,
+  hasCrashLog,
+  hasPreviousAbnormalExit,
+  reloadWithMarker,
+} from '@/debug/crashCapture';
 import { runManualUpdateCheck } from '@/update/manualUpdateCheck';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
@@ -78,6 +87,9 @@ export default function SettingsScreen() {
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
+  // 上次是否异常退出:安装时判定并缓存,读取即当次快照,渲染期不变。
+  const [lastExitAbnormal] = useState(() => hasPreviousAbnormalExit());
+  const [crashLogAvailable, setCrashLogAvailable] = useState(() => hasCrashLog());
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -203,7 +215,8 @@ export default function SettingsScreen() {
         otaEnabled: updatesEnabled,
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
-        reload: () => Updates.reloadAsync(),
+        // 预期内主动重载:先写正常终态,避免下次启动误判「上次异常退出」。
+        reload: () => reloadWithMarker(() => Updates.reloadAsync()),
         onPhase: (phase) => setUpdatePhase(phase),
       });
       if (outcome.kind === 'bundle-update-available') {
@@ -458,6 +471,44 @@ export default function SettingsScreen() {
     setDebugExpanded((value) => !value);
   }, []);
 
+  const exportCrashLog = useCallback(async () => {
+    if (!hasCrashLog()) {
+      setCrashLogAvailable(false);
+      Alert.alert(t('settings.debug.crashLogEmptyTitle'), t('settings.debug.crashLogEmptyBody'));
+      return;
+    }
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert(t('settings.debug.shareUnavailableTitle'), t('settings.debug.shareUnavailableBody'));
+        return;
+      }
+      await Sharing.shareAsync(getCrashLogFile().uri, {
+        mimeType: 'text/plain',
+        dialogTitle: t('settings.debug.exportCrashLog'),
+      });
+    } catch {
+      Alert.alert(t('settings.debug.shareUnavailableTitle'), t('settings.debug.shareUnavailableBody'));
+    }
+  }, [t]);
+
+  const confirmClearCrashLog = useCallback(() => {
+    Alert.alert(
+      t('settings.debug.clearCrashConfirmTitle'),
+      t('settings.debug.clearCrashConfirmBody'),
+      [
+        { style: 'cancel', text: t('settings.debug.clearCrashCancel') },
+        {
+          style: 'destructive',
+          text: t('settings.debug.clearCrashConfirm'),
+          onPress: () => {
+            clearCrashLog();
+            setCrashLogAvailable(false);
+          },
+        },
+      ],
+    );
+  }, [t]);
+
   const avatarLabel = (overview.header.name.trim()[0] ?? '?').toUpperCase();
   const updateBusy = updatePhase === 'checking' || updatePhase === 'downloading';
   const updateButtonLabel = updatePhase === 'checking' ? t('settings.version.checking')
@@ -630,6 +681,33 @@ export default function SettingsScreen() {
                 ...updateInfoRows.map((row) => (
                   <InfoRow key={row.id} label={row.label} testID={`settings.updateInfo.${row.id}`} value={row.value} />
                 )),
+                // 崩溃日志:上次退出状态 + 导出 / 清空(供远端用户把崩溃现场发回)。
+                <InfoRow
+                  key="debug.lastExit"
+                  label={t('settings.debug.lastExit')}
+                  testID="settings.row.lastExit"
+                  value={lastExitAbnormal ? t('settings.debug.lastExitAbnormal') : t('settings.debug.lastExitNormal')}
+                />,
+                <ActionInfoRow
+                  accessibilityLabel={t('settings.debug.exportCrashLog')}
+                  key="debug.exportCrashLog"
+                  label={t('settings.debug.exportCrashLog')}
+                  onPress={() => void exportCrashLog()}
+                  testID="settings.exportCrashLog"
+                  value=""
+                />,
+                ...(crashLogAvailable
+                  ? [
+                    <ActionInfoRow
+                      accessibilityLabel={t('settings.debug.clearCrashLog')}
+                      key="debug.clearCrashLog"
+                      label={t('settings.debug.clearCrashLog')}
+                      onPress={confirmClearCrashLog}
+                      testID="settings.clearCrashLog"
+                      value=""
+                    />,
+                  ]
+                  : []),
               ]
               : []}
           </SettingsGroup>

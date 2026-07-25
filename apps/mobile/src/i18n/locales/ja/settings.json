@@ -67,7 +67,20 @@
     "deviceId": "デバイス ID",
     "initializing": "初期化中",
     "authServer": "Auth Server",
-    "authRegion": "ログインリージョン"
+    "authRegion": "ログインリージョン",
+    "lastExit": "前回の終了",
+    "lastExitNormal": "正常",
+    "lastExitAbnormal": "異常",
+    "exportCrashLog": "クラッシュログを書き出す",
+    "clearCrashLog": "クラッシュログを消去",
+    "crashLogEmptyTitle": "クラッシュログなし",
+    "crashLogEmptyBody": "まだクラッシュは記録されていません。",
+    "shareUnavailableTitle": "共有できません",
+    "shareUnavailableBody": "この端末では共有できないか、共有がキャンセルされました。",
+    "clearCrashConfirmTitle": "クラッシュログを消去",
+    "clearCrashConfirmBody": "記録されたクラッシュログを消去しますか?この操作は取り消せません。",
+    "clearCrashConfirm": "消去",
+    "clearCrashCancel": "キャンセル"
   },
   "updateInfo": {
     "embedded": "アプリ本体と同梱",
