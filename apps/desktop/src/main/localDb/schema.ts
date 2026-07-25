@@ -29,6 +29,7 @@ const SESSION_SOURCES = [
   'scheduler',
   'learn',
   'shared',
+  'plugin',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(

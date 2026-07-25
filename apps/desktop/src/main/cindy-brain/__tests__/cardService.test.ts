@@ -302,6 +302,20 @@ describe('withCardToken(令牌注入纯函数)', () => {
       result: [1],
     });
   });
+
+  it('inFlightCallInfoOf 只认真正在途:交卷/重开/查无一律 null(workspace 凭证语义)', () => {
+    const { svc } = makeService();
+    svc.registerCall('c1', { ghostId: 'g1', toolUseId: null, sessionId: 's1' });
+    expect(svc.inFlightCallInfoOf('c1')).toEqual({ ghostId: 'g1', sessionId: 's1' });
+    // 交卷后:宽限窗内 callInfoOf 仍可查(卡片供片语义),但在途凭证必须失效。
+    svc.finalizeCall('c1');
+    expect(svc.callInfoOf('c1')).not.toBeNull();
+    expect(svc.inFlightCallInfoOf('c1')).toBeNull();
+    // 重开态(card-action 换卡窗口)同样不是工具调用在途,不发凭证。
+    svc.reopenForAction('c1', { ghostId: 'g1', sessionId: 's1' });
+    expect(svc.inFlightCallInfoOf('c1')).toBeNull();
+    expect(svc.inFlightCallInfoOf('nope')).toBeNull();
+  });
 });
 
 describe('parseCardHeightReport(report-height IPC 校验 + clamp 纯函数)', () => {

@@ -114,26 +114,6 @@ function validateQuote(
   if (isNonNegativeFinite(quote.cacheCreatePerMtok)) {
     next.cacheCreatePerMtok = quote.cacheCreatePerMtok;
   }
-  // 折扣元数据整组透传:discount 合法且带完整 input/output 原价才保留,避免残缺
-  // 缓存数据让展示层重建出错误的划线原价。
-  if (
-    typeof quote.discount === 'number' &&
-    Number.isFinite(quote.discount) &&
-    quote.discount > 0 &&
-    quote.discount <= 1 &&
-    isNonNegativeFinite(quote.originalInputPerMtok) &&
-    isNonNegativeFinite(quote.originalOutputPerMtok)
-  ) {
-    next.discount = quote.discount;
-    next.originalInputPerMtok = quote.originalInputPerMtok;
-    next.originalOutputPerMtok = quote.originalOutputPerMtok;
-    if (isNonNegativeFinite(quote.originalCacheReadPerMtok)) {
-      next.originalCacheReadPerMtok = quote.originalCacheReadPerMtok;
-    }
-    if (isNonNegativeFinite(quote.originalCacheCreatePerMtok)) {
-      next.originalCacheCreatePerMtok = quote.originalCacheCreatePerMtok;
-    }
-  }
   return next;
 }
 

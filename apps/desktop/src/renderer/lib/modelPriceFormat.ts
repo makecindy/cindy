@@ -3,8 +3,6 @@ import type { ModelPriceQuote, MoneyCurrency } from '../../shared/regionalMoney'
 interface EffectiveModelCost {
   input?: number;
   output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
 }
 
 const MIN_DISPLAY_DISCOUNT = 0.0005;
@@ -49,11 +47,33 @@ function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+function inferDiscount(
+  quote: ModelPriceQuote,
+  cost: Required<EffectiveModelCost>,
+): number | undefined {
+  const candidates: number[] = [];
+  for (const [original, current] of [
+    [quote.inputPerMtok, cost.input],
+    [quote.outputPerMtok, cost.output],
+  ] as const) {
+    if (original === 0) {
+      if (current !== 0) return undefined;
+      continue;
+    }
+    const candidate = 1 - current / original;
+    if (candidate < MIN_DISPLAY_DISCOUNT || candidate > 1) return undefined;
+    candidates.push(candidate);
+  }
+  if (candidates.length === 0) return undefined;
+  const discount = candidates[0];
+  return candidates.every((candidate) => Math.abs(candidate - discount) < 1e-9)
+    ? discount
+    : undefined;
+}
+
 /**
- * 构建模型选择器的展示价格。quote 即实付口径——Gateway costDiscount 已在构建
- * quote 时套用(shared/modelPriceQuote.ts),用量记账与展示同价;折扣前原价由
- * quote.original* 承载。CatalogModel.cost 只作为「明确全零 → 免费」的证据
- * (含缓存维度),不再参与折扣推断。
+ * 构建模型选择器的展示价格。quote 继续保留用量估算所需的标准价；
+ * CatalogModel.cost 只承载 XD 模型的折后展示价。
  */
 export function modelPricePresentation(
   quote: ModelPriceQuote | null | undefined,
@@ -61,49 +81,33 @@ export function modelPricePresentation(
 ): ModelPricePresentation | null {
   if (quote === undefined) return null;
 
-  if (quote === null) {
-    // 免费证据链:价格快照已成功加载但确认无该模型报价(quote === null),且目录
-    // cost 的所有计费维度(含缓存)都明确为 0。任何维度带价都不许出免费标签。
-    const input = effectiveCost?.input;
-    const output = effectiveCost?.output;
-    const allDimensionsZero =
-      isNonNegativeFinite(input) &&
-      input === 0 &&
-      isNonNegativeFinite(output) &&
-      output === 0 &&
-      (effectiveCost?.cacheRead === undefined || effectiveCost.cacheRead === 0) &&
-      (effectiveCost?.cacheWrite === undefined || effectiveCost.cacheWrite === 0);
-    return allDimensionsZero ? { kind: 'free' } : null;
-  }
+  const input = effectiveCost?.input;
+  const output = effectiveCost?.output;
+  const hasEffectiveCost = isNonNegativeFinite(input) && isNonNegativeFinite(output);
 
   if (
-    quote.discount !== undefined &&
-    quote.discount >= MIN_DISPLAY_DISCOUNT &&
-    quote.originalInputPerMtok !== undefined &&
-    quote.originalOutputPerMtok !== undefined
+    hasEffectiveCost &&
+    input === 0 &&
+    output === 0 &&
+    (quote === null || (quote.inputPerMtok === 0 && quote.outputPerMtok === 0))
   ) {
-    const {
-      discount,
-      originalInputPerMtok,
-      originalOutputPerMtok,
-      originalCacheReadPerMtok,
-      originalCacheCreatePerMtok,
-      ...current
-    } = quote;
-    const original: ModelPriceQuote = {
-      ...current,
-      inputPerMtok: originalInputPerMtok,
-      outputPerMtok: originalOutputPerMtok,
-      ...(originalCacheReadPerMtok !== undefined
-        ? { cacheReadPerMtok: originalCacheReadPerMtok }
-        : {}),
-      ...(originalCacheCreatePerMtok !== undefined
-        ? { cacheCreatePerMtok: originalCacheCreatePerMtok }
-        : {}),
-    };
-    return { kind: 'priced', current, original, discount };
+    return { kind: 'free' };
   }
-  return { kind: 'priced', current: quote };
+  if (quote === null) return null;
+  if (!hasEffectiveCost) return { kind: 'priced', current: quote };
+
+  const discount = inferDiscount(quote, { input, output });
+  if (discount === undefined) return { kind: 'priced', current: quote };
+  return {
+    kind: 'priced',
+    current: {
+      ...quote,
+      inputPerMtok: input,
+      outputPerMtok: output,
+    },
+    original: quote,
+    discount,
+  };
 }
 
 export function modelPriceDetailRows(
@@ -145,14 +149,6 @@ export function modelPriceDetailRows(
           {
             kind: 'cacheRead' as const,
             value: formatModelPriceAmount(quote.cacheReadPerMtok, quote.currency),
-            ...(originalQuote?.cacheReadPerMtok !== undefined
-              ? {
-                  originalValue: formatModelPriceAmount(
-                    originalQuote.cacheReadPerMtok,
-                    originalQuote.currency,
-                  ),
-                }
-              : {}),
           },
         ]),
     ...(quote.cacheCreatePerMtok === undefined
@@ -161,14 +157,6 @@ export function modelPriceDetailRows(
           {
             kind: 'cacheCreate' as const,
             value: formatModelPriceAmount(quote.cacheCreatePerMtok, quote.currency),
-            ...(originalQuote?.cacheCreatePerMtok !== undefined
-              ? {
-                  originalValue: formatModelPriceAmount(
-                    originalQuote.cacheCreatePerMtok,
-                    originalQuote.currency,
-                  ),
-                }
-              : {}),
           },
         ]),
   ];

@@ -464,13 +464,19 @@ describe('FORGE_GUIDE', () => {
       'minimize',
       '最小化为浮动气泡',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
-      '十四个卡槽',
+      // 卡槽总数标记随 workspace 槽合入更新为十五个。
+      '十五个卡槽',
       '捆绑 Agent Skills(skill 槽)',
       'skill.items',
       'SKILL.md',
       '~/.agents/skills',
       '逐字一致',
       '不受插件沙箱约束',
+      // 2026-07-25 工作区会话(workspace 槽):目录亲选/确认卡授权,判重复用,
+      // 空会话入口落侧边栏;§2 卡槽清单与 §4.17 章节同步。
+      '创建工作区会话(workspace 槽)',
+      'cindy.workspace',
+      "kind: 'ensure-session'",
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

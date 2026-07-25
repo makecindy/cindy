@@ -16,6 +16,7 @@ import {
   FileCode2,
   FilePen,
   FolderOpen,
+  FolderPlus,
   Globe,
   GraduationCap,
   KeyRound,
@@ -58,6 +59,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   pick: FolderOpen,
   preview: AppWindow,
   skill: GraduationCap,
+  workspace: FolderPlus,
 };
 
 function itemIcon(item: GhostPermissionItem): LucideIcon {

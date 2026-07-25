@@ -2427,6 +2427,8 @@
         "noChange": "No permission changes.",
         "pick": "Can ask you to pick a folder for it",
         "pickDetail": "When it asks, Cindy shows the system folder picker; you decide what to share, and cancelling gives it nothing.",
+        "workspace": "Can ask to create a session entry for a project folder in the sidebar",
+        "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
         "sessionContext": "Can learn which project folder the current session is working in",
         "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
         "preview": "Can open preview pages from the sites below in the sidebar browser",
@@ -2522,7 +2524,8 @@
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
         "slotFs": "File writing",
-        "slotSkill": "Agent skills"
+        "slotSkill": "Agent skills",
+        "slotWorkspace": "Workspace sessions"
       },
       "commandPaletteTag": "Plugin command",
       "updateConfirm": {
@@ -2534,6 +2537,10 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "workspace": {
+        "dialogTitle": "Choose a project folder",
+        "dialogMessage": "Plugin “{{name}}” is asking you to choose a project folder to create a session in the sidebar"
       }
     },
     "mcp": {
@@ -6169,6 +6176,7 @@
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
+      "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "dirMeta": "{{count}} files · {{size}}",
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",

@@ -89,6 +89,12 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 约束,也不随"某工作目录停用本插件"而隐藏——仅全局停用/卸载才撤链。因此
  * manifest 全声明式(items 的 name/description 必须与 SKILL.md frontmatter 逐字
  * 一致,打包与装入双侧强制),装入确认框逐条列出并置于清单最上部。
+ * 'workspace' = 工作区会话(2026-07-25):插件请主机在指定本机项目目录下确保
+ * 存在一个会话入口并显示在侧边栏——目录下已有 active 会话即复用,没有才创建
+ * 空 draft 会话(不拉起 agent 进程)。目录授权两条路:系统选文件夹窗口亲选
+ * 即授权(pick 模式,路径不回沙箱),或 tool-call 语境下带在途 callId + 绝对
+ * 路径(目录在该会话 workdir 内自动放行,workdir 外弹确认卡)。远程工作区
+ * v1 一律拒(fail closed)。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -105,6 +111,7 @@ export const GHOST_SLOTS = [
   'pick',
   'preview',
   'skill',
+  'workspace',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -1281,6 +1288,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'fs') keys.push('slotFs');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
+    else if (slot === 'workspace') keys.push('slotWorkspace');
     // 'panel' 槽已由 manifest.panel 覆盖,不重复
   }
   return keys;
@@ -1342,7 +1350,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1518,6 +1526,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // "它会来要"。
   if (manifest.slots.includes('pick')) {
     items.push({ key: 'pick', kind: 'pick', labelKey: 'pick', detailKey: 'pickDetail' });
+  }
+  // workspace 槽:能为指定项目目录创建/复用侧边栏会话入口。授权动作是用户
+  // 亲选目录或点确认卡,装入时只告知"它会来要"。
+  if (manifest.slots.includes('workspace')) {
+    items.push({
+      key: 'workspace',
+      kind: 'workspace',
+      labelKey: 'workspace',
+      detailKey: 'workspaceDetail',
+    });
   }
   // session-context 槽:派活时可获知当前会话的项目目录位置(路径信息,
   // 非文件访问权;node 槽的执行权另行单列)。
@@ -4182,6 +4200,62 @@ export interface DirDepositReceiptShape {
   total_bytes: number;
   rel_paths: string[];
 }
+
+/** workspace 槽:用途说明/新会话标题长度上限。 */
+export const GHOST_WORKSPACE_TITLE_MAX_CHARS = 100;
+/** workspace 槽:同一插件两次请求的最小间隔 ms(防确认卡/对话框骚扰)。 */
+export const GHOST_WORKSPACE_MIN_INTERVAL_MS = 3000;
+
+/**
+ * 上行:workspace 槽——请主机在指定本机项目目录下确保存在一个会话入口
+ * (侧边栏可见)。目录下已有 active 会话时复用(created:false),没有才创建
+ * 空 draft 会话(不拉起 agent 进程)。目录授权两条路:
+ * - mode:'pick':主机弹系统级选文件夹窗口,用户亲手选中即授权,绝对路径
+ *   不回沙箱(与 pick 槽同一哲学);
+ * - mode:'dir':传绝对路径 + 当前在途 ghost_call 的 callId(主机签发的上下文
+ *   凭证,反查发起会话)。目录在该会话 workdir 内自动放行,workdir 外弹
+ *   确认卡由用户决定(对齐 attachments/dir 过户的两档钳制)。
+ * 远程工作区(SSH)v1 不支持,一律拒(fail closed)。
+ */
+export interface GhostPipeWorkspaceRequest {
+  type: 'workspace-request';
+  /** v1 只有 ensure-session 一种语义;将来扩能力时在此收窄枚举。 */
+  kind: 'ensure-session';
+  mode: 'pick' | 'dir';
+  /** mode:'dir' 必填:目标项目目录的本机绝对路径。 */
+  dir?: string;
+  /** mode:'dir' 必填:当前在途 ghost_call 的 callId。 */
+  callId?: string;
+  /** pick 模式选择框里的用途说明(净化后随插件名展示);也用作新会话标题。 */
+  title?: string;
+  /** 建成/命中后是否跳转聚焦到该会话(缺省 false,只落侧边栏)。 */
+  focus?: boolean;
+}
+
+/** workspace 槽结构化返回。绝对路径不回沙箱,只给目录 basename。 */
+export type GhostPipeWorkspaceResult =
+  | {
+      ok: true;
+      sessionId: string;
+      /** true = 本次新建;false = 命中已有会话复用。 */
+      created: boolean;
+      /** 目录名(展示用,不含上级路径)。 */
+      name: string;
+    }
+  | {
+      ok: false;
+      errorCode:
+        | 'PERMISSION_DENIED'
+        | 'INVALID_REQUEST'
+        | 'CANCELLED'
+        | 'RATE_LIMITED'
+        | 'BUSY'
+        | 'DIR_NOT_FOUND'
+        | 'NOT_DIRECTORY'
+        | 'HOST_NOT_READY'
+        | 'INTERNAL';
+      message: string;
+    };
 
 /**
  * 上行:preview 槽——请主机在右侧栏内置浏览器打开一个预览标签页。

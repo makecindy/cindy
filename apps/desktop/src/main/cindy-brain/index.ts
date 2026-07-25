@@ -133,13 +133,14 @@ import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
 import { GhostPreviewSlot } from './previewSlot.js';
+import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { getDirDepositVault, getSaveDepositVault } from './dirDeposit.js';
+import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import {
   GhostSubscriptionGateway,
   GhostTurnTranslator,
@@ -1280,6 +1281,85 @@ export function getGhostPickSlot(): GhostPickSlot {
     });
   }
   return pickSlotSingleton;
+}
+
+let workspaceSlotSingleton: GhostWorkspaceSlot | null = null;
+
+/**
+ * 工作区会话槽单例(workspace):资格审/限速/目录授权/判重在 GhostWorkspaceSlot,
+ * 这里只组装 Electron 系统对话框、确认卡桥(lane='workspace')、在途 callId
+ * 反查(cardService)与会话目录快照;真实的判重/创建/聚焦服务由 maker-ipc
+ * 初始化完成后经 setGhostWorkspaceSessionService 注入(保持 cindy-brain 不
+ * 反向依赖 maker-ipc)。
+ */
+export function getGhostWorkspaceSlot(): GhostWorkspaceSlot {
+  if (!workspaceSlotSingleton) {
+    workspaceSlotSingleton = new GhostWorkspaceSlot({
+      getGhost: findAvailableGhost,
+      showDirectoryDialog: async ({ ghostName, purpose }) => {
+        const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) throw new Error('没有可挂靠的宿主窗口');
+        // main 侧 t() 只插值 {{appName}},插件名在调用点替换(与 pick 槽同做法)。
+        const message = t('settings.ghosts.workspace.dialogMessage').replaceAll('{{name}}', ghostName);
+        const result = await dialog.showOpenDialog(win, {
+          title: t('settings.ghosts.workspace.dialogTitle'),
+          message: purpose ? `${message}\n${purpose}` : message,
+          properties: ['openDirectory', 'createDirectory'],
+        });
+        if (result.canceled || result.filePaths.length === 0) return null;
+        return result.filePaths[0];
+      },
+      // 严格在途:交卷/重开后的 callId 不再是有效的目录授权上下文凭证。
+      resolveCallContext: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
+      getSessionDirInfo: async (sessionId) => {
+        const snapshot = await getSessionFsSnapshot(sessionId);
+        if (!snapshot) return null;
+        return { workingDir: snapshot.workingDir, remoteHostId: snapshot.remoteHostId };
+      },
+      statDir: async (dirAbs) => {
+        try {
+          const stat = await fs.promises.stat(dirAbs);
+          return stat.isDirectory() ? 'ok' : 'not-directory';
+        } catch {
+          return 'not-found';
+        }
+      },
+      isInsideWorkdir: (dirAbs, workdirAbs) => {
+        try {
+          return isPathInsideDir(fs.realpathSync.native(workdirAbs), fs.realpathSync.native(dirAbs));
+        } catch {
+          return false;
+        }
+      },
+      confirmDir: async ({ ghostId, sessionId, dirAbs }) => {
+        const bridge = getGhostGrantConfirmBridge();
+        if (!bridge) {
+          return { ok: false, message: '确认通道未就绪,请让用户稍后重试' };
+        }
+        const decision = await bridge.request(sessionId, {
+          ghostId,
+          ghostName: findAvailableGhost(ghostId)?.manifest.name ?? ghostId,
+          lane: 'workspace',
+          items: [{ name: path.basename(dirAbs), absPath: dirAbs, size: 0, isDirectory: true }],
+        });
+        if (decision.confirmed) return { ok: true };
+        return {
+          ok: false,
+          message:
+            decision.reason === 'timeout'
+              ? '确认超时:用户未在时限内响应,本次工作区会话请求已取消'
+              : '用户拒绝了本次工作区会话请求,不要重试;如确有需要请先与用户沟通',
+        };
+      },
+      log,
+    });
+  }
+  return workspaceSlotSingleton;
+}
+
+/** maker-ipc 完成初始化后注入判重/创建/聚焦服务;保持 cindy-brain 不反向依赖它。 */
+export function setGhostWorkspaceSessionService(service: WorkspaceSessionService | null): void {
+  getGhostWorkspaceSlot().setSessionService(service);
 }
 
 let previewSlotSingleton: GhostPreviewSlot | null = null;
@@ -2666,7 +2746,8 @@ export function registerGhostIpc(): void {
   // fsSlot 三档守门)/ agent-request(Agent 新回合,一次性用户票或后台权限
   // 守门)/ node-request(随包 Node JSON-RPC/MCP stdio 中继)/ pick-request
   // (系统级选文件夹,用户亲选即授权)/ preview-request(右侧栏开预览标签,
-  // preview.hosts 白名单守门)。其它类型一律拒。
+  // preview.hosts 白名单守门)/ workspace-request(工作区会话入口,亲选或
+  // 确认卡授权,判重/创建在 workspaceSlot)。其它类型一律拒。
   ipcMain.handle('ghost-pipe:ping', (event) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
@@ -2725,6 +2806,11 @@ export function registerGhostIpc(): void {
     // 限速/单发/结果分档在 pickSlot。
     if (type === 'pick-request') {
       return getGhostPickSlot().handleRequest(id, payload);
+    }
+    // workspace-request = 工作区会话入口(workspace 槽):目录亲选或确认卡
+    // 授权,已有 active 会话复用;限速/判重/创建守门在 workspaceSlot。
+    if (type === 'workspace-request') {
+      return getGhostWorkspaceSlot().handleRequest(id, payload);
     }
     // preview-request = 右侧栏开预览标签(preview 槽):URL 必须命中身份卡
     // preview.hosts 白名单;守门/限速在 previewSlot,落地在 renderer。

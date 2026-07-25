@@ -586,9 +586,10 @@ export interface PendingGhostGrantConfirm {
   /**
    * attachments = 媒体文件交给意识;dir = 上传目录/文件;save_dir = 允许意识
    * 往目录里存文件;fs_write = 意识申请写工作目录文件(会话 permission 为
-   * 逐条确认档时逐次弹,同目录本会话批一次)。
+   * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
+   * 为工作区在侧边栏创建/复用会话入口(不过户字节)。
    */
-  lane: 'attachments' | 'dir' | 'save_dir' | 'fs_write';
+  lane: 'attachments' | 'dir' | 'save_dir' | 'fs_write' | 'workspace';
   items: Array<{
     name: string;
     absPath: string;
@@ -7110,7 +7111,13 @@ function parseGhostGrantConfirmRequest(request: {
   [k: string]: unknown;
 }): PendingGhostGrantConfirm | null {
   const lane = request.lane;
-  if (lane !== 'attachments' && lane !== 'dir' && lane !== 'save_dir' && lane !== 'fs_write')
+  if (
+    lane !== 'attachments' &&
+    lane !== 'dir' &&
+    lane !== 'save_dir' &&
+    lane !== 'fs_write' &&
+    lane !== 'workspace'
+  )
     return null;
   if (typeof request.ghostId !== 'string' || typeof request.ghostName !== 'string') return null;
   const rawItems = Array.isArray(request.items) ? request.items : null;

@@ -112,10 +112,12 @@ describe('automation-generated sessions', () => {
       'scheduler',
       'learn',
       'shared',
+      'plugin',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('discord');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -123,6 +125,7 @@ describe('automation-generated sessions', () => {
     expect(normalizeSessionSource('feishu')).toBe('feishu');
     expect(normalizeSessionSource('telegram')).toBe('telegram');
     expect(normalizeSessionSource('discord')).toBe('discord');
+    expect(normalizeSessionSource('plugin')).toBe('plugin');
     expect(normalizeSessionSource(null)).toBe('desktop');
     expect(normalizeSessionSource('unknown')).toBe('desktop');
   });

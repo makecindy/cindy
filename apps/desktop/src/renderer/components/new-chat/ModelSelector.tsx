@@ -648,9 +648,8 @@ function ModelSelectorContentView({
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
   // providerId 是价格索引的一部分。同模型经 XD / OpenAI / Anthropic 等来源出现时，
-  // 必须按实际行来源查价，不能退化为 pricing[modelId]。XD Gateway quote 本身即
-  // 折后实付口径(原价在 quote.original*),CatalogModel.cost 只作「明确全零 →
-  // 免费」的证据;其它来源保持价格源自带的币种。
+  // 必须按实际行来源查价，不能退化为 pricing[modelId]。只有 XD Gateway 目录价会
+  // 叠加 CatalogModel.cost 作为折后展示价；其它来源保持价格源自带的币种。
   const pricePresentationOf = (providerId: string | null, id: string) => {
     // device-link 只同步被控端 provider 目录，不同步价格快照；不能把控制端价格与
     // 被控端 CatalogModel.cost 拼成一个展示结果。在协议补齐前远程选择器不展示价格。

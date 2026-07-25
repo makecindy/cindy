@@ -461,7 +461,14 @@ import {
   runGhostAssistantReplyHook,
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
+  setGhostWorkspaceSessionService,
+  notifyGhostSessionEvent,
 } from '../cindy-brain/index.js';
+import {
+  createPluginDraftSession,
+  findActiveSessionByWorkdir,
+} from '../localDb/ipc/pluginWorkspaceSessions.js';
+import { openMainWindowSession } from '../deepLink.js';
 
 const log = createLogger('maker-ipc');
 
@@ -4917,6 +4924,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       sessionId: forkedSessionId,
       disposition: 'forked',
     };
+  });
+
+  // Ghost 的 workspace 槽:判重/创建走 localDb 服务,创建后广播与 scheduler
+  // 同一条 `local-db:sessions:created` 通道让侧边栏刷新;focus 复用 deep link
+  // 的会话聚焦通道。注入方式与 setGhostAgentTurnRunner 同款倒置,避免
+  // cindy-brain 反向依赖 maker-ipc / localDb 形成模块环。
+  setGhostWorkspaceSessionService({
+    findActiveSessionByWorkdir,
+    createDraftSession: async (params) => {
+      // draft 跟随用户在 New Maker 面板的当前选择,与用户手建草稿的默认体验
+      // 一致。main 侧缓存没有"当前激活 vendor"信号,取有选择记录的一档:
+      // cc 有记录用 cc;cc 无记录而 codex 有则整套跟 codex(agentKind 一起切,
+      // 避免给 codex-only 用户建出带 Claude 默认值的 cc 会话);都没有走
+      // mapper 兜底。
+      const ccDefaults = getWorkerDefaultsFromNewMaker('claude-code');
+      const codexDefaults = ccDefaults.model ? null : getWorkerDefaultsFromNewMaker('codex');
+      const picked = ccDefaults.model
+        ? { agentKind: 'cc' as const, d: ccDefaults }
+        : codexDefaults?.model
+          ? { agentKind: 'codex' as const, d: codexDefaults }
+          : null;
+      const sessionId = await createPluginDraftSession({
+        ...params,
+        ...(picked
+          ? {
+              defaults: {
+                agentKind: picked.agentKind,
+                ...(picked.d.model ? { model: picked.d.model } : {}),
+                ...(picked.d.effort ? { effort: picked.d.effort } : {}),
+                ...(picked.d.fastMode !== undefined ? { fastMode: picked.d.fastMode } : {}),
+                ...(picked.d.providerId !== undefined ? { providerId: picked.d.providerId } : {}),
+              },
+            }
+          : {}),
+        notifySessionCreated: (info) => notifyGhostSessionEvent('created', info),
+      });
+      broadcastSessionCreated(sessionId);
+      return sessionId;
+    },
+    focusSession: (sessionId) => openMainWindowSession(sessionId),
   });
 
   // 排队项会进 pendingQueue projection, 经 Electron IPC 结构化克隆发给 renderer,

@@ -176,20 +176,6 @@ describe('XD 网关权威模型清单重建', () => {
         id: 'missing-output',
         inputCostPerToken: 0.000012,
       },
-      {
-        id: 'cached-half-price',
-        costDiscount: 0.5,
-        inputCostPerToken: 0.000012,
-        outputCostPerToken: 0.000036,
-        cacheReadInputTokenCost: 0.000012,
-        cacheCreationInputTokenCost: 0.000036,
-      },
-      {
-        id: 'cache-only-priced',
-        inputCostPerToken: 0,
-        outputCostPerToken: 0,
-        cacheReadInputTokenCost: 0.000012,
-      },
     ]);
 
     const cc = xdModels('claude-code');
@@ -214,19 +200,6 @@ describe('XD 网关权威模型清单重建', () => {
       output: 36,
     });
     expect(cc.find((m) => m.id === 'missing-output')?.cost).toBeUndefined();
-    // 缓存维度随折扣一起投影;只免标准价、缓存带价的模型 cost 会暴露缓存价,
-    // 供展示层拒绝「免费」误标。
-    expect(cc.find((m) => m.id === 'cached-half-price')?.cost).toEqual({
-      input: 6,
-      output: 18,
-      cacheRead: 6,
-      cacheWrite: 18,
-    });
-    expect(cc.find((m) => m.id === 'cache-only-priced')?.cost).toEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 12,
-    });
   });
 
   it('非法 effort 档位被白名单过滤;defaultEffort 不在档位集内时回落 high 规则', () => {

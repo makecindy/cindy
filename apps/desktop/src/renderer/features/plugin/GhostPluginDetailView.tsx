@@ -18,6 +18,7 @@ import {
   FileCode2,
   FilePen,
   FolderOpen,
+  FolderPlus,
   Globe,
   GraduationCap,
   KeyRound,
@@ -88,6 +89,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   pick: FolderOpen,
   preview: AppWindow,
   skill: GraduationCap,
+  workspace: FolderPlus,
 };
 
 /** Chooses a visual affordance without changing the host-owned permission title or meaning. */

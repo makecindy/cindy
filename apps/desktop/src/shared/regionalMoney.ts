@@ -23,15 +23,6 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
-  /**
-   * Gateway 促销折扣(0..1]。存在时本报价的各单价**已是折后实付价**——用量记账与
-   * 选择器展示共用同一口径;折扣前原价由 original* 字段承载,仅供划线展示。
-   */
-  discount?: number;
-  originalInputPerMtok?: number;
-  originalOutputPerMtok?: number;
-  originalCacheReadPerMtok?: number;
-  originalCacheCreatePerMtok?: number;
 }
 
 export type ModelPricingCatalog = Record<string, Record<string, ModelPriceQuote>>;
