@@ -54,6 +54,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
@@ -389,7 +390,12 @@ function vendorKeyToAgentKind(v?: 'cc' | 'codex'): AgentKind | null {
   return null;
 }
 
-export function ModelSelectorContent({
+export function ModelSelectorContent(props: ModelSelectorContentProps) {
+  const pricing = useModelPricing();
+  return <ModelSelectorContentView {...props} pricing={pricing} />;
+}
+
+function ModelSelectorContentView({
   modelId,
   effort,
   onModelChange,
@@ -410,7 +416,8 @@ export function ModelSelectorContent({
   configurationEnabled = true,
   pointerRevealRequiresIntent = false,
   agentSwitch,
-}: ModelSelectorContentProps) {
+  pricing,
+}: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
   const { t } = useTranslation();
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
   // 切到另一家 tab 只是「浏览目标引擎的模型」,选中模型行才真正触发切换事务。
@@ -444,7 +451,6 @@ export function ModelSelectorContent({
   // 同时拉两个 agent —— vendorKey 不传时把两边模型一起展示。hooks 必须按固定顺序调用。
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
-  const pricing = useModelPricing();
   // 本机骨折 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
@@ -1873,7 +1879,7 @@ export function ModelSelector({
   );
 
   const content = (
-    <ModelSelectorContent
+    <ModelSelectorContentView
       modelId={modelId}
       effort={effort}
       onModelChange={onModelChange}
@@ -1892,6 +1898,7 @@ export function ModelSelector({
       configurationEnabled={configurationEnabled}
       pointerRevealRequiresIntent={morphEnabled}
       agentSwitch={contentAgentSwitch}
+      pricing={pricing}
       followSession={
         fallbackOption
           ? {

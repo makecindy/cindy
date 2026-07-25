@@ -197,10 +197,13 @@ const pricingRef = vi.hoisted(() => {
       },
     },
   };
-  return { DEFAULT_PRICING, pricing: DEFAULT_PRICING as unknown };
+  return { DEFAULT_PRICING, pricing: DEFAULT_PRICING as unknown, renderCalls: 0 };
 });
 vi.mock('@/hooks/useModelPricing', () => ({
-  useModelPricing: () => pricingRef.pricing,
+  useModelPricing: () => {
+    pricingRef.renderCalls += 1;
+    return pricingRef.pricing;
+  },
 }));
 
 // 可变 providers mock:默认 = anthropic fixture(分段/hover 用例依赖),
@@ -442,6 +445,24 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.textContent).toContain('超高');
     expect(trigger.textContent).not.toContain('X-High');
     expect(trigger.querySelector('[data-model-promotion-badge]')).toBeNull();
+  });
+
+  it('reuses the parent pricing snapshot when the model content opens', () => {
+    pricingRef.renderCalls = 0;
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+      }),
+    );
+    expect(pricingRef.renderCalls).toBe(1);
+
+    pricingRef.renderCalls = 0;
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(pricingRef.renderCalls).toBe(1);
   });
 
   it('shows Gateway discount and free promotions in the selected-model trigger', () => {
