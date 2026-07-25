@@ -82,10 +82,13 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
     runtimes: {
       'claude-code': {
         baseUrl: 'https://api.anthropic.com',
+        // contextWindow 必须与目录(providers.json)一致:保存时它是窗口的唯一来源
+        // (拉取的模型列表不带窗口),缺省会落 200k 默认 → toSdkModelString 剥掉
+        // 1M 模型的 [1m] 路由,用户拿到 1/5 窗口。
         models: [
-          { id: 'claude-opus-5', name: 'Claude Opus 5' },
-          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
-          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+          { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
+          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
         ],
       },
     },

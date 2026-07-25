@@ -49,6 +49,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 }));
 
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { createCustomProvider } from '@/lib/customProviders';
 
 const anthropicProvider = {
   id: 'anthropic',
@@ -153,12 +154,47 @@ describe('AddProviderWizard — preset 直达', () => {
       expect(screen.getByText('settings.providers.wizard.fetchFailed')).not.toBeNull(),
     );
     // 降级:推荐模型仍在清单里,完成按钮可用(不被空列表堵死)。
+    expect(screen.getByText('Claude Opus 5')).not.toBeNull();
     expect(screen.getByText('Claude Sonnet 5')).not.toBeNull();
     expect(screen.getByText('Claude Haiku 4.5')).not.toBeNull();
     expect(
       (screen.getByText('settings.providers.wizard.finish').closest('button') as HTMLButtonElement)
         .disabled,
     ).toBe(false);
+  });
+
+  it('官方 API 预设:完成保存 → 模型带目录口径 contextWindow(Codex P1 回归)', async () => {
+    render(
+      React.createElement(AddProviderWizard, {
+        providers: [anthropicProvider],
+        entry: { kind: 'builtin' as const, providerId: 'anthropic' },
+        onOpenCustomForm: vi.fn(),
+        onClose: vi.fn(),
+        onDone: vi.fn(),
+      }),
+    );
+
+    fireEvent.click(await screen.findByText('settings.providers.wizard.useApiKey'));
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('Claude Opus 5')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    // 保存产物必须带预设声明的 contextWindow:它是唯一窗口来源,缺省会落
+    // 200k 默认导致 1M 模型丢 [1m] 路由(toSdkModelString 按窗口剥后缀)。
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    const models = config.runtimes['claude-code']?.models ?? [];
+    expect(models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-opus-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-sonnet-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-haiku-4-5', contextWindow: 200_000 }),
+      ]),
+    );
   });
 
   it('presetId 不存在 → 回落目录第一步', async () => {
