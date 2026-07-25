@@ -272,6 +272,14 @@ describe('ghost · 清单校验', () => {
       ...goodManifest(),
       locales: { en: 'locales/en.json', ja: 'locales/en.json' },
     }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'locales/en.json', ja: 'Locales/EN.json' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...goodManifest(),
+      locales: { en: 'GHOST.JSON' },
+    }).ok).toBe(false);
   });
 
   it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
@@ -299,7 +307,27 @@ describe('ghost · 清单校验', () => {
       entry: 'main.js',
       slots: ['tool'],
       tools: [
-        { name: 'alpha', description: 'Base alpha' },
+        {
+          name: 'alpha',
+          description: 'Base alpha',
+          parameters: {
+            type: 'object',
+            title: 'Base arguments',
+            properties: {
+              query: {
+                type: 'string',
+                title: 'Base query',
+                description: 'Base query description',
+              },
+              mode: {
+                oneOf: [
+                  { const: 'fast', title: 'Base fast mode' },
+                  { const: 'safe', title: 'Base safe mode' },
+                ],
+              },
+            },
+          },
+        },
         { name: 'beta', description: 'Base beta' },
       ],
     });
@@ -311,7 +339,18 @@ describe('ghost · 清单校验', () => {
       whenToUse: 'Localized routing',
       tools: {
         beta: { description: 'Localized beta' },
-        alpha: { description: 'Localized alpha' },
+        alpha: {
+          description: 'Localized alpha',
+          parameters: {
+            '': { title: 'Localized arguments' },
+            '/properties/query': {
+              title: 'Localized query',
+              description: 'Localized query description',
+            },
+            '/properties/mode/oneOf/0': { title: 'Localized fast mode' },
+            '/properties/mode/oneOf/1': { title: 'Localized safe mode' },
+          },
+        },
       },
     }, parsed.manifest);
     expect(resource.ok).toBe(true);
@@ -321,7 +360,25 @@ describe('ghost · 清单校验', () => {
       description: 'Localized description',
       whenToUse: 'Localized routing',
       tools: [
-        { name: 'alpha', description: 'Localized alpha' },
+        {
+          name: 'alpha',
+          description: 'Localized alpha',
+          parameters: {
+            title: 'Localized arguments',
+            properties: {
+              query: {
+                title: 'Localized query',
+                description: 'Localized query description',
+              },
+              mode: {
+                oneOf: [
+                  { title: 'Localized fast mode' },
+                  { title: 'Localized safe mode' },
+                ],
+              },
+            },
+          },
+        },
         { name: 'beta', description: 'Localized beta' },
       ],
     });
@@ -330,6 +387,104 @@ describe('ghost · 清单校验', () => {
       description: 'Localized description',
       whenToUse: 'Localized routing',
       tools: { alpha: { description: 'Only one' } },
+    }, parsed.manifest).ok).toBe(false);
+  });
+
+  it('locale 资源完整覆盖宿主持有的面板、凭证、连接与 setup 标签', () => {
+    const parsed = validateGhostManifest({
+      schemaVersion: 2,
+      id: 'localized-labels',
+      name: 'Base',
+      version: '1.0.0',
+      entry: 'main.js',
+      settingsHtml: 'settings.html',
+      slots: ['panel', 'network', 'node'],
+      panel: { title: 'Base panel', html: 'panel.html' },
+      network: {
+        hosts: ['api.example.com'],
+        secrets: [{
+          key: 'api_key',
+          label: 'Base API key',
+          hint: 'Base secret hint',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }],
+        connections: [{
+          key: 'instance',
+          label: 'Base instance',
+          hint: 'Base connection hint',
+          inject: { header: 'Authorization', format: 'Bearer {value}' },
+        }],
+      },
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [{
+          key: 'worker_key',
+          label: 'Base worker key',
+          hint: 'Base worker hint',
+          methods: ['run'],
+        }],
+      },
+      setup: {
+        requires: [{ anyOf: [{ kv: 'default_repo', label: 'Base repository' }] }],
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const resource = validateGhostManifestLocaleResource({
+      name: 'Localized',
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: {
+          api_key: { label: 'Localized API key', hint: 'Localized secret hint' },
+        },
+        connections: {
+          instance: { label: 'Localized instance', hint: 'Localized connection hint' },
+        },
+      },
+      node: {
+        secretBindings: {
+          worker_key: { label: 'Localized worker key', hint: 'Localized worker hint' },
+        },
+      },
+      setup: {
+        kv: {
+          default_repo: { label: 'Localized repository' },
+        },
+      },
+    }, parsed.manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(resolveGhostManifestLocale(parsed.manifest, resource.resource)).toMatchObject({
+      panel: { title: 'Localized panel' },
+      network: {
+        secrets: [{
+          key: 'api_key',
+          label: 'Localized API key',
+          hint: 'Localized secret hint',
+        }],
+        connections: [{
+          key: 'instance',
+          label: 'Localized instance',
+          hint: 'Localized connection hint',
+        }],
+      },
+      node: {
+        secretBindings: [{
+          key: 'worker_key',
+          label: 'Localized worker key',
+          hint: 'Localized worker hint',
+        }],
+      },
+      setup: {
+        requires: [{
+          anyOf: [{ kind: 'kv', key: 'default_repo', label: 'Localized repository' }],
+        }],
+      },
+    });
+    expect(validateGhostManifestLocaleResource({
+      name: 'Incomplete',
+      panel: { title: 'Localized panel' },
     }, parsed.manifest).ok).toBe(false);
   });
 

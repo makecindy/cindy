@@ -996,7 +996,22 @@ export interface GhostManifestLocaleResource {
   name: string;
   description?: string;
   whenToUse?: string;
-  tools?: Record<string, { description: string }>;
+  tools?: Record<string, {
+    description: string;
+    /** JSON Pointer → 该参数 schema 节点已有的 title / description 翻译。 */
+    parameters?: Record<string, { title?: string; description?: string }>;
+  }>;
+  panel?: { title: string };
+  network?: {
+    secrets?: Record<string, { label: string; hint?: string }>;
+    connections?: Record<string, { label: string; hint?: string }>;
+  };
+  node?: {
+    secretBindings?: Record<string, { label: string; hint?: string }>;
+  };
+  setup?: {
+    kv?: Record<string, { label: string }>;
+  };
 }
 
 /** 单个插件 locale JSON 的字节上限。Forge 与装入侧共用，避免两端契约漂移。 */
@@ -1541,6 +1556,99 @@ export function withGhostResolvedLocale(
   return { ...manifest, resolvedLocale };
 }
 
+type GhostSchemaLocaleText = { title?: string; description?: string };
+type GhostSchemaLocaleShape = { title: boolean; description: boolean };
+
+const GHOST_SCHEMA_MAP_KEYWORDS = [
+  'properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas',
+] as const;
+const GHOST_SCHEMA_SINGLE_KEYWORDS = [
+  'additionalProperties', 'unevaluatedProperties', 'propertyNames', 'items',
+  'contains', 'not', 'if', 'then', 'else',
+] as const;
+const GHOST_SCHEMA_ARRAY_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'] as const;
+
+function ghostJsonPointerChild(pointer: string, segment: string | number): string {
+  const escaped = String(segment).replace(/~/g, '~0').replace(/\//g, '~1');
+  return `${pointer}/${escaped}`;
+}
+
+/** 收集 JSON Schema 节点中已有的 title / description，以 JSON Pointer 稳定寻址。 */
+function collectGhostSchemaLocaleShape(
+  schema: unknown,
+  pointer = '',
+  result: Record<string, GhostSchemaLocaleShape> = {},
+): Record<string, GhostSchemaLocaleShape> {
+  if (!isPlainObject(schema)) return result;
+  const title = typeof schema.title === 'string';
+  const description = typeof schema.description === 'string';
+  if (title || description) result[pointer] = { title, description };
+  for (const keyword of GHOST_SCHEMA_MAP_KEYWORDS) {
+    const children = schema[keyword];
+    if (!isPlainObject(children)) continue;
+    for (const [key, child] of Object.entries(children)) {
+      collectGhostSchemaLocaleShape(child, ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), key), result);
+    }
+  }
+  for (const keyword of GHOST_SCHEMA_SINGLE_KEYWORDS) {
+    collectGhostSchemaLocaleShape(schema[keyword], ghostJsonPointerChild(pointer, keyword), result);
+  }
+  for (const keyword of GHOST_SCHEMA_ARRAY_KEYWORDS) {
+    const children = schema[keyword];
+    if (!Array.isArray(children)) continue;
+    children.forEach((child, index) => {
+      collectGhostSchemaLocaleShape(child, ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), index), result);
+    });
+  }
+  return result;
+}
+
+function resolveGhostSchemaLocale(
+  schema: Record<string, unknown>,
+  localized: Record<string, GhostSchemaLocaleText>,
+  pointer = '',
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...schema };
+  const text = localized[pointer];
+  if (text?.title !== undefined) result.title = text.title;
+  if (text?.description !== undefined) result.description = text.description;
+  for (const keyword of GHOST_SCHEMA_MAP_KEYWORDS) {
+    const children = schema[keyword];
+    if (!isPlainObject(children)) continue;
+    result[keyword] = Object.fromEntries(
+      Object.entries(children).map(([key, child]) => [
+        key,
+        isPlainObject(child)
+          ? resolveGhostSchemaLocale(
+              child,
+              localized,
+              ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), key),
+            )
+          : child,
+      ]),
+    );
+  }
+  for (const keyword of GHOST_SCHEMA_SINGLE_KEYWORDS) {
+    const child = schema[keyword];
+    if (!isPlainObject(child)) continue;
+    result[keyword] = resolveGhostSchemaLocale(child, localized, ghostJsonPointerChild(pointer, keyword));
+  }
+  for (const keyword of GHOST_SCHEMA_ARRAY_KEYWORDS) {
+    const children = schema[keyword];
+    if (!Array.isArray(children)) continue;
+    result[keyword] = children.map((child, index) => (
+      isPlainObject(child)
+        ? resolveGhostSchemaLocale(
+            child,
+            localized,
+            ghostJsonPointerChild(ghostJsonPointerChild(pointer, keyword), index),
+          )
+        : child
+    ));
+  }
+  return result;
+}
+
 /**
  * 校验 locale 文件，并要求它完整覆盖原 manifest 已声明的可本地化字段。
  * 缺译拒装，避免支持语言中静默混入另一种语言。
@@ -1550,6 +1658,13 @@ export function validateGhostManifestLocaleResource(
   manifest: GhostManifest,
 ): { ok: true; resource: GhostManifestLocaleResource } | { ok: false; reason: string } {
   if (!isPlainObject(raw)) return { ok: false, reason: 'locale 文件必须是对象' };
+  const allowedTopLevelFields = new Set([
+    'name', 'description', 'whenToUse', 'tools', 'panel', 'network', 'node', 'setup',
+  ]);
+  const unknownTopLevelField = Object.keys(raw).find((field) => !allowedTopLevelFields.has(field));
+  if (unknownTopLevelField) {
+    return { ok: false, reason: `locale 含未知字段 ${JSON.stringify(unknownTopLevelField)}` };
+  }
   if (typeof raw.name !== 'string' || raw.name.trim().length === 0 || raw.name.length > 64) {
     return { ok: false, reason: 'locale.name 必须是 1–64 字符的非空字符串' };
   }
@@ -1577,7 +1692,7 @@ export function validateGhostManifestLocaleResource(
     return { ok: false, reason: whenToUse.error };
   }
 
-  let tools: Record<string, { description: string }> | undefined;
+  let tools: GhostManifestLocaleResource['tools'];
   if (manifest.tools !== undefined) {
     if (!isPlainObject(raw.tools)) {
       return { ok: false, reason: 'locale.tools 必须按 tool name 提供完整对象' };
@@ -1592,6 +1707,15 @@ export function validateGhostManifestLocaleResource(
       if (!isPlainObject(localized)) {
         return { ok: false, reason: `locale.tools 缺少 ${JSON.stringify(tool.name)}` };
       }
+      const unknownToolField = Object.keys(localized).find(
+        (field) => field !== 'description' && field !== 'parameters',
+      );
+      if (unknownToolField) {
+        return {
+          ok: false,
+          reason: `locale.tools[${JSON.stringify(tool.name)}] 含未知字段 ${JSON.stringify(unknownToolField)}`,
+        };
+      }
       if (
         typeof localized.description !== 'string' ||
         localized.description.trim().length === 0 ||
@@ -1602,10 +1726,230 @@ export function validateGhostManifestLocaleResource(
           reason: `locale.tools[${JSON.stringify(tool.name)}].description 必须是 1–1024 字符的非空字符串`,
         };
       }
-      tools[tool.name] = { description: localized.description };
+      const parameterShape = collectGhostSchemaLocaleShape(tool.parameters);
+      const parameterPointers = Object.keys(parameterShape);
+      let parameters: Record<string, GhostSchemaLocaleText> | undefined;
+      if (parameterPointers.length > 0) {
+        if (!isPlainObject(localized.parameters)) {
+          return {
+            ok: false,
+            reason: `locale.tools[${JSON.stringify(tool.name)}].parameters 必须按 JSON Pointer 完整提供参数文案`,
+          };
+        }
+        const expectedPointers = new Set(parameterPointers);
+        const unknownPointer = Object.keys(localized.parameters).find((pointer) => !expectedPointers.has(pointer));
+        if (unknownPointer) {
+          return {
+            ok: false,
+            reason: `locale.tools[${JSON.stringify(tool.name)}].parameters 含未知路径 ${JSON.stringify(unknownPointer)}`,
+          };
+        }
+        parameters = {};
+        for (const pointer of parameterPointers) {
+          const shape = parameterShape[pointer];
+          const localizedText = localized.parameters[pointer];
+          if (!isPlainObject(localizedText)) {
+            return {
+              ok: false,
+              reason: `locale.tools[${JSON.stringify(tool.name)}].parameters 缺少 ${JSON.stringify(pointer)}`,
+            };
+          }
+          const allowedFields = new Set([
+            ...(shape.title ? ['title'] : []),
+            ...(shape.description ? ['description'] : []),
+          ]);
+          const unknownField = Object.keys(localizedText).find((field) => !allowedFields.has(field));
+          if (unknownField) {
+            return {
+              ok: false,
+              reason: `locale.tools[${JSON.stringify(tool.name)}].parameters[${JSON.stringify(pointer)}] 含未知字段 ${JSON.stringify(unknownField)}`,
+            };
+          }
+          if (
+            shape.title &&
+            (typeof localizedText.title !== 'string' || localizedText.title.trim().length === 0 || localizedText.title.length > 256)
+          ) {
+            return {
+              ok: false,
+              reason: `locale.tools[${JSON.stringify(tool.name)}].parameters[${JSON.stringify(pointer)}].title 必须是 1–256 字符的非空字符串`,
+            };
+          }
+          if (
+            shape.description &&
+            (
+              typeof localizedText.description !== 'string' ||
+              localizedText.description.trim().length === 0 ||
+              localizedText.description.length > 1024
+            )
+          ) {
+            return {
+              ok: false,
+              reason: `locale.tools[${JSON.stringify(tool.name)}].parameters[${JSON.stringify(pointer)}].description 必须是 1–1024 字符的非空字符串`,
+            };
+          }
+          parameters[pointer] = {
+            ...(typeof localizedText.title === 'string' ? { title: localizedText.title } : {}),
+            ...(typeof localizedText.description === 'string' ? { description: localizedText.description } : {}),
+          };
+        }
+      } else if (localized.parameters !== undefined) {
+        return {
+          ok: false,
+          reason: `locale.tools[${JSON.stringify(tool.name)}].parameters 不应存在：原参数 schema 没有 title / description`,
+        };
+      }
+      tools[tool.name] = {
+        description: localized.description,
+        ...(parameters !== undefined ? { parameters } : {}),
+      };
     }
   } else if (raw.tools !== undefined) {
     return { ok: false, reason: 'locale.tools 不应存在：原 manifest 未声明工具' };
+  }
+
+  let panel: GhostManifestLocaleResource['panel'];
+  if (manifest.panel?.title !== undefined) {
+    if (!isPlainObject(raw.panel)) {
+      return { ok: false, reason: 'locale.panel 必须提供 panel.title' };
+    }
+    const unknownPanelField = Object.keys(raw.panel).find((field) => field !== 'title');
+    if (unknownPanelField) {
+      return { ok: false, reason: `locale.panel 含未知字段 ${JSON.stringify(unknownPanelField)}` };
+    }
+    if (typeof raw.panel.title !== 'string' || raw.panel.title.trim().length === 0 || raw.panel.title.length > 64) {
+      return { ok: false, reason: 'locale.panel.title 必须是 1–64 字符的非空字符串' };
+    }
+    panel = { title: raw.panel.title };
+  } else if (raw.panel !== undefined) {
+    return { ok: false, reason: 'locale.panel 不应存在：原 manifest 未声明 panel.title' };
+  }
+
+  const validateLocalizedLabels = (
+    rawValue: unknown,
+    fieldPath: string,
+    declarations: ReadonlyArray<{ key: string; hint?: string }>,
+  ): { ok: true; labels?: Record<string, { label: string; hint?: string }> } | { ok: false; reason: string } => {
+    if (declarations.length === 0) {
+      if (rawValue !== undefined) {
+        return { ok: false, reason: `${fieldPath} 不应存在：原 manifest 未声明对应项目` };
+      }
+      return { ok: true };
+    }
+    if (!isPlainObject(rawValue)) {
+      return { ok: false, reason: `${fieldPath} 必须按稳定 key 提供完整对象` };
+    }
+    const expectedKeys = new Set(declarations.map((declaration) => declaration.key));
+    const unknownKey = Object.keys(rawValue).find((key) => !expectedKeys.has(key));
+    if (unknownKey) {
+      return { ok: false, reason: `${fieldPath} 含未知 key ${JSON.stringify(unknownKey)}` };
+    }
+    const labels: Record<string, { label: string; hint?: string }> = {};
+    for (const declaration of declarations) {
+      const localized = rawValue[declaration.key];
+      if (!isPlainObject(localized)) {
+        return { ok: false, reason: `${fieldPath} 缺少 ${JSON.stringify(declaration.key)}` };
+      }
+      const allowedFields = declaration.hint !== undefined ? new Set(['label', 'hint']) : new Set(['label']);
+      const unknownField = Object.keys(localized).find((field) => !allowedFields.has(field));
+      if (unknownField) {
+        return {
+          ok: false,
+          reason: `${fieldPath}[${JSON.stringify(declaration.key)}] 含未知字段 ${JSON.stringify(unknownField)}`,
+        };
+      }
+      if (typeof localized.label !== 'string' || localized.label.trim().length === 0 || localized.label.length > 64) {
+        return {
+          ok: false,
+          reason: `${fieldPath}[${JSON.stringify(declaration.key)}].label 必须是 1–64 字符的非空字符串`,
+        };
+      }
+      if (
+        declaration.hint !== undefined &&
+        (typeof localized.hint !== 'string' || localized.hint.trim().length === 0 || localized.hint.length > 200)
+      ) {
+        return {
+          ok: false,
+          reason: `${fieldPath}[${JSON.stringify(declaration.key)}].hint 必须是 1–200 字符的非空字符串`,
+        };
+      }
+      labels[declaration.key] = {
+        label: localized.label,
+        ...(typeof localized.hint === 'string' ? { hint: localized.hint } : {}),
+      };
+    }
+    return { ok: true, labels };
+  };
+
+  const secretDecls = manifest.network?.secrets ?? [];
+  const connectionDecls = manifest.network?.connections ?? [];
+  let network: GhostManifestLocaleResource['network'];
+  if (secretDecls.length > 0 || connectionDecls.length > 0) {
+    if (!isPlainObject(raw.network)) {
+      return { ok: false, reason: 'locale.network 必须完整覆盖凭证与连接展示文案' };
+    }
+    const unknownNetworkField = Object.keys(raw.network).find(
+      (field) => field !== 'secrets' && field !== 'connections',
+    );
+    if (unknownNetworkField) {
+      return { ok: false, reason: `locale.network 含未知字段 ${JSON.stringify(unknownNetworkField)}` };
+    }
+    const secrets = validateLocalizedLabels(raw.network.secrets, 'locale.network.secrets', secretDecls);
+    if (!secrets.ok) return secrets;
+    const connections = validateLocalizedLabels(raw.network.connections, 'locale.network.connections', connectionDecls);
+    if (!connections.ok) return connections;
+    network = {
+      ...(secrets.labels !== undefined ? { secrets: secrets.labels } : {}),
+      ...(connections.labels !== undefined ? { connections: connections.labels } : {}),
+    };
+  } else if (raw.network !== undefined) {
+    return { ok: false, reason: 'locale.network 不应存在：原 manifest 未声明凭证或连接' };
+  }
+
+  const nodeSecretDecls = manifest.node?.secretBindings ?? [];
+  let node: GhostManifestLocaleResource['node'];
+  if (nodeSecretDecls.length > 0) {
+    if (!isPlainObject(raw.node)) {
+      return { ok: false, reason: 'locale.node 必须完整覆盖 Node 凭证展示文案' };
+    }
+    const unknownNodeField = Object.keys(raw.node).find((field) => field !== 'secretBindings');
+    if (unknownNodeField) {
+      return { ok: false, reason: `locale.node 含未知字段 ${JSON.stringify(unknownNodeField)}` };
+    }
+    const secretBindings = validateLocalizedLabels(
+      raw.node.secretBindings,
+      'locale.node.secretBindings',
+      nodeSecretDecls,
+    );
+    if (!secretBindings.ok) return secretBindings;
+    node = { secretBindings: secretBindings.labels! };
+  } else if (raw.node !== undefined) {
+    return { ok: false, reason: 'locale.node 不应存在：原 manifest 未声明 node.secretBindings' };
+  }
+
+  const setupKvDecls = new Map<string, { key: string }>();
+  for (const group of manifest.setup?.requires ?? []) {
+    for (const requirement of group.anyOf) {
+      if (requirement.kind === 'kv') setupKvDecls.set(requirement.key, { key: requirement.key });
+    }
+  }
+  let setup: GhostManifestLocaleResource['setup'];
+  if (setupKvDecls.size > 0) {
+    if (!isPlainObject(raw.setup)) {
+      return { ok: false, reason: 'locale.setup 必须完整覆盖 setup kv 展示文案' };
+    }
+    const unknownSetupField = Object.keys(raw.setup).find((field) => field !== 'kv');
+    if (unknownSetupField) {
+      return { ok: false, reason: `locale.setup 含未知字段 ${JSON.stringify(unknownSetupField)}` };
+    }
+    const kv = validateLocalizedLabels(raw.setup.kv, 'locale.setup.kv', [...setupKvDecls.values()]);
+    if (!kv.ok) return kv;
+    setup = {
+      kv: Object.fromEntries(
+        Object.entries(kv.labels!).map(([key, localized]) => [key, { label: localized.label }]),
+      ),
+    };
+  } else if (raw.setup !== undefined) {
+    return { ok: false, reason: 'locale.setup 不应存在：原 manifest 未声明 setup kv 项' };
   }
 
   return {
@@ -1615,6 +1959,10 @@ export function validateGhostManifestLocaleResource(
       ...(typeof description === 'string' ? { description } : {}),
       ...(typeof whenToUse === 'string' ? { whenToUse } : {}),
       ...(tools !== undefined ? { tools } : {}),
+      ...(panel !== undefined ? { panel } : {}),
+      ...(network !== undefined ? { network } : {}),
+      ...(node !== undefined ? { node } : {}),
+      ...(setup !== undefined ? { setup } : {}),
     },
   };
 }
@@ -1634,7 +1982,60 @@ export function resolveGhostManifestLocale(
           tools: manifest.tools.map((tool) => ({
             ...tool,
             description: resource.tools![tool.name].description,
+            ...(tool.parameters !== undefined && resource.tools![tool.name].parameters !== undefined
+              ? { parameters: resolveGhostSchemaLocale(tool.parameters, resource.tools![tool.name].parameters!) }
+              : {}),
           })),
+        }
+      : {}),
+    ...(manifest.panel !== undefined && resource.panel !== undefined
+      ? { panel: { ...manifest.panel, title: resource.panel.title } }
+      : {}),
+    ...(manifest.network !== undefined && resource.network !== undefined
+      ? {
+          network: {
+            ...manifest.network,
+            ...(manifest.network.secrets !== undefined && resource.network.secrets !== undefined
+              ? {
+                  secrets: manifest.network.secrets.map((secret) => ({
+                    ...secret,
+                    ...resource.network!.secrets![secret.key],
+                  })),
+                }
+              : {}),
+            ...(manifest.network.connections !== undefined && resource.network.connections !== undefined
+              ? {
+                  connections: manifest.network.connections.map((connection) => ({
+                    ...connection,
+                    ...resource.network!.connections![connection.key],
+                  })),
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(manifest.node !== undefined && resource.node?.secretBindings !== undefined
+      ? {
+          node: {
+            ...manifest.node,
+            secretBindings: manifest.node.secretBindings?.map((binding) => ({
+              ...binding,
+              ...resource.node!.secretBindings![binding.key],
+            })),
+          },
+        }
+      : {}),
+    ...(manifest.setup !== undefined && resource.setup?.kv !== undefined
+      ? {
+          setup: {
+            requires: manifest.setup.requires.map((group) => ({
+              anyOf: group.anyOf.map((requirement) => (
+                requirement.kind === 'kv'
+                  ? { ...requirement, label: resource.setup!.kv![requirement.key].label }
+                  : requirement
+              )),
+            })),
+          },
         }
       : {}),
   };
@@ -1689,6 +2090,16 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
     const normalized: Partial<Record<SupportedLocale, string>> = {};
     const seenPaths = new Set<string>();
+    const nonLocalePaths = [
+      GHOST_MANIFEST_FILE,
+      raw.entry,
+      raw.icon,
+      raw.settingsHtml,
+      isPlainObject(raw.panel) ? raw.panel.html : undefined,
+      isPlainObject(raw.node) ? raw.node.entry : undefined,
+      ...(isPlainObject(raw.node) && Array.isArray(raw.node.entries) ? raw.node.entries : []),
+    ].filter((value): value is string => typeof value === 'string');
+    const nonLocalePathFolds = new Set(nonLocalePaths.map((value) => value.toLowerCase()));
     for (const locale of SUPPORTED_LOCALES) {
       const localePath = raw.locales[locale];
       if (localePath === undefined) continue;
@@ -1699,10 +2110,17 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ) {
         return { ok: false, reason: `locales.${locale} 必须是安装目录内以 .json 结尾的安全相对路径` };
       }
-      if (seenPaths.has(localePath)) {
+      const normalizedLocalePath = localePath.toLowerCase();
+      if (nonLocalePathFolds.has(normalizedLocalePath)) {
+        return {
+          ok: false,
+          reason: `locales.${locale} 路径 ${JSON.stringify(localePath)} 与插件其他声明文件大小写折叠后冲突`,
+        };
+      }
+      if (seenPaths.has(normalizedLocalePath)) {
         return { ok: false, reason: `locales 含重复路径 ${JSON.stringify(localePath)}` };
       }
-      seenPaths.add(localePath);
+      seenPaths.add(normalizedLocalePath);
       normalized[locale] = localePath;
     }
     locales = normalized as GhostManifest['locales'];

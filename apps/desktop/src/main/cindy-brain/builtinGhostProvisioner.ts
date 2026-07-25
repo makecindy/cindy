@@ -8,6 +8,7 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 
 /**
  * builtinGhostProvisioner — 内置意识的启动播种(第一方可信通道)。
@@ -545,6 +546,14 @@ function readSeedManifest(seedDir: string, id: string, log?: BuiltinProvisionerL
   }
   if (v.manifest.id !== id) {
     log?.warn('builtin seed skipped: dir name != manifest id', { seedDir, manifestId: v.manifest.id });
+    return null;
+  }
+  const localeValidation = validateGhostLocaleResourcesInDirectory(seedDir, v.manifest);
+  if (!localeValidation.ok) {
+    log?.warn('builtin seed skipped: invalid locale resources', {
+      seedDir,
+      reason: localeValidation.reason,
+    });
     return null;
   }
   return v.manifest;

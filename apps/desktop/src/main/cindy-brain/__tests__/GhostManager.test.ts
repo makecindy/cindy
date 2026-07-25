@@ -129,6 +129,53 @@ describe('GhostManager · install', () => {
     });
   });
 
+  it('已安装 locale 或其父目录被替换为目录外软链时拒绝读取并回退基础清单', async () => {
+    hostLocale = 'en';
+    const manifest = {
+      ...goodManifest(),
+      name: 'Base name',
+      locales: { en: 'locales/en.json' },
+    };
+    const locale = (name: string) => JSON.stringify({
+      name,
+      tools: { do_thing: { description: 'Localized tool' } },
+    });
+    const cindy = await makeCindy('localized-symlink.cindy', manifest, {
+      'locales/en.json': locale('Packaged name'),
+    });
+    await manager.install(cindy);
+    const localePath = path.join(rootDir, 'hello', 'locales', 'en.json');
+    const outsidePath = path.join(workDir, 'outside-locale.json');
+    await fs.promises.writeFile(outsidePath, locale('Outside name'));
+    await fs.promises.rm(localePath);
+    try {
+      await fs.promises.symlink(outsidePath, localePath, 'file');
+    } catch {
+      return; // Windows 无 symlink 权限时跳过；生产守卫仍由 lstatSync 钉死。
+    }
+
+    expect(manager.list()[0].manifest).toMatchObject({
+      name: 'Base name',
+      resolvedLocale: 'en',
+      tools: [{ name: 'do_thing', description: '做点事' }],
+    });
+
+    const localesDir = path.dirname(localePath);
+    const outsideLocalesDir = path.join(workDir, 'outside-locales');
+    await fs.promises.rm(localesDir, { recursive: true, force: true });
+    await fs.promises.mkdir(outsideLocalesDir);
+    await fs.promises.writeFile(path.join(outsideLocalesDir, 'en.json'), locale('Outside parent name'));
+    await fs.promises.symlink(
+      outsideLocalesDir,
+      localesDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    expect(manager.list()[0].manifest).toMatchObject({
+      name: 'Base name',
+      resolvedLocale: 'en',
+    });
+  });
+
   it('locale 文件缺失、非法 JSON 或缺少工具翻译时 inspect/install 都拒绝', async () => {
     const manifest = {
       ...goodManifest(),
@@ -146,6 +193,11 @@ describe('GhostManager · install', () => {
       'locales/en.json': JSON.stringify({ name: 'English', tools: {} }),
     });
     await expectRejection(await manager.install(incomplete), 'file-invalid');
+
+    const aliasedManifest = await makeCindy('locale-manifest-alias.cindy', goodManifest(), {
+      'GHOST.JSON': JSON.stringify({ name: 'Alias locale' }),
+    });
+    await expectRejection(await manager.install(aliasedManifest), 'file-invalid');
   });
 
   it('装入合法 .cindy:目录落地、ghost.json 在位、list 可见、onChanged 收到全量清单', async () => {

@@ -23,6 +23,7 @@ import {
   verifyGhostZipSignatures,
   type GhostTrustRegistry,
 } from './ghostSignature.js';
+import { isPathInsideDir } from './dirDeposit.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -161,11 +162,16 @@ export class GhostManager {
     for (const candidatePath of candidates) {
       try {
         const absPath = path.join(dir, ...candidatePath.split('/'));
-        const stat = fs.statSync(absPath);
+        const stat = fs.lstatSync(absPath);
         if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
           throw new Error(`locale 文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
         }
-        const raw = JSON.parse(fs.readFileSync(absPath, 'utf8'));
+        const realDir = fs.realpathSync.native(dir);
+        const realLocalePath = fs.realpathSync.native(absPath);
+        if (!isPathInsideDir(realDir, realLocalePath)) {
+          throw new Error('locale 文件经软链解析后位于插件目录之外');
+        }
+        const raw = JSON.parse(fs.readFileSync(realLocalePath, 'utf8'));
         const validated = validateGhostManifestLocaleResource(raw, manifest);
         if (!validated.ok) throw new Error(validated.reason);
         return resolveGhostManifestLocale(runtimeManifest, validated.resource);
@@ -337,6 +343,26 @@ export class GhostManager {
     }
 
     const prefix = detectSingleTopFolderPrefix(allEntries.map((e) => e.name));
+    // ZIP 条目名在检查阶段区分大小写，但 Windows / 默认 macOS 解压落盘不区分。
+    // 折叠后撞同一路径会让后写条目覆盖先写条目（包括 ghost.json），必须在
+    // 读取清单前整体拒绝。
+    const seenEntryPaths = new Set<string>();
+    const aliasedEntry = allEntries.find((entry) => {
+      const rel = entry.name.slice(prefix.length).replace(/\/$/, '');
+      if (rel.length === 0) return false;
+      const folded = rel.toLowerCase();
+      if (seenEntryPaths.has(folded)) return true;
+      seenEntryPaths.add(folded);
+      return false;
+    });
+    if (aliasedEntry) {
+      return {
+        rejection: {
+          code: 'file-invalid',
+          reason: `压缩包含大小写折叠后重复的路径:${aliasedEntry.name.slice(prefix.length)}`,
+        },
+      };
+    }
     // 这两个点文件只属于主机：包若能自带它们，就可伪造停用状态或覆盖
     // 签名信任快照。大小写也折叠检查，避免在 Windows/macOS 上撞同一文件。
     const reservedHostFile = allEntries.find((entry) => {

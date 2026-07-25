@@ -19,12 +19,11 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import {
-  GHOST_LOCALE_MAX_BYTES,
   GHOST_MANIFEST_FILE,
   validateGhostManifest,
-  validateGhostManifestLocaleResource,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
 const MAX_BASIC_FILES = 256;
@@ -557,33 +556,13 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
 
     // 2) locale 资源必须真实、可解析且完整覆盖已声明字段。与装入侧使用
     // 同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
-    if (manifest.locales) {
-      for (const [locale, rel] of Object.entries(manifest.locales)) {
-        if (!rel) continue;
-        let raw: unknown;
-        try {
-          const abs = path.join(dir, ...rel.split('/'));
-          const stat = await fs.promises.stat(abs);
-          if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
-            throw new Error(`文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
-          }
-          raw = JSON.parse(await fs.promises.readFile(abs, 'utf8'));
-        } catch (err) {
-          return {
-            ok: false,
-            errorCode: 'MANIFEST_INVALID',
-            message: `locales.${locale} 不可用(${rel}):${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-        const localized = validateGhostManifestLocaleResource(raw, manifest);
-        if (!localized.ok) {
-          return {
-            ok: false,
-            errorCode: 'MANIFEST_INVALID',
-            message: `locales.${locale} 不合格(${rel}):${localized.reason}`,
-          };
-        }
-      }
+    const localeValidation = validateGhostLocaleResourcesInDirectory(dir, manifest);
+    if (!localeValidation.ok) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: localeValidation.reason,
+      };
     }
 
     // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
@@ -606,12 +585,22 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     let totalBytes = 0;
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
+    const seenPackPaths = new Set<string>();
     const walk = async (cur: string, relBase: string): Promise<ForgePackResult | null> => {
       const entries = await fs.promises.readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         if (shouldSkip(e.name)) continue;
         const abs = path.join(cur, e.name);
         const rel = relBase ? `${relBase}/${e.name}` : e.name;
+        const foldedRel = rel.toLowerCase();
+        if (seenPackPaths.has(foldedRel)) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `源码目录含大小写折叠后重复的路径:${rel}`,
+          };
+        }
+        seenPackPaths.add(foldedRel);
         if (e.isDirectory()) {
           const bad = await walk(abs, rel);
           if (bad) return bad;
@@ -754,16 +743,45 @@ my-ghost/
   "whenToUse": "Use it when ...",
   "tools": {
     "do_thing": {
-      "description": "Do the task and return the result."
+      "description": "Do the task and return the result.",
+      "parameters": {
+        "/properties/query": {
+          "title": "Query",
+          "description": "Describe what to search for."
+        }
+      }
+    }
+  },
+  "panel": { "title": "Plugin panel" },
+  "network": {
+    "secrets": {
+      "api_key": { "label": "API key", "hint": "Create one in account settings." }
+    },
+    "connections": {
+      "instance": { "label": "Service instance", "hint": "Enter the instance URL and token." }
+    }
+  },
+  "node": {
+    "secretBindings": {
+      "worker_key": { "label": "Worker key", "hint": "Used only by the local worker." }
+    }
+  },
+  "setup": {
+    "kv": {
+      "default_repo": { "label": "Default repository" }
     }
   }
 }
 \`\`\`
 
-若原清单声明了 \`description\`、\`whenToUse\` 或 \`tools\`，每个 locale 文件都必须
-完整提供对应字段/全部工具说明；缺译、未知工具、多余字段、文件缺失、无效 JSON 或单文件
-超过 64KB 都会在 Forge 打包期与安装期拒绝。清单列表、详情页、Agent 工具目录都消费
-同一份本地化结果。
+若原清单声明了 \`description\`、\`whenToUse\`、\`tools\`、\`panel.title\`、
+\`network.secrets / connections\`、\`node.secretBindings\` 或 \`setup\` 的 kv 标签，
+每个 locale 文件都必须完整提供对应文案；凭证、连接、Node 凭证和 kv 项按稳定 key 对齐。
+工具参数 schema 中已有的 \`title / description\` 用 JSON Pointer 对齐（如
+\`/properties/query\`；根节点用空字符串 \`""\`），参数名、类型、枚举和协议结构不翻译。
+缺译、未知 key、多余字段、文件缺失、路径大小写与磁盘不一致、无效 JSON 或单文件超过
+64KB 都会在 Forge 打包期、内置播种期与安装期拒绝。清单列表、详情页、Panel 标题、
+安装/配置提示和 Agent 工具目录都消费同一份本地化结果。
 
 十三个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻

@@ -173,6 +173,21 @@ describe('packGhostDir', () => {
       ok: false,
       errorCode: 'MANIFEST_INVALID',
     });
+
+    await fs.promises.rm(path.join(missing, 'locales'), { recursive: true, force: true });
+    await fs.promises.mkdir(path.join(missing, 'Locales'), { recursive: true });
+    await fs.promises.writeFile(
+      path.join(missing, 'Locales', 'EN.json'),
+      JSON.stringify({
+        name: 'Demo',
+        tools: { do_thing: { description: 'English tool' } },
+      }),
+    );
+    expect(await packGhostDir(missing)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('大小写不一致'),
+    });
   });
 
   it('目录不存在 / 清单坏 / 声明的入口文件缺失 → 结构化拒绝', async () => {
