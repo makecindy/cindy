@@ -617,8 +617,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         return {
           ok: false,
           errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message:
-            '用户已在当前工作目录停用该插件;不要重试,改用其它可用方式完成任务,必要时如实转告用户。',
+          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
         };
       }
       // Runtime setup gate: resolve the target before creating any durable
@@ -686,7 +685,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         return {
           ok: false,
           errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-          message: '用户已在当前工作目录停用该插件;不要重试。',
+          message: t('newChat.pluginSetup.targetDisabledInWorkdir'),
         };
       }
       if (
@@ -898,8 +897,11 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       }
       // Full revalidation after session-context await (DB query may take time)
       const postCtx = getGhostManager().list().find((g) => g.manifest.id === ghostId);
-      if (!postCtx || !postCtx.enabled) {
+      if (!postCtx || !isGhostAvailableForActiveSession(ghostId)) {
         return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
+      }
+      if (!postCtx.enabled) {
+        return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
       }
       if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
         return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
