@@ -53,8 +53,8 @@ interface RsbBrowserBridgeIpcSubset {
   tabOpResult(result: RsbBrowserBridgeTabOpResult): Promise<unknown>;
   /** 资源看门狗:上报本 renderer 当前展示的浏览器 tab(null = 无)。 */
   setForeground(input: { tabId: string | null }): Promise<unknown>;
-  /** 用户主动强杀 guest 进程。 */
-  forceKill(input: { tabId: string }): Promise<unknown>;
+  /** 用户主动强杀 guest 进程(webContentsId = registry 未命中时的兜底解析)。 */
+  forceKill(input: { tabId: string; webContentsId?: number }): Promise<unknown>;
   /** main → renderer 资源看门狗事件。 */
   onResourceEvent(cb: (event: RsbBrowserBridgeResourceEvent) => void): () => void;
 }
@@ -145,14 +145,24 @@ export function setForegroundBrowserTab(tabId: string, active: boolean): void {
   }
 }
 
-/** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条的「强制终止」)。 */
+/** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条的「强制终止」)。
+ *  随包携带 webview 的现值 webContentsId:页面在首个 dom-ready 前锁死 renderer
+ *  时 tab 还没 report 进 main 的 registry,main 用它做兜底解析(归属校验不变)。 */
 export function forceKillBrowserTab(tabId: string): Promise<void> {
   const api = ipc();
   if (!api) return Promise.resolve();
-  return api.forceKill({ tabId }).then(
-    () => undefined,
-    () => undefined,
-  );
+  let webContentsId: number | undefined;
+  try {
+    webContentsId = browserWebviewPool.peek(tabId)?.webview.getWebContentsId();
+  } catch {
+    // attach 尚未完成时 getWebContentsId 抛 —— 不带兜底 id,交给 main 判 NOT_FOUND。
+  }
+  return api
+    .forceKill(webContentsId === undefined ? { tabId } : { tabId, webContentsId })
+    .then(
+      () => undefined,
+      () => undefined,
+    );
 }
 
 /**

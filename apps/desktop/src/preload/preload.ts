@@ -3497,8 +3497,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 资源看门狗:上报本 renderer 当前展示的浏览器 tab(null = 无)。 */
     setForeground: (input: { tabId: string | null }): Promise<unknown> =>
       ipcRenderer.invoke('rsb-browser-bridge:set-foreground', input),
-    /** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条的「强制终止」)。 */
-    forceKill: (input: { tabId: string }): Promise<unknown> =>
+    /** 用户主动强杀 guest 进程(unresponsive banner / cpu 提示条的「强制终止」);
+     *  webContentsId 供 registry 未命中(attach 后、首个 dom-ready 前)兜底。 */
+    forceKill: (input: { tabId: string; webContentsId?: number }): Promise<unknown> =>
       ipcRenderer.invoke('rsb-browser-bridge:force-kill', input),
     /** main → renderer 资源看门狗事件(evict-request / kill-notice / cpu-alert)。 */
     onResourceEvent: (cb: (event: unknown) => void) =>

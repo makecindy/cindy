@@ -238,6 +238,19 @@ describe('useBrowserWebview', () => {
     expect(result!.crash).toEqual({ reason: 'killed', cause: 'resource-memory' });
   });
 
+  it('upgrades the crash when gone + late notice land in the same React batch', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+
+    // 两个事件在同一次 act(同一批,React 尚未 commit)内先后到达 ——
+    // 订阅回调必须能看到 crash 已发生(靠同步写 ref,不能等渲染期镜像)。
+    act(() => {
+      mockWebview.dispatch('render-process-gone', { details: { reason: 'killed' } });
+      bridgeMocks.resourceCb?.({ tabId: 'tab-a', kind: 'kill-notice', cause: 'memory' });
+    });
+    expect(result!.crash).toEqual({ reason: 'killed', cause: 'resource-memory' });
+  });
+
   it('upgrades an existing crash on a late kill-notice and consumes the pending cause', () => {
     let result: UseBrowserWebviewResult | null = null;
     render(createElement(HookProbe, { onResult: (next) => { result = next; } }));

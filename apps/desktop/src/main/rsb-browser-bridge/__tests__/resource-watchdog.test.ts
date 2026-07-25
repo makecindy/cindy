@@ -252,6 +252,95 @@ describe('BrowserGuestResourceWatchdog', () => {
   });
 });
 
+describe('BrowserGuestResourceWatchdog — shared renderer process (PID) grouping', () => {
+  /** 双 tab harness:两个 tab 可指向同一个或不同的 guest 进程。 */
+  function makePairHarness(opts: { samePid: boolean }) {
+    const pidA = 2001;
+    const pidB = opts.samePid ? pidA : 2002;
+    const guestA = makeGuest(pidA);
+    const guestB = makeGuest(pidB);
+    const metricA: GuestProcessMetric = {
+      pid: pidA,
+      cpu: { percentCPUUsage: 0 },
+      memory: { workingSetSize: 100_000 },
+    };
+    const metricB: GuestProcessMetric = {
+      pid: pidB,
+      cpu: { percentCPUUsage: 0 },
+      memory: { workingSetSize: 100_000 },
+    };
+    const flags = {
+      pinned: new Set<string>(),
+      foreground: new Set<string>(),
+    };
+    const notifyEvict = vi.fn();
+    const notifyKillNotice = vi.fn();
+    const notifyCpuAlert = vi.fn();
+    const deps: ResourceWatchdogDeps = {
+      listTabs: () => [
+        { tabId: 'ta', webContentsId: 71 },
+        { tabId: 'tb', webContentsId: 72 },
+      ],
+      isPinned: (tabId) => flags.pinned.has(tabId),
+      isForeground: (tabId) => flags.foreground.has(tabId),
+      lookupWebContents: (id) => (id === 71 ? guestA : id === 72 ? guestB : null),
+      getMetrics: () => (opts.samePid ? [metricA] : [metricA, metricB]),
+      notifyEvict,
+      notifyKillNotice,
+      notifyCpuAlert,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    };
+    return {
+      watchdog: new BrowserGuestResourceWatchdog(deps),
+      guestA,
+      guestB,
+      metricA,
+      metricB,
+      flags,
+      notifyEvict,
+      notifyKillNotice,
+      notifyCpuAlert,
+    };
+  }
+
+  it('a pinned sibling in the same process exempts every tab of that process', () => {
+    const h = makePairHarness({ samePid: true });
+    h.flags.pinned.add('tb');
+    h.flags.foreground.add('ta');
+    h.metricA.memory.workingSetSize = FG_MEMORY_KILL_KB * 2;
+    for (let i = 0; i < BG_CPU_EVICT_STRIKES * 2; i += 1) h.watchdog.tick();
+    expect(h.guestA.crashed).toBe(false);
+    expect(h.notifyKillNotice).not.toHaveBeenCalled();
+    expect(h.notifyEvict).not.toHaveBeenCalled();
+  });
+
+  it('a background sibling of a foreground process is not evicted for shared metrics', () => {
+    const h = makePairHarness({ samePid: true });
+    h.flags.foreground.add('ta'); // tb 后台,但与 ta 同进程
+    // 进程级内存超后台淘汰线但低于前台强杀线:tb 不能替前台负载背锅被淘汰。
+    h.metricA.memory.workingSetSize = BG_MEMORY_EVICT_KB + 1;
+    h.watchdog.tick();
+    expect(h.notifyEvict).not.toHaveBeenCalled();
+    // 对照组:不同进程时,后台 tb 自己的内存超线照常淘汰。
+    const h2 = makePairHarness({ samePid: false });
+    h2.flags.foreground.add('ta');
+    h2.metricB.memory.workingSetSize = BG_MEMORY_EVICT_KB + 1;
+    h2.watchdog.tick();
+    expect(h2.notifyEvict).toHaveBeenCalledWith('tb');
+  });
+
+  it('kills a shared process at most once per tick', () => {
+    const h = makePairHarness({ samePid: true });
+    h.flags.foreground.add('ta');
+    h.flags.foreground.add('tb');
+    h.metricA.memory.workingSetSize = FG_MEMORY_KILL_KB;
+    h.watchdog.tick();
+    expect(h.notifyKillNotice).toHaveBeenCalledTimes(1);
+    // 同一进程:两个 guest fake 各自记 crashed,但只允许对进程杀一次。
+    expect(Number(h.guestA.crashed) + Number(h.guestB.crashed)).toBe(1);
+  });
+});
+
 describe('pickResourceEventTarget', () => {
   const live = () => ({ isDestroyed: () => false });
   const dead = () => ({ isDestroyed: () => true });

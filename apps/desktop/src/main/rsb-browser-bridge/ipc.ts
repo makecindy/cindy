@@ -253,11 +253,21 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
 
   // 用户主动终止 guest 进程(unresponsive banner / cpu-alert 提示条的按钮)。
   // 归属校验与截图相同:tabId → registry → 该 guest 必须挂在发起请求的 renderer
-  // 下,防止拿别的窗口的 webContents 强杀。
+  // 下,防止拿别的窗口的 webContents 强杀。registry 未命中时(页面在首个
+  // dom-ready 前锁死 renderer,还没 report 进来)接受 renderer 自报的
+  // webContentsId 兜底 —— 对其执行与 report 相同的三重校验(可解析、是 webview
+  // guest、宿主为 sender),不放松信任模型。
   ipcMain.handle(RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL, (event, payload: unknown) => {
     const obj = requireObject(payload, 'force-kill payload');
     const tabId = requireString(obj.tabId, 'tabId');
-    const target = registry.getWebContentsByTabId(tabId);
+    let target = registry.getWebContentsByTabId(tabId);
+    if (!target && obj.webContentsId !== undefined) {
+      const webContentsId = requireNonNegativeInt(obj.webContentsId, 'webContentsId');
+      const fallback = electronWebContents.fromId(webContentsId);
+      if (fallback && !fallback.isDestroyed() && fallback.getType() === 'webview') {
+        target = fallback;
+      }
+    }
     if (!target) {
       throwIpcError('NOT_FOUND', `no live webContents for tab ${tabId}`);
     }

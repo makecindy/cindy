@@ -294,10 +294,14 @@ export function useBrowserWebview(
       setIsAudible(false);
       setResourceAlert(null);
       const cause = consumePendingKillCause(tabId);
-      setCrash({
+      const next = {
         reason: e.details.reason,
         ...(cause === 'memory' ? { cause: 'resource-memory' as const } : {}),
-      });
+      };
+      // 同步写 ref:kill-notice 可能与本事件同一批到达(React 还没 commit),
+      // 订阅回调靠 crashRef 判断"crash 是否已发生",不能等渲染期镜像。
+      crashRef.current = next;
+      setCrash(next);
     };
     // unresponsive:guest renderer 卡死(主线程长时间不响应)。当成软崩处理 ——
     // 也显示 crash banner,但 reason='unresponsive'(UI 可分支显示"卡死"vs"崩溃")。
@@ -332,7 +336,9 @@ export function useBrowserWebview(
         setResourceAlert({ cpuPercent: event.cpuPercent });
       } else if (event.kind === 'kill-notice' && crashRef.current) {
         consumePendingKillCause(tabId);
-        setCrash({ ...crashRef.current, cause: 'resource-memory' });
+        const upgraded = { ...crashRef.current, cause: 'resource-memory' as const };
+        crashRef.current = upgraded;
+        setCrash(upgraded);
       }
     });
 

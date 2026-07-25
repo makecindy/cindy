@@ -128,6 +128,22 @@ export class BrowserGuestResourceWatchdog {
       return;
     }
 
+    // ── 第一遍:解析每个 tab 的进程归属,按 PID 聚合豁免状态 ────────────────
+    // Chromium 可能把 same-site 的多个 webview guest 合并进同一个 renderer 进程,
+    // 此时 CPU / 内存指标是进程级的,pin / 前台却是 tab 级 —— 独立裁决会出现
+    // "杀前台超限 tab 连带杀掉同进程的 pinned 兄弟"或"后台兄弟替前台的负载
+    // 背锅被淘汰"。聚合规则:同 PID 内任一 tab pinned → 全体豁免;任一 tab
+    // 前台 → 全体按前台策略;kill 每 tick 每 PID 至多一次(杀进程本来就会
+    // 带走同进程所有 tab,重复调用无意义)。
+    interface ResolvedTab {
+      tabId: string;
+      wc: GuestWebContentsLike;
+      pid: number;
+      metric: GuestProcessMetric;
+    }
+    const resolved: ResolvedTab[] = [];
+    const pidPinned = new Set<number>();
+    const pidForeground = new Set<number>();
     const liveTabIds = new Set<string>();
     for (const tab of tabs) {
       liveTabIds.add(tab.tabId);
@@ -136,18 +152,26 @@ export class BrowserGuestResourceWatchdog {
         this.states.delete(tab.tabId);
         continue;
       }
-      let metric: GuestProcessMetric | undefined;
+      let pid: number;
       try {
-        metric = metricsByPid.get(wc.getOSProcessId());
+        pid = wc.getOSProcessId();
       } catch {
         // guest 正处于 crash / attach 中间态,取不到 pid —— 本轮跳过。
         continue;
       }
+      const metric = metricsByPid.get(pid);
       if (!metric) continue;
+      if (this.deps.isPinned(tab.tabId)) pidPinned.add(pid);
+      if (this.deps.isForeground(tab.tabId)) pidForeground.add(pid);
+      resolved.push({ tabId: tab.tabId, wc, pid, metric });
+    }
 
-      if (this.deps.isPinned(tab.tabId)) {
-        // automation 驱动中的 tab 全豁免;连击计数一并清零,pin 释放后重新累计,
-        // 避免 automation 期间的高负载"记账"到用户头上。
+    // ── 第二遍:按聚合后的进程级状态执行阶梯 ─────────────────────────────
+    const killedPids = new Set<number>();
+    for (const tab of resolved) {
+      if (pidPinned.has(tab.pid)) {
+        // automation 驱动中的进程全豁免(含同进程兄弟 tab);连击计数一并清零,
+        // pin 释放后重新累计,避免 automation 期间的高负载"记账"到用户头上。
         this.states.delete(tab.tabId);
         continue;
       }
@@ -160,14 +184,22 @@ export class BrowserGuestResourceWatchdog {
       this.states.set(tab.tabId, state);
       if (state.alertCooldownTicks > 0) state.alertCooldownTicks -= 1;
 
-      const cpu = metric.cpu.percentCPUUsage;
-      const memoryKB = metric.memory.workingSetSize;
+      const cpu = tab.metric.cpu.percentCPUUsage;
+      const memoryKB = tab.metric.memory.workingSetSize;
+      const wc = tab.wc;
 
-      if (this.deps.isForeground(tab.tabId)) {
+      if (pidForeground.has(tab.pid)) {
         state.bgCpuStrikes = 0;
         if (memoryKB >= FG_MEMORY_KILL_KB) {
+          // 同 PID 每 tick 至多杀一次:forcefullyCrashRenderer 杀的是整个进程,
+          // 同进程兄弟 tab 会一起收到 render-process-gone,重复调用无意义。
+          if (killedPids.has(tab.pid)) {
+            this.states.delete(tab.tabId);
+            continue;
+          }
+          killedPids.add(tab.pid);
           this.deps.logger.warn(
-            `resource watchdog killing foreground guest: tab=${tab.tabId} memoryKB=${memoryKB}`,
+            `resource watchdog killing foreground guest: tab=${tab.tabId} pid=${tab.pid} memoryKB=${memoryKB}`,
           );
           // 先 notice 后 kill:renderer 记下原因,随后的 render-process-gone
           // banner 才能显示"内存过高被终止"而不是笼统的"页面崩溃"。

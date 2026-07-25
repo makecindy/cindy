@@ -207,9 +207,18 @@ export interface RsbBrowserBridgeSetForegroundPayload {
   tabId: string | null;
 }
 
-/** Payload renderer sends on `force-kill`. */
+/**
+ * Payload renderer sends on `force-kill`。
+ *
+ * `webContentsId`(可选)= renderer 侧 `webview.getWebContentsId()` 的现值,
+ * 供 registry 未命中时兜底:页面在首个 dom-ready 前就把 renderer 锁死(内联
+ * 死循环)时,tab 还没 report 进 TabRegistry,但 guest 已 attach、unresponsive
+ * banner 已出现 —— 没有兜底的话「强制终止」按钮会静默失效。main 端对该 id 做
+ * 与 report 相同的归属校验(必须是 webview guest 且宿主为 sender)后才执行。
+ */
 export interface RsbBrowserBridgeForceKillPayload {
   tabId: string;
+  webContentsId?: number;
 }
 
 /** Resource watchdog event main pushes on `resource-event`(kind 语义见 channel 注释)。 */
