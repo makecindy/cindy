@@ -137,7 +137,10 @@ function readBootMarker(): { phase?: string; at?: number } | null {
   }
 }
 
-function writeBootMarker(phase: BootPhase, at: number): void {
+// phase 放宽为 string(而非 BootPhase):reloadWithMarker 失败恢复要照原样写回损坏/
+// 前向兼容的未知 phase,若限死枚举就得靠 `as BootPhase` 断言绕过、反而削弱类型意义。
+// 已知阶段的入参约束由上层 markBootPhase(phase: BootPhase) 负责。
+function writeBootMarker(phase: string, at: number): void {
   try {
     ensureDir();
     bootMarkerFile().write(JSON.stringify({ phase, at }));
@@ -284,7 +287,7 @@ export async function reloadWithMarker(reloadAsync: () => Promise<void>): Promis
     // 也照原样写回,而不是把它留在 'reloading' 掩盖后续异常;未知 phase 经
     // isAbnormalPreviousBoot 会被保守判为异常,符合预期)。
     if (typeof previousPhase === 'string' && previousPhase.length > 0) {
-      writeBootMarker(previousPhase as BootPhase, previous?.at ?? Date.now());
+      writeBootMarker(previousPhase, previous?.at ?? Date.now());
     }
     throw err;
   }

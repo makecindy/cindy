@@ -26,29 +26,43 @@ interface CrashBoundaryProps {
 }
 
 interface CrashBoundaryState {
-  error: Error | null;
+  // 独立的布尔标志,而非「error 是否真值」:JS 允许 throw 任意值,抛出 null / 0 / '' 等
+  // 假值时 error 仍为假,若据此判断兜底就不会触发、反而重挂崩溃子树。caught 保留原始值(unknown)。
+  hasError: boolean;
+  caught: unknown;
 }
 
 export class CrashBoundary extends Component<CrashBoundaryProps, CrashBoundaryState> {
-  state: CrashBoundaryState = { error: null };
+  state: CrashBoundaryState = { hasError: false, caught: undefined };
 
-  static getDerivedStateFromError(error: Error): CrashBoundaryState {
-    return { error };
+  static getDerivedStateFromError(error: unknown): CrashBoundaryState {
+    return { hasError: true, caught: error };
   }
 
-  componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
+  componentDidCatch(error: unknown, info: { componentStack?: string | null }): void {
     recordReactError(error, info.componentStack ?? undefined);
   }
 
   private handleReset = (): void => {
-    this.setState({ error: null });
+    this.setState({ hasError: false, caught: undefined });
   };
 
   render(): ReactNode {
-    if (this.state.error) {
-      return <CrashFallback error={this.state.error} onReset={this.handleReset} />;
+    if (this.state.hasError) {
+      return <CrashFallback error={this.state.caught} onReset={this.handleReset} />;
     }
     return this.props.children;
+  }
+}
+
+/** 从任意 throw 值取一段可展示的文本(可能不是 Error 实例)。 */
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name || 'Error';
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error) ?? String(error);
+  } catch {
+    return String(error);
   }
 }
 
@@ -76,7 +90,7 @@ async function exportLog(): Promise<void> {
 }
 
 // 不依赖 ThemeProvider:直读系统深浅色。崩溃兜底是静态一屏,不监听主题实时切换。
-function CrashFallback({ error, onReset }: { error: Error; onReset: () => void }): ReactNode {
+function CrashFallback({ error, onReset }: { error: unknown; onReset: () => void }): ReactNode {
   const colors: ThemeColors = Appearance.getColorScheme() === 'dark' ? darkColors : lightColors;
   const styles = makeStyles(colors);
 
@@ -94,7 +108,7 @@ function CrashFallback({ error, onReset }: { error: Error; onReset: () => void }
       <Text style={styles.title}>{i18n.t('shared.crashScreen.title')}</Text>
       <Text style={styles.body}>{i18n.t('shared.crashScreen.body')}</Text>
       <Text style={styles.detail} numberOfLines={3}>
-        {redactSensitiveText(error.message)}
+        {redactSensitiveText(messageOf(error))}
       </Text>
       <Pressable
         accessibilityRole="button"
@@ -143,7 +157,8 @@ const makeStyles = (colors: ThemeColors) =>
     },
     primaryButton: {
       backgroundColor: colors.textPrimary,
-      borderRadius: radius.control,
+      // 单行交互按钮用 pill 几何(设计规范:8px control radius 仅用于不能做 pill 的内联控件)。
+      borderRadius: radius.pill,
       marginTop: spacing.lg,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.sm,
@@ -154,7 +169,7 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: fontWeight.medium,
     },
     secondaryButton: {
-      borderRadius: radius.control,
+      borderRadius: radius.pill,
       paddingHorizontal: spacing.xl,
       paddingVertical: spacing.sm,
     },
