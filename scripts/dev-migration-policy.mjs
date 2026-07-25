@@ -60,13 +60,16 @@ export function findUnmergedMigrationArtifacts(repoRoot) {
 export function usesIsolatedUserData(argv, env = process.env) {
   return (
     argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')) ||
-    env.XDT_ISOLATED === '1' ||
-    Boolean(env.XDT_USER_DATA_DIR?.trim())
+    env.XDT_ISOLATED === '1'
   );
 }
 
-export function usesPassiveUserData(argv) {
-  return argv.includes('--passive') || argv.includes('--preserve-running');
+export function usesPassiveUserData(argv, env = process.env) {
+  return (
+    argv.includes('--passive') ||
+    argv.includes('--preserve-running') ||
+    env.XDT_SCHEDULER_PASSIVE === '1'
+  );
 }
 
 /**
@@ -78,7 +81,7 @@ export function usesPassiveUserData(argv) {
  * Run this before the restart pipeline stops any existing Cindy instance.
  */
 export function assertSharedDevMigrationPolicy(_repoRoot, argv, env = process.env) {
-  if (usesIsolatedUserData(argv, env) || usesPassiveUserData(argv)) return;
+  if (usesIsolatedUserData(argv, env) || usesPassiveUserData(argv, env)) return;
   throw new Error(
     'Primary desktop dev cannot migrate shared Cindy userData because it may upgrade the release database and prevent an older release from opening it.\n' +
       'Use pnpm restart:desktop:remote -- --isolated=<name> for dev migrations, or --passive for a shared read-only preview.',

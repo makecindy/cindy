@@ -92,7 +92,6 @@ if (shouldBlockSharedPrimaryDev({
   isPackaged: app.isPackaged,
   schedulerPassive: devFlags.schedulerPassive,
   isolated: devFlags.isolated,
-  hasUserDataOverride: devFlags.userDataDirOverride !== null,
 })) {
   stderr.write(
     '[cindy] Primary desktop dev cannot use shared Cindy userData because it may upgrade ' +

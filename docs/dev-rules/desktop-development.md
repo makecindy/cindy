@@ -49,7 +49,8 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
   并共享当前 userData／登录态；仅供能证明实例归属的上层编排，或用户明确「不要关当前
   实例／不要重新登录」时用。仅支持 remote，禁止与 `--isolated` 组合。
 
-已手动设 `XDT_USER_DATA_DIR` 时尊重用户值，不覆盖。
+已手动设 `XDT_USER_DATA_DIR` 时仍须同时声明 `--isolated` / `XDT_ISOLATED=1`；脚本会尊重
+该目录值而不覆盖。仅设置目录不足以证明它与正式版 userData 隔离，因此不能绕过启动闸。
 
 ### 并行多开 dev
 

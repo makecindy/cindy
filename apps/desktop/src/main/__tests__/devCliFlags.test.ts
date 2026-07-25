@@ -274,19 +274,27 @@ describe('shouldBlockSharedPrimaryDev', () => {
     ).toBe(false);
     expect(
       shouldBlockSharedPrimaryDev({
-        isPackaged: false,
-        schedulerPassive: false,
-        isolated: false,
-        hasUserDataOverride: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldBlockSharedPrimaryDev({
         isPackaged: true,
         schedulerPassive: false,
         isolated: false,
       }),
     ).toBe(false);
+  });
+
+  it('手动 XDT_USER_DATA_DIR 不等于 isolated，不能绕过 primary dev 启动闸', () => {
+    const flags = resolveDevCliFlags({
+      ...base,
+      envUserDataDir: '/AppData/xdt-maker',
+    });
+    expect(flags.userDataDirOverride).toBe('/AppData/xdt-maker');
+    expect(flags.isolated).toBe(false);
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: flags.schedulerPassive,
+        isolated: flags.isolated,
+      }),
+    ).toBe(true);
   });
 });
 

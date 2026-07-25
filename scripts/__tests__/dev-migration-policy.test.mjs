@@ -82,6 +82,40 @@ test('passive shared dev may start without running migrations', () => {
     assert.doesNotThrow(() =>
       assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready', '--preserve-running']),
     );
+    assert.doesNotThrow(() =>
+      assertSharedDevMigrationPolicy(
+        fixture.repo,
+        ['--wait-ready'],
+        { XDT_SCHEDULER_PASSIVE: '1' },
+      ),
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a userData override alone cannot bypass shared primary protection', () => {
+  const fixture = createFixture();
+  try {
+    assert.throws(
+      () =>
+        assertSharedDevMigrationPolicy(
+          fixture.repo,
+          ['--wait-ready'],
+          { XDT_USER_DATA_DIR: path.join(fixture.repo, 'Cindy') },
+        ),
+      /may upgrade the release database and prevent an older release from opening/,
+    );
+    assert.doesNotThrow(() =>
+      assertSharedDevMigrationPolicy(
+        fixture.repo,
+        ['--wait-ready'],
+        {
+          XDT_ISOLATED: '1',
+          XDT_USER_DATA_DIR: path.join(fixture.repo, 'Cindy-dev'),
+        },
+      ),
+    );
   } finally {
     fixture.cleanup();
   }

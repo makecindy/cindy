@@ -137,15 +137,8 @@ export function shouldBlockSharedPrimaryDev(input: {
   isPackaged: boolean;
   schedulerPassive: boolean;
   isolated: boolean;
-  /** 手动 XDT_USER_DATA_DIR 也代表用户明确选择了 dev 数据目录。 */
-  hasUserDataOverride?: boolean;
 }): boolean {
-  return (
-    !input.isPackaged &&
-    !input.schedulerPassive &&
-    !input.isolated &&
-    !input.hasUserDataOverride
-  );
+  return !input.isPackaged && !input.schedulerPassive && !input.isolated;
 }
 
 export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {
