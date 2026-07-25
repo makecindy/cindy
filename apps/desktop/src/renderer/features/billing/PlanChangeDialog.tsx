@@ -32,7 +32,7 @@ export type PlanChangeCandidate = {
   product: BillingCatalogProduct;
   offer: BillingCatalogOffer;
   /** UI hint only; the server quote is the authority on the change type. */
-  direction: 'UPGRADE' | 'DOWNGRADE';
+  direction: 'UPGRADE' | 'DOWNGRADE' | null;
 };
 
 function formatEffectiveDate(iso: string, locale: string): string {
@@ -104,7 +104,11 @@ export function PlanChangeTargetDialog({
               <div className="divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
                 {candidates.map((candidate) => {
                   const DirectionIcon =
-                    candidate.direction === 'UPGRADE' ? ArrowUpRight : ArrowDownRight;
+                    candidate.direction === 'UPGRADE'
+                      ? ArrowUpRight
+                      : candidate.direction === 'DOWNGRADE'
+                        ? ArrowDownRight
+                        : null;
                   return (
                     <button
                       key={candidate.offer.code}
@@ -121,12 +125,14 @@ export function PlanChangeTargetDialog({
                         <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                           {candidate.product.name}
                         </p>
-                        <p className="mt-0.5 inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
-                          <DirectionIcon size={12} />
-                          {candidate.direction === 'UPGRADE'
-                            ? t('billing.planChange.upgradeBadge')
-                            : t('billing.planChange.downgradeBadge')}
-                        </p>
+                        {DirectionIcon && (
+                          <p className="mt-0.5 inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)]">
+                            <DirectionIcon size={12} />
+                            {candidate.direction === 'UPGRADE'
+                              ? t('billing.planChange.upgradeBadge')
+                              : t('billing.planChange.downgradeBadge')}
+                          </p>
+                        )}
                       </div>
                       <div className="shrink-0 text-right">
                         <p className="text-13 font-medium tabular-nums text-[var(--text-primary)]">

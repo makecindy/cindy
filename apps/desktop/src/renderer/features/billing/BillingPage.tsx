@@ -438,10 +438,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
 
   const currentPlan = currentSubscription?.effectivePlan ?? null;
   const pendingPlanChange = currentSubscription?.pendingPlanChange ?? null;
-  const planChangeable =
-    currentSubscription?.status === 'ACTIVE' &&
-    !currentSubscription.cancelAtPeriodEnd &&
-    currentPlan?.offer.interval === 'MONTH';
+  const hasCurrentSubscription = currentSubscription !== null;
   const currentPlanFacts = useMemo(() => {
     if (!currentSubscription) return null;
     const plan = currentSubscription.effectivePlan;
@@ -456,32 +453,25 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     };
   }, [billingLocale, currentSubscription, planNameOf, t]);
 
-  // UI candidates only. The quote is the authority on whether a target is
-  // actually reachable; this filter just avoids offering obviously invalid
-  // targets (other interval, same level, or another provider's offers).
+  // The server quote owns reachability and direction. The renderer only hides
+  // offers that are not currently sold and the exact current offer.
   const planChangeCandidates = useMemo<PlanChangeCandidate[]>(() => {
-    if (!planChangeable || !currentPlan) return [];
-    const currentProvider = currentSubscription?.provider ?? null;
+    if (!hasCurrentSubscription) return [];
     return subscriptionOffers
       .filter(
-        (entry) =>
-          isCatalogOfferPurchasable(entry) &&
-          entry.offer.interval === currentPlan.offer.interval &&
-          entry.offer.code !== currentPlan.offer.code &&
-          entry.product.level !== null &&
-          entry.product.level !== currentPlan.product.level &&
-          (currentProvider === null ||
-            entry.purchaseOptions.some((option) => option.provider === currentProvider)),
+        (entry) => isCatalogOfferPurchasable(entry) && entry.offer.code !== currentPlan?.offer.code,
       )
       .map(({ product, offer }) => ({
         product,
         offer,
         direction:
-          (product.level ?? 0) > currentPlan.product.level
-            ? ('UPGRADE' as const)
-            : ('DOWNGRADE' as const),
+          currentPlan && product.level !== null && product.level !== currentPlan.product.level
+            ? product.level > currentPlan.product.level
+              ? ('UPGRADE' as const)
+              : ('DOWNGRADE' as const)
+            : null,
       }));
-  }, [subscriptionOffers, planChangeable, currentPlan, currentSubscription?.provider]);
+  }, [subscriptionOffers, hasCurrentSubscription, currentPlan]);
 
   const openPurchaseDialog = (kind: PurchaseKind) => {
     resetSelection();
@@ -605,7 +595,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               facts={currentPlanFacts}
               loading={loadingSubscription}
               error={subscriptionError}
-              planChangeable={planChangeable}
+              hasSubscription={hasCurrentSubscription}
               actionDisabled={loadingSubscription || subscriptionError}
               pendingPlanChange={pendingPlanChange}
               pendingTargetName={planNameOf(pendingPlanChange?.targetPlan?.product.code)}
@@ -802,7 +792,7 @@ function SubscriptionOverviewCard({
   facts,
   loading,
   error,
-  planChangeable,
+  hasSubscription,
   actionDisabled,
   pendingPlanChange,
   pendingTargetName,
@@ -814,7 +804,7 @@ function SubscriptionOverviewCard({
   facts: CurrentPlanFacts | null;
   loading: boolean;
   error: boolean;
-  planChangeable: boolean;
+  hasSubscription: boolean;
   actionDisabled: boolean;
   pendingPlanChange: BillingPendingPlanChange | null;
   pendingTargetName: string | null;
@@ -892,11 +882,11 @@ function SubscriptionOverviewCard({
         </div>
         <button
           type="button"
-          onClick={planChangeable ? onChangePlan : onPurchase}
+          onClick={hasSubscription ? onChangePlan : onPurchase}
           disabled={actionDisabled}
           className="h-8 shrink-0 select-none rounded-full border border-[var(--border-default)] px-3.5 text-12 font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover-soft)] disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {planChangeable
+          {hasSubscription
             ? t('billing.settings.subscriptionCard.changeAction')
             : t('billing.settings.subscriptionCard.action')}
         </button>
