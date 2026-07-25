@@ -54,6 +54,8 @@ import {
   type RemoteProjectTarget,
 } from '@/components/new-chat/AddRemoteProjectDialog';
 import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
+import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
+import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { buildDeviceLinkCreateArgs } from './deviceLinkCreateArgs';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
@@ -64,6 +66,7 @@ import { useAttachments } from '@/hooks/useAttachments';
 import {
   useNewMakerDraft,
   switchVendor,
+  getDraft,
   patchDraft,
   patchCollab,
   patchCurrentVendorPrefs,
@@ -125,6 +128,7 @@ import {
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { createLogger } from '@/lib/logger';
+import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -324,8 +328,10 @@ export function NewMakerDraftRoute() {
   const { t } = useTranslation();
   const draft = useNewMakerDraft();
   const navigate = useNavigate();
-  // minWidth=640:自适应内容列在大屏封顶 1220(hook 内 MAX),小屏兜一个体面下限
-  // (与对话页的 max 对称);窄于下限时 hook 自动回落成"填满容器",不溢出。
+  // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
+  // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
+  // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
+  // "填满容器",不溢出。
   const { containerRef, inputWidth } = useProportionalWidth(914, { minWidth: 640 });
   // The available rail can shrink when either sidebar opens while the
   // viewport itself remains wide. Keep the draft layout responsive to that
@@ -416,6 +422,9 @@ export function NewMakerDraftRoute() {
   const effectiveDeviceLinkDeviceId = draft.deviceLinkDeviceId ?? undefined;
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   const isDeviceLinkDraft = effectiveWorkingDir != null && effectiveDeviceLinkDeviceId != null;
+  // 零可用模型引导卡:device-link 草稿不出(连接态在被控端,本机替它连不上)。
+  const providerOnboarding = useProviderOnboarding();
+  const showProviderOnboardingCard = providerOnboarding.visible && !isDeviceLinkDraft;
   const effectiveExtraDirs = draft.extraDirs;
   const effectiveCollab = collab;
   const effectiveCollabEnabled =
@@ -1099,9 +1108,19 @@ export function NewMakerDraftRoute() {
     patchDraft({ workingDir: dir, remoteHostId: null });
   }, []);
 
+  // ─── 新草稿入场:引用目录清零 ──────────────────────────────────────────
+  // 引用目录是"这次给 agent 额外看哪"的单次授权,不是"我常用哪个"的偏好记忆:
+  // 上一个未发送草稿留下的目录若静默带进新草稿,用户会无感知地扩大 agent 可见
+  // 范围(2026-07-25 用户定稿)。每次进入草稿页一律从空开始;store 侧 sanitize
+  // 也不跨重启还原,双保险。workingDir / 文本 / 模型等便利性记忆不受影响。
+  // StrictMode 双 mount 安全:清空幂等;guard 避免空转 emit。
+  useEffect(() => {
+    if (getDraft().extraDirs.length > 0) patchDraft({ extraDirs: [] });
+  }, []);
+
   // ─── 用户增删 extraDirs → 写回 draft ────────────────────────────────────
-  // 草稿期 (还没建 session) 没有 IPC 可调; localStorage 持久化 + 走 createSession
-  // 时一次性透传到 DB / agent 即可。
+  // 草稿期 (还没建 session) 没有 IPC 可调; 内存态 + 走 createSession
+  // 时一次性透传到 DB / agent 即可(sanitize 不跨重启还原,见 store 注释)。
   const handleExtraDirsChange = useCallback((next: string[]) => {
     patchDraft({ extraDirs: next });
   }, []);
@@ -1253,11 +1272,16 @@ export function NewMakerDraftRoute() {
                 }
                 remoteWorkingDir = resp.meta.path;
               } catch (err) {
-                // 隧道失败(含老被控端 CHANNEL_NOT_ALLOWED)→ unknown 类 toast,回显原始信息。
-                showWorktreeError({
-                  kind: 'unknown',
-                  message: err instanceof Error ? err.message : String(err),
-                });
+                const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
+                if (remoteWorkdirMessage) {
+                  toast.error(remoteWorkdirMessage);
+                } else {
+                  // 隧道失败(含老被控端 CHANNEL_NOT_ALLOWED)仍沿用 worktree 通用错误提示。
+                  showWorktreeError({
+                    kind: 'unknown',
+                    message: err instanceof Error ? err.message : String(err),
+                  });
+                }
                 return;
               } finally {
                 setWtCreating(false);
@@ -1568,8 +1592,7 @@ export function NewMakerDraftRoute() {
             // 自动分配 <userData>/dialogues/<date>/<sid>/ 作为运行目录,不进入项目段。
             workspaceKind: workingDir ? 'project' : 'dialogue',
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
-            // Codex 不支持 extraDirs (capability=false), agent 收到也忽略;
-            // 但 draft.extraDirs 是 vendor 无关字段, 这里照传, DB 存了也无害。
+            // extraDirs 是 vendor 无关字段；Claude 与 Codex 都按只读引用目录透传。
             extraDirs: effectiveExtraDirs,
             providerId,
           });
@@ -1653,7 +1676,9 @@ export function NewMakerDraftRoute() {
           });
         } catch (err) {
           log.error('[draft send]', err);
-          toast.error(t('ccAgent.draft.createSessionFailed'));
+          toast.error(
+            getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+          );
         } finally {
           setWtCreating(false);
           sendInFlightRef.current = false;
@@ -1733,7 +1758,11 @@ export function NewMakerDraftRoute() {
               providerId: chatInitialProviderId ?? null,
             }),
           ],
-        );
+        ).catch((err) => {
+          const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
+          if (remoteWorkdirMessage) throw new Error(remoteWorkdirMessage);
+          throw err;
+        });
         const remoteSessionId = (createResult as { sessionId?: string } | null)?.sessionId;
         if (!remoteSessionId) {
           throw new Error(t('ccAgent.draft.createSessionFailed'));
@@ -2044,16 +2073,22 @@ export function NewMakerDraftRoute() {
             data-testid="create-agent-main"
             className={cn(
               'relative flex h-full min-w-0 w-full flex-col items-center justify-start',
+              // 引导卡比快速开始高一截:收紧顶部留白并允许纵向滚动,否则外壳
+              // overflow-hidden 会把卡片下半截裁在视口外(2026-07-24 用户实测)。
+              showProviderOnboardingCard && 'overflow-y-auto pb-8',
               isDraftNarrow
                 ? 'px-4 pt-[calc(max(64px,18vh)_+_32px_-_var(--content-header-h,46px))]'
-                : 'px-8 pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]',
+                : showProviderOnboardingCard
+                  ? 'px-8 pt-[calc(max(56px,10vh)_+_46px_-_var(--content-header-h,46px))]'
+                  : 'px-8 pt-[calc(max(96px,28vh)_+_46px_-_var(--content-header-h,46px))]',
             )}
           >
             <div
               className="relative flex w-full flex-col items-start"
               // 与进行中对话页同源:内容列宽度跟随 useProportionalWidth 算出的
-              // inputWidth(封顶 1220px),不再死锁 800——大屏自适应变宽,且发送后
-              // 同一个 ChatInput 无宽度跳变。inputWidth 由 useLayoutEffect 同步量出
+              // inputWidth(封顶 914+20=934px,见 hook 首参),不再死锁 800——大屏留出
+              // 左右呼吸空间、窄屏自适应收窄,且发送后同一个 ChatInput 无宽度跳变。
+              // inputWidth 由 useLayoutEffect 同步量出
               // (paint 前已就绪);极端未量到(0)时回落旧默认 800,不放大到全宽。
               style={{ maxWidth: inputWidth || 800 }}
             >
@@ -2245,56 +2280,62 @@ export function NewMakerDraftRoute() {
                     </span>
                   </div>
                 )}
-                {/* 输入框跟随 inputWidth 变宽后,快捷入口只有 4 项,若也铺满全宽
-                    会被撑成又宽又空的短卡。这里把卡片区封顶在 800px、左对齐(与输入框
-                    左缘齐),保持每张卡当前的紧凑比例;输入框仍独立用满可用宽度。 */}
-                <div
-                  data-testid="create-agent-quick-starts"
-                  className="mt-[42px] w-full"
-                  style={{ maxWidth: 800 }}
-                >
-                  {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
-                      (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
-                  <div className="mb-2.5 px-0.5">
-                    <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
-                      {t('newChat.createAgent.quickStart')}
+                {/* 零可用模型 → 快速开始换成「连接供应商」引导卡(互斥:此时快捷入口
+                    只会把 prompt 填进发不出去的输入框;device-link 草稿由上方 chip 负责,
+                    引导卡自身有 !isDeviceLinkDraft gate)。dismiss / 连上后恢复快捷入口。 */}
+                {showProviderOnboardingCard && (
+                  <div className="mt-8 w-full" style={{ maxWidth: 800 }}>
+                    <ConnectProviderCard />
+                  </div>
+                )}
+                {/* 快捷入口与输入框同宽:左右两缘都与上方 ChatInput 对齐(父列已封顶
+                    inputWidth)。此前封顶 800px 会在宽窗口下右缘短一截,视觉上没对齐
+                    (2026-07-24 用户反馈)。 */}
+                {!showProviderOnboardingCard && (
+                  <div data-testid="create-agent-quick-starts" className="mt-[42px] w-full">
+                    {/* 标题字号 12→14px(DESIGN §3 Caption),与卡片间距 16→10px 收近
+                        (DESIGN §5 间距档)——用户改稿 2026-07-22。 */}
+                    <div className="mb-2.5 px-0.5">
+                      <div className="text-[14px] font-medium leading-[18px] text-[var(--text-secondary)]">
+                        {t('newChat.createAgent.quickStart')}
+                      </div>
+                    </div>
+                    <div
+                      className={cn(
+                        'grid w-full gap-3',
+                        isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
+                      )}
+                    >
+                      {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => handleQuickStart(labelKey)}
+                          // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl);
+                          // 窄态横排 / 常态竖排自适应(#562)。
+                          className={cn(
+                            'group rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
+                            isDraftNarrow
+                              ? 'flex min-h-[84px] items-center gap-3 p-3'
+                              : 'flex min-h-[112px] flex-col items-start gap-3 p-4',
+                          )}
+                        >
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
+                            <Icon
+                              size={16}
+                              strokeWidth={2}
+                              className="text-[var(--create-agent-quick-card-icon)]"
+                            />
+                          </span>
+                          {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。 */}
+                          <span className="flex min-w-0 min-h-10 items-center text-13 font-semibold leading-[16px]">
+                            {t(labelKey)}
+                          </span>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  <div
-                    className={cn(
-                      'grid w-full gap-3',
-                      isDraftNarrow ? 'grid-cols-1' : isDraftMedium ? 'grid-cols-2' : 'grid-cols-4',
-                    )}
-                  >
-                    {createAgentQuickStarts.map(({ key, labelKey, icon: Icon }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => handleQuickStart(labelKey)}
-                        // 圆角与输入框统一为 12px(DESIGN §5 容器档,rounded-xl);
-                        // 窄态横排 / 常态竖排自适应(#562)。
-                        className={cn(
-                          'group rounded-xl border border-[var(--create-agent-quick-card-border)] bg-[var(--create-agent-quick-card-bg)] text-left text-[var(--create-agent-quick-card-text)] transition-colors hover:bg-[var(--create-agent-quick-card-bg-hover)]',
-                          isDraftNarrow
-                            ? 'flex min-h-[84px] items-center gap-3 p-3'
-                            : 'flex min-h-[112px] flex-col items-start gap-3 p-4',
-                        )}
-                      >
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--create-agent-quick-card-icon-bg)]">
-                          <Icon
-                            size={16}
-                            strokeWidth={2}
-                            className="text-[var(--create-agent-quick-card-icon)]"
-                          />
-                        </span>
-                        {/* 字号 13px 与左侧会话列表(text-13)一致——用户改稿 2026-07-22。 */}
-                        <span className="flex min-w-0 min-h-10 items-center text-13 font-semibold leading-[16px]">
-                          {t(labelKey)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                )}
                 {/* 首页「新建目标」弹窗:无 sessionId → onCreate 建会话并 setGoal(见 handleCreateGoal)。
                 initialObjective = 点「新建目标」时输入框里已有的文字。 */}
                 <NewGoalDialog

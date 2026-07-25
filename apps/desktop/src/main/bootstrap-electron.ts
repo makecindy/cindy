@@ -235,6 +235,10 @@ import {
   installPowerEventDiagnostics,
   installWindowResponsivenessDiagnostics,
 } from './powerWakeDiagnostics';
+import {
+  broadcastVoiceInputPowerState,
+  installVoiceInputPowerRelease,
+} from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
@@ -342,6 +346,14 @@ import {
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { GhostPanelWindowsController } from './ghost-panel-window/controller.js';
+import { createGhostPanelWindow } from './ghost-panel-window/window.js';
+import { registerGhostPanelWindowIpc } from './ghost-panel-window/ipc.js';
+import {
+  patchGhostPanelWindowEntry,
+  readGhostPanelWindowsSettings,
+  removeGhostPanelWindowEntry,
+} from './ghost-panel-window/settings-store.js';
 import {
   readRsbWindowSettings,
   writeRsbWindowSettingsPatch,
@@ -367,6 +379,7 @@ import {
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
 import { hasClaudeAiOAuth } from './maker-host/claude-credentials-store.js';
@@ -485,8 +498,10 @@ import {
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
   isImDefaultEffort,
+  isImDefaultSettingsChannel,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
+  type ImDefaultSettingsChannel,
   type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
 import {
@@ -500,6 +515,7 @@ import {
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
+import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
   noteManualXdKeySaved,
@@ -531,9 +547,17 @@ import {
 } from './app-shortcuts/index.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
-import { registerGhostIpc, suspendAllGhosts } from './cindy-brain/index.js';
+import {
+  getGhostManager,
+  isGhostAvailableForActiveSession,
+  registerGhostIpc,
+  setGhostsChangedObserver,
+  suspendAllGhosts,
+  waitForGhostMutations,
+} from './cindy-brain/index.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
+import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
 import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
@@ -759,6 +783,7 @@ const authBoundaryLog = createLogger('auth-boundary');
 // 主窗 renderer 加载失败可观测性 + dev 启动看门狗(见 renderer-boot-guard.ts 顶部注释)。
 const rendererGuardLog = createLogger('renderer-guard');
 const updatePresentationLog = createLogger('update-presentation');
+const voicePowerBroadcastLog = createLogger('voice-input-power');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -796,6 +821,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Every Ghost sandbox can retain live OAuth, subscription, or in-memory
   // state. Stop them before changing owners; resident Ghosts are recreated by
   // the auth-change activation pass after the new boundary is committed.
+  await waitForGhostMutations();
   suspendAllGhosts();
   // Personal IM channels have the same DB boundary. Relogin restarts them via
   // app:ready-for-bot after the new DbClient is ready.
@@ -975,6 +1001,52 @@ registerRsbWindowIpc({
   getMainWindow: () => mainWindowRef,
 });
 
+// ── 插件停靠面板独立窗口(ghost panel window)────────────────────────────
+// 每 ghostId 一扇窗:PanelChrome「独立窗口」按钮 → setDetached(id, true) 开窗,
+// 主窗布局树里该 pane 停止渲染(树不动);关窗/合并即回停靠。装/卸/启停广播
+// 经 setGhostsChangedObserver 喂 reconcile,失去资格的窗口即时收掉。
+// deps 同样全 lazy(isQuitting 声明在后),状态机见 ghost-panel-window/controller.ts。
+const ghostPanelWindowsController = new GhostPanelWindowsController({
+  settings: {
+    read: readGhostPanelWindowsSettings,
+    patchEntry: patchGhostPanelWindowEntry,
+    removeEntry: removeGhostPanelWindowEntry,
+  },
+  createWindow: (ghostId) => {
+    const ghost = getGhostManager()
+      .list()
+      .find((g) => g.manifest.id === ghostId);
+    const title = ghost?.manifest.panel?.title ?? ghost?.manifest.name ?? ghostId;
+    return createGhostPanelWindow(ghostId, title);
+  },
+  isGhostDetachable: (ghostId) => {
+    const ghost = getGhostManager()
+      .list()
+      .find((g) => g.manifest.id === ghostId);
+    return (
+      ghost !== undefined &&
+      ghost.enabled !== false &&
+      ghost.manifest.panel !== undefined &&
+      ghost.manifest.panel.position !== 'tab' &&
+      isGhostAvailableForActiveSession(ghostId)
+    );
+  },
+  broadcastState: (state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.GHOST_PANEL_WINDOW_STATE_CHANGED, state);
+      } catch {
+        // window torn down mid-broadcast — ignore
+      }
+    }
+  },
+  isQuitting: () => isQuitting,
+  log: createLogger('ghost-panel-window-controller'),
+});
+registerGhostPanelWindowIpc(ghostPanelWindowsController);
+setGhostsChangedObserver((ghosts) => ghostPanelWindowsController.reconcile(ghosts));
+
 registerRsbBrowserBridgeIpc({
   registry: getRsbBrowserBridge(),
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
@@ -1015,6 +1087,7 @@ registerLayoutIpc();
 // renderer 首帧 sendSync 拉已装意识清单(意识面板与内置面板同帧注册,规则 7
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
 registerGhostIpc();
+registerPluginMarketIpc();
 
 // ── Custom protocol registration (image-local-cache M2) ──────────────────
 // MUST run before app.whenReady(), and MUST be a SINGLE call:
@@ -2326,6 +2399,19 @@ const registerIpcHandlers = () => {
     return windows.find((w) => !w.isDestroyed() && w.isMinimizable()) ?? windows[0];
   };
 
+  registerBillingIpc({
+    getMainWindow: () => mainWindowRef,
+    requirePersonalAccount: () => {
+      requireAppCapability(
+        'canUseCindyAccountServices',
+        'Billing requires a personal Cindy account.',
+      );
+      if (authManager.getAuthState().user?.membershipKind !== 'personal') {
+        throwIpcError('PERMISSION_DENIED', 'Billing is only available to personal accounts.');
+      }
+    },
+  });
+
   initAppBadgeService({
     getWindow: () => getWindow() ?? null,
     onSessionAttentionMarked: (sessionId) => {
@@ -2453,16 +2539,25 @@ const registerIpcHandlers = () => {
       }
     },
   );
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_GET, async () => {
-    return imDefaultSettingsWire();
+  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_GET, async (_e, rawChannel: unknown) => {
+    return imDefaultSettingsWire(parseImDefaultSettingsChannel(rawChannel));
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET, async (_e, patch: unknown) => {
-    writeImDefaultSettingsPatch(parseImDefaultSettingsPatch(patch));
-    return imDefaultSettingsWire();
-  });
-  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async () => {
-    resetImDefaultSettings();
-    return imDefaultSettingsWire();
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET,
+    async (_e, patch: unknown, rawChannel: unknown) => {
+      const channel = parseImDefaultSettingsChannel(rawChannel);
+      writeImDefaultSettingsPatch(parseImDefaultSettingsPatch(patch), channel);
+      return imDefaultSettingsWire(channel);
+    },
+  );
+  ipcMain.handle(MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_RESET, async (_e, rawChannel: unknown) => {
+    const channel = parseImDefaultSettingsChannel(rawChannel);
+    if (channel) {
+      resetImDefaultSettingsChannel(channel);
+    } else {
+      resetImDefaultSettings();
+    }
+    return imDefaultSettingsWire(channel);
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
@@ -3281,7 +3376,9 @@ const registerIpcHandlers = () => {
         markDesktopDevStartupFailed(
           'AUTH_INIT_FAILED',
           err instanceof Error ? err.message : String(err),
-          { phase: 'auth:initialize' },
+          {
+            phase: 'auth:initialize',
+          },
         );
       }
       throw err;
@@ -4432,7 +4529,10 @@ const registerIpcHandlers = () => {
           // 错误,无法区分"file:// 编码问题"还是"文件 / 权限问题",难排障。
           createLogger('shell:open-file-in-browser').warn(
             'openExternal failed, fallback to openPath',
-            { fileUrl, error: String(e) },
+            {
+              fileUrl,
+              error: String(e),
+            },
           );
           const errMsg = await shell.openPath(filePath);
           if (errMsg) return { success: false, error: errMsg };
@@ -5490,6 +5590,20 @@ app.on('ready', async () => {
   // render-watchdog 的漂移/无帧日志提供时间锚点。
   installPowerEventDiagnostics({ powerMonitor });
 
+  // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
+  // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。
+  installVoiceInputPowerRelease({
+    powerMonitor,
+    broadcast: (channel, payload) => {
+      broadcastVoiceInputPowerState(
+        BrowserWindow.getAllWindows(),
+        channel,
+        payload,
+        voicePowerBroadcastLog,
+      );
+    },
+  });
+
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
     authManager.handleResume();
@@ -5648,14 +5762,22 @@ function memorySettingsWire() {
   };
 }
 
-function imDefaultSettingsWire() {
-  const state = readImDefaultSettingsState();
+function imDefaultSettingsWire(channel?: ImDefaultSettingsChannel) {
+  const state = readImDefaultSettingsState(channel);
   return {
     ...state.value,
     isCustomized: state.isCustomized,
     customizedKeys: state.customizedKeys,
     defaults: state.defaults,
   };
+}
+
+function parseImDefaultSettingsChannel(raw: unknown): ImDefaultSettingsChannel | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!isImDefaultSettingsChannel(raw)) {
+    throwIpcError('INVALID_PARAMS', 'im default settings channel invalid');
+  }
+  return raw;
 }
 
 function subagentModelSettingsWire() {

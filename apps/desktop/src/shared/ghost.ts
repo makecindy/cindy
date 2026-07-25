@@ -127,6 +127,40 @@ export type GhostNodeProtocol = (typeof GHOST_NODE_PROTOCOLS)[number];
 export const GHOST_NODE_LIFECYCLES = ['on-demand', 'resident'] as const;
 export type GhostNodeLifecycle = (typeof GHOST_NODE_LIFECYCLES)[number];
 
+/** 单插件最多可声明的 Node 凭证绑定数。 */
+export const GHOST_NODE_MAX_SECRET_BINDINGS = 4;
+/** 单条 Node 凭证最多可绑定的 JSON-RPC 方法数。 */
+export const GHOST_NODE_MAX_SECRET_METHODS = 16;
+const GHOST_NODE_MCP_RESERVED_METHODS = new Set(['initialize', 'notifications/initialized']);
+
+/** MCP 握手由宿主发起，插件业务请求与凭证绑定均不得占用这些方法。 */
+export function isGhostNodeMcpReservedMethod(method: string): boolean {
+  return GHOST_NODE_MCP_RESERVED_METHODS.has(method);
+}
+
+/**
+ * 主机保险库 → 随包 Node Worker 的按请求凭证绑定。
+ *
+ * 值由 settingsHtml 经 `/secrets` 一次性写入 safeStorage；浏览器沙箱
+ * main.js 不能直接从保险库读取明文。宿主仅在 method 与 entry 同时命中
+ * 本声明时，把值放进发往 Worker 的保留字段 `cindy.secrets[key]`；
+ * Worker 获得明文后仍可能主动回传或泄露。未声明 entry 时只允许主入口。
+ */
+export interface GhostNodeSecretBinding {
+  /** 凭证键(插件内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
+  key: string;
+  /** 给用户看的名称(安装确认与设置状态使用)。 */
+  label: string;
+  /** 允许注入的 JSON-RPC 方法白名单(1–16 条)。 */
+  methods: string[];
+  /** 可选目标入口；缺省只绑定 node.entry 主入口。 */
+  entry?: string;
+  /** 可选输入提示。 */
+  hint?: string;
+  /** 可选凭证申请页(仅 https；设置页外链须逐字命中)。 */
+  url?: string;
+}
+
 /**
  * 随插件安装的本地 Node 工作进程声明。
  *
@@ -155,6 +189,11 @@ export interface GhostNodeNeeds {
    * 权限本质不变:仍只能跑包内申报过的 JS,node 槽本就是用户级执行权。
    */
   childSpawn?: boolean;
+  /**
+   * 由主机 safeStorage 持久化、按声明的方法临时注入 Worker 的凭证。
+   * 这是 Node 高风险能力的一部分，安装权限清单会逐条披露。
+   */
+  secretBindings?: GhostNodeSecretBinding[];
 }
 
 /** node 额外入口条数上限(1 主 + 4 额外 = 每插件至多 5 个工作进程)。 */
@@ -253,20 +292,24 @@ export const GHOST_LAUNCH_MODES = ['on-demand', 'resident'] as const;
 export type GhostLaunchMode = (typeof GHOST_LAUNCH_MODES)[number];
 
 /**
- * 面板显示形态(相对主聊天窗)。left / right = 顶层布局树停靠 pane;
+ * 面板显示形态(相对主聊天窗)。left = 顶层布局树停靠 pane(缺省);
  * 'tab' = 不进布局树,作为右侧栏(right-tabs)里的每会话单例页签
  * (2026-07-24 定案,注册链路见 renderer/cindy-brain/ghostTabPlugins.tsx)。
- * top / bottom 需要嵌套上下分割(树操作/拖缝/卸载查找全链路),排期中——
- * 校验层先收词并明确拒绝,不静默降级(规则 9)。
+ * right 已退役(2026-07-25 Lizi 定案:右侧是右侧边栏的地盘,插件面板默认
+ * 挤过去体验差;用户想放右边用拖拽换位即可)——旧包声明的 right 在校验期
+ * 归一化为 left(已装插件每次启动都重过校验,硬拒会把存量插件打没;兼容
+ * 语义与 model→cindy 改名同款)。top / bottom 需要嵌套上下分割(树操作/
+ * 拖缝/卸载查找全链路),排期中——校验层先收词并明确拒绝,不静默降级(规则 9)。
  */
-export const GHOST_PANEL_POSITIONS = ['left', 'right', 'tab'] as const;
+export const GHOST_PANEL_POSITIONS = ['left', 'tab'] as const;
 export type GhostPanelPosition = (typeof GHOST_PANEL_POSITIONS)[number];
 
 /** 面板声明(五个卡槽中的「面板」槽,一段意识至多一块)。 */
 export interface GhostPanelDecl {
   /** 面板标准头(PanelChrome)标题;缺省用意识 name。 */
   title?: string;
-  /** 显示形态:left / right 停靠,或 'tab' 右侧栏页签;缺省 = right(2026-07-12 Lizi 定案)。 */
+  /** 显示形态:left 停靠主聊天窗左侧(缺省),或 'tab' 右侧栏页签;
+   *  right 已退役并入 left(2026-07-25 Lizi 定案,见 GHOST_PANEL_POSITIONS 注释)。 */
   position?: GhostPanelPosition;
   /** 面板界面入口(安装目录内相对路径,意识自绘)。 */
   html: string;
@@ -274,6 +317,14 @@ export interface GhostPanelDecl {
   minWidth?: number;
   /** 装入布局时的初始宽度占比(与 layoutTree 的 fraction 同语义)。仅停靠形态有效,'tab' 时禁用。 */
   defaultFraction?: number;
+  /**
+   * 标准头系统按钮开关(2026-07-25):缺省全开,声明 false 逐个关闭。
+   * 当前一批:maximize =「撑满内容区」、detach =「在独立窗口中打开」。
+   * 标准头本体(标题条)恒由主机绘制、不可关——可配置的只是系统按钮;
+   * 'tab' 形态没有标准头,声明本字段拒装。未知键按规则 9 收词明确拒绝,
+   * 新按钮上线时在这里扩键。
+   */
+  systemButtons?: { maximize?: boolean; detach?: boolean };
 }
 
 /**
@@ -727,12 +778,13 @@ export function ghostPreviewUrlAllowed(manifest: GhostManifest, rawUrl: string):
 }
 
 /**
- * 身份卡里声明过的全部外链地址(当前来源 = network.secrets[].url,装包时
+ * 身份卡里声明过的全部外链地址(来源 = network.secrets[].url 与
+ * node.secretBindings[].url,装包时
  * 已校验仅 https):意识 webview 外链闸(GhostExternalLinkGate)的白名单,
  * settingsHtml/面板里的 <a href> 逐字命中才转系统浏览器打开。
  */
 export function ghostExternalLinkUrls(manifest: GhostManifest): string[] {
-  return (manifest.network?.secrets ?? [])
+  return [...(manifest.network?.secrets ?? []), ...(manifest.node?.secretBindings ?? [])]
     .map((s) => s.url)
     .filter((url): url is string => typeof url === 'string' && url.length > 0);
 }
@@ -1072,7 +1124,9 @@ export interface GhostTrustInfo {
 }
 
 /** 意识面板的 panelKind(布局树寻址用)。 */
-export function ghostPanelKind(id: string): string {
+// 返回类型收窄到模板字面量:右侧栏 TabKindId 含 `ghost:${string}` 分支,
+// 调用方无需再 as 断言;对既有 string 消费方完全兼容。
+export function ghostPanelKind(id: string): `ghost:${string}` {
   return `${GHOST_PANEL_KIND_PREFIX}${id}`;
 }
 
@@ -1230,6 +1284,18 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelKey: manifest.node.protocol === 'mcp-stdio' ? 'nodeMcp' : 'nodeRuntime',
       detailKey: 'nodeRuntimeDetail',
     });
+    for (const binding of manifest.node.secretBindings ?? []) {
+      const targetEntry = binding.entry ?? manifest.node.entry;
+      const stableMethods = [...binding.methods].sort();
+      items.unshift({
+        key: `node:secret:${binding.key}:${targetEntry}:${stableMethods.join(',')}`,
+        kind: 'node',
+        labelKey: 'nodeSecret',
+        labelArgs: { name: binding.label },
+        detailKey: 'nodeSecretDetail',
+        detail: binding.methods.join('\n'),
+      });
+    }
     if (manifest.node.lifecycle === 'resident') {
       items.unshift({
         key: 'node:resident',
@@ -1347,11 +1413,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     });
   }
   if (manifest.panel) {
-    const position = manifest.panel.position ?? 'right';
+    const position = manifest.panel.position ?? 'left';
     items.push({
       key: `panel:${position}`,
       kind: 'panel',
-      labelKey: position === 'left' ? 'panelLeft' : position === 'tab' ? 'panelTab' : 'panelRight',
+      labelKey: position === 'tab' ? 'panelTab' : 'panelLeft',
       labelArgs: { title: manifest.panel.title ?? manifest.name },
     });
   }
@@ -1500,7 +1566,7 @@ export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
  * - 树上已有同 kind 的 pane(重装)→ 返回 null:不动树,位置记忆保留、原位复活;
  * - 意识没声明面板 → null;
  * - position:'tab' → null:页签形态不进布局树,由右侧栏页签(ghostTabPlugins)承载;
- * - 否则停在聊天区右侧(index 1),宽度占比/最小宽取清单声明。
+ * - 否则停在聊天区左侧,宽度占比/最小宽取清单声明。
  * 卸下时**不做**逆操作 —— 树数据保留正是"重装复活"的记忆来源(§6 规则 5)。
  */
 export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): Layout | null {
@@ -1509,13 +1575,14 @@ export function layoutWithGhostPanel(layout: Layout, manifest: GhostManifest): L
   const kind = ghostPanelKind(manifest.id);
   if (findSplitChildByPanelKind(layout, kind)) return null;
   // 停靠位置(相对主聊天窗):按 chat-main 的实际下标定插入点,不写死
-  // 序号(未来树形态变化不至于错位)。缺省 right(2026-07-12 Lizi 定案)。
+  // 序号(未来树形态变化不至于错位)。停靠恒在聊天区左侧(2026-07-25 Lizi
+  // 定案:right 退役,右侧留给右侧边栏;用户要右侧自己拖拽换位——已在树里
+  // 的 pane 是用户布局记忆,本函数只管首次装入,不搬动存量)。
   const chatIndex =
     layout.content.type === 'split'
       ? layout.content.children.findIndex((c) => c.node.type === 'pane' && c.node.panelKind === 'chat-main')
       : -1;
-  const position = manifest.panel.position ?? 'right';
-  const index = chatIndex < 0 ? 1 : position === 'left' ? chatIndex : chatIndex + 1;
+  const index = chatIndex < 0 ? 0 : chatIndex;
   const result = insertRootSplitPane(
     layout,
     {
@@ -1614,28 +1681,66 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     ) {
       return { ok: false, reason: 'panel.defaultFraction 必须是 0.05–0.8 之间的数字' };
     }
+    let systemButtons: GhostPanelDecl['systemButtons'];
+    if (p.systemButtons !== undefined) {
+      const sb = p.systemButtons;
+      if (!isPlainObject(sb)) {
+        return { ok: false, reason: 'panel.systemButtons 必须是对象(如 { "maximize": false })' };
+      }
+      // 收词明确拒绝未知键(规则 9):新系统按钮上线时在白名单里扩键。
+      const knownButtons = ['maximize', 'detach'];
+      for (const key of Object.keys(sb)) {
+        if (!knownButtons.includes(key)) {
+          return { ok: false, reason: `panel.systemButtons 只认 ${knownButtons.join(' / ')},未知键:${key}` };
+        }
+        if (typeof (sb as Record<string, unknown>)[key] !== 'boolean') {
+          return { ok: false, reason: `panel.systemButtons.${key} 必须是布尔值` };
+        }
+      }
+      const maximize = (sb as Record<string, unknown>).maximize;
+      const detach = (sb as Record<string, unknown>).detach;
+      systemButtons = {
+        ...(typeof maximize === 'boolean' ? { maximize } : {}),
+        ...(typeof detach === 'boolean' ? { detach } : {}),
+      };
+    }
+    let position: GhostPanelPosition | undefined;
     if (p.position !== undefined) {
       if (p.position === 'top' || p.position === 'bottom') {
         // 收词但明确拒绝(规则 9 不静默降级):上下停靠等布局引擎嵌套分割就绪后开放。
-        return { ok: false, reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / right / tab' };
+        return { ok: false, reason: 'panel.position 的 top / bottom 暂未支持(排期中),当前可用:left / tab' };
       }
-      if (!(GHOST_PANEL_POSITIONS as readonly string[]).includes(p.position as string)) {
-        return { ok: false, reason: `panel.position 必须是 ${GHOST_PANEL_POSITIONS.join(' / ')}` };
-      }
-      // 页签形态没有拖缝宽度语义:收词明确拒绝而非静默忽略(规则 9)。
-      if (p.position === 'tab' && (p.minWidth !== undefined || p.defaultFraction !== undefined)) {
+      if (p.position === 'right') {
+        // right 退役兼容(见 GHOST_PANEL_POSITIONS 注释):旧包归一化为 left,
+        // 不硬拒 —— 已装插件每次启动重过本校验,硬拒等于把存量插件打没。
+        position = 'left';
+      } else if (!(GHOST_PANEL_POSITIONS as readonly string[]).includes(p.position as string)) {
         return {
           ok: false,
-          reason: "panel.minWidth / panel.defaultFraction 仅停靠形态(left / right)有效,position:'tab' 时请移除",
+          reason: `panel.position 必须是 ${GHOST_PANEL_POSITIONS.join(' / ')}(right 已退役,旧包自动并入 left)`,
+        };
+      } else {
+        position = p.position as GhostPanelPosition;
+      }
+      // 页签形态没有拖缝宽度/标准头语义:收词明确拒绝而非静默忽略(规则 9)。
+      if (
+        position === 'tab' &&
+        (p.minWidth !== undefined || p.defaultFraction !== undefined || p.systemButtons !== undefined)
+      ) {
+        return {
+          ok: false,
+          reason:
+            "panel.minWidth / panel.defaultFraction / panel.systemButtons 仅停靠形态(left)有效,position:'tab' 时请移除",
         };
       }
     }
     panel = {
       ...(p.title !== undefined ? { title: p.title as string } : {}),
-      ...(p.position !== undefined ? { position: p.position as GhostPanelPosition } : {}),
+      ...(position !== undefined ? { position } : {}),
       html: p.html as string,
       ...(p.minWidth !== undefined ? { minWidth: p.minWidth as number } : {}),
       ...(p.defaultFraction !== undefined ? { defaultFraction: p.defaultFraction as number } : {}),
+      ...(systemButtons !== undefined ? { systemButtons } : {}),
     };
   }
 
@@ -1843,7 +1948,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 node 能力详单但 slots 未包含 "node"' };
     }
     const nodeRaw = raw.node as Record<string, unknown>;
-    const allowedNodeFields = new Set(['entry', 'protocol', 'lifecycle', 'idleTimeoutSeconds', 'entries', 'childSpawn']);
+    const allowedNodeFields = new Set([
+      'entry',
+      'protocol',
+      'lifecycle',
+      'idleTimeoutSeconds',
+      'entries',
+      'childSpawn',
+      'secretBindings',
+    ]);
     const unknownNodeField = Object.keys(nodeRaw).find((key) => !allowedNodeFields.has(key));
     if (unknownNodeField) {
       return {
@@ -1919,6 +2032,153 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (nodeRaw.childSpawn !== undefined && typeof nodeRaw.childSpawn !== 'boolean') {
       return { ok: false, reason: 'node.childSpawn 必须是布尔值' };
     }
+    let nodeSecretBindings: GhostNodeSecretBinding[] | undefined;
+    if (nodeRaw.secretBindings !== undefined) {
+      if (
+        !Array.isArray(nodeRaw.secretBindings) ||
+        nodeRaw.secretBindings.length === 0 ||
+        nodeRaw.secretBindings.length > GHOST_NODE_MAX_SECRET_BINDINGS
+      ) {
+        return {
+          ok: false,
+          reason: `node.secretBindings 必须是 1–${GHOST_NODE_MAX_SECRET_BINDINGS} 条的数组`,
+        };
+      }
+      if (raw.settingsHtml === undefined) {
+        return {
+          ok: false,
+          reason: 'node.secretBindings 需要 settingsHtml 收集凭证',
+        };
+      }
+      nodeSecretBindings = [];
+      const seenSecretKeys = new Set<string>();
+      for (const bindingRaw of nodeRaw.secretBindings) {
+        if (!isPlainObject(bindingRaw)) {
+          return { ok: false, reason: 'node.secretBindings 每项必须是对象' };
+        }
+        const binding = bindingRaw as Record<string, unknown>;
+        const unknownBindingField = Object.keys(binding).find(
+          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url'].includes(key),
+        );
+        if (unknownBindingField) {
+          return {
+            ok: false,
+            reason: `node.secretBindings[] 含不允许的字段 ${JSON.stringify(unknownBindingField)}`,
+          };
+        }
+        if (typeof binding.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.key)) {
+          return {
+            ok: false,
+            reason: 'node.secretBindings[].key 必须是小写字母开头的 1–32 位小写/数字/下划线',
+          };
+        }
+        if (seenSecretKeys.has(binding.key)) {
+          return {
+            ok: false,
+            reason: `node.secretBindings 含重复 key ${JSON.stringify(binding.key)}`,
+          };
+        }
+        seenSecretKeys.add(binding.key);
+        if (
+          typeof binding.label !== 'string' ||
+          binding.label.trim().length === 0 ||
+          binding.label.length > 64
+        ) {
+          return {
+            ok: false,
+            reason: 'node.secretBindings[].label 必须是 1–64 字符的非空字符串',
+          };
+        }
+        if (
+          !Array.isArray(binding.methods) ||
+          binding.methods.length === 0 ||
+          binding.methods.length > GHOST_NODE_MAX_SECRET_METHODS
+        ) {
+          return {
+            ok: false,
+            reason: `node.secretBindings[].methods 必须是 1–${GHOST_NODE_MAX_SECRET_METHODS} 条的数组`,
+          };
+        }
+        const methods: string[] = [];
+        for (const method of binding.methods) {
+          if (typeof method !== 'string' || !/^[A-Za-z0-9_./:-]{1,128}$/.test(method)) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].methods 每项必须是 1–128 位安全方法名',
+            };
+          }
+          if (nodeRaw.protocol === 'mcp-stdio' && isGhostNodeMcpReservedMethod(method)) {
+            return {
+              ok: false,
+              reason: `node.secretBindings[].methods 不能绑定宿主保留的 MCP 方法 ${JSON.stringify(method)}`,
+            };
+          }
+          if (methods.includes(method)) {
+            return {
+              ok: false,
+              reason: `node.secretBindings[].methods 含重复方法 ${JSON.stringify(method)}`,
+            };
+          }
+          methods.push(method);
+        }
+        let bindingEntry: string | undefined;
+        if (binding.entry !== undefined) {
+          if (
+            typeof binding.entry !== 'string' ||
+            (binding.entry !== nodeRaw.entry && !(nodeEntries ?? []).includes(binding.entry))
+          ) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].entry 必须逐字命中 node.entry 或 node.entries',
+            };
+          }
+          bindingEntry = binding.entry;
+        }
+        if (
+          binding.hint !== undefined &&
+          (typeof binding.hint !== 'string' ||
+            binding.hint.trim().length === 0 ||
+            binding.hint.length > 200)
+        ) {
+          return {
+            ok: false,
+            reason: 'node.secretBindings[].hint 必须是 1–200 字符的非空字符串',
+          };
+        }
+        if (binding.url !== undefined) {
+          if (
+            typeof binding.url !== 'string' ||
+            binding.url.length === 0 ||
+            binding.url.length > 200
+          ) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].url 必须是 1–200 字符的字符串',
+            };
+          }
+          let parsed: URL;
+          try {
+            parsed = new URL(binding.url);
+          } catch {
+            return { ok: false, reason: 'node.secretBindings[].url 不是合法的绝对地址' };
+          }
+          if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+            return {
+              ok: false,
+              reason: 'node.secretBindings[].url 仅支持 https 且不允许内嵌用户名/密码',
+            };
+          }
+        }
+        nodeSecretBindings.push({
+          key: binding.key,
+          label: binding.label,
+          methods,
+          ...(bindingEntry !== undefined ? { entry: bindingEntry } : {}),
+          ...(binding.hint !== undefined ? { hint: binding.hint as string } : {}),
+          ...(binding.url !== undefined ? { url: binding.url as string } : {}),
+        });
+      }
+    }
     node = {
       entry: nodeRaw.entry,
       protocol: nodeRaw.protocol as GhostNodeProtocol,
@@ -1930,6 +2190,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         : {}),
       ...(nodeEntries !== undefined ? { entries: nodeEntries } : {}),
       ...(nodeRaw.childSpawn !== undefined ? { childSpawn: nodeRaw.childSpawn } : {}),
+      ...(nodeSecretBindings !== undefined ? { secretBindings: nodeSecretBindings } : {}),
     };
   }
   if (slots.includes('node') && node === undefined) {
@@ -2080,6 +2341,12 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         }
         if (seenKeys.has(s.key)) {
           return { ok: false, reason: `network.secrets 含重复 key ${JSON.stringify(s.key)}` };
+        }
+        if (node?.secretBindings?.some((binding) => binding.key === s.key)) {
+          return {
+            ok: false,
+            reason: `network.secrets 的 key ${JSON.stringify(s.key)} 与 node.secretBindings 撞名`,
+          };
         }
         seenKeys.add(s.key);
         if (typeof s.label !== 'string' || s.label.trim().length === 0 || s.label.length > 64) {
@@ -2621,6 +2888,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       connections = [];
       const seenConnKeys = new Set<string>();
       const secretKeySet = new Set((secrets ?? []).map((s) => s.key));
+      const nodeSecretKeySet = new Set((node?.secretBindings ?? []).map((s) => s.key));
       for (const c of n.connections) {
         if (!isPlainObject(c)) return { ok: false, reason: 'network.connections 每项必须是对象' };
         if (typeof c.key !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(c.key)) {
@@ -2632,6 +2900,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         // 与 secrets 共用键命名空间(保险库派生键同一前缀),撞名拒装。
         if (secretKeySet.has(c.key)) {
           return { ok: false, reason: `network.connections[].key ${JSON.stringify(c.key)} 与 network.secrets 的 key 撞名(两者共用命名空间)` };
+        }
+        if (nodeSecretKeySet.has(c.key)) {
+          return { ok: false, reason: `network.connections[].key ${JSON.stringify(c.key)} 与 node.secretBindings 的 key 撞名(两者共用命名空间)` };
         }
         seenConnKeys.add(c.key);
         if (typeof c.label !== 'string' || c.label.trim().length === 0 || c.label.length > 64) {
@@ -2706,7 +2977,14 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (!Array.isArray(su.requires) || su.requires.length > GHOST_SETUP_MAX_GROUPS) {
       return { ok: false, reason: `setup.requires 必须是 0–${GHOST_SETUP_MAX_GROUPS} 组的数组(空数组 = 显式声明无使用前置需求)` };
     }
-    const secretByKey = new Map((network?.secrets ?? []).map((s) => [s.key, s] as const));
+    const secretByKey = new Map<string, { loginDerived: boolean }>([
+      ...(network?.secrets ?? []).map(
+        (s) => [s.key, { loginDerived: s.source === 'login-email' }] as const,
+      ),
+      ...(node?.secretBindings ?? []).map(
+        (s) => [s.key, { loginDerived: false }] as const,
+      ),
+    ]);
     const connectionKeys = new Set((network?.connections ?? []).map((c) => c.key));
     const groups: GhostSetupGroup[] = [];
     for (const g of su.requires) {
@@ -2726,9 +3004,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           if (refKind === 'secret') {
             const decl = secretByKey.get(refKey);
             if (!decl) {
-              return { ok: false, reason: `setup 引用了未声明的凭证 ${JSON.stringify(refKey)}(必须逐字取自 network.secrets[].key)` };
+              return { ok: false, reason: `setup 引用了未声明的凭证 ${JSON.stringify(refKey)}(必须逐字取自 network.secrets[].key 或 node.secretBindings[].key)` };
             }
-            if (decl.source === 'login-email') {
+            if (decl.loginDerived) {
               return { ok: false, reason: `setup 不允许引用 login-email 源凭证 ${JSON.stringify(refKey)}(登录派生身份恒就绪,无配置动作可引导)` };
             }
             item = { kind: 'secret', key: refKey };

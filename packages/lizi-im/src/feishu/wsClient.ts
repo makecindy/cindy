@@ -34,6 +34,7 @@ import { ConflictDetector } from './conflictDetector.js';
 import { feishuEvents } from './events.js';
 import * as outbound from './outbound.js';
 import * as ownerGuard from './ownerGuard.js';
+import * as storage from './storage.js';
 import { parseIncoming } from './incomingContent.js';
 import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
@@ -60,9 +61,18 @@ let pendingOfflineNotice = false;
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
 export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
 
+function emitRendererStatus(error?: string): void {
+  feishuEvents.emit('status', {
+    status: currentStatus,
+    error,
+    botAppId: currentBotAppId,
+    ownerOpenId: ownerGuard.firstAllowed() ?? storage.readOwnerOpenId(),
+  });
+}
+
 function setStatus(status: FeishuConnectionStatus, error?: string): void {
   currentStatus = status;
-  feishuEvents.emit('status', { status, error, botAppId: currentBotAppId });
+  emitRendererStatus(error);
   // Also broadcast public IMStatus to host orchestrator subscribers
   feishuEvents.emit('imStatus', toImStatus(status, error));
 }
@@ -362,6 +372,8 @@ interface StopOptions {
   offlineTimeoutMs?: number;
   /** False for transport recovery; true/default for a logical shutdown. */
   announceOffline?: boolean;
+  /** Clear the owner after any offline notice, before broadcasting idle. */
+  clearOwnerBeforeIdle?: boolean;
   reason?: string;
 }
 
@@ -422,6 +434,10 @@ export async function stop(opts: StopOptions = {}): Promise<void> {
     detector = null;
   }
   outbound.unbindClient();
+  if (opts.clearOwnerBeforeIdle) {
+    pendingOfflineNotice = false;
+    ownerGuard.clear();
+  }
   if (!opts.keepStatus) {
     currentBotAppId = null;
     setStatus('idle');
@@ -515,6 +531,7 @@ async function handleIncomingMessage(
   // processing this very message (so the user's first ask isn't lost).
   if (ownerGuard.tryClaimOwner(senderOpenId)) {
     log.info(`[feishu/wsClient] TOFU: claimed owner ...${senderOpenId.slice(-8)}`);
+    emitRendererStatus();
     try {
       await outbound.sendText(senderOpenId, transportMessages.ownerBinding.welcome);
     } catch (err) {

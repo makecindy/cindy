@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   refresh: vi.fn(),
   invalidateSession: vi.fn(),
+  logger: {
+    error: vi.fn(),
+    warn: vi.fn(),
+  },
 }));
 
 vi.mock('electron', () => ({ net: { fetch: mocks.netFetch } }));
@@ -19,7 +23,7 @@ vi.mock('../authManager', () => ({
   invalidateSession: mocks.invalidateSession,
 }));
 vi.mock('../logger', () => ({
-  createLogger: () => ({ error: vi.fn(), warn: vi.fn() }),
+  createLogger: () => mocks.logger,
 }));
 
 import { serverApiFetch } from '../serverApiClient';
@@ -161,5 +165,59 @@ describe('serverApiFetch', () => {
     ).rejects.toBeTruthy();
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
+  });
+
+  it('redacted requests do not persist upstream messages, bodies, or network errors', async () => {
+    mocks.getAccessToken.mockReturnValue('token-a');
+    mocks.netFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => ({
+          error: {
+            code: 'PROVIDER_PRIVATE_FAILURE',
+            message: 'merchant private response body',
+          },
+        }),
+      })
+      .mockRejectedValueOnce(new Error('network URL contained private detail'));
+
+    await expect(
+      serverApiFetch('/api/billing/orders/order-1', {
+        baseUrl: 'https://model-access.example.com',
+        redactErrorDetails: true,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+      statusCode: 502,
+      message: '请求失败 (502)',
+    });
+    await expect(
+      serverApiFetch('/api/billing/orders/order-1', {
+        baseUrl: 'https://model-access.example.com',
+        redactErrorDetails: true,
+      }),
+    ).rejects.toBeTruthy();
+
+    const logged = JSON.stringify({
+      error: mocks.logger.error.mock.calls,
+      warn: mocks.logger.warn.mock.calls,
+    });
+    expect(logged).not.toContain('PROVIDER_PRIVATE_FAILURE');
+    expect(logged).not.toContain('merchant private response body');
+    expect(logged).not.toContain('private detail');
+    expect(logged).not.toContain('order-1');
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_not_ok',
+      'path=/api/billing/orders',
+      'method=GET',
+      'status=502',
+      'code=INTERNAL_ERROR',
+    );
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      'serverApiFetch.redacted_network_error',
+      'path=/api/billing/orders',
+      'method=GET',
+    );
   });
 });

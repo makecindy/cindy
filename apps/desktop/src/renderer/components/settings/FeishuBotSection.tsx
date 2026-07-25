@@ -7,10 +7,10 @@ import { useFeishuBot, type FeishuBotStatus } from '@/hooks/useFeishuBot';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
-import {
-  savedCredentialsNoteKey,
-  shouldShowSavedCredentialsCard,
-} from './feishuBotPresentation';
+import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
+import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 
 const FEISHU_LAUNCHER_URL = 'https://open.feishu.cn/page/launcher?from=backend_oneclick';
 
@@ -40,9 +40,7 @@ function statusColor(s: FeishuBotStatus): string {
 }
 
 function statusTextColor(s: FeishuBotStatus): string {
-  return s === 'connected'
-    ? 'var(--settings-badge-connected-text)'
-    : statusColor(s);
+  return s === 'connected' ? 'var(--settings-badge-connected-text)' : statusColor(s);
 }
 
 function maskTail(value: string): string {
@@ -50,7 +48,13 @@ function maskTail(value: string): string {
   return `${value.slice(0, 8)}••••${value.slice(-4)}`;
 }
 
-export function FeishuBotSection() {
+export function FeishuBotSection({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const {
     appId,
     setAppId,
@@ -70,6 +74,7 @@ export function FeishuBotSection() {
   } = useFeishuBot();
 
   const [showSecret, setShowSecret] = useState(false);
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -92,18 +97,25 @@ export function FeishuBotSection() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.feishuBot.title')}
-        </h2>
+    <ImChannelSettingsCard
+      id="personal-im-feishu"
+      title={t('settings.feishuBot.title')}
+      description={t('settings.feishuBot.description')}
+      routeSummary={
+        routeSummary
+          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
+          : null
+      }
+      expanded={expanded}
+      onToggle={onToggle}
+      status={
         <span
           className={cn(
             'inline-flex items-center gap-1.5 rounded-full',
-            'px-3 py-[5px]',
+            'px-2.5 py-1',
             'bg-[var(--settings-badge-bg)]',
             'border border-[var(--settings-badge-border)]',
-            'text-12 font-medium tracking-[0.12px]',
+            'text-11 font-medium tracking-[0.12px]',
           )}
           style={{ letterSpacing: '0.12px', color: statusTextColor(status) }}
           role="status"
@@ -117,12 +129,10 @@ export function FeishuBotSection() {
           />
           {t(statusKey[status])}
         </span>
-      </div>
-
-      <p className="text-13 leading-[1.6] text-[var(--settings-section-desc)]">
-        {t('settings.feishuBot.description')}
-      </p>
-
+      }
+    >
+      <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
+      <div className="h-px w-full bg-[var(--border-default)]" />
       {showSavedCredentialsCard ? (
         <SavedCredentialsCard
           appId={appId}
@@ -149,7 +159,13 @@ export function FeishuBotSection() {
           onOpenLauncher={openLauncher}
         />
       )}
-    </div>
+      {hasSavedCreds && (
+        <>
+          <div className="h-px w-full bg-[var(--border-default)]" />
+          <FeishuBotNotificationSection />
+        </>
+      )}
+    </ImChannelSettingsCard>
   );
 }
 
@@ -208,7 +224,12 @@ function SavedCredentialsCard(props: {
                     (props.isReconnecting || props.isClearing) && 'cursor-not-allowed opacity-40',
                   )}
                 >
-                  <Spinner icon={RefreshCw} size={14} strokeWidth={2} spinning={props.isReconnecting} />
+                  <Spinner
+                    icon={RefreshCw}
+                    size={14}
+                    strokeWidth={2}
+                    spinning={props.isReconnecting}
+                  />
                 </button>
               </span>
             </Tip>
@@ -221,12 +242,16 @@ function SavedCredentialsCard(props: {
       <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
         <div className="flex justify-between gap-4">
           <span>{t('settings.feishuBot.connected.appIdLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">{maskTail(props.appId)}</span>
+          <span className="font-medium text-[var(--settings-section-title)]">
+            {maskTail(props.appId)}
+          </span>
         </div>
         <div className="flex justify-between gap-4">
           <span>{t('settings.feishuBot.connected.ownerLabel')}</span>
           <span className="font-medium text-[var(--settings-section-title)]">
-            {props.ownerOpenId ? maskTail(props.ownerOpenId) : t('settings.feishuBot.connected.ownerWaiting')}
+            {props.ownerOpenId
+              ? maskTail(props.ownerOpenId)
+              : t('settings.feishuBot.connected.ownerWaiting')}
           </span>
         </div>
       </div>
@@ -267,7 +292,10 @@ function ManualConfig(props: {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-3">
-      <label className="text-12 font-medium text-[var(--settings-section-desc)]" style={{ letterSpacing: '0.12px' }}>
+      <label
+        className="text-12 font-medium text-[var(--settings-section-desc)]"
+        style={{ letterSpacing: '0.12px' }}
+      >
         {t('settings.feishuBot.appIdLabel')}
       </label>
       <input
@@ -286,7 +314,10 @@ function ManualConfig(props: {
         style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
       />
 
-      <label className="text-12 font-medium text-[var(--settings-section-desc)]" style={{ letterSpacing: '0.12px' }}>
+      <label
+        className="text-12 font-medium text-[var(--settings-section-desc)]"
+        style={{ letterSpacing: '0.12px' }}
+      >
         {t('settings.feishuBot.appSecretLabel')}
       </label>
       <div className="relative">
@@ -309,7 +340,11 @@ function ManualConfig(props: {
           type="button"
           onClick={() => props.setShowSecret(!props.showSecret)}
           className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
-          aria-label={props.showSecret ? t('settings.feishuBot.hideSecret') : t('settings.feishuBot.showSecret')}
+          aria-label={
+            props.showSecret
+              ? t('settings.feishuBot.hideSecret')
+              : t('settings.feishuBot.showSecret')
+          }
         >
           {props.showSecret ? <Eye size={18} /> : <EyeOff size={18} />}
         </button>
@@ -318,11 +353,18 @@ function ManualConfig(props: {
       <div className="flex min-h-[18px] items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           {props.validationError ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">{props.validationError}</p>
+            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+              {props.validationError}
+            </p>
           ) : props.errorMessage ? (
-            <p className="text-12 text-[var(--settings-error-text)]" role="alert">{props.errorMessage}</p>
+            <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+              {props.errorMessage}
+            </p>
           ) : (
-            <p className="text-12 text-[var(--settings-source-meta)]" style={{ letterSpacing: '0.12px' }}>
+            <p
+              className="text-12 text-[var(--settings-source-meta)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
               <button
                 type="button"
                 onClick={props.onOpenLauncher}

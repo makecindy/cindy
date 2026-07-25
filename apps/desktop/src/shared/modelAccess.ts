@@ -35,6 +35,50 @@ export interface ModelAccessStatus {
   endpoint: string | null;
 }
 
+/** 当前登录身份在 AIGateway Credit Ledger 中的同一时点余额快照。 */
+export interface ModelAccessBalance {
+  planCredits: string;
+  purchasedCredits: string;
+  promotionalCredits: string;
+  available: string;
+  scale: 9;
+  observedAt: string;
+}
+
+export interface ModelAccessCreditPoolUsage {
+  remaining: string;
+  used: string | null;
+  total: string | null;
+}
+
+export type ModelAccessPromotionalGrantState = 'active' | 'depleted' | 'expired' | 'voided';
+
+export interface ModelAccessPromotionalGrantUsage {
+  grantId: string;
+  displayName: string | null;
+  originalAmount: string;
+  usedAmount: string;
+  remainingAmount: string;
+  expiresAt: string;
+  state: ModelAccessPromotionalGrantState;
+}
+
+/** Gateway 账本的当前额度、三类用量和逐笔赠送只读投影。 */
+export interface ModelAccessCreditUsage {
+  available: string;
+  plan: ModelAccessCreditPoolUsage;
+  purchased: ModelAccessCreditPoolUsage;
+  promotional: ModelAccessCreditPoolUsage;
+  promotionalGrants: ModelAccessPromotionalGrantUsage[];
+  /** false 表示 Gateway 历史超过 Server 的安全分页上限，列表只含最近记录。 */
+  promotionalGrantsComplete: boolean;
+  /** 当前逐笔赠送与总余额来自同一次 Gateway 额度快照。 */
+  promotionalGrantConsistency: 'OBSERVED';
+  ledgerUpdatedAt: string | null;
+  scale: 9;
+  observedAt: string;
+}
+
 /** main → renderer 的状态推送通道。 */
 export const MODEL_ACCESS_STATUS_CHANNEL = 'model-access:status-change';
 
@@ -49,12 +93,64 @@ export const MODEL_ACCESS_STATUS_CHANNEL = 'model-access:status-change';
 export interface ModelAccessAgentOverride {
   contextWindow?: number;
   efforts?: string[];
-  defaultEffort?: string;
+  defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
 }
 
-export interface ModelAccessGatewayModel {
+export interface ModelGroupTieredPricing {
+  range: [number, number];
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
+  cacheReadInputTokenCost?: number;
+  cacheCreationInputTokenCost?: number;
+}
+
+/**
+ * model-access-server 从 AIGateway /model-groups 白名单透传的价格字段。
+ * 字段名和单位保持 Gateway 原样（per token）；Desktop 在构建 quote 时才转
+ * per-million-token，并按构建区域赋予币种。
+ */
+export interface ModelGroupPricing {
+  costDiscount?: number;
+  inputCostPerToken?: number;
+  outputCostPerToken?: number;
+  inputCostPerTokenPriority?: number;
+  outputCostPerTokenPriority?: number;
+  cacheReadInputTokenCost?: number;
+  cacheReadInputTokenCostPriority?: number;
+  cacheCreationInputTokenCost?: number;
+  inputCostPerTokenAbove200kTokens?: number;
+  outputCostPerTokenAbove200kTokens?: number;
+  cacheReadInputTokenCostAbove200kTokens?: number;
+  inputCostPerTokenAbove200kTokensPriority?: number;
+  outputCostPerTokenAbove200kTokensPriority?: number;
+  cacheReadInputTokenCostAbove200kTokensPriority?: number;
+  inputCostPerTokenAbove272kTokens?: number;
+  outputCostPerTokenAbove272kTokens?: number;
+  cacheReadInputTokenCostAbove272kTokens?: number;
+  inputCostPerTokenAbove272kTokensPriority?: number;
+  outputCostPerTokenAbove272kTokensPriority?: number;
+  cacheReadInputTokenCostAbove272kTokensPriority?: number;
+  inputCostPerCharacter?: number;
+  outputCostPerCharacter?: number;
+  inputCostPerSecond?: number;
+  outputCostPerSecond?: number;
+  inputCostPerAudioToken?: number;
+  outputCostPerAudioToken?: number;
+  inputCostPerAudioPerSecond?: number;
+  outputCostPerAudioPerSecond?: number;
+  inputCostPerImage?: number;
+  outputCostPerImage?: number;
+  inputCostPerImageToken?: number;
+  outputCostPerImageToken?: number;
+  cacheReadInputImageTokenCost?: number;
+  inputCostPerVideoPerSecond?: number;
+  outputCostPerVideoPerSecond?: number;
+  tieredPricing?: ModelGroupTieredPricing[];
+}
+
+export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
   agents?: ('claude-code' | 'codex')[];
@@ -64,7 +160,7 @@ export interface ModelAccessGatewayModel {
   contextWindow?: number;
   maxOutputTokens?: number;
   efforts?: string[];
-  defaultEffort?: string;
+  defaultEffort?: string | null;
   sortOrder?: number;
   /** Fast(加速档)支持;缺省按 true 处理(开了没效果无害,但不能没有)。 */
   supportsFastMode?: boolean;

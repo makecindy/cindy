@@ -149,6 +149,7 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   method: string;
+  timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -258,6 +259,7 @@ export class AppServerClient {
     // reject 所有挂起 request — 上层 await 不会无限等。
     const err = new Error(`codex app-server closed: ${reason}`);
     for (const [, pending] of this.pending) {
+      if (pending.timeoutId) clearTimeout(pending.timeoutId);
       pending.reject(err);
     }
     this.pending.clear();
@@ -278,7 +280,11 @@ export class AppServerClient {
    * 发送一个 JSON-RPC request, 等待对应 id 的 response。
    * server 返回 error 时 reject 一个携带 code+message 的 Error。
    */
-  request<R = unknown>(method: string, params?: unknown): Promise<R> {
+  request<R = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number },
+  ): Promise<R> {
     if (this.closed) {
       return Promise.reject(new Error(`AppServerClient.request(${method}) after close()`));
     }
@@ -288,18 +294,38 @@ export class AppServerClient {
     const transport = this.transport;
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params });
+    const timeoutMs = opts?.timeoutMs;
+    if (
+      timeoutMs !== undefined &&
+      (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+    ) {
+      return Promise.reject(
+        new Error(`AppServerClient.request(${method}): timeoutMs must be a positive finite number`),
+      );
+    }
     return new Promise<R>((resolve, reject) => {
-      this.pending.set(id, {
+      const pending: PendingRequest = {
         resolve: resolve as (v: unknown) => void,
         reject,
         method,
-      });
+        timeoutId: null,
+      };
+      this.pending.set(id, pending);
+      if (timeoutMs !== undefined) {
+        pending.timeoutId = setTimeout(() => {
+          if (this.pending.get(id) !== pending) return;
+          this.pending.delete(id);
+          reject(new Error(`codex app-server ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        pending.timeoutId.unref?.();
+      }
       transport.writeLine(payload).then(undefined, (err: Error) => {
         // transport 拒绝就立刻 reject 这一 request, 不要让它在 pending 里等到 close。
         // 只有 response 尚未先到时才留 tombstone；否则迟到的 write callback 不应
         // 重新关联已经完成的 id。
-        if (!this.pending.has(id)) return;
+        if (this.pending.get(id) !== pending) return;
         this.pending.delete(id);
+        if (pending.timeoutId) clearTimeout(pending.timeoutId);
         this.rememberWriteFailure(id, method);
         reject(err);
       });
@@ -407,6 +433,7 @@ export class AppServerClient {
       return;
     }
     this.pending.delete(id);
+    if (pending.timeoutId) clearTimeout(pending.timeoutId);
     if (error) {
       this.notifyAuthInvalidated(error);
       const err = new Error(`codex app-server ${pending.method} error ${error.code}: ${error.message}`);

@@ -45,6 +45,7 @@ import {
   Zap,
 } from 'lucide-react-native';
 import {
+  getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
 } from 'expo-audio';
@@ -205,6 +206,11 @@ import {
   takePrewarmedMobileVoiceAsr,
   type PrewarmedMobileVoiceAsr,
 } from '@/session/mobileVoicePrewarm';
+import {
+  resolveMobileVoiceRecordingPermission,
+  shouldCancelMobileVoiceForBackground,
+  waitForMobileVoiceAppActive,
+} from '@/session/mobileVoiceStartup';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
   createMobileCindyVoiceCredential,
@@ -460,6 +466,9 @@ export default function NewRemoteSessionScreen() {
   const firstMessageInputRef = useRef<NativeTextInput>(null);
   const voiceDraftScrollRef = useRef<ScrollView>(null);
   const voiceRecordingActiveRef = useRef(false);
+  const voicePermissionRequestInFlightRef = useRef(false);
+  const voicePermissionRequestSeqRef = useRef(0);
+  const voicePermissionRequestAbortRef = useRef<AbortController | null>(null);
   const voiceStartupInFlightRef = useRef(false);
   const voiceStopInFlightRef = useRef(false);
   const voiceStartupSeqRef = useRef(0);
@@ -880,6 +889,10 @@ export default function NewRemoteSessionScreen() {
   }, []);
 
   const cancelVoiceForDeviceSwitch = useCallback(() => {
+    voicePermissionRequestSeqRef.current += 1;
+    voicePermissionRequestAbortRef.current?.abort();
+    voicePermissionRequestAbortRef.current = null;
+    voicePermissionRequestInFlightRef.current = false;
     voiceStartupSeqRef.current += 1;
     const controller = voiceControllerSessionRef.current;
     voiceControllerSessionRef.current = null;
@@ -897,13 +910,14 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       // iOS permission sheets and Control Center can briefly report `inactive`.
-      // Only a real background transition owns the foreground-only voice teardown.
+      // Android permission sheets can report `background`, but permission
+      // resolution has not claimed audio resources and must survive that event.
       if (nextState !== 'background') return;
-      if (
-        voiceStartupInFlightRef.current
-        || voiceRecordingActiveRef.current
-        || voiceControllerSessionRef.current
-      ) {
+      if (shouldCancelMobileVoiceForBackground({
+        startupInFlight: voiceStartupInFlightRef.current,
+        recordingActive: voiceRecordingActiveRef.current,
+        hasController: Boolean(voiceControllerSessionRef.current),
+      })) {
         cancelVoiceForDeviceSwitch();
       } else {
         // pressIn may have opened a speculative ASR connection without creating
@@ -916,7 +930,11 @@ export default function NewRemoteSessionScreen() {
 
   const selectDevice = useCallback((option: NewSessionDeviceOption) => {
     if (creating) return;
-    if (voiceStopInFlightRef.current || voiceIsProcessing) return;
+    if (
+      voicePermissionRequestInFlightRef.current
+      || voiceStopInFlightRef.current
+      || voiceIsProcessing
+    ) return;
     if (voiceStartupInFlightRef.current || voiceRecordingActiveRef.current || voiceState === 'listening') {
       cancelVoiceForDeviceSwitch();
     }
@@ -1360,15 +1378,20 @@ export default function NewRemoteSessionScreen() {
 
   const startVoiceRecording = useCallback(async () => {
     if (
-      voiceStartupInFlightRef.current
+      voicePermissionRequestInFlightRef.current
+      || voiceStartupInFlightRef.current
       || voiceStopInFlightRef.current
       || voiceRecordingActiveRef.current
       || voiceState === 'listening'
       || voiceIsProcessing
     ) return;
     setVoiceError(null);
+    let permissionRequestSeq: number | null = null;
+    let permissionRequestAbortController: AbortController | null = null;
     let startupSeq: number | null = null;
     let claimedPrewarm: PrewarmedMobileVoiceAsr | null = null;
+    let audioModeEnabled = false;
+    let createdController: MobileVoiceControllerSession | null = null;
     try {
       if (!selectedDeviceId) {
         setVoiceState('error');
@@ -1380,23 +1403,61 @@ export default function NewRemoteSessionScreen() {
         setVoiceError(mobileVoiceRealtimeAudioUnavailableError());
         return;
       }
-      startupSeq = voiceStartupSeqRef.current + 1;
-      voiceStartupSeqRef.current = startupSeq;
-      voiceStartupInFlightRef.current = true;
-      const permission = await requestRecordingPermissionsAsync();
-      if (voiceStartupSeqRef.current !== startupSeq) return;
-      if (!permission.granted) {
-        voiceStartupInFlightRef.current = false;
+      permissionRequestSeq = voicePermissionRequestSeqRef.current + 1;
+      voicePermissionRequestSeqRef.current = permissionRequestSeq;
+      const currentPermissionAbortController = new AbortController();
+      permissionRequestAbortController = currentPermissionAbortController;
+      voicePermissionRequestAbortRef.current = currentPermissionAbortController;
+      voicePermissionRequestInFlightRef.current = true;
+      let permissionResult: Awaited<ReturnType<typeof resolveMobileVoiceRecordingPermission>>;
+      try {
+        permissionResult = await resolveMobileVoiceRecordingPermission({
+          getPermission: getRecordingPermissionsAsync,
+          requestPermission: requestRecordingPermissionsAsync,
+          isRequestCurrent: () => voicePermissionRequestSeqRef.current === permissionRequestSeq,
+          isAppActive: () => AppState.currentState === 'active',
+          subscribeToAppState: (listener) => {
+            const subscription = AppState.addEventListener('change', listener);
+            return () => subscription.remove();
+          },
+          signal: currentPermissionAbortController.signal,
+          waitForAppActive: () => waitForMobileVoiceAppActive({
+            isAppActive: () => AppState.currentState === 'active',
+            subscribe: (listener) => {
+              const subscription = AppState.addEventListener('change', listener);
+              return () => subscription.remove();
+            },
+            signal: currentPermissionAbortController.signal,
+          }),
+        });
+      } finally {
+        if (voicePermissionRequestSeqRef.current === permissionRequestSeq) {
+          voicePermissionRequestInFlightRef.current = false;
+        }
+        if (voicePermissionRequestAbortRef.current === permissionRequestAbortController) {
+          voicePermissionRequestAbortRef.current = null;
+        }
+      }
+      if (permissionResult === 'cancelled') return;
+      if (permissionResult === 'denied') {
         voiceStopInFlightRef.current = false;
         voiceRecordingActiveRef.current = false;
         setVoiceState('error');
         setVoiceError(mobileVoiceMicPermissionError());
         return;
       }
+      if (
+        voicePermissionRequestSeqRef.current !== permissionRequestSeq
+        || AppState.currentState !== 'active'
+      ) return;
+      startupSeq = voiceStartupSeqRef.current + 1;
+      voiceStartupSeqRef.current = startupSeq;
+      voiceStartupInFlightRef.current = true;
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
       });
+      audioModeEnabled = true;
       // Open the device link in the background: voice dictation writes into the
       // local composer via the cloud ASR proxy and does not need the mobile↔desktop
       // link (only submitting the composed message later does). Awaiting it here
@@ -1473,6 +1534,7 @@ export default function NewRemoteSessionScreen() {
           });
         },
       });
+      createdController = controller;
       voiceControllerSessionRef.current = controller;
       voiceRecordingActiveRef.current = true;
       await controller.start();
@@ -1492,7 +1554,29 @@ export default function NewRemoteSessionScreen() {
       // (e.g. session construction threw); closing it again after the
       // controller's own teardown is harmless — provider stop is idempotent.
       void claimedPrewarm?.asr.stop().catch(() => undefined);
-      if (startupSeq !== null && voiceStartupSeqRef.current !== startupSeq) return;
+      if (
+        startupSeq === null
+        && permissionRequestSeq !== null
+        && voicePermissionRequestSeqRef.current !== permissionRequestSeq
+      ) return;
+      if (startupSeq !== null && voiceStartupSeqRef.current !== startupSeq) {
+        if (createdController) {
+          if (voiceControllerSessionRef.current === createdController) {
+            voiceControllerSessionRef.current = null;
+            voiceRecordingActiveRef.current = false;
+          }
+          await createdController.cancel().catch(() => undefined);
+        }
+        if (
+          audioModeEnabled
+          && !voiceControllerSessionRef.current
+          && !voiceStartupInFlightRef.current
+          && !voiceRecordingActiveRef.current
+        ) {
+          await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
+        }
+        return;
+      }
       const controller = voiceControllerSessionRef.current;
       voiceControllerSessionRef.current = null;
       await controller?.cancel().catch(() => undefined);
@@ -1577,6 +1661,10 @@ export default function NewRemoteSessionScreen() {
     return () => {
       const controller = voiceControllerSessionRef.current;
       voiceControllerSessionRef.current = null;
+      voicePermissionRequestSeqRef.current += 1;
+      voicePermissionRequestAbortRef.current?.abort();
+      voicePermissionRequestAbortRef.current = null;
+      voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
@@ -2069,6 +2157,7 @@ export default function NewRemoteSessionScreen() {
   const create = useCallback(async () => {
     if (
       creatingRef.current
+      || voicePermissionRequestInFlightRef.current
       || voiceStartupInFlightRef.current
       || voiceStopInFlightRef.current
       || voiceIsProcessing

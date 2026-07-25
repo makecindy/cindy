@@ -20,6 +20,9 @@ function createTables(db: Database.Database): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_amount REAL NOT NULL DEFAULT 0,
+      total_cost_currency TEXT,
+      total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
       fast_mode INTEGER NOT NULL DEFAULT 0,
@@ -133,7 +136,9 @@ describe('tx session.importShare', () => {
   it('inserts session and all messages (including rewound rows) atomically', () => {
     const result = tx(db, validArgs());
     expect(result).toEqual({ messageCount: 3 });
-    const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get('new-session-1') as Record<string, unknown>;
+    const session = db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get('new-session-1') as Record<string, unknown>;
     expect(session.source).toBe('shared');
     expect(session.sdk_session_id).toBe('sdk-abc');
     expect(session.provider_id).toBe('prov-1');
@@ -141,8 +146,14 @@ describe('tx session.importShare', () => {
     expect(session.fast_mode).toBe(0);
     expect(session.cleared_at).toBe(1700000000050);
     const messages = db
-      .prepare('SELECT id, rewind_at, agent_kind FROM messages WHERE session_id = ? ORDER BY created_at')
-      .all('new-session-1') as Array<{ id: string; rewind_at: number | null; agent_kind: string | null }>;
+      .prepare(
+        'SELECT id, rewind_at, agent_kind FROM messages WHERE session_id = ? ORDER BY created_at',
+      )
+      .all('new-session-1') as Array<{
+      id: string;
+      rewind_at: number | null;
+      agent_kind: string | null;
+    }>;
     expect(messages.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
     expect(messages.map((m) => m.agent_kind)).toEqual(['cc', 'codex', null]);
     expect(messages[2].rewind_at).toBe(1700000000400);

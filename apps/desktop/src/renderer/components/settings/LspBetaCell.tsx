@@ -39,25 +39,16 @@ export function LspBetaCell() {
       try {
         await window.electronAPI.maker.lspModeSet(next);
         toast.success(
-          t(
-            next
-              ? 'settings.lspMode.toast.enabled'
-              : 'settings.lspMode.toast.disabled',
-            {
-              defaultValue: next
-                ? 'LSP 已开启,新建 session 后生效'
-                : 'LSP 已关闭,新建 session 后生效',
-            },
-          ),
+          next
+            ? t('settings.lspMode.toast.enabled')
+            : t('settings.lspMode.toast.disabled'),
         );
       } catch (err) {
         log.warn('lspModeSet failed', err);
         toast.error(
           err instanceof Error
             ? err.message
-            : t('settings.lspMode.toast.toggleFailed', {
-                defaultValue: '切换 LSP 开关失败',
-              }),
+            : t('settings.lspMode.toast.toggleFailed'),
         );
         setEnabled(prev);
       } finally {
@@ -67,15 +58,8 @@ export function LspBetaCell() {
     [enabled, setEnabled, t],
   );
 
-  const title = t('settings.lspMode.cell.title', {
-    defaultValue: '代码智能 (LSP) · Beta',
-  });
-  const description = t('settings.lspMode.cell.description', {
-    defaultValue:
-      '通过 typescript-language-server 给 agent 提供精确的符号引用、跳转、call hierarchy。' +
-      '仅在 TypeScript 项目里生效 (自动检测 tsconfig.json / package.json 依赖)。' +
-      '非 TS 项目里此开关无效果,agent 工具列表不会出现 lsp_*。',
-  });
+  const title = t('settings.lspMode.cell.title');
+  const description = t('settings.lspMode.cell.description');
 
   return (
     <div
@@ -102,9 +86,7 @@ export function LspBetaCell() {
           checked={enabled}
           disabled={pending}
           onCheckedChange={(v) => void handleToggle(v)}
-          aria-label={t('settings.lspMode.toggleAria', {
-            defaultValue: 'LSP 代码智能开关',
-          })}
+          aria-label={t('settings.lspMode.toggleAria')}
         />
       </div>
     </div>

@@ -1,7 +1,10 @@
 import { createLogger } from '@/lib/logger';
 import {
   WebMicAudioEngine,
+  currentPowerReleaseGeneration,
+  isPowerReleaseCancellation,
   isSelectedMicrophoneUnavailableError,
+  powerReleaseCancellation,
   type PcmChunk,
 } from './WebMicAudioEngine';
 import { createVoiceInputAudioProfile } from './audioProfile';
@@ -22,6 +25,12 @@ export type VoiceInputCaptureSessionStartResult =
   | {
       ok: false;
       error: string;
+      /**
+       * Startup was cancelled rather than broken — currently only by a power
+       * release (suspend / lock) landing mid-start. Callers should clean up
+       * silently instead of surfacing `error`, which is an internal message.
+       */
+      cancelled?: boolean;
     };
 
 type VoiceInputCaptureSessionOptions = {
@@ -95,6 +104,7 @@ export async function startVoiceInputCaptureSession(
 
   engine = createEngine(options.deviceId);
   options.setEngine(engine);
+  const powerGenerationAtStart = currentPowerReleaseGeneration();
 
   const startEngineWithAutomaticFallback = async (): Promise<void> => {
     try {
@@ -113,6 +123,13 @@ export async function startVoiceInputCaptureSession(
           stopError instanceof Error ? stopError.message : String(stopError),
         );
       });
+      // A release can land during the stop() above, and by then no session error
+      // carries the power reason any more — the check below would only see the
+      // earlier device error and happily open the default microphone after the
+      // one-shot event.
+      if (currentPowerReleaseGeneration() !== powerGenerationAtStart) {
+        throw powerReleaseCancellation();
+      }
       engine = createEngine(undefined);
       options.setEngine(engine);
       await engine.start();
@@ -125,6 +142,17 @@ export async function startVoiceInputCaptureSession(
     log.info(message(options.label, 'microphone started'), { elapsedMs: options.elapsedMs?.() });
   } catch (error) {
     options.setEngine(null);
+    // Suspend/lock cancelling startup is the user walking away on purpose, not
+    // a failure worth an error surface. Report it as cancellation so callers
+    // clean up quietly instead of showing an internal message.
+    if (isPowerReleaseCancellation(error)) {
+      log.debug(message(options.label, 'microphone start cancelled by power release'));
+      return {
+        ok: false,
+        cancelled: true,
+        error: options.formatStartError(error),
+      };
+    }
     return {
       ok: false,
       error: options.formatStartError(error),

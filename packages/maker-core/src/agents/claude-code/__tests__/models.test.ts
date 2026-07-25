@@ -51,6 +51,17 @@ describe('ClaudeCodeAgent model capabilities', () => {
     expect(agent.capabilities.availableModels).toEqual([]);
   });
 
+  it('uses unambiguous display names for every Anthropic effort level', () => {
+    const agent = new ClaudeCodeAgent(createDeps());
+    expect(agent.capabilities.effortLevels.map(({ id, displayName }) => [id, displayName])).toEqual([
+      ['low', 'Low'],
+      ['medium', 'Medium'],
+      ['high', 'High'],
+      ['xhigh', 'Extra High'],
+      ['max', 'Max'],
+    ]);
+  });
+
   // sonnet 必须映射到显式版本号:裸 'sonnet[1m]' 别名会随 cc-code 二进制漂移
   // (Sonnet 5 上线后别名仍指 4.6,用户选 Sonnet 5 实际发出 claude-sonnet-4-6)。
   it('maps every catalog sonnet model to its explicit versioned SDK string', () => {
@@ -110,6 +121,7 @@ describe('ClaudeCodeAgent model capabilities', () => {
 
   it('falls back to the legacy hardcoded chain when window is unknown', () => {
     // 目录外模型 / 未传窗口的老调用方(title-one-shot)行为不变
+    expect(toSdkModelString('claude-opus-5')).toBe('claude-opus-5[1m]');
     expect(toSdkModelString('claude-sonnet-5')).toBe('claude-sonnet-5[1m]');
     expect(toSdkModelString('codex/gpt-5.5')).toBe('codex/gpt-5.5');
     expect(toSdkModelString('totally-unknown-model')).toBe('totally-unknown-model');

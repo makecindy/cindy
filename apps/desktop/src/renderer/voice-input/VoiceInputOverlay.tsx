@@ -648,7 +648,15 @@ export function VoiceInputOverlay() {
     t('settings.voiceInput.microphone.errors.fallbackToAuto')
   ), [t]);
 
+  // 这个 overlay 订阅的是全部语音设置,但只有这两项与采集设备有关。语言、润色等
+  // 变更同样会走到这里,如果不过滤,一次无关设置改动就会在保活窗口已经到期释放后
+  // 重新打开麦克风,让隐私指示灯毫无理由地重新亮起。
+  const lastKeepAliveConfigRef = useRef<string | null>(null);
+
   const prewarmFastActivationIfEnabled = useCallback((settings: ReturnType<typeof getVoiceInputSettings>) => {
+    const configKey = `${settings.fastActivationEnabled ? 'on' : 'off'}|${settings.microphoneDeviceId ?? ''}`;
+    if (lastKeepAliveConfigRef.current === configKey) return;
+    lastKeepAliveConfigRef.current = configKey;
     if (!settings.fastActivationEnabled) {
       void disposeKeepAliveVoiceInputMicrophone('setting_disabled').catch(() => undefined);
       return;
@@ -811,6 +819,23 @@ export function VoiceInputOverlay() {
       elapsedMs,
     });
     if (!captureStart.ok) {
+      // 电源释放(锁屏/挂起)取消了启动:走与「启动尝试已失效」相同的静默清理,
+      // 不把内部错误消息推到 UI —— 用户是主动离开,不是遇到故障。
+      if (captureStart.cancelled) {
+        log.debug('global microphone start cancelled by power release');
+        resolveStartReadyState(attemptId, { ok: false, error: captureStart.error });
+        startAttemptIdRef.current += 1;
+        cancelStartedRun(startResultPromise);
+        suppressedStartErrorAttemptsRef.current.delete(attemptId);
+        await restoreSystemAudioForRecording();
+        // setVoiceState('listening') already ran, and this path owns no engine
+        // or run, so no later cancel/state event will arrive to clear it.
+        // Leaving it would strand the overlay in 'listening' — where the
+        // stateRef.current === 'listening' guard silently swallows every
+        // subsequent shortcut press.
+        await closeOverlayAndReset();
+        return;
+      }
       log.warn('global microphone start failed:', captureStart.error);
       resolveStartReadyState(attemptId, { ok: false, error: captureStart.error });
       startAttemptIdRef.current += 1;
@@ -863,6 +888,7 @@ export function VoiceInputOverlay() {
     cancelStartedRun,
     clearErrorCloseTimer,
     closeOverlay,
+    closeOverlayAndReset,
     createStartReadyState,
     failRecording,
     formatMicrophoneFallbackMessage,

@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * per-turn 费用展示(MessageActionBar"本轮消耗")的 renderer 侧:
  *   - formatTurnCostUsd:用户可见费用统一保留两位小数。
- *   - makerChatStore:历史加载从 agentMeta 提取 turnCostUsd;本机 IPC 与 device-link
+ *   - makerChatStore:历史 USD 会投影为区域金额;本机 IPC 与 device-link
  *     remote push 都按 clientId 命中消息补字段;clientId 不存在 → state 引用不变(no-op)。
  */
 
@@ -50,6 +50,8 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { formatTurnCostUsd } from '@/lib/usageFormat';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import { regionalizeLegacyUsd } from '../../shared/regionalMoney';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
@@ -122,6 +124,8 @@ function serverMessage(over: Partial<Message>): Message {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+const legacyMoney = (amountUsd: number) =>
+  regionalizeLegacyUsd(amountUsd, CURRENT_CINDY_REGION);
 const DETAILS = buildTurnUsageDetails({
   inputTokens: 1200,
   outputTokens: 300,
@@ -218,17 +222,18 @@ describe('makerChatStore per-turn 费用', () => {
     const staleEstimateMetaModel = snap.messages.find((m) => m.clientId === 'a-stale-estimate-meta-model');
     const livePricingPreserved = snap.messages.find((m) => m.clientId === 'a-live-pricing-preserved');
     const noCost = snap.messages.find((m) => m.clientId === 'a-no-cost');
-    expect(withCost?.turnCostUsd).toBe(0.05);
+    expect(withCost?.turnMoney).toEqual(legacyMoney(0.05));
     expect(withCost?.turnCostIsEstimate).toBe(true);
+    expect(withCost?.userTurnMoney).toEqual(legacyMoney(12.34));
     expect(withCost?.userTurnCostUsd).toBe(12.34);
     expect(withCost?.userTurnCostIsEstimate).toBe(true);
     expect(withCost?.turnUsageDetails).toEqual(DETAILS);
-    expect(staleEstimate?.turnCostUsd).toBeCloseTo(2.011);
+    expect(staleEstimate?.turnMoney).toEqual(legacyMoney(2.011));
     expect(staleEstimate?.turnCostIsEstimate).toBe(true);
     expect(staleEstimate?.turnUsageDetails).toEqual(GPT_DETAILS);
-    expect(staleEstimateMetaModel?.turnCostUsd).toBeCloseTo(2.011);
-    expect(livePricingPreserved?.turnCostUsd).toBe(3.14);
-    expect(noCost?.turnCostUsd).toBeUndefined();
+    expect(staleEstimateMetaModel?.turnMoney).toEqual(legacyMoney(2.011));
+    expect(livePricingPreserved?.turnMoney).toEqual(legacyMoney(3.14));
+    expect(noCost?.turnMoney).toBeUndefined();
   });
 
   it('device-link 旧历史:缺少持久化累计值时按完整用户轮投影', async () => {
@@ -260,8 +265,12 @@ describe('makerChatStore per-turn 费用', () => {
     await flush();
 
     const messages = makerChatStore.getSnapshot(SID).messages;
+    expect(messages.find((m) => m.clientId === 'segment-1')?.userTurnMoney).toEqual(
+      legacyMoney(14.8),
+    );
     expect(messages.find((m) => m.clientId === 'segment-1')?.userTurnCostUsd).toBe(14.8);
     const final = messages.find((m) => m.clientId === 'final');
+    expect(final?.userTurnMoney).toEqual(legacyMoney(15.5));
     expect(final?.userTurnCostUsd).toBe(15.5);
     expect(final?.userTurnCostIsEstimate).toBe(true);
   });
@@ -288,8 +297,9 @@ describe('makerChatStore per-turn 费用', () => {
 
     const snap = makerChatStore.getSnapshot(SID);
     const msg = snap.messages.find((m) => m.clientId === 'a-live');
-    expect(msg?.turnCostUsd).toBe(0.042);
+    expect(msg?.turnMoney).toEqual(legacyMoney(0.042));
     expect(msg?.turnCostIsEstimate).toBe(false);
+    expect(msg?.userTurnMoney).toEqual(legacyMoney(52.229224));
     expect(msg?.userTurnCostUsd).toBe(52.229224);
     expect(msg?.userTurnCostIsEstimate).toBe(false);
     expect(msg?.turnUsageDetails).toEqual(DETAILS);
@@ -318,7 +328,7 @@ describe('makerChatStore per-turn 费用', () => {
     });
 
     const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-live-estimate');
-    expect(msg?.turnCostUsd).toBeCloseTo(2.011);
+    expect(msg?.turnMoney).toEqual(legacyMoney(2.011));
     expect(msg?.turnCostIsEstimate).toBe(true);
   });
 
@@ -340,7 +350,7 @@ describe('makerChatStore per-turn 费用', () => {
     });
 
     const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-live-pricing-preserved');
-    expect(msg?.turnCostUsd).toBe(3.14);
+    expect(msg?.turnMoney).toEqual(legacyMoney(3.14));
     expect(msg?.turnCostIsEstimate).toBe(true);
   });
 
@@ -368,8 +378,9 @@ describe('makerChatStore per-turn 费用', () => {
     });
 
     const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-remote');
-    expect(msg?.turnCostUsd).toBe(0.08);
+    expect(msg?.turnMoney).toEqual(legacyMoney(0.08));
     expect(msg?.turnCostIsEstimate).toBe(true);
+    expect(msg?.userTurnMoney).toEqual(legacyMoney(2.08));
     expect(msg?.userTurnCostUsd).toBe(2.08);
     expect(msg?.userTurnCostIsEstimate).toBe(true);
   });

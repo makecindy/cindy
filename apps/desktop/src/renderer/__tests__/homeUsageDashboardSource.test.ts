@@ -11,28 +11,34 @@ const dailyBarsSource = readFileSync(
   resolve(__dirname, '../components/new-chat/UsageDailyBars.tsx'),
   'utf8',
 );
+const heatmapSource = readFileSync(
+  resolve(__dirname, '../components/new-chat/UsageHeatmap.tsx'),
+  'utf8',
+);
 
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
     expect(source).toMatch(
-      /const accountTodaySpend =\s+typeof claudeQuota\?\.todaySpend === 'number' \? claudeQuota\.todaySpend : null;/,
+      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend, CURRENT_CINDY_REGION\)\s+: null;/,
     );
-    expect(source).toContain('const hasAccountTodaySpend = accountTodaySpend !== null;');
+    expect(source).toContain('const hasAccountTodaySpend = accountTodayMoney !== null;');
     expect(source).toContain('const layoutHistory = history ?? emptyLayoutHistory;');
     expect(source).toContain(
-      'const displayTodaySpend = accountTodaySpend ?? layoutHistory.totals.today;',
+      'const displayTodaySpend = accountTodayMoney ?? layoutHistory.totals.today;',
     );
     expect(source).toContain('const ACCOUNT_LOCAL_TODAY_MATCH_EPSILON = 0.01;');
     expect(source).toMatch(
-      /function isSameDisplayedTodaySpend\(\s+accountTodaySpend: number \| null,\s+localTodaySpend: number,\s+\): boolean/,
+      /function isSameDisplayedTodaySpend\(\s+accountTodaySpend: RegionalMoney \| null,\s+localTodaySpend: RegionalMoney,\s+\): boolean/,
     );
     expect(source).toMatch(
-      /layoutHistory\.anomaly\.isAnomalous &&\s+isSameDisplayedTodaySpend\(accountTodaySpend, layoutHistory\.totals\.today\);/,
+      /layoutHistory\.anomaly\.isAnomalous &&\s+isSameDisplayedTodaySpend\(accountTodayMoney, layoutHistory\.totals\.today\);/,
     );
     expect(source).toContain(
-      '`${formatUsd(displayTodaySpend)} / ${formatCompactUsd(softDailyLimit)}`',
+      '`${formatMoney(displayTodaySpend)} / ${formatCompactMoney(softDailyLimitMoney)}`',
     );
-    expect(source).toMatch(/hasSpendValue \?\s+formatUsd\(displayTodaySpend\)\s+:\s+UNKNOWN_VALUE/);
+    expect(source).toMatch(
+      /hasSpendValue \?\s+formatMoney\(displayTodaySpend\)\s+:\s+UNKNOWN_VALUE/,
+    );
     expect(source).toContain('warning={showLocalSpendAnomaly}');
   });
 
@@ -54,6 +60,17 @@ describe('HomeUsageDashboard source contract', () => {
     expect(source).not.toContain('history.days.length === 0 && history.models.length === 0');
   });
 
+  it('uses the build-region currency for empty chart cells', () => {
+    expect(heatmapSource).toContain(
+      'regionalCurrencyForRegion(CURRENT_CINDY_REGION)',
+    );
+    expect(dailyBarsSource).toContain(
+      'regionalCurrencyForRegion(CURRENT_CINDY_REGION)',
+    );
+    expect(heatmapSource).not.toContain("money.currency ?? 'USD'");
+    expect(dailyBarsSource).not.toContain("money.currency ?? 'USD'");
+  });
+
   it('shows cached usage immediately while marking background refresh', () => {
     expect(source).toContain(
       'const { history, refreshing: usageRefreshing } = useUsageHistory({ paused: collapsed, userId: user?.id });',
@@ -73,14 +90,13 @@ describe('HomeUsageDashboard source contract', () => {
 
   it('loads once while collapsed but skips usage push subscriptions', () => {
     expect(source).toContain('useUsageHistory({ paused: collapsed, userId: user?.id })');
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
-    );
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     const loadIndex = hookSource.indexOf('void load(scopeKey);');
     const pausedIndex = hookSource.indexOf('if (paused) {');
     const pushIndex = hookSource.indexOf('window.electronAPI.maker.usage.onTodaySpendChanged');
-    const tokenPushIndex = hookSource.indexOf('window.electronAPI.maker.usage.onTodayTokensChanged');
+    const tokenPushIndex = hookSource.indexOf(
+      'window.electronAPI.maker.usage.onTodayTokensChanged',
+    );
     expect(loadIndex).toBeGreaterThan(0);
     expect(pausedIndex).toBeGreaterThan(0);
     expect(loadIndex).toBeLessThan(pausedIndex);
@@ -89,78 +105,72 @@ describe('HomeUsageDashboard source contract', () => {
   });
 
   it('scopes renderer usage-history snapshots by account', () => {
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
-    );
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(hookSource).toContain('function storageKeyForScope(scopeKey: string): string');
     expect(hookSource).toContain('localStorage.getItem(storageKeyForScope(scopeKey))');
-    expect(hookSource).toContain('localStorage.setItem(storageKeyForScope(scopeKey), JSON.stringify(p))');
+    expect(hookSource).toContain(
+      'localStorage.setItem(storageKeyForScope(scopeKey), JSON.stringify(p))',
+    );
     expect(hookSource).toContain('const scopes = new Map<string, UsageHistoryScopeState>();');
     expect(hookSource).toContain('const scopeKey = normalizeScopeKey(opts?.userId);');
   });
 
   it('does not render the previous account history after the scope changes', () => {
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
+    expect(hookSource).toContain(
+      'const [historyState, setHistoryState] = useState<{ scopeKey: string; value: UsageHistoryPayload | null }>',
     );
-    expect(hookSource).toContain('const [historyState, setHistoryState] = useState<{ scopeKey: string; value: UsageHistoryPayload | null }>');
     expect(hookSource).toContain('setHistoryState({ scopeKey, value });');
-    expect(hookSource).toContain('history: historyState.scopeKey === scopeKey ? historyState.value : scope.cache,');
+    expect(hookSource).toContain(
+      'history: historyState.scopeKey === scopeKey ? historyState.value : scope.cache,',
+    );
   });
 
   it('adds subscription estimates to mixed actual daily bars', () => {
+    expect(dailyBarsSource).toContain('const subscriptionEstimateSum = segments.reduce(');
+    expect(dailyBarsSource).toContain('actualAmount + subscriptionEstimateSum,');
     expect(dailyBarsSource).toContain(
-      'const subscriptionEstimateSum = segments.reduce((a, s) => a + s.subscriptionEstimateUsd, 0);',
+      'segments.some((segment) => segment.subscriptionEstimateAmount > 0)',
     );
-    expect(dailyBarsSource).toContain(
-      'const effectiveUsd = Math.max(costUsd + subscriptionEstimateSum, segSum);',
-    );
-    expect(dailyBarsSource).toContain('estimated: subscriptionEstimateSum > 0,');
-    expect(dailyBarsSource).toContain('subscription: formatUsd(subscriptionEstimateSum)');
+    expect(dailyBarsSource).toContain("money(subscriptionEstimateSum, true, 'value-estimate')");
   });
 
   it('force-refreshes delayed pricing retries instead of reusing pending memory cache', () => {
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
-    );
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(hookSource).toContain('scope.pricingRetryTimer = setTimeout(() => {');
     expect(hookSource).toContain('void load(scopeKey, { forceRefresh: true });');
     expect(hookSource).not.toContain('setTimeout(() => void load(), PRICING_RETRY_DELAY_MS);');
   });
 
   it('cancels delayed retries when a usage scope is no longer active', () => {
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
-    );
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(hookSource).toContain('pricingRetryTimer: ReturnType<typeof setTimeout> | null;');
-    expect(hookSource).toContain('function deactivateScopeIfUnused(scope: UsageHistoryScopeState): void');
+    expect(hookSource).toContain(
+      'function deactivateScopeIfUnused(scope: UsageHistoryScopeState): void',
+    );
     expect(hookSource).toContain('cancelScopeTimers(scope);');
     expect(hookSource).toContain('scope.loadSeq += 1;');
     expect(hookSource).toContain('deactivateScopeIfUnused(activeScope);');
-    expect(hookSource).toContain('if (scope.listeners.size === 0 && scope.statusListeners.size === 0) return;');
+    expect(hookSource).toContain(
+      'if (scope.listeners.size === 0 && scope.statusListeners.size === 0) return;',
+    );
   });
 
   it('resets the pricing retry gate after successful loads and usage-push refreshes', () => {
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
-    );
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(hookSource).toContain('opts?: { forceRefresh?: boolean; resetPricingRetry?: boolean }');
     expect(hookSource).toContain('if (opts?.resetPricingRetry) scope.pricingRetryDone = false;');
     expect(hookSource).toContain('scope.pricingRetryDone = false;');
-    expect(hookSource).toContain('void load(scopeKey, { forceRefresh: true, resetPricingRetry: true });');
+    expect(hookSource).toContain(
+      'void load(scopeKey, { forceRefresh: true, resetPricingRetry: true });',
+    );
   });
 
   it('does not retry forever for permanent Codex null estimates', () => {
-    const hookSource = readFileSync(
-      resolve(__dirname, '../hooks/useUsageHistory.ts'),
-      'utf8',
-    );
+    const hookSource = readFileSync(resolve(__dirname, '../hooks/useUsageHistory.ts'), 'utf8');
     expect(hookSource).toContain('if (next.estimatesPending) {');
-    expect(hookSource).not.toContain("next.models.some((m) => m.agentKind === 'codex' && m.estimatedCostUsd === null)");
+    expect(hookSource).not.toContain(
+      "next.models.some((m) => m.agentKind === 'codex' && m.estimatedCostUsd === null)",
+    );
   });
 });

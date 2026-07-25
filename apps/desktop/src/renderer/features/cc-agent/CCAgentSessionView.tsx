@@ -82,6 +82,7 @@ import { clearInterruptedAttentionIfOwned } from '@/hooks/useInterruptedSessions
 import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWaitBanner';
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
+import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
@@ -1997,7 +1998,7 @@ export function CCAgentSessionView({
   // 双 IPC 协调,跟 setModel 同模式:
   //   1. sessionService.update({ extraDirs }) → 落 DB(持久化)
   //   2. window.electronAPI.maker.setExtraDirs(sessionId, ...) → 推 closure
-  //      (Claude 下一 turn buildQuery 自动用新值; agent capability=false / session 已 close 时 no-op)
+  //      (Claude / Codex 都在下一 turn 使用新值；session 已 close 时 no-op)
   //   3. refreshServerSession → 让本视图的 session.extraDirs 同步到最新值
   // 失败任一只 toast warn,不阻塞;乐观 UI 由 chip 数字角标已经反映。
   const handleExtraDirsChange = useCallback(
@@ -3004,6 +3005,12 @@ export function CCAgentSessionView({
               />
             )}
 
+            {/* 零可用模型引导条:与首屏引导卡共享判定与 dismiss(useProviderOnboarding),
+              组件自判 visible、不可见渲染 null。device-link 远程会话不出——连接态在被控端。 */}
+            {!remoteDeviceId && (
+              <ConnectProviderBanner style={{ width: inputWidth }} className="py-1" />
+            )}
+
             <div
               className="mx-auto flex flex-col items-center gap-[10px]"
               style={{ width: inputWidth }}
@@ -3323,6 +3330,7 @@ export function CCAgentSessionView({
                         : (session?.providerId ?? null)
                     }
                     sessionId={sessionId}
+                    sessionInitialMoney={session?.totalMoney ?? null}
                     sessionInitialCostUsd={session?.totalCostUsd ?? null}
                     sessionInitialTokens={session?.totalTokenUsage ?? null}
                     remoteHostId={session?.remoteHostId ?? null}

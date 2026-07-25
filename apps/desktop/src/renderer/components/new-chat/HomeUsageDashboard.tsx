@@ -25,8 +25,8 @@ import { Tip } from '@/components/ui/tooltip';
 import {
   DAILY_SOFT_LIMIT_FACTOR,
   formatCompactTokens,
-  formatCompactUsd,
-  formatUsd,
+  formatCompactMoney,
+  formatMoney,
 } from '@/lib/usageFormat';
 import { useClaudeAccountUsage } from '@/hooks/useClaudeAccountUsage';
 import { useUsageHistory, type UsageHistoryPayload } from '@/hooks/useUsageHistory';
@@ -34,6 +34,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { UsageDailyBars } from './UsageDailyBars';
 import { UsageHeatmap } from './UsageHeatmap';
 import { USAGE_TOP_MODELS, usageModelKey } from './usagePalette';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  gatewayMoney,
+  type RegionalMoney,
+  zeroRegionalMoney,
+} from '../../../shared/regionalMoney';
 
 const COLLAPSED_STORAGE_KEY = 'homeUsageDashboard.collapsed';
 /** 与 useUsageHistory 的拉取窗口一致 (20 周)。 */
@@ -42,6 +48,8 @@ const HEATMAP_WINDOW_DAYS = 140;
 const ACCOUNT_LOCAL_TODAY_MATCH_EPSILON = 0.01;
 const UNKNOWN_VALUE = '—';
 const TOKEN_DISTRIBUTION_TOP_MODELS = 5;
+
+const zeroMoney = () => zeroRegionalMoney(CURRENT_CINDY_REGION);
 
 type TokenDistributionInput = {
   model: string;
@@ -82,10 +90,13 @@ function createEmptyUsageHistoryPayload(): UsageHistoryPayload {
     models: [],
     streak: { current: 0, longest: 0 },
     totals: {
-      today: 0,
-      last30Days: 0,
-      last30DaysWithEstimatedValue: 0,
-      last30DaysEstimatedValue: 0,
+      today: zeroMoney(),
+      last30Days: zeroMoney(),
+      last30DaysWithEstimatedValue: zeroMoney(),
+      last30DaysEstimatedValue: zeroRegionalMoney(
+        CURRENT_CINDY_REGION,
+        'value-estimate',
+      ),
       todayTokens: 0,
       last30DaysTokens: 0,
     },
@@ -110,11 +121,15 @@ function writeCollapsedFlag(value: boolean): void {
 }
 
 function isSameDisplayedTodaySpend(
-  accountTodaySpend: number | null,
-  localTodaySpend: number,
+  accountTodaySpend: RegionalMoney | null,
+  localTodaySpend: RegionalMoney,
 ): boolean {
   if (accountTodaySpend === null) return true;
-  return Math.abs(accountTodaySpend - localTodaySpend) <= ACCOUNT_LOCAL_TODAY_MATCH_EPSILON;
+  return (
+    accountTodaySpend.currency === localTodaySpend.currency &&
+    Math.abs(accountTodaySpend.amount - localTodaySpend.amount) <=
+      ACCOUNT_LOCAL_TODAY_MATCH_EPSILON
+  );
 }
 
 function modelTokenTotal(model: UsageHistoryPayload['models'][number]): number {
@@ -175,24 +190,30 @@ export function HomeUsageDashboard(): React.JSX.Element {
     });
   }, []);
 
-  const accountTodaySpend =
-    typeof claudeQuota?.todaySpend === 'number' ? claudeQuota.todaySpend : null;
-  const hasAccountTodaySpend = accountTodaySpend !== null;
+  const accountTodayMoney =
+    typeof claudeQuota?.todaySpend === 'number'
+      ? gatewayMoney(claudeQuota.todaySpend, CURRENT_CINDY_REGION)
+      : null;
+  const hasAccountTodaySpend = accountTodayMoney !== null;
 
-  const displayTodaySpend = accountTodaySpend ?? layoutHistory.totals.today;
+  const displayTodaySpend = accountTodayMoney ?? layoutHistory.totals.today;
   const hasSpendValue = hasHistoryData || hasAccountTodaySpend;
   const showLocalSpendAnomaly =
     layoutHistory.anomaly.isAnomalous &&
-    isSameDisplayedTodaySpend(accountTodaySpend, layoutHistory.totals.today);
+    isSameDisplayedTodaySpend(accountTodayMoney, layoutHistory.totals.today);
   const softDailyLimit = hasMonthly ? (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR : null;
+  const softDailyLimitMoney =
+    softDailyLimit === null
+      ? null
+      : gatewayMoney(softDailyLimit, CURRENT_CINDY_REGION);
   const todayValue = !hasSpendValue
     ? UNKNOWN_VALUE
-    : softDailyLimit !== null
-      ? `${formatUsd(displayTodaySpend)} / ${formatCompactUsd(softDailyLimit)}`
-      : formatUsd(displayTodaySpend);
+    : softDailyLimitMoney
+      ? `${formatMoney(displayTodaySpend)} / ${formatCompactMoney(softDailyLimitMoney)}`
+      : formatMoney(displayTodaySpend);
   const anomalyTip = showLocalSpendAnomaly
     ? t('usageDashboard.anomalyTooltip', {
-        avg: formatUsd(layoutHistory.anomaly.trailing7DayAvg ?? 0),
+        avg: formatMoney(layoutHistory.anomaly.trailing7DayAvg ?? zeroMoney()),
       })
     : null;
 
@@ -241,13 +262,13 @@ export function HomeUsageDashboard(): React.JSX.Element {
       })
     : `${UNKNOWN_VALUE} / ${UNKNOWN_VALUE}`;
   const last30DaysValue = hasHistoryData
-    ? `${layoutHistory.totals.last30DaysEstimatedValue > 0 ? '≈' : ''}${formatUsd(layoutHistory.totals.last30DaysWithEstimatedValue)}`
+    ? formatMoney(layoutHistory.totals.last30DaysWithEstimatedValue)
     : UNKNOWN_VALUE;
-  const last30DaysTip = hasHistoryData && layoutHistory.totals.last30DaysEstimatedValue > 0
+  const last30DaysTip = hasHistoryData && layoutHistory.totals.last30DaysEstimatedValue.amount > 0
     ? t('usageDashboard.last30dTooltip', {
-        api: formatUsd(layoutHistory.totals.last30Days),
-        subscription: formatUsd(layoutHistory.totals.last30DaysEstimatedValue),
-        total: formatUsd(layoutHistory.totals.last30DaysWithEstimatedValue),
+        api: formatMoney(layoutHistory.totals.last30Days),
+        subscription: formatMoney(layoutHistory.totals.last30DaysEstimatedValue),
+        total: formatMoney(layoutHistory.totals.last30DaysWithEstimatedValue),
       })
     : null;
 
@@ -256,7 +277,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
     <span className="min-w-0 flex-1 truncate text-right text-[11px] leading-[18px] tabular-nums text-[var(--text-tertiary)]">
       <span className={cn(showLocalSpendAnomaly && 'font-medium text-[var(--warning-accent)]')}>
         {t('usageDashboard.collapsedToday', {
-          v: hasSpendValue ? formatUsd(displayTodaySpend) : UNKNOWN_VALUE,
+          v: hasSpendValue ? formatMoney(displayTodaySpend) : UNKNOWN_VALUE,
         })}
       </span>
       {' · '}
@@ -335,7 +356,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
           <StatCell
             value={
               hasMonthly
-                ? `${formatCompactUsd(claudeQuota.spend)} / ${formatCompactUsd(claudeQuota.maxBudget)}`
+                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION))}`
                 : `${UNKNOWN_VALUE} / ${UNKNOWN_VALUE}`
             }
             label={t('usageDashboard.monthly')}
@@ -344,7 +365,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
           <StatCell
             value={last30DaysValue}
             label={
-              layoutHistory.totals.last30DaysEstimatedValue > 0
+              layoutHistory.totals.last30DaysEstimatedValue.amount > 0
                 ? t('usageDashboard.last30dWithEstimate')
                 : t('usageDashboard.last30d')
             }

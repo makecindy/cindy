@@ -12,6 +12,7 @@ import {
   privateBinaryPath,
   runtimeInstallRoot,
   runtimeVersionMatchesPin,
+  systemRuntimeVersionSupportsPin,
 } from '../linux-runtime-fallback';
 
 const tempDirs: string[] = [];
@@ -38,15 +39,25 @@ function singleFileTar(name: string, content: Buffer): Buffer {
 
 describe('runtimeVersionMatchesPin', () => {
   it('requires Cindy-managed Claude and Codex binaries to match their pins exactly', () => {
-    expect(runtimeVersionMatchesPin('claude-code', '2.1.215 (Claude Code)')).toBe(true);
-    expect(runtimeVersionMatchesPin('claude-code', '2.1.214 (Claude Code)')).toBe(false);
-    expect(runtimeVersionMatchesPin('codex', 'codex-cli 0.144.6')).toBe(true);
-    expect(runtimeVersionMatchesPin('codex', 'codex-cli 0.144.5')).toBe(false);
+    expect(runtimeVersionMatchesPin('claude-code', '2.1.219 (Claude Code)')).toBe(true);
+    expect(runtimeVersionMatchesPin('claude-code', '2.1.218 (Claude Code)')).toBe(false);
+    expect(runtimeVersionMatchesPin('codex', 'codex-cli 0.145.0')).toBe(true);
+    expect(runtimeVersionMatchesPin('codex', 'codex-cli 0.144.6')).toBe(false);
   });
 
   it('rejects empty or unparsable version output', () => {
     expect(runtimeVersionMatchesPin('claude-code', '')).toBe(false);
     expect(runtimeVersionMatchesPin('codex', 'development build')).toBe(false);
+  });
+});
+
+describe('systemRuntimeVersionSupportsPin', () => {
+  it('accepts the pinned or newer Claude runtime and rejects older or prerelease-equivalent builds', () => {
+    expect(systemRuntimeVersionSupportsPin('claude-code', '2.1.219 (Claude Code)')).toBe(true);
+    expect(systemRuntimeVersionSupportsPin('claude-code', '2.2.0 (Claude Code)')).toBe(true);
+    expect(systemRuntimeVersionSupportsPin('claude-code', '2.1.218 (Claude Code)')).toBe(false);
+    expect(systemRuntimeVersionSupportsPin('claude-code', '2.1.219-beta.1')).toBe(false);
+    expect(systemRuntimeVersionSupportsPin('claude-code', '2.2.0-beta.1')).toBe(false);
   });
 });
 
@@ -66,10 +77,10 @@ describeOnLinuxFileSystem('install path helpers', () => {
 
   it('resolves the exact legacy CDN cache path for migration', () => {
     expect(legacyManagedBinaryPath('/userdata', 'claude-code')).toBe(
-      path.join('/userdata', 'claude-code', '2.1.215', 'claude'),
+      path.join('/userdata', 'claude-code', '2.1.219', 'claude'),
     );
     expect(legacyManagedBinaryPath('/userdata', 'codex')).toBe(
-      path.join('/userdata', 'codex', '0.144.6', 'codex'),
+      path.join('/userdata', 'codex', '0.145.0', 'codex'),
     );
   });
 
@@ -84,16 +95,16 @@ describeOnLinuxFileSystem('install path helpers', () => {
 describe('official asset descriptors', () => {
   it('uses the trusted Claude asset committed with the version pin', () => {
     const sha256 = 'a'.repeat(64);
-    expect(pinnedOfficialAssetDescriptor('claude-code', '2.1.215', {
+    expect(pinnedOfficialAssetDescriptor('claude-code', '2.1.219', {
       runtimeAssets: {
         'linux-x64': {
-          url: 'https://downloads.claude.ai/claude-code-releases/2.1.215/linux-x64/claude',
+          url: 'https://downloads.claude.ai/claude-code-releases/2.1.219/linux-x64/claude',
           sha256,
           size: 123,
         },
       },
     })).toEqual({
-      url: 'https://downloads.claude.ai/claude-code-releases/2.1.215/linux-x64/claude',
+      url: 'https://downloads.claude.ai/claude-code-releases/2.1.219/linux-x64/claude',
       sha256,
       size: 123,
     });

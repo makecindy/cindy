@@ -7,7 +7,7 @@ Cindy desktop application — all supported platforms
 This file separately discloses components not distributed under open-source licenses.
 
 ------------------------------------------------------------------------------
-Claude Code CLI@2.1.215
+Claude Code CLI@2.1.219
 Category: proprietary
 License: LicenseRef-Anthropic-Commercial-Terms
 Source: https://www.anthropic.com/legal/commercial-terms

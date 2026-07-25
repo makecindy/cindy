@@ -65,8 +65,11 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
 - `navigateOnDragDrop: false`
 
 窗口可以追加 preload、partition、节流等功能配置，但不得覆盖上述字段为更宽松的值。
-`webviewTag` 默认关闭；主界面和右侧栏因内置浏览器需要而开启，是受控例外，必须继续由
-`webview-security.ts` 在 `will-attach-webview` 阶段覆盖 Renderer 传入的全部安全选项。
+`webviewTag` 默认关闭；受控例外目前有三处——主界面与右侧栏子窗口（内置浏览器需要），
+以及插件面板独立窗口（`main/ghost-panel-window/window.ts`，仅承载 ghost 分区面板
+webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-attach-webview` 阶段
+覆盖 Renderer 传入的全部安全选项（hardener 挂在 `web-contents-created`，对所有窗口
+全局生效，ghost 附加闸只认分区与地址、不认宿主窗口）。
 
 内置浏览器为了捕获 `window.open`，会在 Main hardener 中设置 `allowpopups`，随后由
 `setWindowOpenHandler` 拒绝真实弹窗并转成受控标签页。这是唯一允许的窄例外；Renderer

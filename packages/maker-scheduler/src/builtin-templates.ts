@@ -1,104 +1,144 @@
 import type { ScheduleTemplate, TemplateCategory } from './types.js';
 
+/**
+ * 内置自动化模板。
+ *
+ * 本文件的中文文案是唯一正本：desktop renderer 通过
+ * `apps/desktop/src/renderer/i18n/locales/<locale>/common.json` 的
+ * `scheduler.builtinTemplates` 块做多语言覆盖（zh-CN 块必须与这里逐字一致，
+ * 由 desktop 侧 schedulerTemplateLocalization 测试锁死）；mobile 经
+ * `maker:schedule:list-templates` 拿到的仍是这里的中文正本。
+ *
+ * 选题原则（2026-07-22 与产品确认）：
+ * - 数据来源只限工作目录/仓库（agent 本来就有权限的范围）和公开 Web；
+ *   绝不周期性读取用户私人账号数据（邮箱、IM、日程）——那类任务每次运行
+ *   都消耗用户 token 并把隐私数据喂进定时任务，不作为官方推荐。
+ * - 产出必须是可交付物（报告 / 草稿 / PR），不是提醒。
+ * - 兼顾开发与非开发办公场景。
+ * - 每个分类固定 2 条：desktop 模板网格是两列，超过 2 条会折行（2026-07-24）。
+ */
+
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
 const DEFAULT_NOTIFY = { desktop: true, feishu: false } as const;
 
 export const TEMPLATE_CATEGORIES: TemplateCategory[] = [
-  { id: 'status-reports', name: '状态报告', order: 1 },
-  { id: 'release-prep', name: '发布准备', order: 2 },
-  { id: 'code-quality', name: '代码质量', order: 3 },
-  { id: 'repo-maintenance', name: '仓库维护', order: 4 },
+  { id: 'dev-automation', name: '开发自动化', order: 1 },
+  { id: 'info-radar', name: '信息雷达', order: 2 },
+  { id: 'office-docs', name: '文档与办公', order: 3 },
 ];
 
 export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
   {
-    id: 'standup-summary',
-    name: '站会摘要',
-    description: '总结昨天的 git 活动，锚定 commit/MR/文件',
-    category: 'status-reports',
+    id: 'nightly-test-heal',
+    name: '夜间自愈测试',
+    description: '每晚跑测试，失败项在隔离工作区尝试最小修复',
+    category: 'dev-automation',
     source: 'builtin',
-    prompt: `总结昨天的 git 活动，生成适合站会同步的摘要。
+    prompt: `运行项目的测试套件，如果有失败项，在隔离工作区尝试给出最小修复。
 约束：
-- 只使用仓库中的具体证据，包括 commit SHA、MR、文件路径、diff、测试结果或 CI 信号
-- 按主题归纳，不要按流水账罗列全部提交
-- 明确列出已完成、进行中、阻塞项和需要团队关注的风险
-- 如果证据不足，请说明缺口，不要补编进展`,
+- 先按仓库文档或 package 脚本确定标准测试命令，再完整运行
+- 只修复有明确失败证据的问题，采用影响面最小的改法，避免顺手重构
+- 修复后重跑相关测试确认通过，并复核完整 diff
+- 按仓库工作流交付修复（如创建分支并开 PR），不要直接改动主分支
+- 无法安全修复的失败项，输出失败原因、疑点文件和建议的排查步骤`,
+    cronExpr: '0 2 * * *',
+    timezone: DEFAULT_TIMEZONE,
+    recurring: true,
+    agentKind: 'claude-code',
+    useWorktree: true,
+    notify: DEFAULT_NOTIFY,
+    capabilities: ['worktree', 'pr'],
+  },
+  {
+    id: 'pr-gatekeeper',
+    name: 'PR 守门人',
+    description: '工作日预审开放 PR 的新增改动，按严重程度报告风险',
+    category: 'dev-automation',
+    source: 'builtin',
+    prompt: `检查仓库当前开放的 PR，对新增改动做一轮预审。
+约束：
+- 逐个查看过去 24 小时内有新提交的开放 PR（周一回看整个周末），引用 PR 编号、文件路径和具体 diff
+- 重点找正确性、安全、数据丢失和兼容性问题，按严重程度分级
+- 只报告有证据支撑的问题，说明失败场景，不要凭风格偏好挑刺
+- 除非用户明确授权，只输出审查结论，不要直接在 PR 上留言或改动代码`,
+    cronExpr: '0 10 * * 1-5',
+    timezone: DEFAULT_TIMEZONE,
+    recurring: true,
+    agentKind: 'claude-code',
+    useWorktree: false,
+    notify: DEFAULT_NOTIFY,
+    capabilities: ['pr'],
+  },
+  {
+    id: 'domain-radar',
+    name: '领域雷达',
+    description: '定期搜集你关注领域的最新动态，输出有观点的摘要',
+    category: 'info-radar',
+    source: 'builtin',
+    prompt: `围绕主题「{{topic}}」搜集过去 24 小时的最新动态（周一回看整个周末），输出一份有观点的摘要。
+约束：
+- 用 Web 搜索获取信息，交叉核对多个来源后再采信，标注每条信息的来源链接
+- 优先收录有实质内容的进展（发布、研究、政策、重要讨论），过滤营销软文和重复转载
+- 对每条动态给出一句"为什么值得关注"的判断，而不是罗列链接
+- 信息不足或来源存疑时如实说明，不要臆造`,
     cronExpr: '0 9 * * 1-5',
     timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
     notify: DEFAULT_NOTIFY,
+    parameters: [
+      {
+        key: 'topic',
+        label: '关注主题',
+        type: 'string',
+        required: true,
+        placeholder: '如：AI Agent、新能源、前端框架',
+      },
+    ],
+    capabilities: ['web', 'params'],
   },
   {
-    id: 'weekly-mr-summary',
-    name: '每周 MR 摘要',
-    description: '按成员和主题总结上周 MR，突出风险',
-    category: 'status-reports',
+    id: 'competitor-watch',
+    name: '竞品动态追踪',
+    description: '每周汇总竞品的产品与市场动态，分析对我们的影响',
+    category: 'info-radar',
     source: 'builtin',
-    prompt: `总结上周合并或仍在评审中的 MR，生成团队周报摘要。
+    prompt: `追踪以下竞品最近一周的动态：{{competitors}}。
 约束：
-- 按成员和主题组织内容，引用 MR 编号、标题、相关 commit 和关键文件
-- 突出高风险改动、未完成评审、测试缺口和可能影响发布的事项
-- 不要把没有证据的推测写成事实
-- 输出应便于团队快速决定下周优先级`,
+- 用 Web 搜索覆盖产品更新、版本发布、定价变化、市场动作和用户口碑，标注来源
+- 区分官方信息和第三方转述，未经证实的传闻要明确标注
+- 对每条重要动态给出"对我们意味着什么"的分析和建议
+- 没有实质动态时如实说明，不要凑数`,
     cronExpr: '0 9 * * 1',
     timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
     notify: DEFAULT_NOTIFY,
+    parameters: [
+      {
+        key: 'competitors',
+        label: '竞品名单',
+        type: 'string',
+        required: true,
+        placeholder: '如：Notion、Linear、Figma',
+      },
+    ],
+    capabilities: ['web', 'params'],
   },
   {
-    id: 'weekly-release-notes',
-    name: '每周发布说明',
-    description: '根据已合并 MR 起草发布说明',
-    category: 'release-prep',
+    id: 'weekly-work-draft',
+    name: '周报草稿助手',
+    description: '从工作目录的文档和产出物整理本周工作，生成周报草稿',
+    category: 'office-docs',
     source: 'builtin',
-    prompt: `根据本周已合并 MR 起草发布说明。
+    prompt: `根据工作目录中本周的文档、笔记和产出物变化，整理一份周报草稿。
 约束：
-- 只纳入有明确 MR、commit 或 changelog 证据的变化
-- 按用户可感知的功能、修复、性能、内部维护分类
-- 对破坏性变更、迁移步骤和配置变更单独标注
-- 保留 MR 链接或编号，方便发布负责人追溯`,
-    cronExpr: '0 9 * * 5',
-    timezone: DEFAULT_TIMEZONE,
-    recurring: true,
-    agentKind: 'claude-code',
-    useWorktree: false,
-    notify: DEFAULT_NOTIFY,
-  },
-  {
-    id: 'pre-release-check',
-    name: '发版前检查',
-    description: '打 tag 前核对 changelog、迁移、测试',
-    category: 'release-prep',
-    source: 'builtin',
-    prompt: `执行发版前检查，确认当前仓库是否适合打 tag。
-约束：
-- 检查 changelog、版本号、数据库迁移、构建脚本、测试和 CI 状态
-- 引用具体文件路径、命令输出、MR 或 commit 作为证据
-- 将问题按阻塞、建议修复、可接受风险分类
-- 不要修改代码；只输出检查结论和最小修复建议`,
-    cronExpr: '0 13 * * 4',
-    timezone: DEFAULT_TIMEZONE,
-    recurring: true,
-    agentKind: 'claude-code',
-    useWorktree: false,
-    notify: DEFAULT_NOTIFY,
-  },
-  {
-    id: 'update-changelog',
-    name: '更新变更日志',
-    description: '用本周亮点和 MR 链接更新 changelog',
-    category: 'release-prep',
-    source: 'builtin',
-    prompt: `根据本周亮点和已合并 MR 更新 changelog 草稿。
-约束：
-- 复用仓库现有 changelog 格式，不引入新的排版风格
-- 每条变更都关联 MR、commit 或文件路径证据
-- 优先写用户可理解的变化，避免内部实现细节淹没重点
-- 如果 changelog 文件不存在或格式不明确，先说明建议方案，不要凭空创建结构`,
+- 只使用工作目录内有实际修改痕迹的内容作为证据，注明对应文件
+- 按"本周完成 / 进行中 / 下周计划 / 需要协调"组织，语言简洁可直接提交
+- 区分实质进展和例行事务，突出有价值的产出
+- 材料不足以判断的部分留出占位并说明，方便用户补充`,
     cronExpr: '0 16 * * 5',
     timezone: DEFAULT_TIMEZONE,
     recurring: true,
@@ -107,79 +147,22 @@ export const BUILTIN_TEMPLATES: ScheduleTemplate[] = [
     notify: DEFAULT_NOTIFY,
   },
   {
-    id: 'daily-bug-scan',
-    name: '每日 Bug 扫描',
-    description: '扫描近期 commit 查找 bug 并提出最小修复',
-    category: 'code-quality',
+    id: 'knowledge-freshness',
+    name: '知识库保鲜',
+    description: '每月体检工作目录文档，找出过期与矛盾内容',
+    category: 'office-docs',
     source: 'builtin',
-    prompt: `扫描最近的 commit（自上次运行以来，或过去 24 小时内），查找可能的 bug 并提出最小修复方案。
+    prompt: `体检工作目录中的文档，找出需要更新的内容。
 约束：
-- 只使用仓库中的具体证据（commit SHA、MR、文件路径、diff、失败的测试、CI 信号）
-- 不要臆造 bug；如果证据不足，请说明并跳过
-- 优先选择最小且安全的修复；避免重构和无关清理
-- 对每个疑点说明影响范围、复现线索和建议验证方式`,
-    cronExpr: '0 9 * * *',
+- 检查过期信息（旧日期、失效链接、已废弃的流程或工具）、前后矛盾和重复内容
+- 每个问题都注明文件路径和具体位置，说明判断依据
+- 按"建议更新 / 建议合并 / 建议删除"分类，给出修订建议清单
+- 只输出体检报告，不要直接修改文档`,
+    cronExpr: '0 10 1 * *',
     timezone: DEFAULT_TIMEZONE,
     recurring: true,
     agentKind: 'claude-code',
     useWorktree: false,
-    notify: DEFAULT_NOTIFY,
-  },
-  {
-    id: 'test-gap-detection',
-    name: '测试盲区检测',
-    description: '找出变更中未测试的路径，补充测试',
-    category: 'code-quality',
-    source: 'builtin',
-    prompt: `检查近期变更中的测试盲区，并提出补充测试方案。
-约束：
-- 对照 diff、现有测试文件、测试命令和失败记录判断覆盖缺口
-- 优先指出高风险路径，包括状态机、数据迁移、IPC、权限和跨平台逻辑
-- 给出最小测试用例建议，说明应验证的行为和失败条件
-- 不要为了提高覆盖率建议无意义快照或脆弱测试`,
-    cronExpr: '0 15 * * *',
-    timezone: DEFAULT_TIMEZONE,
-    recurring: true,
-    agentKind: 'claude-code',
-    useWorktree: false,
-    notify: DEFAULT_NOTIFY,
-  },
-  {
-    id: 'nightly-ci-report',
-    name: '每晚 CI 报告',
-    description: '总结 CI 失败和不稳定测试，提出修复建议',
-    category: 'code-quality',
-    source: 'builtin',
-    prompt: `总结当天 CI 失败和不稳定测试，提出下一步修复建议。
-约束：
-- 引用具体 pipeline、job、测试名称、错误片段、commit 或 MR 作为证据
-- 区分确定失败、疑似 flaky、环境问题和缺少信息的情况
-- 对每个问题给出最小排查路径和优先级
-- 不要把网络抖动或缓存问题直接归因到代码，除非有证据支持`,
-    cronExpr: '0 21 * * *',
-    timezone: DEFAULT_TIMEZONE,
-    recurring: true,
-    agentKind: 'claude-code',
-    useWorktree: false,
-    notify: DEFAULT_NOTIFY,
-  },
-  {
-    id: 'dependency-sweep',
-    name: '依赖清扫',
-    description: '扫描过时依赖，提出安全升级方案',
-    category: 'repo-maintenance',
-    source: 'builtin',
-    prompt: `扫描仓库依赖状态，提出安全且可回滚的升级方案。
-约束：
-- 优先关注安全漏洞、已知兼容性问题和项目实际使用到的关键依赖
-- 引用 package 文件、lockfile、release note 或安全公告作为证据
-- 将升级分为可直接升级、需要适配、建议暂缓三类
-- 不要批量升级无关依赖；每个建议都要包含验证命令和回滚方式`,
-    cronExpr: '0 9 1 * *',
-    timezone: DEFAULT_TIMEZONE,
-    recurring: true,
-    agentKind: 'claude-code',
-    useWorktree: true,
     notify: DEFAULT_NOTIFY,
   },
 ];

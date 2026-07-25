@@ -98,7 +98,7 @@ describe('syncGhostPanelRegistrations · 按 position 分派两个注册表', ()
   it("tab 型只进 Tab 注册表;停靠型只进顶层面板注册表", () => {
     syncGhostPanelRegistrations([
       ghost('tabbed'),
-      ghost('docked', { html: 'panel.html', position: 'right' }),
+      ghost('docked', { html: 'panel.html', position: 'left' }),
     ]);
     expect(getTabKind('ghost:tabbed')).not.toBeNull();
     expect(hasPanelKind('ghost:tabbed')).toBe(false);
@@ -106,8 +106,8 @@ describe('syncGhostPanelRegistrations · 按 position 分派两个注册表', ()
     expect(getTabKind('ghost:docked')).toBeNull();
   });
 
-  it('换版把 position 从 right 改成 tab → 顶层注销、页签注册(反向亦然)', () => {
-    syncGhostPanelRegistrations([ghost('m', { html: 'panel.html', position: 'right' })]);
+  it('换版把 position 从 left 改成 tab → 顶层注销、页签注册(反向亦然)', () => {
+    syncGhostPanelRegistrations([ghost('m', { html: 'panel.html', position: 'left' })]);
     expect(hasPanelKind('ghost:m')).toBe(true);
 
     syncGhostPanelRegistrations([ghost('m', { html: 'panel.html', position: 'tab' })]);

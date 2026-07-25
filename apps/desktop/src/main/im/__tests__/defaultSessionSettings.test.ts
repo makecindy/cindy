@@ -141,6 +141,28 @@ describe('resolveImSessionDefaults', () => {
     });
   });
 
+  it('reads defaults from the requested channel scope', async () => {
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': {
+          providerId: null,
+          model: 'claude-opus-4-8',
+          effort: 'xhigh',
+        },
+        codex: {
+          providerId: null,
+          model: 'codex/gpt-5.5',
+          effort: 'high',
+        },
+      },
+    });
+
+    await resolveImSessionDefaults(config, null, 'discord');
+
+    expect(mocks.readImDefaultSettings).toHaveBeenCalledWith('discord');
+  });
+
   it('keeps a valid Codex default with its selected provider', async () => {
     mocks.readImDefaultSettings.mockReturnValue({
       agentKind: 'codex',
@@ -255,7 +277,9 @@ describe('resolveImSessionDefaults', () => {
           'claude-code': [],
           codex: [customCodexModel],
         },
-        routing: { codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' } },
+        routing: {
+          codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' },
+        },
       },
     ]);
     mocks.readImDefaultSettings.mockReturnValue({
@@ -283,10 +307,7 @@ describe('resolveImSessionDefaults', () => {
   });
 
   it('falls back from Codex budget default when the XD gateway source is disconnected', async () => {
-    mocks.listProviders.mockResolvedValue([
-      { ...providers[0], connected: false },
-      providers[1],
-    ]);
+    mocks.listProviders.mockResolvedValue([{ ...providers[0], connected: false }, providers[1]]);
     mocks.readImDefaultSettings.mockReturnValue({
       agentKind: 'codex',
       agents: {

@@ -16,6 +16,12 @@ import { createLogger } from './logger';
 
 const log = createLogger('serverApiClient');
 
+function redactedLogPath(apiPath: string): string {
+  const pathname = apiPath.split(/[?#]/, 1)[0];
+  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
+  return segments.length > 0 ? `/${segments.join('/')}` : '/';
+}
+
 export class ServerApiError extends Error {
   constructor(
     public readonly code: string,
@@ -42,6 +48,8 @@ export interface ApiFetchOptions {
   baseUrl: string;
   /** Abort the request after this many milliseconds; 0 disables the deadline. */
   timeoutMs?: number;
+  /** Keep upstream response/network details out of local logs for sensitive flows. */
+  redactErrorDetails?: boolean;
 }
 
 interface RawResponse<T> {
@@ -63,9 +71,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
   }
   const timeoutMs = opts.timeoutMs ?? 0;
   const controller = timeoutMs > 0 ? new AbortController() : null;
-  const timeoutId = controller
-    ? setTimeout(() => controller.abort(), timeoutMs)
-    : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
     const response = await net.fetch(url, {
@@ -83,7 +89,15 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     }
     return { ok: response.ok, status: response.status, data };
   } catch (err) {
-    log.error('fetch failed', apiPath, err);
+    if (opts.redactErrorDetails) {
+      log.error(
+        'serverApiFetch.redacted_network_error',
+        'path=' + redactedLogPath(apiPath),
+        'method=' + method,
+      );
+    } else {
+      log.error('fetch failed', apiPath, err);
+    }
     return { ok: false, status: 0, data: null };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
@@ -94,10 +108,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
  * 高层 API：成功 → 返回 data；失败 → throw ServerApiError。
  * 可恢复的 401 自动 refresh 一次再重试（除非 `skipAutoRefresh`）。
  */
-export async function serverApiFetch<T>(
-  apiPath: string,
-  opts: ApiFetchOptions,
-): Promise<T> {
+export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
   let result = await rawFetch<T>(apiPath, opts);
   let refreshedAndRetried = false;
   const firstCode = readErrorCode(result.data) ?? statusToCode(result.status);
@@ -131,15 +142,29 @@ export async function serverApiFetch<T>(
     }
     // 网络异常 rawFetch 已 log;这里补 not-ok 响应(401/5xx 等)的日志,
     // 否则上层 catch 一吞,排查调用链时完全看不到原因。
-    log.warn(
-      'serverApiFetch.not_ok',
-      'path=' + apiPath,
-      'method=' + (opts.method ?? 'GET'),
-      'status=' + result.status,
-      'code=' + errCode,
-      'msg=' + errMsg,
+    if (opts.redactErrorDetails) {
+      log.warn(
+        'serverApiFetch.redacted_not_ok',
+        'path=' + redactedLogPath(apiPath),
+        'method=' + (opts.method ?? 'GET'),
+        'status=' + result.status,
+        'code=' + statusToCode(result.status),
+      );
+    } else {
+      log.warn(
+        'serverApiFetch.not_ok',
+        'path=' + apiPath,
+        'method=' + (opts.method ?? 'GET'),
+        'status=' + result.status,
+        'code=' + errCode,
+        'msg=' + errMsg,
+      );
+    }
+    throw new ServerApiError(
+      opts.redactErrorDetails ? statusToCode(result.status) : errCode,
+      result.status,
+      opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
     );
-    throw new ServerApiError(errCode, result.status, errMsg);
   }
   if (result.data === null) {
     throw new ServerApiError('EMPTY_RESPONSE', result.status, '响应体为空');

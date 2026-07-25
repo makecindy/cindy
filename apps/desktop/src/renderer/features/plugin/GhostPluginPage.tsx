@@ -8,9 +8,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronDown, Plus, Sparkles, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Sparkles, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import { useAuth } from '@/contexts/AuthContext';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import {
@@ -32,11 +34,21 @@ import {
 import { patchDraft } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
+import { GhostPermissionDiffView } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
-import { ghostPanelKind, type GhostSetupStatus } from '../../../shared/ghost';
+import {
+  diffGhostPermissionItems,
+  ghostPanelKind,
+  type GhostSetupStatus,
+} from '../../../shared/ghost';
+import type {
+  PluginMarketDetail,
+  PluginMarketItem,
+  PluginMarketSnapshot,
+} from '../../../shared/pluginMarket';
 import {
   toGhostPluginDetail,
   toGhostPluginListItem,
@@ -48,10 +60,25 @@ import { formatSetupGateDescription } from './lib/ghostSetupGateModel';
 import { PluginManagementLayout, PluginManagementPage } from './PluginManagementLayout';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
+import {
+  pluginPresentationOrigin,
+  type PluginPresentationOrigin,
+} from './lib/pluginMarketPresentation';
+import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
+type PluginPresentationFilter = 'all' | PluginPresentationOrigin;
+type PresentedGhostPluginItem = GhostPluginListItem & { origin: PluginPresentationOrigin };
+
+const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
+  'all',
+  'public',
+  'organization',
+  'local',
+];
 
 /**
  * Ghost-backed Plugin page.
@@ -65,10 +92,39 @@ export function GhostPluginPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm, confirmWithCheckbox } = useConfirmDialog();
+  const { user, mode, dataOwnerId } = useAuth();
+  const showEnterprise = user?.membershipKind === 'org';
   const ghosts = useInstalledGhosts();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [installedExpanded, setInstalledExpanded] = useState(false);
+  const [marketSnapshot, setMarketSnapshot] = useState<PluginMarketSnapshot | null>(null);
+  const [originFilter, setOriginFilter] = useState<PluginPresentationFilter>('all');
+  const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
+  const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
+  const marketRefreshRequestRef = useRef(0);
+  const marketDetailRequestRef = useRef(0);
+  const refreshMarket = useCallback(async () => {
+    const requestId = ++marketRefreshRequestRef.current;
+    try {
+      const snapshot = await window.electronAPI.pluginMarket.snapshot();
+      if (requestId === marketRefreshRequestRef.current) setMarketSnapshot(snapshot);
+    } catch (error) {
+      if (requestId === marketRefreshRequestRef.current) {
+        setMarketSnapshot({
+          items: [],
+          unavailableReason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }, []);
+  useEffect(() => {
+    setMarketSnapshot(null);
+    setMarketDetail(null);
+    setMarketBusyId(null);
+    marketDetailRequestRef.current += 1;
+    void refreshMarket();
+  }, [refreshMarket, mode, dataOwnerId]);
   const activeSessionWorkingDir = useSyncExternalStore(
     subscribeToLastWorkingDir,
     getLastWorkingDir,
@@ -130,7 +186,15 @@ export function GhostPluginPage() {
     next.delete('ghost');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
-  const installedItems = useMemo(
+  const marketItems = marketSnapshot?.items ?? [];
+  const marketByGhostId = useMemo(() => {
+    const map = new Map<string, PluginMarketItem>();
+    for (const item of marketItems) {
+      if (item.installState !== 'conflict') map.set(item.ghostId, item);
+    }
+    return map;
+  }, [marketItems]);
+  const allInstalledItems = useMemo<PresentedGhostPluginItem[]>(
     () =>
       ghosts
         // cindy-mivo was renamed to xd-mivo. Older user data can still
@@ -140,21 +204,88 @@ export function GhostPluginPage() {
             ghost.manifest.id !== 'cindy-mivo' ||
             !ghosts.some((candidate) => candidate.manifest.id === 'xd-mivo'),
         )
-        .map((ghost) => toGhostPluginListItem(ghost)),
-    [ghosts],
+        .map((ghost) => ({
+          ...toGhostPluginListItem(ghost),
+          origin: pluginPresentationOrigin(marketByGhostId.get(ghost.manifest.id)),
+        })),
+    [ghosts, marketByGhostId],
+  );
+  const installedItems = useMemo(
+    () =>
+      showEnterprise
+        ? allInstalledItems
+        : allInstalledItems.filter((item) => item.origin !== 'organization'),
+    [allInstalledItems, showEnterprise],
   );
   const installedShortcutItems = useMemo(
     () => sortGhostPluginItemsByRecentUse(installedItems, recentGhostIds),
     [installedItems, recentGhostIds],
   );
-  const items = useMemo(
+  const searchedInstalledItems = useMemo(
     () => filterGhostPluginItems(installedItems, query),
     [installedItems, query],
   );
+  const searchedAvailableMarketItems = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    return marketItems.filter((item) => {
+      if (item.installState === 'installed' || item.installState === 'update-available') {
+        return false;
+      }
+      if (!showEnterprise && pluginPresentationOrigin(item) === 'organization') return false;
+      return `${item.name} ${item.description ?? ''} ${item.ghostId} ${item.author ?? ''}`
+        .toLocaleLowerCase()
+        .includes(normalizedQuery);
+    });
+  }, [marketItems, query, showEnterprise]);
+  const originFilters = useMemo(
+    () =>
+      showEnterprise
+        ? PRESENTATION_FILTERS
+        : PRESENTATION_FILTERS.filter((filter) => filter !== 'organization'),
+    [showEnterprise],
+  );
+  const effectiveOriginFilter =
+    !showEnterprise && originFilter === 'organization' ? 'all' : originFilter;
+  const items = useMemo(
+    () =>
+      effectiveOriginFilter === 'all'
+        ? searchedInstalledItems
+        : searchedInstalledItems.filter((item) => item.origin === effectiveOriginFilter),
+    [effectiveOriginFilter, searchedInstalledItems],
+  );
+  const availableMarketItems = useMemo(
+    () =>
+      effectiveOriginFilter === 'all'
+        ? searchedAvailableMarketItems
+        : searchedAvailableMarketItems.filter(
+            (item) => pluginPresentationOrigin(item) === effectiveOriginFilter,
+          ),
+    [effectiveOriginFilter, searchedAvailableMarketItems],
+  );
+  const originCounts = useMemo(() => {
+    const counts: Record<PluginPresentationOrigin, number> = {
+      public: 0,
+      organization: 0,
+      local: 0,
+    };
+    for (const item of searchedInstalledItems) counts[item.origin] += 1;
+    for (const item of searchedAvailableMarketItems) {
+      counts[pluginPresentationOrigin(item)] += 1;
+    }
+    return counts;
+  }, [searchedAvailableMarketItems, searchedInstalledItems]);
+  const searchedItemCount = searchedInstalledItems.length + searchedAvailableMarketItems.length;
   const selectedGhost = selectedId
     ? (ghosts.find((ghost) => ghost.manifest.id === selectedId) ?? null)
     : null;
   const selectedDetail = selectedGhost ? toGhostPluginDetail(selectedGhost) : null;
+  const selectedMarketInstall = selectedDetail
+    ? (marketByGhostId.get(selectedDetail.id) ?? null)
+    : null;
+  const selectedMarketUpdate =
+    selectedMarketInstall?.installState === 'update-available'
+      ? selectedMarketInstall
+      : null;
 
   const panelStatus = useMemo(() => {
     if (!selectedDetail || selectedDetail.panelMinWidth === null) return null;
@@ -201,8 +332,56 @@ export function GhostPluginPage() {
 
   const handleUpdate = useCallback(async () => {
     if (!selectedDetail) return;
+    if (selectedMarketUpdate) {
+      setMarketBusyId(selectedMarketUpdate.pluginId);
+      try {
+        const next = await window.electronAPI.pluginMarket.detail(
+          selectedMarketUpdate.pluginId,
+        );
+        const diff = diffGhostPermissionItems(
+          selectedGhost?.manifest ?? next.manifest,
+          next.manifest,
+        );
+        const approved = await confirm({
+          title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
+          description: t('settings.ghosts.updateConfirm.body', {
+            from: selectedGhost?.manifest.version ?? selectedDetail.version,
+            to: next.version,
+          }),
+          content: <GhostPermissionDiffView diff={diff} />,
+          maxWidth: 520,
+          confirmText: t('settings.ghosts.updateConfirm.confirm'),
+          cancelText: t('settings.ghosts.updateConfirm.cancel'),
+        });
+        if (!approved) return;
+        const result = await window.electronAPI.pluginMarket.install(
+          selectedMarketUpdate.pluginId,
+          { allowPermissionExpansion: diff.added.length > 0 },
+        );
+        toast.success(
+          t('settings.ghosts.toast.updated', {
+            name: result.ghost.manifest.name,
+            version: result.ghost.manifest.version,
+          }),
+        );
+        await refreshMarket();
+      } catch (error) {
+        toast.error(t(pluginMarketErrorKey(error)));
+      } finally {
+        setMarketBusyId(null);
+      }
+      return;
+    }
     await pickAndUpdateGhost(selectedDetail.id, { t, confirm, confirmWithCheckbox });
-  }, [confirm, confirmWithCheckbox, selectedDetail, t]);
+  }, [
+    confirm,
+    confirmWithCheckbox,
+    refreshMarket,
+    selectedDetail,
+    selectedGhost,
+    selectedMarketUpdate,
+    t,
+  ]);
 
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
@@ -297,12 +476,83 @@ export function GhostPluginPage() {
     });
     if (!ok) return;
     try {
-      await window.electronAPI.ghosts.uninstall(selectedDetail.id);
+      if (selectedMarketInstall) {
+        await window.electronAPI.pluginMarket.uninstall(selectedMarketInstall.pluginId);
+        await refreshMarket();
+      } else {
+        await window.electronAPI.ghosts.uninstall(selectedDetail.id);
+      }
       toast.success(t('settings.ghosts.toast.uninstalled', { name: selectedDetail.name }));
     } catch (error) {
-      toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
+      toast.error(
+        selectedMarketInstall
+          ? t(pluginMarketErrorKey(error))
+          : t(ghostInstallErrorKey(extractIpcError(error)?.code)),
+      );
     }
-  }, [confirm, selectedDetail, t]);
+  }, [confirm, refreshMarket, selectedDetail, selectedMarketInstall, t]);
+
+  const handleSelectMarket = useCallback(
+    async (pluginId: string) => {
+      const requestId = ++marketDetailRequestRef.current;
+      setMarketBusyId(pluginId);
+      try {
+        const detail = await window.electronAPI.pluginMarket.detail(pluginId);
+        if (requestId === marketDetailRequestRef.current) setMarketDetail(detail);
+      } catch (error) {
+        if (requestId === marketDetailRequestRef.current) {
+          toast.error(t(pluginMarketErrorKey(error)));
+        }
+      } finally {
+        if (requestId === marketDetailRequestRef.current) setMarketBusyId(null);
+      }
+    },
+    [t],
+  );
+
+  const handleInstallFromMarket = useCallback(async () => {
+    if (!marketDetail) return;
+    const confirmed = await confirm({
+      title: t('settings.ghosts.market.installConfirmTitle', {
+        name: marketDetail.name,
+      }),
+      description: t('settings.ghosts.market.installConfirmDescription'),
+      confirmText: t('settings.ghosts.market.install'),
+      cancelText: t('settings.ghosts.installConfirm.cancel'),
+      autoFocusConfirm: true,
+    });
+    if (!confirmed) return;
+    setMarketBusyId(marketDetail.pluginId);
+    try {
+      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
+      toast.success(
+        t('settings.ghosts.toast.installedAsleep', {
+          name: result.ghost.manifest.name,
+        }),
+      );
+      setMarketDetail(null);
+      setSelectedId(result.ghost.manifest.id);
+      await refreshMarket();
+    } catch (error) {
+      toast.error(t(pluginMarketErrorKey(error)));
+    } finally {
+      setMarketBusyId(null);
+    }
+  }, [confirm, marketDetail, refreshMarket, t]);
+
+  if (marketDetail) {
+    return (
+      <MarketPluginDetailView
+        detail={marketDetail}
+        busy={marketBusyId === marketDetail.pluginId}
+        onBack={() => {
+          marketDetailRequestRef.current += 1;
+          setMarketDetail(null);
+        }}
+        onInstall={() => void handleInstallFromMarket()}
+      />
+    );
+  }
 
   if (selectedDetail) {
     return (
@@ -319,6 +569,11 @@ export function GhostPluginPage() {
         onToggle={(enabled) => void handleToggle(selectedDetail.id, enabled)}
         onUse={handleUse}
         onUpdate={() => void handleUpdate()}
+        updateLabel={
+          selectedMarketUpdate
+            ? t('settings.ghosts.market.update')
+            : undefined
+        }
         onUninstall={() => void handleUninstall()}
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
       />
@@ -446,21 +701,69 @@ export function GhostPluginPage() {
           ) : null}
 
           <section className="plugin-motion-page-section mt-6 min-w-0">
-            <div className="mb-5 flex items-baseline gap-2">
-              <h2 className="text-20 font-medium text-[var(--text-primary)]">
-                {t('settings.ghosts.page.allTitle')}
-              </h2>
-              <span className="text-13 tabular-nums text-[var(--text-tertiary)]">
-                {items.length}
-              </span>
+            <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-baseline gap-2">
+                <h2 className="text-20 font-medium text-[var(--text-primary)]">
+                  {t('settings.ghosts.page.allTitle')}
+                </h2>
+                <span className="text-13 tabular-nums text-[var(--text-tertiary)]">
+                  {items.length + availableMarketItems.length}
+                </span>
+              </div>
+              <div
+                className="flex max-w-full items-center gap-1 overflow-x-auto"
+                role="group"
+                aria-label={t('settings.ghosts.page.filtersAria')}
+                style={WINDOW_NO_DRAG_STYLE}
+              >
+                {originFilters.map((filter) => {
+                  const selected = effectiveOriginFilter === filter;
+                  const count = filter === 'all' ? searchedItemCount : originCounts[filter];
+                  return (
+                    <button
+                      key={filter}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setOriginFilter(filter)}
+                      className={cn(
+                        'shrink-0 select-none rounded-full px-3.5 py-2 text-12 transition-colors duration-150',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                        selected
+                          ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+                      )}
+                    >
+                      {filter === 'all'
+                        ? t('settings.ghosts.page.filterAll')
+                        : t(`settings.ghosts.page.origin.${filter}`)}
+                      <span className="ml-1.5 tabular-nums text-[var(--text-tertiary)]">
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {items.length > 0 ? (
+            {marketSnapshot?.unavailableReason ? (
+              <p className="mb-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 text-[var(--text-secondary)]">
+                {t(
+                  marketSnapshot.unavailableReason === 'authentication-required'
+                    ? 'settings.ghosts.market.authenticationRequired'
+                    : marketSnapshot.unavailableReason === 'not-configured'
+                      ? 'settings.ghosts.market.notConfigured'
+                      : 'settings.ghosts.market.unavailable',
+                )}
+              </p>
+            ) : null}
+
+            {items.length > 0 || availableMarketItems.length > 0 ? (
               <div className="plugin-motion-stagger grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {items.map((item) => (
                   <GhostPluginCard
                     key={item.id}
                     item={item}
+                    sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
                     onSelect={() => setSelectedId(item.id)}
                     onAction={() => void handleUseGhost(item.id)}
                     effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
@@ -468,15 +771,23 @@ export function GhostPluginPage() {
                     onToggle={(enabled) => void handleToggle(item.id, enabled)}
                   />
                 ))}
+                {availableMarketItems.map((item) => (
+                  <MarketPluginCard
+                    key={item.pluginId}
+                    item={item}
+                    busy={marketBusyId === item.pluginId}
+                    onSelect={() => void handleSelectMarket(item.pluginId)}
+                  />
+                ))}
               </div>
             ) : (
               <div className="rounded-xl border-[0.5px] border-[var(--border-default)] px-5 py-10 text-center">
                 <p className="text-13 text-[var(--text-secondary)]">
-                  {installedItems.length === 0
+                  {installedItems.length === 0 && marketItems.length === 0
                     ? t('settings.ghosts.empty')
                     : t('settings.ghosts.page.emptyFiltered')}
                 </p>
-                {installedItems.length === 0 ? (
+                {installedItems.length === 0 && marketItems.length === 0 ? (
                   <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">
                     {t('settings.ghosts.emptyHint')}
                   </p>
@@ -487,6 +798,84 @@ export function GhostPluginPage() {
         </PluginManagementPage>
       </main>
     </PluginManagementLayout>
+  );
+}
+
+function MarketPluginCard({
+  item,
+  busy,
+  onSelect,
+}: {
+  item: PluginMarketItem;
+  busy: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <article
+      className={cn(
+        'group flex min-h-[108px] w-full select-none items-start gap-4 rounded-xl border-[0.5px] border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-left',
+        'transition-[background-color,border-color,transform] duration-150 ease-out',
+        'hover:-translate-y-px hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)]',
+        'active:translate-y-0 active:scale-[0.992] motion-reduce:transform-none motion-reduce:transition-none',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        disabled={busy || item.installState === 'conflict'}
+        className="flex min-w-0 flex-1 items-start gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-wait"
+        aria-label={item.name}
+      >
+        <GhostPluginIcon
+          iconDataUrl={item.icon?.url}
+          iconId={item.ghostId}
+          iconName={item.name}
+        />
+        <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-15 font-medium text-[var(--text-primary)]">
+              {item.name}
+            </span>
+          </span>
+          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
+            <span>
+              {t(`settings.ghosts.page.origin.${pluginPresentationOrigin(item)}`)}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>v{item.version}</span>
+            <span aria-hidden="true">·</span>
+            <span className="truncate font-mono">{item.ghostId}</span>
+            {item.author ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="truncate">{item.author}</span>
+              </>
+            ) : null}
+          </span>
+          <span className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">
+            {item.description || item.ghostId}
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        disabled={busy || item.installState === 'conflict'}
+        className={cn(
+          'inline-flex h-8 shrink-0 items-center gap-1.5 self-center rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)]',
+          'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
+        )}
+      >
+        <ChevronRight size={13} aria-hidden="true" />
+        {t(
+          item.installState === 'conflict'
+            ? 'settings.ghosts.market.conflict'
+            : 'settings.ghosts.market.details',
+        )}
+      </button>
+    </article>
   );
 }
 
@@ -563,6 +952,7 @@ function GhostPluginActions({
 /** Compact installed Plugin card. */
 export function GhostPluginCard({
   item,
+  sourceLabel,
   onSelect,
   onAction,
   onToggle,
@@ -570,6 +960,7 @@ export function GhostPluginCard({
   toggleDisabled = false,
 }: {
   item: GhostPluginListItem;
+  sourceLabel?: string;
   onSelect: () => void;
   onAction: () => void;
   onToggle?: (enabled: boolean) => void;
@@ -598,6 +989,17 @@ export function GhostPluginCard({
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
           <span className="truncate text-15 font-medium text-[var(--text-primary)]">
             {item.name}
+          </span>
+          <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
+            {sourceLabel ? (
+              <>
+                <span>{sourceLabel}</span>
+                <span aria-hidden="true">·</span>
+              </>
+            ) : null}
+            <span>v{item.version}</span>
+            <span aria-hidden="true">·</span>
+            <span className="truncate font-mono">{item.id}</span>
           </span>
           <span className="mt-1.5 line-clamp-2 text-13 leading-5 text-[var(--text-secondary)]">
             {item.description || item.id}

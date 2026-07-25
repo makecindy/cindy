@@ -117,11 +117,7 @@ export function createImSessionRepo(
     async findActiveSession(botContextId, userId, scopeKey) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const db = getDbClient().drizzle;
-      const rows = await db
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, id))
-        .limit(1);
+      const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
       const row = rows[0];
       if (!row) return null;
       if (row.status !== 'active') {
@@ -160,7 +156,11 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const workingDir = ns.ensureWorkingDir(botContextId);
-      return rowFromDefaults(id, workingDir, await resolveImSessionDefaults(config, providerSnapshot));
+      return rowFromDefaults(
+        id,
+        workingDir,
+        await resolveImSessionDefaults(config, providerSnapshot, ns.source),
+      );
     },
 
     /**
@@ -174,38 +174,41 @@ export function createImSessionRepo(
      */
     async createSession(botContextId, userId, scopeKey, prepared) {
       const db = getDbClient().drizzle;
-      const row = prepared ?? await this.prepareNewSession(botContextId, userId, scopeKey);
+      const row = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
       const now = Date.now();
-      await db.insert(sessions).values({
-        id: row.id,
-        title: ns.defaultTitle(userId),
-        ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
-        workingDir: row.workingDir,
-        model: row.model,
-        effort: row.effort,
-        permissionMode: row.permissionMode,
-        fastMode: row.fastMode,
-        status: 'active',
-        agentKind: toDbAgentKind(row.agentKind),
-        providerId: row.providerId,
-        source: ns.source,
-        ...ns.extraInsertColumns(botContextId, userId),
-        createdAt: now,
-        updatedAt: now,
-        // IM 会话由用户消息触发创建,插入时即设 userSendAt,
-        // 避免广播后 renderer 重拉到 userSendAt=null 的行被误判为草稿。
-        userSendAt: now,
-      }).onConflictDoUpdate({
-        target: sessions.id,
-        set: {
-          status: 'active',
-          source: ns.source,
+      await db
+        .insert(sessions)
+        .values({
+          id: row.id,
+          title: ns.defaultTitle(userId),
           ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
+          workingDir: row.workingDir,
+          model: row.model,
+          effort: row.effort,
+          permissionMode: row.permissionMode,
+          fastMode: row.fastMode,
+          status: 'active',
+          agentKind: toDbAgentKind(row.agentKind),
+          providerId: row.providerId,
+          source: ns.source,
           ...ns.extraInsertColumns(botContextId, userId),
+          createdAt: now,
           updatedAt: now,
+          // IM 会话由用户消息触发创建,插入时即设 userSendAt,
+          // 避免广播后 renderer 重拉到 userSendAt=null 的行被误判为草稿。
           userSendAt: now,
-        },
-      });
+        })
+        .onConflictDoUpdate({
+          target: sessions.id,
+          set: {
+            status: 'active',
+            source: ns.source,
+            ...(ns.workspaceKind ? { workspaceKind: ns.workspaceKind } : {}),
+            ...ns.extraInsertColumns(botContextId, userId),
+            updatedAt: now,
+            userSendAt: now,
+          },
+        });
       // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
       // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
       // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
@@ -287,17 +290,21 @@ export async function clearContext(sessionId: string): Promise<void> {
 }
 
 /**
- * `/new` 语义:保留同一个 IM 会话行,但按当前全局 IM 默认重新开始一条新对话。
+ * `/new` 语义:保留同一个 IM 会话行,但按当前渠道的 IM 默认重新开始一条新对话。
  *
  * 这会同时重置 agent/model/effort/provider/permission/fast 和 sdkSessionId。也就是说
- * 用户把全局默认从 Claude Code 改成 Codex 后,在 Feishu 里执行 `/new` 会按 Codex 开始。
+ * 用户把飞书默认从 Claude Code 改成 Codex 后,在飞书里执行 `/new` 会按 Codex 开始，
+ * 不影响 Discord 的下一条新会话。
  */
 export async function resetSessionToDefaults(
   sessionId: string,
   config: ImOrchestratorConfig,
   prepared?: ImSessionRow,
+  channel?: ImSessionNamespace['source'],
 ): Promise<void> {
-  const defaults = prepared ?? rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config));
+  const defaults =
+    prepared ??
+    rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
@@ -367,10 +374,7 @@ export async function updateModelEffort(
 }
 
 /** Update permissionMode column (for /permission picker). */
-export async function updatePermissionMode(
-  sessionId: string,
-  mode: PermissionMode,
-): Promise<void> {
+export async function updatePermissionMode(sessionId: string, mode: PermissionMode): Promise<void> {
   const db = getDbClient().drizzle;
   await db
     .update(sessions)
@@ -379,9 +383,7 @@ export async function updatePermissionMode(
 }
 
 /** 读取 /permission 切换前的持久化权限；非法历史值按 ask 处理。 */
-export async function readPermissionMode(
-  sessionId: string,
-): Promise<PermissionMode | null> {
+export async function readPermissionMode(sessionId: string): Promise<PermissionMode | null> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select({ permissionMode: sessions.permissionMode })

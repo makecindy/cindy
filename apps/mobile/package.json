@@ -35,7 +35,6 @@
     "expo-localization": "~56.0.6",
     "expo-media-library": "~56.0.8",
     "expo-notifications": "~56.0.22",
-    "expo-observe": "~56.0.21",
     "expo-paste-input": "0.2.2",
     "expo-router": "^56.2.11",
     "expo-secure-store": "^56.0.4",

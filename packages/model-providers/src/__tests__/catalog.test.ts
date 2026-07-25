@@ -147,6 +147,22 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(presets.map((p) => p.id)).toContain('openrouter');
   });
 
+  it('ships product display names for newly discovered XD gateway models', () => {
+    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
+      version?: unknown;
+      models?: Record<string, unknown>;
+    };
+    expect(metadata.version).toBe(1);
+    expect(metadata.models?.['bytedance-seed/seed-2.1-pro']).toMatchObject({
+      agents: ['claude-code', 'codex'],
+      name: 'Seed 2.1 Pro',
+    });
+    expect(metadata.models?.['qwen/qwen3.8-max-preview']).toMatchObject({
+      agents: ['claude-code', 'codex'],
+      name: 'Qwen 3.8 Max Preview',
+    });
+  });
+
   it('models are grouped per-agent (no flat array, no rogue agent keys)', () => {
     for (const p of BUNDLED_CATALOG.providers) {
       expect(Array.isArray(p.models), `${p.id} models must be a per-agent map`).toBe(false);

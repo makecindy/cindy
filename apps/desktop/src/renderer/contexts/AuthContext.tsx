@@ -29,6 +29,7 @@ import { setUserPromptOwner } from '@/lib/userPromptStore';
 import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/memorySettingsStore';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 
@@ -199,7 +200,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isAuthenticated || !accountDeletionRestored) return;
     setAccountDeletionRestored(false);
-    if (isSecondaryWindow() || isSidebarWindow()) return;
+    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) return;
     let disposed = false;
     void authServiceRef
       .current!.consumeAccountDeletionRestoredNotice()

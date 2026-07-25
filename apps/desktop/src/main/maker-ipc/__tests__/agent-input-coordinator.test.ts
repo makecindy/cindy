@@ -4919,17 +4919,17 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
   it('block:丢弃排队项(不落库不派发),回调 onUserMessageBlocked,后续消息继续放行', async () => {
     const h = createHarness();
     h.setScreenUserMessage(async (_sid, agentFacingText) =>
-      agentFacingText.includes('敏感')
-        ? { action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: '含敏感词' }
+      agentFacingText.includes('剧透')
+        ? { action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: '含剧透' }
         : { action: 'allow' },
     );
-    h.coordinator.enqueue('s1', makeItem('c1', '敏感话'));
+    h.coordinator.enqueue('s1', makeItem('c1', '剧透话'));
     h.coordinator.enqueue('s1', makeItem('c2', '正常话'));
     await flush();
     expect(h.onUserMessageBlocked).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({ clientId: 'c1' }),
-      { action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: '含敏感词' },
+      { action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: '含剧透' },
     );
     // 被拦项从未进 sendToAgent(不落库不起 turn);第二条正常派发
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
@@ -4945,7 +4945,7 @@ describe('AgentInputCoordinator 意识拦截钩(订阅槽①,will-user-message)'
     const h = createHarness();
     const screen = vi.fn(async () => ({ action: 'block', ghostId: 'g1', ghostName: '哨兵', reason: 'x' }) as const);
     h.setScreenUserMessage(screen);
-    h.coordinator.enqueue('s1', makeItem('c1', '敏感话', { bypassGhostHooks: true }));
+    h.coordinator.enqueue('s1', makeItem('c1', '剧透话', { bypassGhostHooks: true }));
     await flush();
     expect(screen).not.toHaveBeenCalled();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);

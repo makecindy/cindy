@@ -159,6 +159,49 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 
 本节记录当前系统必须持续满足的运行时不变量。它们不是远期规划，而是 Lead / Worker 协同时已经依赖的行为契约。
 
+#### Lead 派单与执行通道
+
+1. **Orca Worker 派单不得由原生 subagent 冒充（状态：不变量）**<br>
+   用户把任务指派给已有 Worker 的 role／label、要求 Lead 向 Worker 派单，或在 active team
+   内按多个角色并行派单时，Lead 必须先读 workspace，再按场景通过
+   `send_to_worker`（复用既有 Worker）／`create_worker`（显式新建一个 Worker）／`create_workers`（显式新建多个 Worker）进入 Orca 状态机；如果请求的 role／label 当前没有匹配的既有 Worker，Lead 必须先如实说明没有匹配项并征求是否创建，不能静默改派别的 Worker，也不能退回 native subagent。
+   如果用户只泛称“Worker”且当前没有任何 Worker，Lead 同样必须先说明并询问是否创建；
+   任务指派本身不等于创建授权。多角色请求必须在派发任何任务前解析全部 role／label；
+   只要有目标缺失或创建授权未决，就不得部分派发，必须集中列出缺失项并先询问。全部映射
+   和授权确定后，多角色请求必须在一个并行 tool-call batch 内一次发出：既有目标走
+   `send_to_worker`，恰好一个授权新目标走带 `initial_task` 的 `create_worker`，两个及以上
+   授权新目标走一次带齐 `initial_task` 的 `create_workers`；不能等待某个派发结果后才发
+   剩余任务。Codex
+   `spawn_agent` 或 Claude Code Agent/Task 的完成结果不能当成 Orca
+   Worker 的完成。只有用户明确要求一次性 subagent／子代理且没有把任务指派给 Orca
+   Worker，或明确要求不使用 Orca Worker 时，才走原生 subagent。
+
+2. **实际执行通道必须披露并按同一通道验收（状态：不变量）**<br>
+   Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明
+   `Orca Worker` 或 `native subagent`。原生 subagent 由 Codex
+   `collabAgentToolCall`／Claude Agent/Task 任务卡展示标识、任务和终态，但不得写入 Orca
+   Worker 状态，也不得触发 Orca Worker 完成提醒。实现指针：
+   `packages/orca-workflow/src/orca-bridge-prompt.ts` 的
+   `renderOrcaLeadSystemPrompt`，以及 `packages/maker-core/src/agents/codex/translator.ts`
+   的 `handleCollabAgentToolCall`。
+
+3. **只有真实异步派发才静默结束 turn（状态：不变量）**<br>
+   `send_to_worker` 只有返回 `ok=true` 且 `wake_kind` 为 `resumed`／`already-active`／
+   `queued` 时才算真实派发。`create_worker` 及 `create_workers` 的每个 created 结果，
+   只有 `dispatched=true`、存在 `queued_message_id`，或
+   `dispatch_outcome.kind=session-dispatch` 且 `dispatch_outcome.dispatched=true`
+   （包括 `dispatch_outcome.wakeKind=queued`）时才算真实派发。Lead 只能据这些具体信号
+   零输出结束当前 turn；工具失败、只创建 Worker 而没有首任务，或首任务未派发时，必须
+   立即向用户报告真实结果，不能等待一个不会到来的 Worker 回报。`create_workers` 每次
+   返回都必须先转告 `user_report`（若存在）并汇总逐项终态。多角色 batch 返回后还必须
+   汇总其他工具的失败／未派发结果；若至少一个结果满足上述派发信号，只做这一次合并报告
+   后立即结束 turn，全部成功且无 `create_workers` 必报内容时零输出结束。若没有任何任务
+   派发，则报告结果后等待用户决定。所有情况都不得继续调用工具，也不 sleep、不 poll。
+   实现指针：
+   `packages/orca-workflow/src/orca-bridge-prompt.ts` 的
+   `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
+   的批量结果契约。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>

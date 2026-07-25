@@ -106,3 +106,34 @@ describe('RunHistoryCard 前置检查结果', () => {
     expect(screen.getByText(/scheduler\.runs\.preRun\.truncated/)).toBeTruthy();
   });
 });
+
+describe('RunHistoryCard 费用展示', () => {
+  it('不可可靠计价时不显示假 $0.00', () => {
+    renderRun({
+      id: 'run-unavailable-cost',
+      scheduleId: 'schedule-1',
+      firedAt: 1,
+      finishedAt: 11,
+      status: 'success',
+      costAttribution: 'unavailable',
+    });
+
+    expect(screen.getByText('scheduler.runs.costUnavailable')).toBeTruthy();
+    expect(screen.queryByText(/scheduler\.runs\.runCost/)).toBeNull();
+  });
+
+  it('已确认真实零费用时显示 $0.00', () => {
+    renderRun({
+      id: 'run-zero-cost',
+      scheduleId: 'schedule-1',
+      firedAt: 1,
+      finishedAt: 11,
+      status: 'success',
+      costAttribution: 'zero',
+      costUsd: 0,
+      estimatedValueUsd: 0,
+    });
+
+    expect(screen.getByText('scheduler.runs.runCost')).toBeTruthy();
+  });
+});

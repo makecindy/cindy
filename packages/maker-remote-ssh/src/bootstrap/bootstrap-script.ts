@@ -80,6 +80,7 @@ export const CODEX_LATEST_INSTALLER_URL = 'https://chatgpt.com/codex/install.sh'
  *   $3 = bundled node version (BUNDLED_NODE_VERSION)
  *   $4 = node dist base URL (NODE_DIST_BASE_URL_DEFAULT)
  *   $5 = codex release version (tools/codex/latest.json pin; codex only)
+ *   $6 = Claude Code version (tools/claude/latest.json pin; claude-code only)
  *
  * The version + URL are passed as args (not hardcoded) so a host-side
  * config knob can later override them without changing this file.
@@ -93,6 +94,7 @@ SERVER_VER="${'$'}{2:-v1}"
 NODE_VER="${'$'}{3:-22.13.0}"
 NODE_BASE_URL="${'$'}{4:-https://nodejs.org/dist}"
 CODEX_RELEASE="${'$'}{5:-}"
+CLAUDE_RELEASE="${'$'}{6:-}"
 
 emit() { printf '%s\n' "$*"; }
 
@@ -105,7 +107,14 @@ emit() { printf '%s\n' "$*"; }
 #                 The npm @openai/codex package does NOT create that layout
 #                 (see codex-rs/app-server-daemon/src/managed_install.rs).
 case "$AGENT_KIND" in
-  claude-code) NPM_PKG="@anthropic-ai/claude-code"; BIN_NAME="claude" ;;
+  claude-code)
+    if [ -z "$CLAUDE_RELEASE" ]; then
+      emit "ERROR missing Claude Code release"
+      exit 4
+    fi
+    NPM_PKG="@anthropic-ai/claude-code@$CLAUDE_RELEASE"
+    BIN_NAME="claude"
+    ;;
   codex)       NPM_PKG="";                          BIN_NAME="codex"  ;;
   *) emit "ERROR unknown agent kind: $AGENT_KIND"; exit 10 ;;
 esac
@@ -255,10 +264,14 @@ verify_binary() {
     V="$("$NODE_BIN" "$BIN_PATH" --version 2>>"$_STDERR_LOG" | head -1 || true)"
   fi
 
-  if [ -n "$V" ]; then
+  if [ -n "$V" ] &&
+     { [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; }; then
     emit "READY $V"
     rm -f "$_STDERR_LOG"
     return 0
+  fi
+  if [ -n "$V" ]; then
+    emit "INSTALL_LOG [verify-fail] Claude Code version ${'$'}{V%% *} != managed pin $CLAUDE_RELEASE"
   fi
   # Diagnostics on failure — these go to INSTALL_LOG so the desktop main process
   # logs them (silent install pipeline forwards INSTALL_LOG lines verbatim).

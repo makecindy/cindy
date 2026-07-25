@@ -62,6 +62,14 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
+    totalCostAmount: real('total_cost_amount').notNull().default(0),
+    totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
+    totalCostIsApproximate: integer('total_cost_is_approximate', {
+      mode: 'boolean',
+    })
+      .notNull()
+      .default(false),
     contextTokens: integer('context_tokens').notNull().default(0),
     contextWindow: integer('context_window').notNull().default(0),
     fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
@@ -171,8 +179,8 @@ export const sessions = sqliteTable(
     codexHistoryHasProductPrompt: integer('codex_history_has_product_prompt', { mode: 'boolean' }),
     /**
      * Session 附加只读引用目录列表(JSON 字符串数组,绝对路径)。
-     * agent (目前仅 Claude Code) 在每 turn 拼 query options.additionalDirectories 时透传。
-     * Codex session 此列恒为 '[]' (capability 不支持, UI 不暴露入口)。
+     * agent 在每 turn 透传：Claude Code 使用 options.additionalDirectories，
+     * Codex 使用 runtimeWorkspaceRoots + 只读 permission profile。
      * 反序列化由 mapper 兜底 (失败 fallback []), 不抛错。
      */
     extraDirs: text('extra_dirs').notNull().default('[]'),
@@ -764,8 +772,20 @@ export const scheduleRuns = sqliteTable(
     costUsd: real('cost_usd').notNull().default(0),
     /** 单次 run 的订阅 token 估算价值，不计入真实账单。 */
     estimatedValueUsd: real('estimated_value_usd').notNull().default(0),
-    /** legacy 表示迁移前数据缺少 runId，不能精确拆分到单次执行。 */
-    costAttribution: text('cost_attribution', { enum: ['exact', 'legacy'] })
+    /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
+    costAmount: real('cost_amount').notNull().default(0),
+    estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    /**
+     * zero 表示已确认零费用；unavailable 表示 agent run 尚无可靠计价；legacy
+     * 表示迁移前数据缺少 runId，不能精确拆分。SQLite 无 CHECK，无需 migration。
+     */
+    costAttribution: text('cost_attribution', {
+      enum: ['exact', 'direct', 'mixed', 'zero', 'unavailable', 'legacy'],
+    })
       .notNull()
       .default('legacy'),
     /**
@@ -897,6 +917,11 @@ export const dailySpend = sqliteTable('daily_spend', {
   day: text('day').primaryKey(),
   /** 当日累计 USD (real)。SDK 单 turn 的 cost 通常是小数 (如 0.0391)。 */
   costUsd: real('cost_usd').notNull().default(0),
+  costAmount: real('cost_amount').notNull().default(0),
+  costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+  costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   /** 最后一次更新的 unix ms。 */
   updatedAt: integer('updated_at').notNull(),
 });
@@ -926,6 +951,11 @@ export const dailyModelUsage = sqliteTable(
     model: text('model').notNull(),
     /** 当日该模型累计 USD (仅 claude-code 实报; codex 恒 0)。 */
     costUsd: real('cost_usd').notNull().default(0),
+    costAmount: real('cost_amount').notNull().default(0),
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
     cacheReadTokens: integer('cache_read_tokens').notNull().default(0),

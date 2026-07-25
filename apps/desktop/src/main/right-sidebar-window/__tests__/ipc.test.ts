@@ -227,6 +227,36 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/command.absPath required/);
   });
 
+  it('validates and forwards open-ghost-tab commands (ghostId 走身份卡同一校验)', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+
+    await handler(
+      { sender: mainWebContents },
+      {
+        command: { type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' },
+        allowOpen: true,
+      },
+    );
+    expect(controller.routeCommand).toHaveBeenCalledWith({
+      command: { type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' },
+      allowOpen: true,
+    });
+
+    // 野值(路径穿越形状 / 缺失)进不了命令通道。
+    for (const ghostId of ['../escape', 'UPPER', '', undefined]) {
+      await expect(
+        handler(
+          { sender: mainWebContents },
+          {
+            command: { type: 'open-ghost-tab', sessionId: 's1', ghostId },
+            allowOpen: true,
+          },
+        ),
+      ).rejects.toThrow(/ghostId/);
+    }
+  });
+
   it('drops commands from secondary renderers but still validates their payloads', async () => {
     const controller = makeController();
     const { handler } = registerController(controller);

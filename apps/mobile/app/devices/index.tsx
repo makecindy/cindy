@@ -55,7 +55,6 @@ import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { useObserve } from '@/observability/observe';
 import {
   createEmptyDeviceIdentityCache,
   loadDeviceIdentityCache,
@@ -796,11 +795,6 @@ export default function HomeScreen() {
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;
-  // EAS Observe:首页设备 / 会话首次加载完成即标记可交互(markInteractive 每 route 仅记首次)。
-  const { markInteractive } = useObserve();
-  useEffect(() => {
-    if (initialHomeSettled) markInteractive();
-  }, [initialHomeSettled, markInteractive]);
   // 首次同步完成后校验恢复/当前选中的设备,不成立时回退「所有对话」并同步持久化:
   // - 设备已不存在(解绑):home.selectedDeviceId 是归一化后的口径,查不到会变 null,
   //   若不回退,表头显示旧设备名而列表实际展示全部会话,两者口径不一致。

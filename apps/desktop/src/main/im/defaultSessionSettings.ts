@@ -2,8 +2,8 @@
  * IM 新会话默认值解析。
  *
  * 这里是唯一把「系统默认 + 用户 override + 当前模型目录」合成 session 初始
- * agent/model/effort/provider 的入口。Feishu、Slack 和 `/new` 都走这里，避免
- * 每个渠道各自硬编码默认值。
+ * agent/model/effort/provider 的入口。每个渠道传入自己的 scope，Feishu、
+ * Slack、Discord 和 `/new` 都走这里，避免渠道之间借用同一份用户选择。
  */
 
 import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
@@ -20,6 +20,7 @@ import {
   IM_DEFAULT_EFFORT_OVERRIDES,
   IM_DEFAULT_SETTINGS,
   type ImDefaultAgentSettings,
+  type ImDefaultSettingsChannel,
 } from '../../shared/imDefaultSettings.js';
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
@@ -56,9 +57,11 @@ export function getImDefaultEffortFor(
 export async function resolveImSessionDefaults(
   config: ImOrchestratorConfig,
   providerSnapshot?: ProviderView[] | null,
+  channel?: ImDefaultSettingsChannel,
 ): Promise<ResolvedImSessionDefaults> {
-  const raw = readImDefaultSettings();
-  const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
+  const raw = readImDefaultSettings(channel);
+  const providers =
+    providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
   const requestedAgent = raw.agentKind;
   const requestedSettings = raw.agents[requestedAgent];
   const model = pickModel(requestedAgent, requestedSettings, config, providers);
@@ -71,7 +74,12 @@ export async function resolveImSessionDefaults(
     config.effortOverrides,
     providers,
   );
-  const providerId = resolveProviderId(providers, agentKind, model.modelId, agentSettings.providerId);
+  const providerId = resolveProviderId(
+    providers,
+    agentKind,
+    model.modelId,
+    agentSettings.providerId,
+  );
 
   return {
     agentKind,
@@ -208,7 +216,9 @@ function resolveProviderId(
 ): string | null {
   if (!providerId) return null;
   if (!providers) return providerId;
-  const provider = connectedProvidersForAgent(providers, agentKind).find((p) => p.id === providerId);
+  const provider = connectedProvidersForAgent(providers, agentKind).find(
+    (p) => p.id === providerId,
+  );
   if (!provider || !providerOffersModel(provider, modelId, agentKind)) {
     log.warn('im default provider unavailable; falling back to default routing', {
       agentKind,

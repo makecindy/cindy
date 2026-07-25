@@ -323,15 +323,33 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
   for (const v of input) {
     if (!isValidPreset(v) || seen.has(v.id)) continue;
     seen.add(v.id);
-    // regionHint 非法值不淘汰整条预设（它只是呈现提示），归一化为缺省（区域中立）。
-    if (v.regionHint !== undefined && v.regionHint !== 'cn' && v.regionHint !== 'global') {
-      const { regionHint: _drop, ...rest } = v as ProviderPreset & { regionHint: unknown };
-      out.push(normalizePresetModelsUrls(rest as ProviderPreset));
-      continue;
+    // 可选呈现字段逐项归一化,**不许分支 continue**:多个字段同时非法时早退会漏清洗
+    // (如 regionHint + nameEn 都坏,坏 nameEn 会原样流出——Codex P2,2026-07-24)。
+    let preset = v as ProviderPreset;
+    // regionHint 非法值不淘汰整条预设(它只是呈现提示),归一化为缺省(区域中立)。
+    if (preset.regionHint !== undefined && preset.regionHint !== 'cn' && preset.regionHint !== 'global') {
+      const { regionHint: _drop, ...rest } = preset as ProviderPreset & { regionHint: unknown };
+      preset = rest as ProviderPreset;
     }
-    out.push(normalizePresetModelsUrls(v));
+    // nameEn 非法值(非字符串/空白串)同容错语义:剥字段不淘汰整条。
+    if (preset.nameEn !== undefined && (typeof preset.nameEn !== 'string' || preset.nameEn.trim().length === 0)) {
+      const { nameEn: _drop, ...rest } = preset as ProviderPreset & { nameEn: unknown };
+      preset = rest as ProviderPreset;
+    }
+    out.push(normalizePresetModelsUrls(preset));
   }
   return out;
+}
+
+/**
+ * 预设展示名:中文 UI 用目录 `name`(国内厂商为中文原名),其它语言优先 `nameEn`
+ * (缺省回落 `name`)。纯呈现选择,不影响预设 id / 创建后的供应商命名语义。
+ */
+export function presetDisplayName(
+  preset: Pick<ProviderPreset, 'name' | 'nameEn'>,
+  locale: string,
+): string {
+  return locale.toLowerCase().startsWith('zh') ? preset.name : (preset.nameEn ?? preset.name);
 }
 
 /** 预设的厂商分组键：id 去掉区域后缀（`zhipu-glm-cn`/`zhipu-glm-global` → `zhipu-glm`）。 */

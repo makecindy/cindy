@@ -34,7 +34,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    // 带 id 插值的 key(copyUserId.display)拼上实际值,便于断言 ID 真的渲染了出来。
+    t: (key: string, params?: Record<string, unknown>) =>
+      params && 'id' in params ? `${key}:${String(params.id)}` : key,
+  }),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
@@ -85,19 +89,50 @@ describe('UserProfileCard copy user ID', () => {
     vi.clearAllMocks();
   });
 
-  it('copies the user ID and shows a success toast when the name is clicked', async () => {
+  it('shows the user ID and copies it with a success toast when the ID row is clicked', async () => {
     renderCard();
 
-    const nameButton = screen.getByRole('button', {
+    // ID 显式展示在卡片上,且名字本身不再是可点击控件。
+    expect(screen.getByText('settings.userProfile.copyUserId.display:user-123')).toBeTruthy();
+    expect(screen.getByText('Lizi').closest('button')).toBeNull();
+
+    const idButton = screen.getByRole('button', {
       name: 'settings.userProfile.copyUserId.action',
     });
-    expect(nameButton.className).toContain('cursor-pointer');
-    expect(nameButton.className).toContain('hover:bg-[var(--settings-profile-avatar-bg)]');
+    expect(idButton.className).toContain('cursor-pointer');
+    expect(idButton.className).toContain('hover:bg-[var(--settings-profile-avatar-bg)]');
+    // 交互件圆角走 pill 档(DESIGN.md Border Radius Scale,无 6px 档)。
+    expect(idButton.className).toContain('rounded-full');
+    // 可见 ID 经 aria-describedby 暴露给辅助技术(aria-label 只承载动作名)。
+    const describedById = idButton.getAttribute('aria-describedby');
+    expect(describedById).toBeTruthy();
+    expect(document.getElementById(describedById!)?.textContent).toBe(
+      'settings.userProfile.copyUserId.display:user-123',
+    );
 
-    fireEvent.click(nameButton);
+    fireEvent.click(idButton);
 
     await waitFor(() => expect(mocks.writeText).toHaveBeenCalledWith('user-123'));
     expect(mocks.toastSuccess).toHaveBeenCalledWith('settings.userProfile.copyUserId.success');
+  });
+
+  it('abbreviates a long user ID in the display while copying the full value', async () => {
+    mocks.authState.user!.id = 'mem_0123456789abcdef0123456789abcdef';
+    renderCard();
+
+    // 展示只露头 6 + 尾 4,完整值不直接渲染。
+    expect(screen.getByText('settings.userProfile.copyUserId.display:mem_01…cdef')).toBeTruthy();
+    expect(
+      screen.queryByText(
+        'settings.userProfile.copyUserId.display:mem_0123456789abcdef0123456789abcdef',
+      ),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.userProfile.copyUserId.action' }));
+
+    await waitFor(() =>
+      expect(mocks.writeText).toHaveBeenCalledWith('mem_0123456789abcdef0123456789abcdef'),
+    );
   });
 
   it('opens the profile edit dialog when the avatar is clicked', () => {

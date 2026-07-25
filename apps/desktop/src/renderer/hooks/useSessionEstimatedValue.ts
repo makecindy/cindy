@@ -2,8 +2,9 @@
  * useSessionEstimatedValue — 订阅当前 Codex 订阅会话的"本会话价值"。
  *
  * 订阅价值不能写入 sessions.total_cost_usd（那是 scheduler / API 账单的真实 cost）。
- * 这里从 assistant message 的 agentMeta.turnCostUsd 估算值汇总，历史初值走 main
- * 侧 SQLite 汇总，实时增量走 usage:message-turn-cost。
+ * 这里从 assistant message 的结构化 turnMoney 估算值汇总，历史初值走 main
+ * 侧 SQLite 汇总，实时增量走 usage:message-turn-cost。旧 turnCostUsd 只作为
+ * 历史 USD 事实投影到当前区域金额。
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -12,6 +13,16 @@ import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotCon
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import {
+  addCompatibleRegionalMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeUsd,
+  USD_TO_CNY_FIXED_RATE,
+  type MoneyEstimateReason,
+  type RegionalMoney,
+} from '../../shared/regionalMoney';
 import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails';
 
 interface EstimatedValueStoreSnapshot {
@@ -21,30 +32,111 @@ interface EstimatedValueStoreSnapshot {
 }
 
 interface EstimatedValueStoreSyncResult {
-  costs: Map<string, number>;
+  costs: Map<string, RegionalMoney>;
   storeClientIds: Set<string>;
 }
 
 interface EstimatedValueTurnCostPayload {
   clientId: string;
-  turnCostUsd: number;
+  turnMoney?: unknown;
+  turnCostUsd?: number;
   turnCostIsEstimate: boolean;
   turnUsageDetails?: unknown;
 }
 
-function estimateFromChatMessage(message: ChatMessage): { clientId: string; costUsd: number } | null {
-  if (message.role !== 'assistant') return null;
-  if (message.turnCostIsEstimate !== true) return null;
-  if (typeof message.turnCostUsd !== 'number' || !Number.isFinite(message.turnCostUsd) || message.turnCostUsd <= 0) {
-    return null;
-  }
-  return { clientId: message.clientId, costUsd: message.turnCostUsd };
+function asValueEstimate(
+  money: RegionalMoney,
+  reason: MoneyEstimateReason = 'subscription-value',
+): RegionalMoney {
+  const estimateReasons = [...new Set([...(money.estimateReasons ?? []), reason])];
+  return {
+    ...money,
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons,
+  };
 }
 
-function areCostMapsEqual(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
+function correctStaleUsdEstimate(
+  money: RegionalMoney,
+  turnUsageDetails: unknown,
+  model?: string,
+): RegionalMoney {
+  const reasons = money.estimateReasons ?? [];
+  const isLegacyCnyProjection =
+    money.currency === 'CNY' &&
+    reasons.includes('legacy-usd') &&
+    reasons.includes('fixed-fx');
+  if (money.currency !== 'USD' && !isLegacyCnyProjection) return money;
+  const amountUsd = isLegacyCnyProjection
+    ? money.amount / USD_TO_CNY_FIXED_RATE
+    : money.amount;
+  const corrected = resolveStaleCodexSubscriptionValueEstimate(
+    amountUsd,
+    normalizeTurnUsageDetails(turnUsageDetails),
+    model,
+  );
+  if (corrected == null) return money;
+  return {
+    ...money,
+    amount: isLegacyCnyProjection
+      ? corrected * USD_TO_CNY_FIXED_RATE
+      : corrected,
+  };
+}
+
+function legacyEstimateMoney(costUsd: number): RegionalMoney | null {
+  if (!Number.isFinite(costUsd) || costUsd <= 0) return null;
+  return regionalizeUsd(
+    costUsd,
+    CURRENT_CINDY_REGION,
+    'legacy-usd',
+    'value-estimate',
+  );
+}
+
+function estimateFromChatMessage(message: ChatMessage): { clientId: string; money: RegionalMoney } | null {
+  if (message.role !== 'assistant') return null;
+  if (message.turnCostIsEstimate !== true) return null;
+  const normalized =
+    normalizeRegionalMoney(message.turnMoney) ??
+    (typeof message.turnCostUsd === 'number'
+      ? legacyEstimateMoney(message.turnCostUsd)
+      : null);
+  if (!normalized || normalized.amount <= 0) return null;
+  return {
+    clientId: message.clientId,
+    money: correctStaleUsdEstimate(
+      asValueEstimate(normalized),
+      message.turnUsageDetails,
+      message.model,
+    ),
+  };
+}
+
+function areMoneyEqual(a: RegionalMoney, b: RegionalMoney): boolean {
+  if (
+    a.amount !== b.amount ||
+    a.currency !== b.currency ||
+    a.approximate !== b.approximate ||
+    a.kind !== b.kind
+  ) {
+    return false;
+  }
+  const aReasons = a.estimateReasons ?? [];
+  const bReasons = b.estimateReasons ?? [];
+  return aReasons.length === bReasons.length &&
+    aReasons.every((reason, index) => reason === bReasons[index]);
+}
+
+function areCostMapsEqual(
+  a: ReadonlyMap<string, RegionalMoney>,
+  b: ReadonlyMap<string, RegionalMoney>,
+): boolean {
   if (a.size !== b.size) return false;
   for (const [key, value] of a) {
-    if (b.get(key) !== value) return false;
+    const other = b.get(key);
+    if (!other || !areMoneyEqual(value, other)) return false;
   }
   return true;
 }
@@ -67,7 +159,7 @@ export function shouldApplyEstimatedValueEntry(
 }
 
 export function syncEstimatedValueCostsFromStoreSnapshot(
-  currentCosts: ReadonlyMap<string, number>,
+  currentCosts: ReadonlyMap<string, RegionalMoney>,
   previousStoreClientIds: ReadonlySet<string>,
   snapshot: EstimatedValueStoreSnapshot,
 ): EstimatedValueStoreSyncResult | null {
@@ -89,7 +181,7 @@ export function syncEstimatedValueCostsFromStoreSnapshot(
     if (!message.clientId) continue;
     const entry = estimateFromChatMessage(message);
     if (entry) {
-      next.set(entry.clientId, entry.costUsd);
+      next.set(entry.clientId, entry.money);
     } else {
       next.delete(message.clientId);
     }
@@ -102,24 +194,33 @@ export function syncEstimatedValueCostsFromStoreSnapshot(
 
 export function resolveEstimatedValueTurnCostEntry(
   payload: EstimatedValueTurnCostPayload,
-): { clientId: string; costUsd: number } | null {
+): { clientId: string; money: RegionalMoney } | null {
   if (payload.turnCostIsEstimate !== true) return null;
   if (!payload.clientId) return null;
-  if (!Number.isFinite(payload.turnCostUsd) || payload.turnCostUsd <= 0) return null;
-  const corrected = resolveStaleCodexSubscriptionValueEstimate(
-    payload.turnCostUsd,
-    normalizeTurnUsageDetails(payload.turnUsageDetails),
-  );
+  const normalized =
+    normalizeRegionalMoney(payload.turnMoney) ??
+    (typeof payload.turnCostUsd === 'number'
+      ? legacyEstimateMoney(payload.turnCostUsd)
+      : null);
+  if (!normalized || normalized.amount <= 0) return null;
   return {
     clientId: payload.clientId,
-    costUsd: corrected ?? payload.turnCostUsd,
+    money: correctStaleUsdEstimate(
+      asValueEstimate(normalized),
+      payload.turnUsageDetails,
+    ),
   };
 }
 
-function sumCosts(costs: Map<string, number>): number | null {
-  let total = 0;
-  for (const cost of costs.values()) total += cost;
-  return total > 0 ? total : null;
+function sumCosts(costs: Map<string, RegionalMoney>): RegionalMoney | null {
+  const values = [...costs.values()];
+  if (values.length === 0) return null;
+  const total = addCompatibleRegionalMoney(
+    values,
+    regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+  );
+  if (!total) return null;
+  return total.amount > 0 ? total : null;
 }
 
 const NOOP_UNSUBSCRIBE = () => {};
@@ -127,14 +228,14 @@ const NOOP_UNSUBSCRIBE = () => {};
 export function useSessionEstimatedValue(
   sessionId: string | undefined,
   enabled: boolean,
-): number | null {
+): RegionalMoney | null {
   const displaySnapshot = useChatDisplaySnapshot(sessionId);
   const displaySnapshotRef = useRef(displaySnapshot);
   const shouldListenForDirectTurnCost = !displaySnapshot || displaySnapshot.chatRealtime;
-  const costsRef = useRef<Map<string, number>>(new Map());
+  const costsRef = useRef<Map<string, RegionalMoney>>(new Map());
   const storeClientIdsRef = useRef<Set<string>>(new Set());
   const transcriptClearedRef = useRef(false);
-  const [valueUsd, setValueUsd] = useState<number | null>(null);
+  const [valueMoney, setValueMoney] = useState<RegionalMoney | null>(null);
   const subscribeSnapshot = useCallback(
     (cb: () => void) =>
       !enabled || !sessionId || displaySnapshot
@@ -156,7 +257,7 @@ export function useSessionEstimatedValue(
     costsRef.current = new Map();
     storeClientIdsRef.current = new Set();
     transcriptClearedRef.current = false;
-    setValueUsd(null);
+    setValueMoney(null);
   }, [enabled, sessionId]);
 
   useEffect(() => {
@@ -173,19 +274,19 @@ export function useSessionEstimatedValue(
     storeClientIdsRef.current = result.storeClientIds;
     if (areCostMapsEqual(costsRef.current, result.costs)) return;
     costsRef.current = result.costs;
-    setValueUsd(sumCosts(result.costs));
+    setValueMoney(sumCosts(result.costs));
   }, [enabled, sessionId, storeSnapshot]);
 
   useEffect(() => {
     if (!enabled || !sessionId) return undefined;
     let cancelled = false;
-    const applyCosts = (next: Map<string, number>): void => {
+    const applyCosts = (next: Map<string, RegionalMoney>): void => {
       if (cancelled || areCostMapsEqual(costsRef.current, next)) return;
       costsRef.current = next;
-      setValueUsd(sumCosts(next));
+      setValueMoney(sumCosts(next));
     };
-    const mergeEntry = (entry: { clientId: string; costUsd: number } | null): void => {
-      if (cancelled || !entry || !entry.clientId || !Number.isFinite(entry.costUsd) || entry.costUsd <= 0) return;
+    const mergeEntry = (entry: { clientId: string; money: RegionalMoney } | null): void => {
+      if (cancelled || !entry || !entry.clientId || entry.money.amount <= 0) return;
       const snapshot = displaySnapshotRef.current ?? makerChatStore.getSnapshot(sessionId);
       if (!shouldApplyEstimatedValueEntry(
         snapshot,
@@ -193,9 +294,9 @@ export function useSessionEstimatedValue(
         transcriptClearedRef.current,
       )) return;
       const prev = costsRef.current.get(entry.clientId);
-      if (prev === entry.costUsd) return;
+      if (prev && areMoneyEqual(prev, entry.money)) return;
       const next = new Map(costsRef.current);
-      next.set(entry.clientId, entry.costUsd);
+      next.set(entry.clientId, entry.money);
       applyCosts(next);
     };
 
@@ -213,7 +314,21 @@ export function useSessionEstimatedValue(
     void estimatedSessionValueFor(sessionId)
       .then((snapshot) => {
         if (cancelled) return;
-        for (const entry of snapshot.entries) mergeEntry(entry);
+        for (const entry of snapshot.entries) {
+          const normalized =
+            normalizeRegionalMoney(entry.money) ??
+            (typeof entry.costUsd === 'number'
+              ? legacyEstimateMoney(entry.costUsd)
+              : null);
+          if (!normalized) continue;
+          mergeEntry({
+            clientId: entry.clientId,
+            money: correctStaleUsdEstimate(
+              asValueEstimate(normalized),
+              entry.turnUsageDetails,
+            ),
+          });
+        }
       })
       .catch(() => {
         // 历史汇总失败不影响实时增量；本 hook 只是展示辅助信息。
@@ -225,5 +340,5 @@ export function useSessionEstimatedValue(
     };
   }, [enabled, sessionId, shouldListenForDirectTurnCost]);
 
-  return valueUsd;
+  return valueMoney;
 }

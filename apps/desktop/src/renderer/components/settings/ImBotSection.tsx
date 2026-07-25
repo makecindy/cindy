@@ -6,8 +6,8 @@
  * agent 切换器 / VendorSegmentedSwitcher),每个分栏配一条简短 Tips 说明差异:
  *   1. Cindy(group='cindy',默认):官方 Cindy 机器人渠道 —— Slack 卡片
  *      (HookConnectionsSection,原 Tina 设置区,共享 App 零凭证)
- *   2. 个人(group='personal'):新会话默认配置(IM 全局项)+ 用户自配凭证的
- *      机器人 —— 飞书机器人(FeishuBotSection + 生命周期播报)、Discord 机器人
+ *   2. 个人(group='personal'):按渠道折叠的用户自配机器人。每个渠道独立保存
+ *      Agent / 模型与凭证配置；同一时刻最多展开一个，渠道增加时页面不会线性变长。
  *
  * 分栏选择经 ?imGroup= 参数由 SettingsView 驱动(深链可直达某分栏);缺省/非法
  * 时 SettingsView 落到默认分栏(旧「飞书机器人」深链落「个人」,其余落「Cindy」)。
@@ -19,6 +19,7 @@
  */
 
 import { Lightbulb } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -26,9 +27,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { DiscordBotSection } from './DiscordBotSection';
 import { FeishuBotSection } from './FeishuBotSection';
-import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
-import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { showCindyGroup, showDiscordBot, type ImBotIdentity } from './imBotVisibility';
 
 /** 「IM 机器人」页内分栏 id(tab 与 ?imGroup= 参数共用)。 */
@@ -56,26 +55,20 @@ export function isImBotSettingsGroup(value: string | null): value is ImBotSettin
 
 /** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord)。 */
 function PersonalGroupContent({ showDiscord }: { showDiscord: boolean }) {
-  const { t } = useTranslation();
+  const [expandedChannel, setExpandedChannel] = useState<'feishu' | 'discord' | null>(null);
+
+  const toggle = (channel: 'feishu' | 'discord') => {
+    setExpandedChannel((current) => (current === channel ? null : channel));
+  };
+
   return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-[18px]">
-        <section aria-label={t('settings.sections.feishuBot')}>
-          <FeishuBotSection />
-        </section>
-        <section aria-label={t('settings.feishuBot.lifecycleAnnouncement.label')}>
-          <FeishuBotNotificationSection />
-        </section>
-      </div>
-
+    <div className="flex flex-col gap-3">
+      <FeishuBotSection expanded={expandedChannel === 'feishu'} onToggle={() => toggle('feishu')} />
       {showDiscord && (
-        <>
-          <div className="h-px w-full bg-[var(--border-default)]" />
-
-          <section aria-label={t('settings.sections.discordBot')}>
-            <DiscordBotSection />
-          </section>
-        </>
+        <DiscordBotSection
+          expanded={expandedChannel === 'discord'}
+          onToggle={() => toggle('discord')}
+        />
       )}
     </div>
   );
@@ -168,12 +161,7 @@ export function ImBotSection({
         {effectiveGroup === 'cindy' ? (
           <HookConnectionsSection />
         ) : (
-          <>
-            {/* 新会话默认配置为 IM 全局项,固定放个人分栏顶部 */}
-            <ImDefaultSettingsSection />
-            <div className="h-px w-full bg-[var(--border-default)]" />
-            <PersonalGroupContent showDiscord={discordVisible} />
-          </>
+          <PersonalGroupContent showDiscord={discordVisible} />
         )}
       </div>
     </div>

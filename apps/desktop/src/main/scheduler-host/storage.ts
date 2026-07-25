@@ -30,6 +30,16 @@ import {
   scheduleRunCreateToRow,
   scheduleRunPatchToRow,
 } from '../localDb/mapper';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
+import {
+  addRegionalMoney,
+  asValueEstimateMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeLegacyUsd,
+  type RegionalMoney,
+  zeroRegionalMoney,
+} from '../../shared/regionalMoney.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
 
@@ -49,23 +59,57 @@ export interface ScheduleSidebarIndexRun {
 
 export interface ScheduleCostSummary {
   scheduleId: string;
-  totalCostUsd: number;
-  totalEstimatedValueUsd: number;
+  totalMoney: RegionalMoney;
+  totalEstimatedValueMoney: RegionalMoney;
+  totalCostUsd?: number;
+  totalEstimatedValueUsd?: number;
+  /** 至少一轮 agent run 无法得到可靠费用。 */
+  hasUnavailableCost?: boolean;
   sessionCount: number;
   sessions: ScheduleSessionCostSummary[];
 }
 
 export interface ScheduleSessionCostSummary {
   sessionId: string;
-  totalCostUsd: number;
-  totalEstimatedValueUsd: number;
+  totalMoney: RegionalMoney;
+  totalEstimatedValueMoney: RegionalMoney;
+  totalCostUsd?: number;
+  totalEstimatedValueUsd?: number;
 }
 
-interface ScheduleTurnCostState {
-  totalCostUsd: number;
-  totalEstimatedValueUsd: number;
+interface ScheduleMoneyValues {
+  costValues: RegionalMoney[];
+  estimatedValueValues: RegionalMoney[];
+}
+
+interface ScheduleTurnCostState extends ScheduleMoneyValues {
+  hasUnavailableCost: boolean;
   sessionIds: Set<string>;
-  sessionCosts: Map<string, { totalCostUsd: number; totalEstimatedValueUsd: number }>;
+  sessionCosts: Map<string, ScheduleMoneyValues>;
+}
+
+function emptyScheduleMoneyValues(): ScheduleMoneyValues {
+  return {
+    costValues: [],
+    estimatedValueValues: [],
+  };
+}
+
+function emptyScheduleTurnCostState(): ScheduleTurnCostState {
+  return {
+    ...emptyScheduleMoneyValues(),
+    hasUnavailableCost: false,
+    sessionIds: new Set<string>(),
+    sessionCosts: new Map<string, ScheduleMoneyValues>(),
+  };
+}
+
+function addCompatibleRegionalMoney(
+  values: readonly RegionalMoney[],
+  currency: RegionalMoney['currency'] = regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+): RegionalMoney | null {
+  const compatible = values.filter((value) => value.currency === currency);
+  return compatible.length > 0 ? addRegionalMoney(compatible) : null;
 }
 
 // Keep IN (...) bind counts well below SQLite's historical 999 variable limit.
@@ -158,25 +202,55 @@ function scheduleOriginFromAgentMeta(agentMeta: string | null): PersistedSchedul
 }
 
 function turnCostFromAgentMeta(agentMeta: string | null): {
-  costUsd: number;
-  estimatedValueUsd: number;
+  costMoney: RegionalMoney | null;
+  estimatedValueMoney: RegionalMoney | null;
+  legacyProjectedActualAmount: number;
 } {
-  if (!agentMeta) return { costUsd: 0, estimatedValueUsd: 0 };
+  if (!agentMeta) {
+    return {
+      costMoney: null,
+      estimatedValueMoney: null,
+      legacyProjectedActualAmount: 0,
+    };
+  }
   try {
     const parsed = JSON.parse(agentMeta) as {
+      turnCost?: unknown;
       turnCostUsd?: unknown;
       turnCostIsEstimate?: unknown;
     };
-    const cost = parsed.turnCostUsd;
-    if (typeof cost !== 'number' || !Number.isFinite(cost) || cost <= 0) {
-      return { costUsd: 0, estimatedValueUsd: 0 };
+    const structured = normalizeRegionalMoney(parsed.turnCost);
+    const legacy =
+      typeof parsed.turnCostUsd === 'number' &&
+      Number.isFinite(parsed.turnCostUsd) &&
+      parsed.turnCostUsd > 0
+        ? regionalizeLegacyUsd(parsed.turnCostUsd, CURRENT_CINDY_REGION)
+        : undefined;
+    const money = structured ?? legacy;
+    if (!money || money.amount <= 0) {
+      return {
+        costMoney: null,
+        estimatedValueMoney: null,
+        legacyProjectedActualAmount: 0,
+      };
     }
-    return parsed.turnCostIsEstimate === true
-      ? { costUsd: 0, estimatedValueUsd: cost }
-      : { costUsd: cost, estimatedValueUsd: 0 };
+    const isEstimate = parsed.turnCostIsEstimate === true || money.kind === 'value-estimate';
+    return {
+      costMoney: isEstimate ? null : money,
+      estimatedValueMoney: isEstimate ? asValueEstimateMoney(money) : null,
+      legacyProjectedActualAmount: !structured && !isEstimate ? money.amount : 0,
+    };
   } catch {
-    return { costUsd: 0, estimatedValueUsd: 0 };
+    return {
+      costMoney: null,
+      estimatedValueMoney: null,
+      legacyProjectedActualAmount: 0,
+    };
   }
+}
+
+function finitePositiveNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function chunkArray<T>(items: readonly T[], size: number): T[][] {
@@ -388,16 +462,18 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     db: SchedulerDrizzleDb,
     runs: ScheduleRun[],
   ): Promise<ScheduleRun[]> {
-    const exactRunIds = new Set(
-      runs.filter((run) => run.costAttribution === 'exact').map((run) => run.id),
+    const attributableRunIds = new Set(
+      runs.filter((run) => run.costAttribution !== 'legacy').map((run) => run.id),
     );
     const sessionIds = new Set(
       runs
-        .filter((run) => exactRunIds.has(run.id))
+        .filter((run) => attributableRunIds.has(run.id))
         .map((run) => run.sessionId)
         .filter((id): id is string => Boolean(id)),
     );
-    if (exactRunIds.size === 0 || sessionIds.size === 0) return runs;
+    if (attributableRunIds.size === 0 || sessionIds.size === 0) {
+      return runs;
+    }
 
     const rows = (
       await Promise.all(
@@ -406,28 +482,72 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
             .select({ agentMeta: messages.agentMeta })
             .from(messages)
             .where(
-              and(
-                inArray(messages.sessionId, sessionIdChunk),
-                eq(messages.role, 'assistant'),
-              ),
+              and(inArray(messages.sessionId, sessionIdChunk), eq(messages.role, 'assistant')),
             ),
         ),
       )
     ).flat();
-    const ledger = new Map<string, { costUsd: number; estimatedValueUsd: number }>();
+    const ledger = new Map<
+      string,
+      { costValues: RegionalMoney[]; estimatedValues: RegionalMoney[] }
+    >();
     for (const row of rows) {
       const origin = scheduleOriginFromAgentMeta(row.agentMeta);
-      if (!origin?.runId || !exactRunIds.has(origin.runId)) continue;
+      if (!origin?.runId || !attributableRunIds.has(origin.runId)) continue;
       const cost = turnCostFromAgentMeta(row.agentMeta);
-      const current = ledger.get(origin.runId) ?? { costUsd: 0, estimatedValueUsd: 0 };
-      current.costUsd += cost.costUsd;
-      current.estimatedValueUsd += cost.estimatedValueUsd;
+      const current = ledger.get(origin.runId) ?? {
+        costValues: [],
+        estimatedValues: [],
+      };
+      if (cost.costMoney) current.costValues.push(cost.costMoney);
+      if (cost.estimatedValueMoney) {
+        current.estimatedValues.push(cost.estimatedValueMoney);
+      }
       ledger.set(origin.runId, current);
     }
 
     return runs.map((run) => {
       const persisted = ledger.get(run.id);
-      return persisted ? { ...run, ...persisted } : run;
+      if (!persisted) return run;
+      if (run.costAttribution === 'direct') {
+        const costValues = [
+          ...(run.costMoney && run.costMoney.amount > 0 ? [run.costMoney] : []),
+          ...persisted.costValues,
+        ];
+        const estimatedValues = [
+          ...(run.estimatedValueMoney && run.estimatedValueMoney.amount > 0
+            ? [run.estimatedValueMoney]
+            : []),
+          ...persisted.estimatedValues,
+        ];
+        return {
+          ...run,
+          costMoney:
+            addCompatibleRegionalMoney(
+              costValues,
+              run.costMoney?.currency,
+            ) ?? zeroRegionalMoney(CURRENT_CINDY_REGION),
+          estimatedValueMoney:
+            addCompatibleRegionalMoney(
+              estimatedValues,
+              run.estimatedValueMoney?.currency,
+            ) ?? zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'),
+          costAttribution: 'exact',
+        };
+      }
+      if (run.costAttribution === 'mixed') {
+        return { ...run, costAttribution: 'exact' };
+      }
+      return {
+        ...run,
+        costMoney:
+          addCompatibleRegionalMoney(persisted.costValues) ??
+          zeroRegionalMoney(CURRENT_CINDY_REGION),
+        estimatedValueMoney:
+          addCompatibleRegionalMoney(persisted.estimatedValues) ??
+          zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'),
+        costAttribution: 'exact',
+      };
     });
   }
 
@@ -534,21 +654,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    */
   async listCostSummaries(): Promise<ScheduleCostSummary[]> {
     const db = this.getDb();
-    const linkedRows = await db
-      .select({
-        scheduleId: scheduleRuns.scheduleId,
-        sessionId: scheduleRuns.sessionId,
-      })
-      .from(scheduleRuns)
-      .where(isNotNull(scheduleRuns.sessionId));
+    const runCostRows = (await db.select().from(scheduleRuns)).map(scheduleRunToCamel);
 
     const bySchedule = new Map<string, ScheduleTurnCostState>();
     const linkedSessionIds = new Set<string>();
     const linkedScheduleIds = new Set<string>();
-    for (const row of linkedRows) {
-      if (!row.sessionId) continue;
-      linkedSessionIds.add(row.sessionId);
+    for (const row of runCostRows) {
       linkedScheduleIds.add(row.scheduleId);
+      if (row.sessionId) linkedSessionIds.add(row.sessionId);
     }
 
     const scheduleByLegacyKey = await this.listSchedulesByLegacyKey(db);
@@ -617,7 +730,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
     let activeSessionId: string | null = null;
     let activeScheduleId: string | null = null;
-    const billableMessageCostBySessionId = new Map<string, number>();
+    const messageCostRunIds = new Set<string>();
+    const messageCostByRunId = new Map<string, ScheduleMoneyValues>();
+    const legacyMessageCostBySessionId = new Map<string, number>();
     for (const row of messageRows) {
       if (row.sessionId !== activeSessionId) {
         activeSessionId = row.sessionId;
@@ -629,74 +744,206 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       }
       if (row.role !== 'assistant') continue;
       const turnCost = turnCostFromAgentMeta(row.agentMeta);
-      const cost = turnCost.costUsd;
-      if (cost <= 0 && turnCost.estimatedValueUsd <= 0) continue;
-      if (cost > 0) {
-        billableMessageCostBySessionId.set(
+      const cost = turnCost.costMoney?.amount ?? 0;
+      const estimatedValue = turnCost.estimatedValueMoney?.amount ?? 0;
+      if (cost <= 0 && estimatedValue <= 0) continue;
+      if (turnCost.legacyProjectedActualAmount > 0) {
+        legacyMessageCostBySessionId.set(
           row.sessionId,
-          (billableMessageCostBySessionId.get(row.sessionId) ?? 0) + cost,
+          (legacyMessageCostBySessionId.get(row.sessionId) ?? 0) +
+            turnCost.legacyProjectedActualAmount,
         );
       }
-      const assistantScheduleId = scheduleOriginFromAgentMeta(row.agentMeta)?.scheduleId;
+      const assistantOrigin = scheduleOriginFromAgentMeta(row.agentMeta);
+      const assistantScheduleId = assistantOrigin?.scheduleId;
+      const assistantRunId = assistantOrigin?.runId;
       const attributedScheduleId = assistantScheduleId ?? activeScheduleId;
       if (!attributedScheduleId || !linkedScheduleIds.has(attributedScheduleId)) {
         continue;
       }
-      const entry = bySchedule.get(attributedScheduleId) ?? {
-        totalCostUsd: 0,
-        totalEstimatedValueUsd: 0,
-        sessionIds: new Set<string>(),
-        sessionCosts: new Map(),
-      };
+      if (assistantRunId) {
+        messageCostRunIds.add(assistantRunId);
+        const runCost = messageCostByRunId.get(assistantRunId) ?? emptyScheduleMoneyValues();
+        if (turnCost.costMoney) runCost.costValues.push(turnCost.costMoney);
+        if (turnCost.estimatedValueMoney) {
+          runCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
+        }
+        messageCostByRunId.set(assistantRunId, runCost);
+      }
+      const entry = bySchedule.get(attributedScheduleId) ?? emptyScheduleTurnCostState();
       entry.sessionIds.add(row.sessionId);
-      entry.totalCostUsd += cost;
-      entry.totalEstimatedValueUsd += turnCost.estimatedValueUsd;
-      const sessionCost = entry.sessionCosts.get(row.sessionId) ?? {
-        totalCostUsd: 0,
-        totalEstimatedValueUsd: 0,
-      };
-      sessionCost.totalCostUsd += cost;
-      sessionCost.totalEstimatedValueUsd += turnCost.estimatedValueUsd;
+      if (turnCost.costMoney) {
+        entry.costValues.push(turnCost.costMoney);
+      }
+      if (turnCost.estimatedValueMoney) {
+        entry.estimatedValueValues.push(turnCost.estimatedValueMoney);
+      }
+      const sessionCost = entry.sessionCosts.get(row.sessionId) ?? emptyScheduleMoneyValues();
+      if (turnCost.costMoney) {
+        sessionCost.costValues.push(turnCost.costMoney);
+      }
+      if (turnCost.estimatedValueMoney) {
+        sessionCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
+      }
       entry.sessionCosts.set(row.sessionId, sessionCost);
       bySchedule.set(attributedScheduleId, entry);
+    }
+
+    // 纯 tool turn 没有 assistant message 可挂账，费用会直接写在 schedule_runs。
+    // 正常消息费用已经进入 message ledger；混合 run 则只补 schedule_runs 快照中
+    // 尚未被消息账本覆盖的余量，避免漏记 direct segment 或双计。
+    const appendRunMoney = (
+      entry: ScheduleTurnCostState,
+      sessionId: string | undefined,
+      costMoney: RegionalMoney | null,
+      estimatedValueMoney: RegionalMoney | null,
+    ): void => {
+      if (costMoney && costMoney.amount > 0) entry.costValues.push(costMoney);
+      if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
+        entry.estimatedValueValues.push(estimatedValueMoney);
+      }
+      if (!sessionId) return;
+      entry.sessionIds.add(sessionId);
+      const sessionCost = entry.sessionCosts.get(sessionId) ?? emptyScheduleMoneyValues();
+      if (costMoney && costMoney.amount > 0) sessionCost.costValues.push(costMoney);
+      if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
+        sessionCost.estimatedValueValues.push(estimatedValueMoney);
+      }
+      entry.sessionCosts.set(sessionId, sessionCost);
+    };
+    const remainingMoney = (
+      total: RegionalMoney | undefined,
+      messageValues: readonly RegionalMoney[],
+    ): RegionalMoney | null => {
+      if (!total || total.amount <= 0) return null;
+      if (messageValues.length === 0) return total;
+      const messageTotal = addCompatibleRegionalMoney(messageValues, total.currency);
+      if (!messageTotal) return total;
+      // 历史脏数据的币种不一致时保留持久化实际金额，不能让整个 dashboard 抛错。
+      if (messageTotal.currency !== total.currency) return total;
+      const amount = Math.max(0, total.amount - messageTotal.amount);
+      return amount > 0 ? { ...total, amount } : null;
+    };
+
+    for (const run of runCostRows) {
+      if (run.costAttribution === 'unavailable' && run.status !== 'running') {
+        // 消息账本已经给出该 run 的费用时，以账本为准；schedule_runs 快照可由
+        // listRuns 的 hydrate 路径自愈，不应把任务误标成“部分费用不可用”。
+        if (messageCostRunIds.has(run.id)) continue;
+        const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
+        entry.hasUnavailableCost = true;
+        appendRunMoney(entry, run.sessionId, null, null);
+        bySchedule.set(run.scheduleId, entry);
+        continue;
+      }
+      if (
+        run.costAttribution === 'zero' &&
+        run.status !== 'running' &&
+        !messageCostRunIds.has(run.id)
+      ) {
+        const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
+        appendRunMoney(entry, run.sessionId, null, null);
+        bySchedule.set(run.scheduleId, entry);
+        continue;
+      }
+      if (run.costAttribution === 'direct' || run.costAttribution === 'mixed') {
+        const messageCost = messageCostByRunId.get(run.id);
+        const costMoney =
+          run.costAttribution === 'direct'
+            ? (run.costMoney ?? null)
+            : remainingMoney(run.costMoney, messageCost?.costValues ?? []);
+        const estimatedValueMoney =
+          run.costAttribution === 'direct'
+            ? (run.estimatedValueMoney ?? null)
+            : remainingMoney(
+                run.estimatedValueMoney,
+                messageCost?.estimatedValueValues ?? [],
+              );
+        const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
+        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney);
+        bySchedule.set(run.scheduleId, entry);
+        continue;
+      }
+      if (run.costAttribution !== 'exact') continue;
+      const messageCost = messageCostByRunId.get(run.id);
+      if (messageCost) continue;
+      const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
+      appendRunMoney(
+        entry,
+        run.sessionId,
+        run.costMoney ?? null,
+        run.estimatedValueMoney ?? null,
+      );
+      bySchedule.set(run.scheduleId, entry);
     }
 
     for (const session of legacySessions) {
       const scheduleId = legacySessionScheduleIds.get(session.id);
       if (!scheduleId) continue;
 
-      const entry = bySchedule.get(scheduleId) ?? {
-        totalCostUsd: 0,
-        totalEstimatedValueUsd: 0,
-        sessionIds: new Set<string>(),
-        sessionCosts: new Map(),
-      };
+      const entry = bySchedule.get(scheduleId) ?? emptyScheduleTurnCostState();
       entry.sessionIds.add(session.id);
       const cost = Number(session.totalCostUsd ?? 0);
       if (Number.isFinite(cost) && cost > 0) {
-        const alreadyCountedMessageCost = billableMessageCostBySessionId.get(session.id) ?? 0;
-        const legacyCost = Math.max(0, cost - alreadyCountedMessageCost);
-        entry.totalCostUsd += legacyCost;
-        const sessionCost = entry.sessionCosts.get(session.id) ?? {
-          totalCostUsd: 0,
-          totalEstimatedValueUsd: 0,
+        const projectedLegacyCost = regionalizeLegacyUsd(cost, CURRENT_CINDY_REGION);
+        const alreadyCountedMessageCost = legacyMessageCostBySessionId.get(session.id) ?? 0;
+        const legacyCost = Math.max(0, projectedLegacyCost.amount - alreadyCountedMessageCost);
+        const legacyMoney: RegionalMoney = {
+          ...projectedLegacyCost,
+          amount: legacyCost,
         };
-        sessionCost.totalCostUsd += legacyCost;
+        if (legacyCost > 0) {
+          entry.costValues.push(legacyMoney);
+        }
+        const sessionCost = entry.sessionCosts.get(session.id) ?? emptyScheduleMoneyValues();
+        if (legacyCost > 0) {
+          sessionCost.costValues.push(legacyMoney);
+        }
         entry.sessionCosts.set(session.id, sessionCost);
       }
       bySchedule.set(scheduleId, entry);
     }
 
-    return [...bySchedule.entries()].map(([scheduleId, summary]) => ({
-      scheduleId,
-      totalCostUsd: summary.totalCostUsd,
-      totalEstimatedValueUsd: summary.totalEstimatedValueUsd,
-      sessionCount: summary.sessionIds.size,
-      sessions: [...summary.sessionCosts.entries()].map(([sessionId, costs]) => ({
-        sessionId,
-        ...costs,
-      })),
-    }));
+    return [...bySchedule.entries()].map(([scheduleId, summary]) => {
+      const totalMoney =
+        addCompatibleRegionalMoney(summary.costValues) ??
+        zeroRegionalMoney(CURRENT_CINDY_REGION);
+      const totalEstimatedValueMoney =
+        addCompatibleRegionalMoney(summary.estimatedValueValues) ??
+        zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate');
+      return {
+        scheduleId,
+        totalMoney,
+        totalEstimatedValueMoney,
+        ...(totalMoney.currency === 'USD'
+          ? {
+              totalCostUsd: totalMoney.amount,
+              totalEstimatedValueUsd: totalEstimatedValueMoney.amount,
+            }
+          : {}),
+        ...(summary.hasUnavailableCost ? { hasUnavailableCost: true } : {}),
+        sessionCount: summary.sessionIds.size,
+        sessions: [...summary.sessionCosts.entries()].map(([sessionId, costs]) => {
+          const money =
+            addCompatibleRegionalMoney(costs.costValues) ??
+            zeroRegionalMoney(CURRENT_CINDY_REGION);
+          const estimatedMoney =
+            addCompatibleRegionalMoney(costs.estimatedValueValues) ??
+            zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate');
+          return {
+            sessionId,
+            totalMoney: money,
+            totalEstimatedValueMoney: estimatedMoney,
+            ...(money.currency === 'USD'
+              ? {
+                  totalCostUsd: money.amount,
+                  totalEstimatedValueUsd: estimatedMoney.amount,
+                }
+              : {}),
+          };
+        }),
+      };
+    });
   }
 
   async deleteRun(id: string): Promise<ScheduleRun | null> {

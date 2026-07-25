@@ -47,11 +47,6 @@ import { useStartupOtaGate } from '@/update/useStartupOtaGate';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useStartupEndpointGate } from '@/config/useStartupEndpointGate';
 import { IS_OTA_SELFHOST } from '@/config/env';
-import { Observe, ObserveRoot } from '@/observability/observe';
-
-// EAS Observe:启用 expo-router 集成,采集 per-route 导航指标(cold_ttr / warm_ttr / tti)。
-// 必须在挂载前的模块作用域调用;否则 useObserve().markInteractive 会退化为全局兜底、不记 per-route。
-Observe.configure({ integrations: { 'expo-router': true } });
 
 function NavigationGate() {
   const auth = useAuth();
@@ -335,6 +330,4 @@ const styles = StyleSheet.create({
   },
 });
 
-// EAS Observe:包裹根布局以采集启动 / 首屏 / OTA 等性能与采用数据。
-// 入口屏(首页 / 会话 / 登录)各自用 useObserve().markInteractive 标记可交互时刻。
-export default ObserveRoot.wrap(RootLayout);
+export default RootLayout;

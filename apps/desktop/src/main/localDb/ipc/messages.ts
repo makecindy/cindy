@@ -34,12 +34,18 @@ import {
 } from '../../../shared/interruptedTurn.js';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
 import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion.js';
+import {
+  addCompatibleRegionalMoney,
+  asValueEstimateMoney,
+  normalizeRegionalMoney,
+  regionalCurrencyForRegion,
+  regionalizeLegacyUsd,
+  regionalizeUsd,
+  type RegionalMoney,
+} from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
-import type {
-  Message,
-  MessageRole,
-  AgentMeta,
-} from '../../../renderer/lib/ccAgent.types';
+import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 
 const log = createLogger('localDb/messages');
 
@@ -52,7 +58,8 @@ type MessageRowWithRowid = MessageRow & { rowid: number };
 
 export interface EstimatedSessionValueEntry {
   clientId: string;
-  costUsd: number;
+  money: RegionalMoney;
+  costUsd?: number;
 }
 
 /**
@@ -61,6 +68,7 @@ export interface EstimatedSessionValueEntry {
  * scoped; callers use this value only to produce a user-facing round total.
  */
 export interface PriorUserRoundCost {
+  money: RegionalMoney | null;
   costUsd: number;
   hasEstimatedValue: boolean;
 }
@@ -76,77 +84,76 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
 ] as const);
 
 export function registerMessageIpc(): void {
-  ipcMain.handle(
-    'local-db:messages:list',
-    async (_e, sessionId: unknown, opts: unknown) => {
-      const sid = requireString(sessionId, 'sessionId');
-      const limit = clampLimit(
-        (opts as { limit?: number } | undefined)?.limit,
-      );
-      const before = (opts as { before?: string } | undefined)?.before;
-      const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
-      const db = getDbClient().drizzle;
+  ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
+    const sid = requireString(sessionId, 'sessionId');
+    const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
+    const before = (opts as { before?: string } | undefined)?.before;
+    const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
+    const db = getDbClient().drizzle;
 
-      // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
-      // 只在首页请求跑(分页跳过,#318 性能语义;首页判定 = 无任何分页游标),
-      // 覆盖「被控端从未本机打开该会话」的导入缺口。
-      await runMessagesListImportSideEffects(sid, {}, {
+    // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
+    // 只在首页请求跑(分页跳过,#318 性能语义;首页判定 = 无任何分页游标),
+    // 覆盖「被控端从未本机打开该会话」的导入缺口。
+    await runMessagesListImportSideEffects(
+      sid,
+      {},
+      {
         deviceLinkFirstPage: !before && beforeTs == null,
-      });
+      },
+    );
 
-      let beforeCursor: { createdAt: number; rowid: number } | null = null;
-      let beforeMs: number | null = null;
-      if (typeof before === 'string' && before) {
-        const beforeRow = await db
-          .select({ createdAt: messages.createdAt, rowid: messageRowid })
-          .from(messages)
-          .where(eq(messages.id, before))
-          .limit(1);
-        if (beforeRow.length > 0) {
-          beforeCursor = beforeRow[0];
-        }
-      } else if (typeof beforeTs === 'number' && Number.isFinite(beforeTs)) {
-        beforeMs = beforeTs;
-      }
-
-      // /clear：过滤 createdAt > session.clearedAt，本地 DB 旧消息也遵守 clearedAt 边界
-      const sessionRow = await db
-        .select({ clearedAt: sessions.clearedAt })
-        .from(sessions)
-        .where(eq(sessions.id, sid))
-        .limit(1);
-      const clearedAtMs = sessionRow[0]?.clearedAt ?? null;
-
-      // rewind-session：list 永远过滤 rewind_at IS NULL —— 被 rewind 软删的消息在 UI 上不可见
-      const conds: (SQL<unknown> | undefined)[] = [eq(messages.sessionId, sid), isNull(messages.rewindAt)];
-      if (beforeCursor) {
-        conds.push(
-          or(
-            lt(messages.createdAt, beforeCursor.createdAt),
-            and(
-              eq(messages.createdAt, beforeCursor.createdAt),
-              lt(messageRowid, beforeCursor.rowid),
-            ),
-          ),
-        );
-      } else if (beforeMs !== null) {
-        conds.push(lt(messages.createdAt, beforeMs));
-      }
-      if (clearedAtMs !== null) conds.push(gt(messages.createdAt, clearedAtMs));
-      const whereExpr = and(...conds);
-
-      const rows = await db
-        .select({
-          ...getMessageSelectFields(),
-          rowid: messageRowid,
-        })
+    let beforeCursor: { createdAt: number; rowid: number } | null = null;
+    let beforeMs: number | null = null;
+    if (typeof before === 'string' && before) {
+      const beforeRow = await db
+        .select({ createdAt: messages.createdAt, rowid: messageRowid })
         .from(messages)
-        .where(whereExpr)
-        .orderBy(desc(messages.createdAt), desc(messageRowid))
-        .limit(limit);
-      return hydrateLegacyUserTurnCosts(rows.map(messageToCamelWithRowid));
-    },
-  );
+        .where(eq(messages.id, before))
+        .limit(1);
+      if (beforeRow.length > 0) {
+        beforeCursor = beforeRow[0];
+      }
+    } else if (typeof beforeTs === 'number' && Number.isFinite(beforeTs)) {
+      beforeMs = beforeTs;
+    }
+
+    // /clear：过滤 createdAt > session.clearedAt，本地 DB 旧消息也遵守 clearedAt 边界
+    const sessionRow = await db
+      .select({ clearedAt: sessions.clearedAt })
+      .from(sessions)
+      .where(eq(sessions.id, sid))
+      .limit(1);
+    const clearedAtMs = sessionRow[0]?.clearedAt ?? null;
+
+    // rewind-session：list 永远过滤 rewind_at IS NULL —— 被 rewind 软删的消息在 UI 上不可见
+    const conds: (SQL<unknown> | undefined)[] = [
+      eq(messages.sessionId, sid),
+      isNull(messages.rewindAt),
+    ];
+    if (beforeCursor) {
+      conds.push(
+        or(
+          lt(messages.createdAt, beforeCursor.createdAt),
+          and(eq(messages.createdAt, beforeCursor.createdAt), lt(messageRowid, beforeCursor.rowid)),
+        ),
+      );
+    } else if (beforeMs !== null) {
+      conds.push(lt(messages.createdAt, beforeMs));
+    }
+    if (clearedAtMs !== null) conds.push(gt(messages.createdAt, clearedAtMs));
+    const whereExpr = and(...conds);
+
+    const rows = await db
+      .select({
+        ...getMessageSelectFields(),
+        rowid: messageRowid,
+      })
+      .from(messages)
+      .where(whereExpr)
+      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .limit(limit);
+    return hydrateLegacyUserTurnCosts(rows.map(messageToCamelWithRowid));
+  });
 
   ipcMain.handle(
     'local-db:messages:around',
@@ -224,7 +231,9 @@ export function registerMessageIpc(): void {
         .orderBy(asc(messages.createdAt), asc(messageRowid))
         .limit(radius);
 
-      return hydrateLegacyUserTurnCosts([...before.reverse(), anchor, ...after].map(messageToCamelWithRowid));
+      return hydrateLegacyUserTurnCosts(
+        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
+      );
     },
   );
 
@@ -306,127 +315,122 @@ export function registerMessageIpc(): void {
         .orderBy(asc(messages.createdAt), asc(messageRowid))
         .limit(radius);
 
-      const rows = await hydrateLegacyUserTurnCosts([...before.reverse(), anchor, ...after].map(messageToCamelWithRowid));
+      const rows = await hydrateLegacyUserTurnCosts(
+        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
+      );
       return capReferenceMessageRows(rows, contentCharLimit);
     },
   );
 
-  ipcMain.handle(
-    'local-db:messages:estimatedSessionValue',
-    async (_e, sessionId: unknown) => {
-      const sid = requireString(sessionId, 'sessionId');
-      const db = getDbClient().drizzle;
+  ipcMain.handle('local-db:messages:estimatedSessionValue', async (_e, sessionId: unknown) => {
+    const sid = requireString(sessionId, 'sessionId');
+    const db = getDbClient().drizzle;
 
-      const [sessionRow] = await db
-        .select({ clearedAt: sessions.clearedAt })
-        .from(sessions)
-        .where(eq(sessions.id, sid))
-        .limit(1);
-      const clearedAtMs = sessionRow?.clearedAt ?? null;
+    const [sessionRow] = await db
+      .select({ clearedAt: sessions.clearedAt })
+      .from(sessions)
+      .where(eq(sessions.id, sid))
+      .limit(1);
+    const clearedAtMs = sessionRow?.clearedAt ?? null;
 
-      const visibleConds = clearedAtMs === null ? [] : [gt(messages.createdAt, clearedAtMs)];
-      const rows = await db
-        .select({
-          clientId: messages.clientId,
-          agentMeta: messages.agentMeta,
-        })
-        .from(messages)
-        .where(and(
+    const visibleConds = clearedAtMs === null ? [] : [gt(messages.createdAt, clearedAtMs)];
+    const rows = await db
+      .select({
+        clientId: messages.clientId,
+        agentMeta: messages.agentMeta,
+      })
+      .from(messages)
+      .where(
+        and(
           eq(messages.sessionId, sid),
           eq(messages.role, 'assistant'),
           isNull(messages.rewindAt),
           ...visibleConds,
-        ));
-      const entries = extractEstimatedSessionValueEntries(rows);
-      return {
-        totalValueUsd: entries.reduce((sum, item) => sum + item.costUsd, 0),
-        entries,
-      };
-    },
-  );
+        ),
+      );
+    const entries = extractEstimatedSessionValueEntries(rows);
+    const totalValueMoney =
+      addCompatibleRegionalMoney(
+        entries.map((entry) => entry.money),
+        regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+      );
+    const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
+    return {
+      totalValueMoney,
+      ...(hasCompleteUsdProjection
+        ? {
+            totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
+          }
+        : {}),
+      entries,
+    };
+  });
 
-  ipcMain.handle(
-    'local-db:messages:create',
-    async (_e, sessionId: unknown, body: unknown) => {
-      const sid = requireString(sessionId, 'sessionId');
-      if (!body || typeof body !== 'object') {
-        throwIpcError('INVALID_PARAMS', 'body 必须是对象');
-      }
-      const b = body as {
-        clientId?: unknown;
-        role?: unknown;
-        content?: unknown;
-        toolUseId?: unknown;
-        agentMeta?: unknown;
-        createdAt?: unknown;
-      };
-      const cid = requireString(b.clientId, 'clientId');
-      if (typeof b.role !== 'string' || !VALID_ROLES.has(b.role as MessageRole)) {
-        throwIpcError('INVALID_PARAMS', 'role 不合法');
-      }
-      if (
-        b.agentMeta !== undefined &&
-        b.agentMeta !== null &&
-        (typeof b.agentMeta !== 'object' || Array.isArray(b.agentMeta))
-      ) {
-        throwIpcError('INVALID_PARAMS', 'agentMeta 必须是对象或 null');
-      }
-      let createdAt: number | undefined;
-      if (b.createdAt !== undefined) {
-        const parsed = typeof b.createdAt === 'number'
+  ipcMain.handle('local-db:messages:create', async (_e, sessionId: unknown, body: unknown) => {
+    const sid = requireString(sessionId, 'sessionId');
+    if (!body || typeof body !== 'object') {
+      throwIpcError('INVALID_PARAMS', 'body 必须是对象');
+    }
+    const b = body as {
+      clientId?: unknown;
+      role?: unknown;
+      content?: unknown;
+      toolUseId?: unknown;
+      agentMeta?: unknown;
+      createdAt?: unknown;
+    };
+    const cid = requireString(b.clientId, 'clientId');
+    if (typeof b.role !== 'string' || !VALID_ROLES.has(b.role as MessageRole)) {
+      throwIpcError('INVALID_PARAMS', 'role 不合法');
+    }
+    if (
+      b.agentMeta !== undefined &&
+      b.agentMeta !== null &&
+      (typeof b.agentMeta !== 'object' || Array.isArray(b.agentMeta))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'agentMeta 必须是对象或 null');
+    }
+    let createdAt: number | undefined;
+    if (b.createdAt !== undefined) {
+      const parsed =
+        typeof b.createdAt === 'number'
           ? b.createdAt
-          : (typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : Number.NaN);
-        if (!Number.isFinite(parsed)) {
-          throwIpcError('INVALID_PARAMS', 'createdAt 必须是合法时间');
-        }
-        createdAt = parsed;
+          : typeof b.createdAt === 'string'
+            ? Date.parse(b.createdAt)
+            : Number.NaN;
+      if (!Number.isFinite(parsed)) {
+        throwIpcError('INVALID_PARAMS', 'createdAt 必须是合法时间');
       }
+      createdAt = parsed;
+    }
 
-      return createMessage(sid, {
-        clientId: cid,
-        role: b.role as MessageRole,
-        content: b.content,
-        toolUseId: typeof b.toolUseId === 'string' ? b.toolUseId : undefined,
-        agentMeta: (b.agentMeta as AgentMeta | null | undefined) ?? null,
-        createdAt,
-      });
-    },
-  );
+    return createMessage(sid, {
+      clientId: cid,
+      role: b.role as MessageRole,
+      content: b.content,
+      toolUseId: typeof b.toolUseId === 'string' ? b.toolUseId : undefined,
+      agentMeta: (b.agentMeta as AgentMeta | null | undefined) ?? null,
+      createdAt,
+    });
+  });
 
   // rewind-session：把 SDK echo 出的 user 消息 cc 元信息（uuid / sdkSessionId）
   // 回写到那条已存在的 user 消息。renderer 暂时用不到，注册 IPC 仅为对称完整性。
   ipcMain.handle(
     'local-db:messages:updateAgentMeta',
-    async (
-      _e,
-      sessionId: unknown,
-      clientId: unknown,
-      agentMeta: unknown,
-    ) => {
+    async (_e, sessionId: unknown, clientId: unknown, agentMeta: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
-      if (
-        agentMeta !== null &&
-        (typeof agentMeta !== 'object' || Array.isArray(agentMeta))
-      ) {
+      if (agentMeta !== null && (typeof agentMeta !== 'object' || Array.isArray(agentMeta))) {
         throwIpcError('INVALID_PARAMS', 'agentMeta 必须是对象或 null');
       }
-      await updateAgentMeta(
-        sid,
-        cid,
-        agentMeta === null ? null : JSON.stringify(agentMeta),
-      );
+      await updateAgentMeta(sid, cid, agentMeta === null ? null : JSON.stringify(agentMeta));
     },
   );
 
   ipcMain.handle(
     'local-db:messages:updateContent',
-    async (
-      _e,
-      sessionId: unknown,
-      clientId: unknown,
-      content: unknown,
-    ) => {
+    async (_e, sessionId: unknown, clientId: unknown, content: unknown) => {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
       const msg = await updateMessageContent(sid, cid, content);
@@ -568,9 +572,8 @@ export async function getMessageDeletionTarget(
     .where(eq(sessions.id, sessionId))
     .limit(1);
   if (!session) return null;
-  const afterClear = session.clearedAt === null
-    ? undefined
-    : gt(messages.createdAt, session.clearedAt);
+  const afterClear =
+    session.clearedAt === null ? undefined : gt(messages.createdAt, session.clearedAt);
   const [row] = await db
     .select({
       id: messages.id,
@@ -616,9 +619,7 @@ export async function getMessageDeletionTarget(
   const scanRealUserBoundary = async (
     direction: 'prior' | 'next',
   ): Promise<UserBoundaryRow | undefined> => {
-    let cursor: SQL<unknown> | undefined = direction === 'prior'
-      ? beforeTarget
-      : afterTarget;
+    let cursor: SQL<unknown> | undefined = direction === 'prior' ? beforeTarget : afterTarget;
     while (cursor) {
       const candidates = await db
         .select({
@@ -634,21 +635,22 @@ export async function getMessageDeletionTarget(
           direction === 'prior' ? desc(messageRowid) : asc(messageRowid),
         )
         .limit(MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE);
-      const boundary = candidates.find((candidate) =>
-        !isHiddenContinuationUserMessage(candidate.agentMeta, candidate.content),
+      const boundary = candidates.find(
+        (candidate) => !isHiddenContinuationUserMessage(candidate.agentMeta, candidate.content),
       );
       if (boundary) return boundary;
       const last = candidates.at(-1);
       if (!last || candidates.length < MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE) return undefined;
-      cursor = direction === 'prior'
-        ? or(
-            lt(messages.createdAt, last.createdAt),
-            and(eq(messages.createdAt, last.createdAt), lt(messageRowid, last.rowid)),
-          )
-        : or(
-            gt(messages.createdAt, last.createdAt),
-            and(eq(messages.createdAt, last.createdAt), gt(messageRowid, last.rowid)),
-          );
+      cursor =
+        direction === 'prior'
+          ? or(
+              lt(messages.createdAt, last.createdAt),
+              and(eq(messages.createdAt, last.createdAt), lt(messageRowid, last.rowid)),
+            )
+          : or(
+              gt(messages.createdAt, last.createdAt),
+              and(eq(messages.createdAt, last.createdAt), gt(messageRowid, last.rowid)),
+            );
     }
     return undefined;
   };
@@ -733,9 +735,9 @@ export async function commitMessageDeletion(
   // 当前生产聊天附件主要是 session-attachment 粗粒度引用，不能因删除一轮
   // 误删同 session 其它气泡仍在用的 blob。这里只释放明确以消息 id/clientId
   // 登记的 message refs；零引用 blob 由 recycler 统一回收。
-  const mediaRefIds = [...new Set(
-    result.messages.flatMap((message) => [message.messageId, message.clientId]),
-  )];
+  const mediaRefIds = [
+    ...new Set(result.messages.flatMap((message) => [message.messageId, message.clientId])),
+  ];
   const mediaCleanup = await Promise.allSettled(
     mediaRefIds.map((refId) => removeMediaRefs({ refKind: 'message', refId })),
   );
@@ -762,9 +764,8 @@ export async function commitMessageDeletion(
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    const visibleAfterClear = sessionRow?.clearedAt == null
-      ? undefined
-      : gt(messages.createdAt, sessionRow.clearedAt);
+    const visibleAfterClear =
+      sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
     const visibleMessageProjection = and(
       eq(messages.sessionId, sessionId),
       sql`${messages.role} IN ('user', 'assistant')`,
@@ -824,15 +825,14 @@ export async function dismissErrorMessage(
   const [row] = await db
     .select()
     .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, clientId),
-      ),
-    )
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
   if (!row || row.role !== 'error') return null;
-  const updated = await updateMessageContent(sessionId, clientId, mergeDismissedIntoErrorContent(row.content));
+  const updated = await updateMessageContent(
+    sessionId,
+    clientId,
+    mergeDismissedIntoErrorContent(row.content),
+  );
   // 广播更新行(review P2):dismiss 若只写 DB,同会话开在其它窗口/被控端本机
   // 窗口的内存 errorDismissed 仍为 false,stale 尾部 banner 留着还能对已忽略的
   // 错误重复 enqueue 续跑。peer 端 handleMessageCreatedRaw 按 clientId merge,
@@ -850,21 +850,11 @@ export async function updateMessageContent(
   await db
     .update(messages)
     .set({ content: safeStringify(content) })
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, clientId),
-      ),
-    );
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
   const [row] = await db
     .select()
     .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, clientId),
-      ),
-    )
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
   if (row) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
@@ -900,7 +890,10 @@ function clampAroundRadius(raw: unknown): number {
 function requireReferenceContentCharLimit(raw: unknown): number | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
-    throwIpcError('INVALID_PARAMS', 'contentCharLimit must be an integer between 1 and 8000 or null');
+    throwIpcError(
+      'INVALID_PARAMS',
+      'contentCharLimit must be an integer between 1 and 8000 or null',
+    );
   }
   return raw;
 }
@@ -975,12 +968,7 @@ export async function createMessage(
   const existing = await db
     .select()
     .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.clientId, body.clientId),
-      ),
-    )
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
     .limit(1);
   if (existing.length > 0) {
     return messageToCamel(existing[0]);
@@ -995,12 +983,7 @@ export async function createMessage(
     const after = await db
       .select()
       .from(messages)
-      .where(
-        and(
-          eq(messages.sessionId, sessionId),
-          eq(messages.clientId, body.clientId),
-        ),
-      )
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
       .limit(1);
     if (after.length > 0) return messageToCamel(after[0]);
     throw err;
@@ -1063,9 +1046,7 @@ export async function updateAgentMeta(
   await db
     .update(messages)
     .set({ agentMeta: agentMetaJson })
-    .where(
-      and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)),
-    );
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
 }
 
 export function extractEstimatedSessionValueEntries(
@@ -1084,7 +1065,32 @@ export function extractEstimatedSessionValueEntries(
       continue;
     }
     if (meta?.turnCostIsEstimate !== true) continue;
-    if (typeof meta.turnCostUsd !== 'number' || !Number.isFinite(meta.turnCostUsd) || meta.turnCostUsd <= 0) {
+    const structured = normalizeRegionalMoney(meta.turnCost);
+    if (structured && structured.amount > 0) {
+      const recomputed =
+        structured.currency === 'USD'
+          ? resolveStaleCodexSubscriptionValueEstimate(
+              structured.amount,
+              normalizeTurnUsageDetails(meta.turnUsageDetails),
+              meta.model,
+            )
+          : null;
+      const money = asValueEstimateMoney({
+        ...structured,
+        amount: recomputed ?? structured.amount,
+      });
+      entries.push({
+        clientId: row.clientId,
+        money,
+        ...(money.currency === 'USD' ? { costUsd: money.amount } : {}),
+      });
+      continue;
+    }
+    if (
+      typeof meta.turnCostUsd !== 'number' ||
+      !Number.isFinite(meta.turnCostUsd) ||
+      meta.turnCostUsd <= 0
+    ) {
       continue;
     }
     const recomputed = resolveStaleCodexSubscriptionValueEstimate(
@@ -1092,11 +1098,12 @@ export function extractEstimatedSessionValueEntries(
       normalizeTurnUsageDetails(meta.turnUsageDetails),
       meta.model,
     );
-    if (typeof recomputed === 'number' && Number.isFinite(recomputed) && recomputed > 0) {
-      entries.push({ clientId: row.clientId, costUsd: recomputed });
-      continue;
-    }
-    entries.push({ clientId: row.clientId, costUsd: meta.turnCostUsd });
+    const costUsd = recomputed ?? meta.turnCostUsd;
+    entries.push({
+      clientId: row.clientId,
+      money: regionalizeUsd(costUsd, CURRENT_CINDY_REGION, 'legacy-usd', 'value-estimate'),
+      costUsd,
+    });
   }
   return entries;
 }
@@ -1123,9 +1130,7 @@ export async function patchMessageAgentMetaWithResult(
   const rows = await db
     .select({ agentMeta: messages.agentMeta })
     .from(messages)
-    .where(
-      and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)),
-    )
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
   if (rows.length === 0) return null;
   // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
@@ -1155,11 +1160,13 @@ export async function broadcastMessageAgentMetaUpdate(
   const [row] = await db
     .select()
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.clientId, clientId),
-      isNull(messages.rewindAt),
-    ))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.clientId, clientId),
+        isNull(messages.rewindAt),
+      ),
+    )
     .limit(1);
   if (!row) return false;
   broadcastMessageRow(sessionId, messageToCamel(row));
@@ -1184,21 +1191,24 @@ export async function readPriorUserRoundCost(
   const [target] = await db
     .select({ createdAt: messages.createdAt, rowid: messageRowid })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.clientId, assistantClientId),
-      eq(messages.role, 'assistant'),
-      isNull(messages.rewindAt),
-    ))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.clientId, assistantClientId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+      ),
+    )
     .limit(1);
-  if (!target) return { costUsd: 0, hasEstimatedValue: false };
+  if (!target) return { money: null, costUsd: 0, hasEstimatedValue: false };
 
   const [session] = await db
     .select({ clearedAt: sessions.clearedAt })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  const visibleAfterClear = session?.clearedAt == null ? [] : [gt(messages.createdAt, session.clearedAt)];
+  const visibleAfterClear =
+    session?.clearedAt == null ? [] : [gt(messages.createdAt, session.clearedAt)];
   const beforeTarget = or(
     lt(messages.createdAt, target.createdAt),
     and(eq(messages.createdAt, target.createdAt), lt(messageRowid, target.rowid)),
@@ -1207,16 +1217,18 @@ export async function readPriorUserRoundCost(
   const userRows = await db
     .select({ createdAt: messages.createdAt, rowid: messageRowid, agentMeta: messages.agentMeta })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.role, 'user'),
-      isNull(messages.rewindAt),
-      beforeTarget,
-      ...visibleAfterClear,
-    ))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+        beforeTarget,
+        ...visibleAfterClear,
+      ),
+    )
     .orderBy(desc(messages.createdAt), desc(messageRowid));
   const boundary = userRows.find((row) => !isAutoResumeUserMessage(row.agentMeta));
-  if (!boundary) return { costUsd: 0, hasEstimatedValue: false };
+  if (!boundary) return { money: null, costUsd: 0, hasEstimatedValue: false };
 
   const afterBoundary = or(
     gt(messages.createdAt, boundary.createdAt),
@@ -1225,25 +1237,46 @@ export async function readPriorUserRoundCost(
   const assistantRows = await db
     .select({ agentMeta: messages.agentMeta })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.role, 'assistant'),
-      isNull(messages.rewindAt),
-      afterBoundary,
-      beforeTarget,
-      ...visibleAfterClear,
-    ));
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+        afterBoundary,
+        beforeTarget,
+        ...visibleAfterClear,
+      ),
+    );
 
-  let costUsd = 0;
-  let hasEstimatedValue = false;
+  const values: RegionalMoney[] = [];
+  const estimatedCurrencies = new Set<RegionalMoney['currency']>();
   for (const row of assistantRows) {
     const meta = parseAgentMetaRecord(row.agentMeta);
-    const segmentCost = meta?.turnCostUsd;
-    if (typeof segmentCost !== 'number' || !Number.isFinite(segmentCost) || segmentCost <= 0) continue;
-    costUsd += segmentCost;
-    hasEstimatedValue ||= meta?.turnCostIsEstimate === true;
+    const structured = normalizeRegionalMoney(meta?.turnCost);
+    const legacy =
+      typeof meta?.turnCostUsd === 'number' &&
+      Number.isFinite(meta.turnCostUsd) &&
+      meta.turnCostUsd > 0
+        ? regionalizeLegacyUsd(meta.turnCostUsd, CURRENT_CINDY_REGION)
+        : undefined;
+    const rawSegment = structured ?? legacy;
+    const isEstimate = rawSegment?.kind === 'value-estimate' || meta?.turnCostIsEstimate === true;
+    const segment = rawSegment && isEstimate ? asValueEstimateMoney(rawSegment) : rawSegment;
+    if (!segment || segment.amount <= 0) continue;
+    values.push(segment);
+    if (isEstimate) estimatedCurrencies.add(segment.currency);
   }
-  return { costUsd, hasEstimatedValue };
+  const money = addCompatibleRegionalMoney(
+    values,
+    regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+  );
+  const hasEstimatedValue =
+    money !== null && estimatedCurrencies.has(money.currency);
+  return {
+    money,
+    costUsd: money?.currency === 'USD' ? money.amount : 0,
+    hasEstimatedValue,
+  };
 }
 
 /**
@@ -1280,7 +1313,8 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  const visibleAfterClear = session?.clearedAt == null ? [] : [gt(messages.createdAt, session.clearedAt)];
+  const visibleAfterClear =
+    session?.clearedAt == null ? [] : [gt(messages.createdAt, session.clearedAt)];
   const rows = await db
     .select({
       clientId: messages.clientId,
@@ -1288,11 +1322,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
       agentMeta: messages.agentMeta,
     })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      isNull(messages.rewindAt),
-      ...visibleAfterClear,
-    ))
+    .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), ...visibleAfterClear))
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
   const totalsByClientId = new Map<string, PriorUserRoundCost>();
@@ -1309,16 +1339,22 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     if (row.role !== 'assistant') continue;
     const meta = parseAgentMetaRecord(row.agentMeta);
     const segmentCost = meta?.turnCostUsd;
-    if (!hasRealUserBoundary ||
+    if (
+      !hasRealUserBoundary ||
       typeof segmentCost !== 'number' ||
       !Number.isFinite(segmentCost) ||
-      segmentCost <= 0) {
+      segmentCost <= 0
+    ) {
       continue;
     }
     costUsd += segmentCost;
     hasEstimatedValue ||= meta?.turnCostIsEstimate === true;
     if (legacyClientIds.has(row.clientId)) {
-      totalsByClientId.set(row.clientId, { costUsd, hasEstimatedValue });
+      totalsByClientId.set(row.clientId, {
+        money: regionalizeLegacyUsd(costUsd, CURRENT_CINDY_REGION),
+        costUsd,
+        hasEstimatedValue,
+      });
     }
   }
 
@@ -1345,6 +1381,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
       ...message,
       agentMeta: {
         ...agentMeta,
+        ...(total.money ? { userTurnCost: total.money } : {}),
         userTurnCostUsd: total.costUsd,
         userTurnCostIsEstimate: total.hasEstimatedValue,
       },
@@ -1377,10 +1414,7 @@ function readMessageText(content: string): string {
 }
 
 function isHiddenContinuationUserMessage(agentMeta: string | null, content: string): boolean {
-  return (
-    isAutoResumeUserMessage(agentMeta) ||
-    isSyntheticTriggerText(readMessageText(content))
-  );
+  return isAutoResumeUserMessage(agentMeta) || isSyntheticTriggerText(readMessageText(content));
 }
 
 function parseAgentMetaRecord(agentMeta: string | null): Record<string, unknown> | null {
@@ -1388,7 +1422,7 @@ function parseAgentMetaRecord(agentMeta: string | null): Record<string, unknown>
   try {
     const parsed = JSON.parse(agentMeta);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
+      ? (parsed as Record<string, unknown>)
       : null;
   } catch {
     return null;
@@ -1404,9 +1438,7 @@ function parseAgentMetaRecord(agentMeta: string | null): Record<string, unknown>
  * 字段的 v1 agent_switch 老行才回落“边界后是否已有 user 行”的启发式。
  * 同毫秒并列用 rowid 决序(与 messages list 的 tie-break 口径一致)。
  */
-export async function findPendingAgentHandoff(
-  sessionId: string,
-): Promise<string | null> {
+export async function findPendingAgentHandoff(sessionId: string): Promise<string | null> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -1442,9 +1474,8 @@ export async function findPendingAgentHandoff(
   } catch {
     return null;
   }
-  const handoff = typeof parsed.handoff === 'string' && parsed.handoff.length > 0
-    ? parsed.handoff
-    : null;
+  const handoff =
+    typeof parsed.handoff === 'string' && parsed.handoff.length > 0 ? parsed.handoff : null;
   if (!handoff || parsed.consumed === true) return null;
   // v2 边界以持久消费位为真源:失败首发可能已先落 user 行；只要 vendor 尚未
   // accepted,重启后仍必须恢复交接。缺字段的 v1 老行才走 user-row 启发式。
@@ -1562,11 +1593,7 @@ export async function findParkedEngineSession(
   const [contextRebuild] = await db
     .select({ rowid: messageRowid, createdAt: messages.createdAt })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.role, 'context_rebuild'),
-      afterClear,
-    ))
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'context_rebuild'), afterClear))
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(1);
   const rows = await db
@@ -1643,14 +1670,16 @@ export async function markLatestAgentHandoffConsumed(sessionId: string): Promise
   const [boundary] = await db
     .select({ clientId: messages.clientId, role: messages.role, content: messages.content })
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      or(
-        and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt)),
-        eq(messages.role, 'context_rebuild'),
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        or(
+          and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt)),
+          eq(messages.role, 'context_rebuild'),
+        ),
+        afterClear,
       ),
-      afterClear,
-    ))
+    )
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(1);
   if (!boundary) return;
@@ -1668,14 +1697,16 @@ export async function markLatestAgentHandoffConsumed(sessionId: string): Promise
     await updateAgentSwitchBoundaryContent(sessionId, boundary.clientId, nextContent);
     return;
   }
-  await getDbClient().drizzle
-    .update(messages)
+  await getDbClient()
+    .drizzle.update(messages)
     .set({ content: safeStringify(nextContent) })
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.clientId, boundary.clientId),
-      eq(messages.role, 'context_rebuild'),
-    ));
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.clientId, boundary.clientId),
+        eq(messages.role, 'context_rebuild'),
+      ),
+    );
 }
 
 /** 原子事务提交后只读并广播边界新行，不做第二次写入。 */
@@ -1687,10 +1718,7 @@ export async function rebroadcastAgentSwitchBoundary(
   const [row] = await db
     .select()
     .from(messages)
-    .where(and(
-      eq(messages.sessionId, sessionId),
-      eq(messages.clientId, boundaryClientId),
-    ))
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, boundaryClientId)))
     .limit(1);
   if (row) broadcastMessageRow(sessionId, messageToCamel(row));
 }

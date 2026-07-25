@@ -13,9 +13,20 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { formatCompactTokens, formatCompactUsd, formatUsd } from '@/lib/usageFormat';
+import {
+  formatCompactMoney,
+  formatCompactTokens,
+  formatMoney,
+} from '@/lib/usageFormat';
 import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
 import { usageModelKey, usageRankColor, usageRankOf } from './usagePalette';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  regionalCurrencyForRegion,
+  type MoneyCurrency,
+  type MoneyKind,
+  type RegionalMoney,
+} from '../../../shared/regionalMoney';
 
 const WINDOW_DAYS = 30;
 const CHART_HEIGHT_PX = 96;
@@ -31,16 +42,16 @@ function shiftDayKeyLocal(dayKey: string, deltaDays: number): string {
 interface DaySegment {
   rank: number;
   label: string;
-  amountUsd: number;
-  apiCostUsd: number;
-  subscriptionEstimateUsd: number;
+  amount: number;
+  apiAmount: number;
+  subscriptionEstimateAmount: number;
   tokens: number;
 }
 
 interface DayBar {
   day: string;
   /** daily_spend 实报日总额 (仅 Claude 计入 $; Codex 不写 $ 入账)。 */
-  costUsd: number;
+  actualAmount: number;
   tokens: number;
   /** rank 升序 (rank 0 = 最大头模型, 渲染在柱子底部)。 */
   segments: DaySegment[];
@@ -48,9 +59,9 @@ interface DayBar {
    * 柱高/总额显示值 = daily_spend 实报 + Codex 订阅价值估算。
    * 纯 Codex 订阅日 costUsd 为 0, 仍按估算分段撑起柱子。
    */
-  effectiveUsd: number;
+  effectiveAmount: number;
   /** 总额包含 Codex 订阅价值估算 → 总额前缀 ≈ 并展示 tooltip 解释。 */
-  estimated: boolean;
+  approximate: boolean;
 }
 
 export function UsageDailyBars({
@@ -59,13 +70,35 @@ export function UsageDailyBars({
   colorOrder,
   todayKey,
 }: {
-  days: Array<{ day: string; costUsd: number; tokens?: number }>;
+  days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   modelDaily: UsageHistoryModelDay[];
   /** 前 N 名模型 key (payload.models 排序), 决定分段/图例配色。 */
   colorOrder: string[];
   todayKey: string;
 }): React.JSX.Element {
   const { t } = useTranslation();
+  const currency: MoneyCurrency =
+    days[0]?.money.currency ??
+    modelDaily[0]?.money.currency ??
+    regionalCurrencyForRegion(CURRENT_CINDY_REGION);
+  const money = (
+    amount: number,
+    approximate: boolean,
+    kind: MoneyKind = 'actual-cost',
+  ): RegionalMoney => ({
+    amount,
+    currency,
+    approximate,
+    kind,
+    ...(approximate
+      ? {
+          estimateReasons:
+            kind === 'value-estimate'
+              ? (['subscription-value'] as const)
+              : (['reference-price'] as const),
+        }
+      : {}),
+  });
 
   const bars = useMemo(() => {
     const byDay = new Map(days.map((d) => [d.day, d]));
@@ -74,7 +107,7 @@ export function UsageDailyBars({
     // 但 tooltip 里要按 token 露出, 不能让它在明细里消失。
     const segsByDay = new Map<string, Map<number, DaySegment>>();
     for (const row of modelDaily) {
-      if (row.amountUsd <= 0 && row.tokens <= 0) continue;
+      if (row.money.amount <= 0 && row.tokens <= 0) continue;
       const rank = usageRankOf(colorOrder, usageModelKey(row.agentKind, row.model));
       let daySegs = segsByDay.get(row.day);
       if (!daySegs) {
@@ -83,18 +116,20 @@ export function UsageDailyBars({
       }
       const seg = daySegs.get(rank);
       if (seg) {
-        seg.amountUsd += row.amountUsd;
-        seg.apiCostUsd += row.apiCostUsd;
-        seg.subscriptionEstimateUsd += row.subscriptionEstimateUsd;
+        seg.amount += row.money.amount;
+        seg.apiAmount += row.apiMoney.amount;
+        seg.subscriptionEstimateAmount +=
+          row.subscriptionEstimateMoney.amount;
         seg.tokens += row.tokens;
         if (rank < colorOrder.length) seg.label = row.model;
       } else {
         daySegs.set(rank, {
           rank,
           label: rank < colorOrder.length ? row.model : t('usageDashboard.othersLegend'),
-          amountUsd: row.amountUsd,
-          apiCostUsd: row.apiCostUsd,
-          subscriptionEstimateUsd: row.subscriptionEstimateUsd,
+          amount: row.money.amount,
+          apiAmount: row.apiMoney.amount,
+          subscriptionEstimateAmount:
+            row.subscriptionEstimateMoney.amount,
           tokens: row.tokens,
         });
       }
@@ -105,20 +140,28 @@ export function UsageDailyBars({
       const day = shiftDayKeyLocal(todayKey, -i);
       const row = byDay.get(day);
       const segments = [...(segsByDay.get(day)?.values() ?? [])].sort((a, b) => a.rank - b.rank);
-      const costUsd = row?.costUsd ?? 0;
-      const segSum = segments.reduce((a, s) => a + s.amountUsd, 0);
-      const subscriptionEstimateSum = segments.reduce((a, s) => a + s.subscriptionEstimateUsd, 0);
-      const effectiveUsd = Math.max(costUsd + subscriptionEstimateSum, segSum);
+      const actualAmount = row?.money.amount ?? 0;
+      const segSum = segments.reduce((a, s) => a + s.amount, 0);
+      const subscriptionEstimateSum = segments.reduce(
+        (a, s) => a + s.subscriptionEstimateAmount,
+        0,
+      );
+      const effectiveAmount = Math.max(
+        actualAmount + subscriptionEstimateSum,
+        segSum,
+      );
       list.push({
         day,
-        costUsd,
+        actualAmount,
         tokens: row?.tokens ?? 0,
         segments,
-        effectiveUsd,
-        estimated: subscriptionEstimateSum > 0,
+        effectiveAmount,
+        approximate:
+          Boolean(row?.money.approximate) ||
+          segments.some((segment) => segment.subscriptionEstimateAmount > 0),
       });
     }
-    const max = Math.max(...list.map((b) => b.effectiveUsd), 0);
+    const max = Math.max(...list.map((b) => b.effectiveAmount), 0);
     return { list, max };
   }, [days, modelDaily, colorOrder, todayKey, t]);
 
@@ -135,7 +178,7 @@ export function UsageDailyBars({
               className="absolute right-0 translate-y-1/2 text-[9px] leading-none tabular-nums text-[var(--text-tertiary)]"
               style={{ bottom: (v / bars.max) * CHART_HEIGHT_PX }}
             >
-              {tickLabel(v)}
+              {tickLabel(v, currency)}
             </span>
           ))}
         </div>
@@ -151,36 +194,47 @@ export function UsageDailyBars({
         ))}
         <div className="absolute inset-0 flex items-end gap-[3px]">
           {bars.list.map((b) => {
-        const ratio = bars.max > 0 ? b.effectiveUsd / bars.max : 0;
-        const h = b.effectiveUsd > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
+        const ratio = bars.max > 0 ? b.effectiveAmount / bars.max : 0;
+        const h = b.effectiveAmount > 0 ? Math.max(3, Math.round(ratio * CHART_HEIGHT_PX)) : 2;
         // 画分段只看有金额的行; tooltip 明细全量列出 (无价格模型按 token 露出)
-        const drawSegs = b.segments.filter((s) => s.amountUsd > 0);
-        const segSum = drawSegs.reduce((a, s) => a + s.amountUsd, 0);
-        const subscriptionEstimateSum = b.segments.reduce((a, s) => a + s.subscriptionEstimateUsd, 0);
+        const drawSegs = b.segments.filter((s) => s.amount > 0);
+        const segSum = drawSegs.reduce((a, s) => a + s.amount, 0);
+        const subscriptionEstimateSum = b.segments.reduce(
+          (a, s) => a + s.subscriptionEstimateAmount,
+          0,
+        );
         // 未分类差额: 日总额里没被任何模型行覆盖的部分 (升级日早段消费 / 未计价行)。
         // 分段必须按 effectiveUsd 定比例 + 差额画中性段, 否则已知模型会撑满整根柱,
         // 视觉上把未分类的钱也算到它们头上 (>1% 才画, 吸收舍入噪声)。
-        const remainder = Math.max(0, b.effectiveUsd - segSum);
-        const showRemainder = segSum > 0 && remainder > b.effectiveUsd * 0.01;
+        const remainder = Math.max(0, b.effectiveAmount - segSum);
+        const showRemainder = segSum > 0 && remainder > b.effectiveAmount * 0.01;
         const titleLines = [
-          `${b.day} · ${b.estimated ? '≈' : ''}$${b.effectiveUsd.toFixed(2)}${
+          `${b.day} · ${formatMoney(money(b.effectiveAmount, b.approximate))}${
             b.tokens > 0 ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })}` : ''
           }`,
-          ...(b.estimated
+          ...(subscriptionEstimateSum > 0
             ? [
                 t('usageDashboard.dailyEstimatedTooltip', {
-                  api: formatUsd(b.costUsd),
-                  subscription: formatUsd(subscriptionEstimateSum),
+                  api: formatMoney(money(b.actualAmount, false)),
+                  subscription: formatMoney(
+                    money(subscriptionEstimateSum, true, 'value-estimate'),
+                  ),
                 }),
               ]
             : []),
           ...b.segments.map((s) => {
             const tokensPart = t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(s.tokens) });
-            return s.amountUsd > 0
-              ? `${s.label}: ${formatUsd(s.amountUsd)} · ${tokensPart}`
+            return s.amount > 0
+              ? `${s.label}: ${formatMoney(money(s.amount, s.subscriptionEstimateAmount > 0))} · ${tokensPart}`
               : `${s.label}: ${tokensPart}`;
           }),
-          ...(showRemainder ? [`${t('usageDashboard.unclassified')}: ${formatUsd(remainder)}`] : []),
+          ...(showRemainder
+            ? [
+                `${t('usageDashboard.unclassified')}: ${formatMoney(
+                  money(remainder, b.approximate),
+                )}`,
+              ]
+            : []),
         ];
         return (
           <div
@@ -188,13 +242,13 @@ export function UsageDailyBars({
             title={titleLines.join('\n')}
             // 列容器只负责高度与圆角裁切; 分段自上而下 = rank 降序 ("其它"在顶, 大头在底)
             className="flex min-w-0 flex-1 flex-col justify-end overflow-hidden rounded-[2px]"
-            style={{ height: h, backgroundColor: segSum > 0 ? undefined : barFallbackColor(b.effectiveUsd, ratio) }}
+            style={{ height: h, backgroundColor: segSum > 0 ? undefined : barFallbackColor(b.effectiveAmount, ratio) }}
           >
             {showRemainder && (
               // 未分类差额: 中性色顶段 (与零消费日同色, 区别于所有模型档)
               <div
                 style={{
-                  height: `${(remainder / b.effectiveUsd) * 100}%`,
+                  height: `${(remainder / b.effectiveAmount) * 100}%`,
                   backgroundColor: 'var(--surface-chip)',
                 }}
               />
@@ -204,7 +258,7 @@ export function UsageDailyBars({
                 <div
                   key={s.rank}
                   style={{
-                    height: `${(s.amountUsd / b.effectiveUsd) * 100}%`,
+                    height: `${(s.amount / b.effectiveAmount) * 100}%`,
                     backgroundColor: usageRankColor(s.rank),
                   }}
                 />
@@ -219,8 +273,8 @@ export function UsageDailyBars({
 }
 
 /** 无分段数据 (历史日 / 无消费日) 的整根柱颜色 — 与旧版纯总额柱一致。 */
-function barFallbackColor(costUsd: number, ratio: number): string {
-  return costUsd > 0
+function barFallbackColor(amount: number, ratio: number): string {
+  return amount > 0
     ? `color-mix(in srgb, var(--accent-emphasis) ${Math.round(35 + ratio * 55)}%, var(--surface-chip))`
     : 'var(--surface-chip)';
 }
@@ -230,9 +284,15 @@ function barFallbackColor(costUsd: number, ratio: number): string {
  * 会把它们全部四舍五入成 "$0" (重复且误导), 这里 < $10 保留小数位。
  * Number() 去掉尾零: $0.2 而不是 $0.20。
  */
-function tickLabel(v: number): string {
-  if (v >= 10) return formatCompactUsd(v);
-  return `$${Number(v.toFixed(2))}`;
+function tickLabel(v: number, currency: MoneyCurrency): string {
+  const money: RegionalMoney = {
+    amount: v,
+    currency,
+    approximate: false,
+    kind: 'actual-cost',
+  };
+  if (v >= 10) return formatCompactMoney(money);
+  return `${currency === 'CNY' ? '¥' : '$'}${Number(v.toFixed(2))}`;
 }
 
 /**

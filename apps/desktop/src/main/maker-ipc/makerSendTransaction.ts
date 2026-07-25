@@ -123,6 +123,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
+  dispatchUserPromptPreview?(sessionId: string): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -492,6 +493,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 await persistUserMessage.onPersisted?.();
               }
             : undefined,
+          onDispatching: () => {
+            if (userPromptPreviewSessionId) {
+              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+            }
+          },
         });
         if (sendResult.accepted && interruptedAckAt !== null) {
           try {

@@ -8,7 +8,7 @@
  * 「默认」概念(无后缀 / 无弱化色 / 无「恢复默认」菜单项 —— 用户反馈: 不要
  * 有 xxx(默认)这种); 选中任一项即写显式偏好。解析链与 main 侧 defaults.ts
  * 逐字段对齐(resolveEffectiveRow, 纯函数有单测), 数据源是
- * imDefaultSettingsGet(桌面新会话默认)+ 本机 capabilities; 权限默认恒
+ * imDefaultSettingsGet('slack')(桌面新会话默认)+ 本机 capabilities; 权限默认恒
  * bypassPermissions(完全访问)。
  *
  * 模型显示名带分组区分: 骨折版(group='gpt-budget')与官方版 displayName
@@ -217,7 +217,7 @@ export function useHookWorkspacePrefs(
     // server push is missed before that fetch resolves.
     // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可
     void window.electronAPI.maker
-      .imDefaultSettingsGet()
+      .imDefaultSettingsGet('slack')
       .then((state: ImDefaultSettingsState) => {
         if (active) setImDefaults({ agentKind: state.agentKind, agents: state.agents });
       })

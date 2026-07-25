@@ -14,6 +14,8 @@ const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts');
+const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
@@ -130,12 +132,23 @@ describe('maker:event hot path ordering', () => {
     expect(abortContext).toContain('isTerminalTurnErrorEvent(event)');
   });
 
-  it('isolates Agent Island interaction updates after renderer delivery', () => {
+  it('rejects stale Agent Island interactions before renderer delivery', () => {
     const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
+    const epochCaptureIndex = interactionListenerSource.indexOf(
+      'getAgentIslandService()?.captureInteractionEpoch(session.id)',
+    );
+    const currentEpochCheckIndex = interactionListenerSource.indexOf(
+      'getAgentIslandService()?.isInteractionCurrent(',
+    );
+    const flushIndex = interactionListenerSource.indexOf('flushAssistantBlock(session.id);');
     const broadcastIndex = interactionListenerSource.indexOf('broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST');
     const pendingIndex = interactionListenerSource.indexOf('pendingInteractionResolvers.set(req.requestId, entry);');
     const islandIndex = interactionListenerSource.indexOf('handleAgentIslandInteractionAfterBroadcast(');
 
+    expect(epochCaptureIndex).toBeGreaterThanOrEqual(0);
+    expect(currentEpochCheckIndex).toBeGreaterThan(epochCaptureIndex);
+    expect(flushIndex).toBeGreaterThan(currentEpochCheckIndex);
+    expect(broadcastIndex).toBeGreaterThan(flushIndex);
     expect(broadcastIndex).toBeGreaterThanOrEqual(0);
     expect(pendingIndex).toBeGreaterThan(broadcastIndex);
     expect(islandIndex).toBeGreaterThan(pendingIndex);
@@ -173,6 +186,77 @@ describe('maker:event hot path ordering', () => {
     expect(closeSessionHandler).not.toContain('handleSessionClosed');
   });
 
+  it('marks Agent Island stopped before provider abort tails can arrive', () => {
+    const coordinatorAbortStart = source.indexOf('abortSession: async (sessionId) => {');
+    const coordinatorAbortEnd = source.indexOf('\n    isTurnRunning:', coordinatorAbortStart);
+    const coordinatorAbortSource = source.slice(coordinatorAbortStart, coordinatorAbortEnd);
+    const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
+    const directAbortEnd = source.indexOf(
+      '\n  ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION',
+      directAbortStart,
+    );
+    const directAbortSource = source.slice(directAbortStart, directAbortEnd);
+    const hookAbortStart = hookControlSource.indexOf('abortSession: async (sessionId) => {');
+    const hookAbortEnd = hookControlSource.indexOf('\n      // session.archive', hookAbortStart);
+    const hookAbortSource = hookControlSource.slice(hookAbortStart, hookAbortEnd);
+
+    expect(source).toContain('function handleAgentIslandSessionStopped(');
+    expect(coordinatorAbortStart).toBeGreaterThanOrEqual(0);
+    expect(coordinatorAbortEnd).toBeGreaterThan(coordinatorAbortStart);
+    expectOrder(
+      coordinatorAbortSource,
+      'const sess = maker.getSession(sessionId);',
+      'if (!sess) return;',
+    );
+    expectOrder(
+      coordinatorAbortSource,
+      'if (!sess) return;',
+      'handleAgentIslandSessionStopped(sess);',
+    );
+    expectOrder(
+      coordinatorAbortSource,
+      'handleAgentIslandSessionStopped(sess);',
+      'await sess.abort();',
+    );
+    expect(directAbortStart).toBeGreaterThanOrEqual(0);
+    expect(directAbortEnd).toBeGreaterThan(directAbortStart);
+    expectOrder(
+      directAbortSource,
+      'const sess = maker.getSession(sessionId);',
+      'if (!sess) return;',
+    );
+    expectOrder(
+      directAbortSource,
+      'if (!sess) return;',
+      'handleAgentIslandSessionStopped(sess);',
+    );
+    expectOrder(
+      directAbortSource,
+      'handleAgentIslandSessionStopped(sess);',
+      'await sess.abort();',
+    );
+    expect(hookAbortStart).toBeGreaterThanOrEqual(0);
+    expect(hookAbortEnd).toBeGreaterThan(hookAbortStart);
+    expectOrder(
+      hookAbortSource,
+      'const session = getMaker().getSession(sessionId);',
+      'if (!session) return;',
+    );
+    expectOrder(
+      hookAbortSource,
+      'if (!session) return;',
+      'getAgentIslandService()?.handleSessionStopped(',
+    );
+    expect(hookAbortSource).toContain(
+      "log.warn('Agent Island session stop update failed before hook provider abort'",
+    );
+    expectOrder(
+      hookAbortSource,
+      'getAgentIslandService()?.handleSessionStopped(',
+      'await session.abort();',
+    );
+  });
+
   it('keeps Codex subscription value out of real session cost totals', () => {
     const wireSessionSource = extractWireSessionSource();
     const codexDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'codex'");
@@ -203,27 +287,29 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const price = isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain('? getSubscriptionDirectValuePrice(pricingModel)');
     expect(codexDoneSource).toContain('? getCodexSubscriptionValuePrice(pricingModel, pricing)');
-    expect(codexDoneSource).toContain(': pricing?.[pricingModel]');
+    expect(codexDoneSource).toContain(": getModelPriceQuote(pricing, 'xd', pricingModel)");
     expect(codexDoneSource).toContain('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain('? await getModelPricing()');
-    expect(codexDoneSource).toContain(': await getModelPricingForModel(pricingModel)');
+    expect(codexDoneSource).toContain(": await getModelPricingForModel('xd', pricingModel)");
+    expect(codexDoneSource).toContain('regionalizeModelPriceQuote(price, CURRENT_CINDY_REGION)');
+    expect(codexDoneSource).toContain('if (!isSubscriptionValue && money)');
+    expect(codexDoneSource).toContain('void recordTurnSpend(money);');
+    expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /if \(!isSubscriptionValue\) \{\s*void recordTurnSpend\(cost\);\s*void recordSessionTurnSpend\(session\.id, cost\);/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue && !isCodexXaiProviderRoute/,
     );
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*costUsdDelta: 0,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue && !isCodexXaiProviderRoute/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
     );
-    expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*costUsdDelta: cost,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
-    );
-    const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(cost);');
-    const modelCostRecordIndex = codexDoneSource.indexOf('costUsdDelta: cost,');
-    const messageCostGuardIndex = codexDoneSource.indexOf('if (turnAssistantPersistId)');
+    const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
+    const modelCostRecordIndex = codexDoneSource.indexOf('if (!isSubscriptionValue && money)');
+    const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThan(codexDoneSource.indexOf('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute'));
-    expect(messageCostGuardIndex).toBeGreaterThan(costRecordIndex);
-    expect(codexDoneSource).toContain('isEstimate: isSubscriptionValue');
+    expect(schedulerCostRecordIndex).toBeGreaterThan(costRecordIndex);
+    expect(codexDoneSource).toContain('clientId: turnAssistantPersistId');
+    expect(codexDoneSource).toContain('money,');
     expect(codexDoneSource).toContain('if (!isRemoteCodexSession &&');
     expect(codexDoneSource).toContain("!model.startsWith(XAI_MODEL_PREFIX) &&");
     expect(codexDoneSource).toContain("(codexAuthInjection === 'env-key' || model.startsWith('codex/') || (sessionProvider === 'xd' && hasGatewayKey))");
@@ -240,24 +326,27 @@ describe('maker:event hot path ordering', () => {
 
     // 仅取 claude-code 块 (到 codex 块前)。
     const claudeDoneSource = wireSessionSource.slice(claudeDoneIndex, codexDoneIndex);
-    // 主路径: 逐模型 HYBRID 定价 (Anthropic→SDK, 非 Anthropic→gateway), 四个 sink 同源同值。
-    expect(claudeDoneSource).toContain('const gatewayPricingModels = Array.from(new Set(');
-    expect(claudeDoneSource).toContain('.filter((model) => !isAnthropicModel(model) && !isSubscriptionDirectModel(model))');
-    expect(claudeDoneSource).toContain('for (const model of gatewayPricingModels) {');
-    expect(claudeDoneSource).toContain('pricing = await getModelPricingForModel(model);');
-    expect(claudeDoneSource).not.toContain('const gatewayPricingModel = deltas');
-    expect(claudeDoneSource).not.toContain('const pricing = needsPricing ? await getModelPricing() : null;');
-    expect(claudeDoneSource).toContain('const { turnTotalUsd, perModel } = resolveClaudeTurnCostSinks(deltas, pricing);');
-    expect(claudeDoneSource).toContain('recordTurnSpend(turnTotalUsd);');
-    expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnTotalUsd);');
-    expect(claudeDoneSource).toContain('costUsdDelta: m.costUsd,');
+    // 主路径:按真实 provider / billing route 取价，所有 sink 共用区域金额结果。
+    expect(claudeDoneSource).toContain('const billingRoute: BillingRoute = session.remoteHostId');
+    expect(claudeDoneSource).toContain("billingRoute === 'xd-gateway'");
+    expect(claudeDoneSource).toContain("await getModelPricingForModel(");
+    expect(claudeDoneSource).toContain("'xd',");
+    expect(claudeDoneSource).toContain('normalizeModelIdForPricing(deltas[0]?.model)');
+    expect(claudeDoneSource).toContain(': await getModelPricing();');
+    expect(claudeDoneSource).toContain('const { turnMoney, perModel } = resolveClaudeTurnCostSinks(');
+    expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
+    expect(claudeDoneSource).toContain('billingRoute,');
+    expect(claudeDoneSource).toContain('region: CURRENT_CINDY_REGION');
+    expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
+    expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
+    expect(claudeDoneSource).toContain('money: m.money,');
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
     expect(claudeDoneSource).toContain(
       'model: isClaudeSubscriptionValueRow ? claudeSubscriptionUsageModelKey(m.model) : m.model,',
     );
     expect(claudeDoneSource).toContain(
-      "isClaudeSubscriptionSession && m.costUsd === 0 && isAnthropicModel(m.model)",
+      "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
     );
     expect(claudeDoneSource).toContain(
       "m.source === 'subscription' && isSubscriptionDirectModel(m.model)",

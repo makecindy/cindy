@@ -168,12 +168,21 @@ export function getPublicState(): FeishuPublicState {
   };
 }
 
+interface SaveAndConnectOptions {
+  /** Owner returned by app registration for the replacement app. */
+  replacementOwnerOpenId?: string | null;
+}
+
 export async function saveAndConnect(
   appId: string,
   appSecret: string,
+  options: SaveAndConnectOptions = {},
 ): Promise<{ verdict: 'connected' | 'conflict' | 'error' | 'pending' }> {
   const saved = storage.readCredentials();
   const credentialsUnchanged = saved?.appId === appId && saved.appSecret === appSecret;
+  if (credentialsUnchanged && options.replacementOwnerOpenId) {
+    persistReplacementOwner(options.replacementOwnerOpenId);
+  }
   if (credentialsUnchanged) {
     const status = wsClient.getCurrentStatus();
     if (status === 'connected') {
@@ -191,9 +200,23 @@ export async function saveAndConnect(
 
   const ok = storage.writeCredentials({ appId, appSecret });
   if (!ok) return { verdict: 'error' };
-  await wsClient.stop({ reason: 'credentials-replaced' });
+  await wsClient.stop({
+    reason: 'credentials-replaced',
+    clearOwnerBeforeIdle: saved?.appId !== appId,
+  });
+  if (options.replacementOwnerOpenId) {
+    persistReplacementOwner(options.replacementOwnerOpenId);
+  }
   const verdict = await wsClient.start({ appId, appSecret }, { reason: 'credentials-replaced' });
   return { verdict };
+}
+
+function persistReplacementOwner(ownerOpenId: string): void {
+  const ownerWritten = storage.writeOwnerOpenId(ownerOpenId);
+  if (!ownerWritten) {
+    throw new Error('[OWNER_PERSIST_FAILED] Failed to persist Feishu owner');
+  }
+  ownerGuard.loadFromDisk();
 }
 
 /** Restart the saved WebSocket connection without changing credentials or owner binding. */
@@ -284,11 +307,9 @@ async function pollRegistrationInBackground(
       let verdict: 'connected' | 'conflict' | 'error' | 'pending';
       try {
         ({ verdict } = await runInAccountScope(accountScope, async () => {
-          if (success.ownerOpenId) {
-            storage.writeOwnerOpenId(success.ownerOpenId);
-            ownerGuard.loadFromDisk();
-          }
-          return saveAndConnect(success.clientId, success.clientSecret);
+          return saveAndConnect(success.clientId, success.clientSecret, {
+            replacementOwnerOpenId: success.ownerOpenId,
+          });
         }));
       } catch (err) {
         if (!isAccountScopeCurrent(accountScope)) return;
@@ -337,7 +358,9 @@ function delay(ms: number): Promise<void> {
 
 export async function clearAndDisconnect(): Promise<void> {
   cancelAppRegistration();
-  await wsClient.stop({ reason: 'credentials-cleared' });
-  ownerGuard.clear();
+  await wsClient.stop({
+    reason: 'credentials-cleared',
+    clearOwnerBeforeIdle: true,
+  });
   storage.clearAll();
 }

@@ -12,6 +12,7 @@ import { BUNDLED_CATALOG, type Catalog, type CatalogModel } from '@cindy/model-p
 
 import {
   getActiveCatalog,
+  getCindyModelContextWindow,
   getCindyModelEffortBaseline,
   setActiveCatalog,
   setAnthropicDiscoveredModels,
@@ -166,16 +167,87 @@ describe('anthropic 发现条目的 cindyModelMeta 元数据基线', () => {
     setAnthropicDiscoveredModels([]);
   });
 
-  it('基线覆盖名字与排序:上游家族级命名("Fable")归位产品命名("Fable 5"),按 meta sortOrder 重排', () => {
-    setActiveCatalog(BUNDLED_CATALOG); // bundled cindyModelMeta:claude-fable-5 → "Fable 5" (sortOrder 0)
+  it('基线统一 Anthropic 名字与排序,新模型不透传 Claude 前缀', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
     setAnthropicDiscoveredModels([
-      anthro('claude-opus-4-8', 'Opus', 0),
-      anthro('claude-fable-5', 'Fable', 1),
+      anthro('claude-opus-5', 'Claude Opus 5', 0),
+      anthro('claude-sonnet-5', 'Claude Sonnet 5', 1),
+      anthro('claude-fable-5', 'Claude Fable 5', 2),
+      anthro('claude-opus-4-8', 'Claude Opus 4.8', 3),
+      anthro('claude-opus-4-7', 'Claude Opus 4.7', 4),
+      anthro('claude-sonnet-4-6', 'Claude Sonnet 4.6', 5),
+      anthro('claude-opus-4-6', 'Claude Opus 4.6', 6),
+      anthro('claude-opus-4-5', 'Claude Opus 4.5', 7),
+      anthro('claude-haiku-4-5', 'Claude Haiku 4.5', 8),
+      anthro('claude-sonnet-4-5', 'Claude Sonnet 4.5', 9),
     ]);
     expect(anthropicList().map((m) => [m.id, m.name])).toEqual([
+      ['claude-opus-5', 'Opus 5'],
       ['claude-fable-5', 'Fable 5'],
       ['claude-opus-4-8', 'Opus 4.8'],
+      ['claude-opus-4-7', 'Opus 4.7'],
+      ['claude-opus-4-6', 'Opus 4.6'],
+      ['claude-opus-4-5', 'Opus 4.5'],
+      ['claude-sonnet-5', 'Sonnet 5'],
+      ['claude-sonnet-4-6', 'Sonnet 4.6'],
+      ['claude-sonnet-4-5', 'Sonnet 4.5'],
+      ['claude-haiku-4-5', 'Haiku 4.5'],
     ]);
+    expect(Object.fromEntries([
+      'claude-fable-5',
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+      'claude-opus-4-5',
+      'claude-sonnet-5',
+      'claude-sonnet-4-6',
+      'claude-sonnet-4-5',
+      'claude-haiku-4-5',
+    ].map((id) => [id, getCindyModelEffortBaseline(id)]))).toEqual({
+      'claude-fable-5': {
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-opus-5': {
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-opus-4-8': {
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-opus-4-7': {
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-opus-4-6': {
+        efforts: ['low', 'medium', 'high', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-opus-4-5': {
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'high',
+      },
+      'claude-sonnet-5': {
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-sonnet-4-6': {
+        efforts: ['low', 'medium', 'high', 'max'],
+        defaultEffort: 'high',
+      },
+      'claude-sonnet-4-5': {
+        efforts: [],
+        defaultEffort: null,
+      },
+      'claude-haiku-4-5': {
+        efforts: [],
+        defaultEffort: null,
+      },
+    });
+    expect(anthropicList().find((m) => m.id === 'claude-opus-4-5')?.defaultEnabled).toBe(false);
+    expect(anthropicList().find((m) => m.id === 'claude-sonnet-4-5')?.defaultEnabled).toBe(false);
   });
 
   it('active overlay 不覆盖能力;发现模块可单独读取 effort 基线', () => {
@@ -203,7 +275,37 @@ describe('anthropic 发现条目的 cindyModelMeta 元数据基线', () => {
       efforts: ['max'],
       defaultEffort: 'max',
     });
+    expect(getCindyModelContextWindow('claude-known')).toBe(123);
     expect(anthropicList().find((m) => m.id === 'claude-unknown')?.name).toBe('Unknown Raw');
+  });
+
+  it('远端 v1 元数据不完整时按模型、按字段回落 bundled v1', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.cindyModelMeta = {
+      version: 1,
+      models: {
+        // 模拟旧远端只认识展示名，不带 4.5 的窗口与 effort 能力。
+        'claude-sonnet-4-5': { name: 'Remote Sonnet 4.5' },
+      },
+    };
+    setActiveCatalog(catalog);
+    setAnthropicDiscoveredModels([
+      anthro('claude-sonnet-4-5', 'Sonnet Raw', 0),
+      anthro('claude-opus-5', 'Opus Raw', 1),
+    ]);
+
+    expect(anthropicList().find((m) => m.id === 'claude-sonnet-4-5')?.name).toBe('Remote Sonnet 4.5');
+    expect(getCindyModelContextWindow('claude-sonnet-4-5')).toBe(200_000);
+    expect(getCindyModelEffortBaseline('claude-sonnet-4-5')).toEqual({
+      efforts: [],
+      defaultEffort: null,
+    });
+    // 远端完全缺席的 bundled 新模型也必须保留完整能力基线。
+    expect(getCindyModelContextWindow('claude-opus-5')).toBe(1_000_000);
+    expect(getCindyModelEffortBaseline('claude-opus-5')).toEqual({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high',
+    });
   });
 
   it('版本门禁:cindyModelMeta.version !== 1 整段忽略;坏信封安全跳过', () => {
@@ -213,11 +315,27 @@ describe('anthropic 发现条目的 cindyModelMeta 元数据基线', () => {
     setAnthropicDiscoveredModels([anthro('claude-fable-5', 'Fable', 0)]);
     expect(anthropicList()[0]?.name).toBe('Fable');
     expect(getCindyModelEffortBaseline('claude-fable-5')).toBeNull();
+    expect(getCindyModelContextWindow('claude-fable-5')).toBeNull();
 
     catalog.cindyModelMeta = 'not-an-object';
     setActiveCatalog(JSON.parse(JSON.stringify(catalog)) as Catalog);
     setAnthropicDiscoveredModels([anthro('claude-fable-5', 'Fable', 0)]);
     expect(anthropicList()[0]?.name).toBe('Fable');
     expect(getCindyModelEffortBaseline('claude-fable-5')).toBeNull();
+    expect(getCindyModelContextWindow('claude-fable-5')).toBeNull();
+  });
+
+  it('active 目录未携带 cindyModelMeta 时回落 bundled v1 基线', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    delete catalog.cindyModelMeta;
+    setActiveCatalog(catalog);
+    setAnthropicDiscoveredModels([anthro('claude-fable-5', 'Fable Raw', 0)]);
+
+    expect(anthropicList()[0]?.name).toBe('Fable 5');
+    expect(getCindyModelContextWindow('claude-fable-5')).toBe(1_000_000);
+    expect(getCindyModelEffortBaseline('claude-fable-5')).toEqual({
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'high',
+    });
   });
 });

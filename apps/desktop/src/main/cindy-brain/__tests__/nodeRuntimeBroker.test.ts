@@ -263,6 +263,211 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
   });
 });
 
+describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
+  /** 就绪前即崩的假进程:Windows 杀软扫描刚写入的引导产物时的真实形态。 */
+  function epermFailingProcess(): FakeNodeProcess {
+    const failing = new FakeNodeProcess(undefined, false);
+    queueMicrotask(() => {
+      failing.stderr.write(
+        "node:fs:560\nError: EPERM: operation not permitted, open 'C:\\app\\.vite\\build\\nodeRuntimeWorkerProcess.js'\n",
+      );
+      failing.emit('exit', 1, null);
+    });
+    return failing;
+  }
+
+  it('就绪前退出自动重试,第二次成功;并发请求共享同一次启动,不发假 crashed', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const pushes: Array<Record<string, unknown>> = [];
+    let spawnCount = 0;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      sendToGhost: (_id, payload) => pushes.push(payload as unknown as Record<string, unknown>),
+      spawnProcess: () => {
+        spawnCount += 1;
+        const child = spawnCount === 1 ? epermFailingProcess() : makeAutoReplyProcess();
+        return child as unknown as NodeWorkerProcess;
+      },
+    });
+
+    const first = broker.handleRequest('node-ghost', rpcRequest('first'));
+    const second = broker.handleRequest('node-ghost', rpcRequest('second'));
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(first).resolves.toMatchObject({ ok: true, result: { method: 'first' } });
+    await expect(second).resolves.toMatchObject({ ok: true, result: { method: 'second' } });
+    expect(spawnCount).toBe(2);
+    const states = pushes.filter((p) => p.name === 'node-status').map((p) => p.state);
+    expect(states).toEqual(['starting', 'running']);
+    broker.destroyAll();
+  });
+
+  it('连续失败耗尽重试:失败消息与 crashed 状态都带 stderr 诊断行,crashed 只发一次', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const pushes: Array<Record<string, unknown>> = [];
+    let spawnCount = 0;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      sendToGhost: (_id, payload) => pushes.push(payload as unknown as Record<string, unknown>),
+      spawnProcess: () => {
+        spawnCount += 1;
+        return epermFailingProcess() as unknown as NodeWorkerProcess;
+      },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, errorCode: 'PROCESS_START_FAILED' });
+    expect((result as { message?: string }).message).toContain('启动前退出');
+    expect((result as { message?: string }).message).toContain('EPERM');
+    expect(spawnCount).toBe(3);
+    const states = pushes.filter((p) => p.name === 'node-status').map((p) => p.state);
+    expect(states).toEqual(['starting', 'crashed']);
+    const crashed = pushes.find((p) => p.state === 'crashed') as { message?: string };
+    expect(crashed.message).toContain('EPERM');
+    expect(broker.stateOf('node-ghost')).toBe('off');
+  });
+
+  it('重试退避期间插件被停用:不再拉新进程', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    let enabled = true;
+    let spawnCount = 0;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => (enabled ? ghost : null),
+      spawnProcess: () => {
+        spawnCount += 1;
+        return epermFailingProcess() as unknown as NodeWorkerProcess;
+      },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(50); // 第一次尝试已失败,退避中
+    enabled = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PROCESS_START_FAILED' });
+    expect(spawnCount).toBe(1);
+  });
+
+  it('destroyAll 后到达的请求不拉新进程(首次尝试即短路)', async () => {
+    const ghost = fakeGhost();
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess,
+    });
+
+    broker.destroyAll();
+    const result = await broker.handleRequest('node-ghost', rpcRequest());
+    expect(result).toMatchObject({ ok: false, errorCode: 'PROCESS_START_FAILED' });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('stop(ghostId) 取消在途重试:退避中不再拉新进程', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    let spawnCount = 0;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => {
+        spawnCount += 1;
+        return epermFailingProcess() as unknown as NodeWorkerProcess;
+      },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(50);
+    broker.stop('node-ghost');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PROCESS_START_FAILED' });
+    expect(spawnCount).toBe(1);
+  });
+
+  it('stop 期间上层禁用阻拦请求;重新启用后 resident 由 startResident 恢复', async () => {
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    let enabled = true;
+    let spawnCount = 0;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => (enabled ? ghost : null),
+      spawnProcess: () => {
+        spawnCount += 1;
+        return makeAutoReplyProcess() as unknown as NodeWorkerProcess;
+      },
+    });
+
+    broker.stop('node-ghost');
+    enabled = false;
+    const blocked = await broker.handleRequest('node-ghost', rpcRequest());
+    expect(blocked).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(spawnCount).toBe(0);
+
+    enabled = true;
+    await broker.startResident(ghost);
+    expect(spawnCount).toBe(1);
+    const ok = await broker.handleRequest('node-ghost', rpcRequest());
+    expect(ok).toMatchObject({ ok: true });
+    broker.destroyAll();
+  });
+
+  it('按需插件 stop 后:上层重新启用时 handleRequest 自动恢复', async () => {
+    const ghost = fakeGhost();
+    let enabled = true;
+    let spawnCount = 0;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => (enabled ? ghost : null),
+      spawnProcess: () => {
+        spawnCount += 1;
+        return makeAutoReplyProcess() as unknown as NodeWorkerProcess;
+      },
+    });
+
+    broker.stop('node-ghost');
+    enabled = false;
+    const blocked = await broker.handleRequest('node-ghost', rpcRequest());
+    expect(blocked).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(spawnCount).toBe(0);
+
+    enabled = true;
+    const ok = await broker.handleRequest('node-ghost', rpcRequest());
+    expect(ok).toMatchObject({ ok: true });
+    expect(spawnCount).toBe(1);
+    broker.destroyAll();
+  });
+
+  it('诊断行不泄露绝对路径', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const pushes: Array<Record<string, unknown>> = [];
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      sendToGhost: (_id, payload) => pushes.push(payload as unknown as Record<string, unknown>),
+      spawnProcess: () => {
+        const failing = new FakeNodeProcess(undefined, false);
+        queueMicrotask(() => {
+          failing.stderr.write(
+            "Error: EPERM: operation not permitted, open 'C:\\Users\\dev\\AppData\\Local\\cindy\\.vite\\build\\nodeRuntimeWorkerProcess.js'\n",
+          );
+          failing.emit('exit', 1, null);
+        });
+        return failing as unknown as NodeWorkerProcess;
+      },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await pending;
+    expect((result as { message?: string }).message).toContain('EPERM');
+    expect((result as { message?: string }).message).not.toContain('C:\\Users');
+    expect((result as { message?: string }).message).not.toContain('AppData');
+    const crashed = pushes.find((p) => p.state === 'crashed') as { message?: string };
+    expect(crashed.message).toContain('EPERM');
+    expect(crashed.message).not.toContain('C:\\Users');
+    broker.destroyAll();
+  });
+});
+
 describe('nodeRuntimeBroker · 权限与协议', () => {
   it('没声明 node 槽时拒绝且不启动进程', async () => {
     const ghost = fakeGhost();
@@ -274,6 +479,120 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       ok: false,
       errorCode: 'PERMISSION_DENIED',
     });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('只在清单绑定的方法中把 safeStorage 凭证注入 Worker 保留字段', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['mail/action'],
+      },
+    ];
+    const child = makeAutoReplyProcess();
+    const readSecret = vi.fn(() => 'fake-secret-value');
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      readSecret,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+    });
+
+    const result = await broker.handleRequest('node-ghost', {
+      type: 'node-request',
+      method: 'mail/action',
+      params: { action: 'search' },
+      // main.js 自报的同名字段不可信；broker 必须忽略并重铸。
+      cindy: { secrets: { mail_code: 'attacker-value' } },
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(readSecret).toHaveBeenCalledWith('node-ghost', 'mail_code');
+    expect(child.received[0]).toMatchObject({
+      method: 'mail/action',
+      params: { action: 'search' },
+      cindy: { secrets: { mail_code: 'fake-secret-value' } },
+    });
+
+    await broker.handleRequest('node-ghost', rpcRequest('account/status', {}));
+    expect(readSecret).toHaveBeenCalledTimes(1);
+    expect(child.received[1]).not.toHaveProperty('cindy');
+    broker.destroyAll();
+  });
+
+  it('绑定凭证未保存时不向 Worker 发送业务请求，也不在日志中泄露值', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['mail/action'],
+      },
+    ];
+    const child = makeAutoReplyProcess();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const spawnProcess = vi.fn(() => child as unknown as NodeWorkerProcess);
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      readSecret: () => null,
+      spawnProcess,
+      log,
+    });
+
+    expect(await broker.handleRequest('node-ghost', rpcRequest('mail/action', {}))).toMatchObject({
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: expect.stringContaining('邮箱授权码'),
+    });
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(child.received).toHaveLength(0);
+    expect(JSON.stringify(log)).not.toContain('fake-secret-value');
+    broker.destroyAll();
+  });
+
+  it('保险库读取异常时返回固定错误，不发送请求或泄露异常细节', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.secretBindings = [
+      {
+        key: 'mail_code',
+        label: '邮箱授权码',
+        methods: ['mail/action'],
+      },
+    ];
+    const child = makeAutoReplyProcess();
+    const spawnProcess = vi.fn(() => child as unknown as NodeWorkerProcess);
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      readSecret: () => {
+        throw new Error('vault failed with sensitive context');
+      },
+      spawnProcess,
+    });
+
+    const result = await broker.handleRequest('node-ghost', rpcRequest('mail/action', {}));
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: '读取 Node 请求所需凭证失败',
+    });
+    expect(JSON.stringify(result)).not.toContain('sensitive context');
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(child.received).toHaveLength(0);
+    broker.destroyAll();
+  });
+
+  it('mcp-stdio 保留初始化方法在启动 Worker 前拒绝', async () => {
+    const ghost = fakeGhost({ protocol: 'mcp-stdio' });
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess });
+
+    for (const method of ['initialize', 'notifications/initialized']) {
+      expect(await broker.handleRequest('node-ghost', rpcRequest(method, {}))).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        message: expect.stringContaining('MCP 初始化'),
+      });
+    }
     expect(spawnProcess).not.toHaveBeenCalled();
   });
 

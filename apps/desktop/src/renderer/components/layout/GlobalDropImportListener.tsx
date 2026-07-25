@@ -49,9 +49,18 @@ type DragHint = 'cindy' | 'share';
 
 export interface GlobalDropImportListenerProps {
   onOpenShareImport: (filePath: string) => void;
+  /**
+   * 当前右侧栏会话 id 的 getter(MainLayout 的 rightSidebarSessionIdRef 读值,
+   * prop 身份稳定)。装入 tab 型插件勾选「立即开启」时用来自动打开页签;
+   * 无会话视图返回 null = 跳过自动打开。
+   */
+  getRightSidebarSessionId?: () => string | null;
 }
 
-export function GlobalDropImportListener({ onOpenShareImport }: GlobalDropImportListenerProps) {
+export function GlobalDropImportListener({
+  onOpenShareImport,
+  getRightSidebarSessionId,
+}: GlobalDropImportListenerProps) {
   const [dragHint, setDragHint] = useState<DragHint | null>(null);
   const dragDepthRef = useRef(0);
   // 当前拖拽序列是否已被 capture 层接管(MIME 悬停识别命中):置位后本序列的
@@ -66,13 +75,20 @@ export function GlobalDropImportListener({ onOpenShareImport }: GlobalDropImport
   useEffect(() => {
     const consumePending = async () => {
       const { filePath } = await window.electronAPI.ghosts.takePendingInstall();
-      if (filePath) await confirmAndInstallGhost(filePath, { t, confirm, confirmWithCheckbox });
+      if (filePath) {
+        await confirmAndInstallGhost(filePath, {
+          t,
+          confirm,
+          confirmWithCheckbox,
+          getSidebarSessionId: getRightSidebarSessionId,
+        });
+      }
     };
     void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     return window.electronAPI.ghosts.onInstallRequested(() => {
       void consumePending().catch((err) => log.warn('consume pending cindy install failed', err));
     });
-  }, [confirm, confirmWithCheckbox, t]);
+  }, [confirm, confirmWithCheckbox, getRightSidebarSessionId, t]);
 
   useEffect(() => {
     // 悬停识别:单文件且 MIME 命中才给遮罩。
@@ -132,7 +148,12 @@ export function GlobalDropImportListener({ onOpenShareImport }: GlobalDropImport
       markGlobalDropIntercepted(e);
       if (kind === 'cindy') {
         // 验明正身 → 确认弹窗 → 装入的编排在 installFlow(与设置页装入按钮同契约)。
-        void confirmAndInstallGhost(path, { t, confirm, confirmWithCheckbox });
+        void confirmAndInstallGhost(path, {
+          t,
+          confirm,
+          confirmWithCheckbox,
+          getSidebarSessionId: getRightSidebarSessionId,
+        });
         return;
       }
       void window.electronAPI.localDb.sessionShare
@@ -190,7 +211,7 @@ export function GlobalDropImportListener({ onOpenShareImport }: GlobalDropImport
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [confirm, confirmWithCheckbox, navigate, onOpenShareImport, t]);
+  }, [confirm, confirmWithCheckbox, getRightSidebarSessionId, navigate, onOpenShareImport, t]);
 
   return (
     <>

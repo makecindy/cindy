@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../shared/ghost';
+import { usePanelMaximize } from '../layout/panelMaximize';
 import { usePanelWidth } from '../layout/paneWidths';
 import { PanelChrome } from '../panels/PanelChrome';
 import { registerPanelKind, unregisterPanelKind, type PanelComponentProps } from '../panels/registry';
@@ -36,6 +37,17 @@ function GhostPanel({
   const kind = ghostPanelKind(manifest.id);
   // 宽度由引擎下发(fraction × 可用宽,缝把手可拖);兜底用清单 minWidth。
   const width = usePanelWidth(kind) ?? manifest.panel?.minWidth ?? 300;
+  // 撑满态(引擎视图态):固定宽让位给 flex-1,树上的 fraction 账本不动。
+  const maximize = usePanelMaximize();
+  const isMaximized = maximize?.maximizedKind === kind;
+  // 标准头系统按钮:身份卡可逐个关闭(panel.systemButtons.<键>:false);
+  // 关闭 = 不把对应入参交给标准头,按钮不长出(标题条本体恒在)。
+  const maximizeEnabled = manifest.panel?.systemButtons?.maximize !== false;
+  const detachEnabled = manifest.panel?.systemButtons?.detach !== false;
+  // 换版更新把按钮关掉时,若面板正撑满,自动还原 —— 否则按钮没了、态出不去。
+  useEffect(() => {
+    if (!maximizeEnabled && isMaximized) maximize?.toggle(kind);
+  }, [maximizeEnabled, isMaximized, maximize, kind]);
   // 沙箱崩了 → 面板原地进入错误接管态。
   const runtimeState = useGhostRuntimeState(manifest.id);
   const broken = runtimeState === 'crashed' || runtimeState === 'fused';
@@ -43,10 +55,22 @@ function GhostPanel({
     <section
       data-panel-drag-root={kind}
       // 侧边分割线由布局引擎统一绘制(LayoutRoot layout-divider),面板不自画。
-      className="flex h-full shrink-0 flex-col overflow-hidden bg-[var(--panel-bg)]"
-      style={{ width }}
+      className={
+        isMaximized
+          ? 'flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]'
+          : 'flex h-full shrink-0 flex-col overflow-hidden bg-[var(--panel-bg)]'
+      }
+      style={isMaximized ? undefined : { width }}
     >
-      <PanelChrome title={manifest.panel?.title ?? manifest.name} />
+      <PanelChrome
+        title={manifest.panel?.title ?? manifest.name}
+        panelKind={maximizeEnabled ? kind : undefined}
+        onDetach={
+          detachEnabled
+            ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(manifest.id, true)
+            : undefined
+        }
+      />
       {broken ? (
         <GhostPanelError manifest={manifest} state={runtimeState} />
       ) : (

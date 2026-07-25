@@ -126,6 +126,19 @@ describe('newMakerDraft store', () => {
     expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
   });
 
+  it('extraDirs 不跨重启还原:运行内生效,重启后一律空(引用目录=单次草稿授权)', async () => {
+    const m1 = await loadModule();
+    m1.patchDraft({ workingDir: 'E:/projects/foo', extraDirs: ['E:/projects/shared-lib'] });
+    // 同一次运行内:内存态生效
+    expect(m1.getDraft().extraDirs).toEqual(['E:/projects/shared-lib']);
+
+    // 模拟 app 重启 → workingDir 等偏好保留,extraDirs 清空(sanitize 一律置空)
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
+    expect(m2.getDraft().extraDirs).toEqual([]);
+  });
+
   it('collab.workerConfig 跨重启保留耐久字段,丢弃一次性 initialTask(codex P2)', async () => {
     const m1 = await loadModule();
     m1.patchDraft({

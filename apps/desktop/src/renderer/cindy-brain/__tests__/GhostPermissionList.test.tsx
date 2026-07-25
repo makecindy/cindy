@@ -55,7 +55,7 @@ describe('GhostPermissionList(装入全量清单)', () => {
     expect(screen.getByText(/perm\.tool:.*gen_image/)).toBeTruthy();
     expect(screen.getByText('根据描述出图')).toBeTruthy(); // 作者自由文本如实展示
     expect(screen.getByText(/perm\.command:.*画图/)).toBeTruthy();
-    expect(screen.getByText(/perm\.panelRight:.*画廊/)).toBeTruthy();
+    expect(screen.getByText(/perm\.panelLeft:.*画廊/)).toBeTruthy();
     expect(screen.getByText('settings.ghosts.perm.code')).toBeTruthy();
     expect(screen.getByText('settings.ghosts.perm.codeDetail')).toBeTruthy(); // 主机固定说明走 i18n
   });
@@ -116,6 +116,29 @@ describe('GhostPermissionList(装入全量清单)', () => {
     // "无网络访问"的旧说明对 network 意识是假话,必须换分档版。
     expect(screen.getByText('settings.ghosts.perm.codeDetailNetwork')).toBeTruthy();
     expect(screen.queryByText('settings.ghosts.perm.codeDetail')).toBeNull();
+  });
+
+  it('Node 持久凭证单独披露明文注入范围', () => {
+    const node: GhostManifest = {
+      ...chip(),
+      slots: [...chip().slots, 'node'],
+      settingsHtml: 'settings.html',
+      node: {
+        entry: 'worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_authorization_code',
+            label: '邮箱授权码',
+            methods: ['account/connect', 'mail/action'],
+          },
+        ],
+      },
+    };
+    render(<GhostPermissionList items={ghostPermissionItems(node)} />);
+    expect(screen.getByText(/perm\.nodeSecret:.*邮箱授权码/)).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.nodeSecretDetail')).toBeTruthy();
+    expect(screen.getByText(/account\/connect\s+mail\/action/)).toBeTruthy();
   });
 });
 

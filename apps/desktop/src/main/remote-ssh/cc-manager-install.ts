@@ -10,17 +10,19 @@
  *
  * Flow:
  *   1. Cache hit → return immediately.
- *   2. Probe remote for cc-mgr.mjs + bundled node.
+ *   2. Probe Cindy-managed Claude Code runtime against the current pin.
+ *      - Current → continue to cc-manager probe.
+ *      - Missing / stale → run the full install pipeline.
+ *   3. Probe remote for cc-mgr.mjs + bundled node.
  *      - Both present → cache + return.
  *      - Manager present + node missing → unrecoverable (someone wiped node);
- *        fall through to step 3.
- *      - Manager missing → step 3.
- *   3. If bundled node missing, piggy-back `installRemoteAgent('claude-code')`
+ *        fall through to step 4.
+ *      - Manager missing → step 4.
+ *   4. Piggy-back `installRemoteAgent('claude-code')`
  *      which downloads the sandboxed node into `~/.xdt-server/<v>/node/`.
- *      Side effect: also installs a `claude` shim under `node_modules/.bin/` —
- *      harmless for cc remote (we don't use it), trivial disk cost (~80MB).
- *   4. Upload cc-mgr.mjs bundle via `installCcManagerBundle` (SSH stdin pipe).
- *   5. Cache the host as ready.
+ *      It also installs the pinned `claude` shim under `node_modules/.bin/`.
+ *   5. Upload cc-mgr.mjs bundle via `installCcManagerBundle` (SSH stdin pipe).
+ *   6. Cache the host as ready.
  *
  * Concurrency: same-host concurrent installs deduplicated via in-flight Map,
  * matching the pattern in `ensureRemoteAgentInstalledOrInstall` (index.ts).
@@ -264,12 +266,38 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
     throwIpcError('SSH_NOT_CONNECTED', `ssh host ${hostId} not connected`);
   }
 
+  // cc-manager 的存在性和版本只证明 daemon bundle 可用，不证明它将启动的
+  // Claude Code binary 符合当前 Desktop pin。应用升级后 in-memory cache 为空，
+  // cold path 必须先做 agent probe；旧 runtime 直接跳过下面的 cc-manager fast
+  // path，进入统一 install pipeline 自动升级 binary。
+  let claudeRuntimeReady = forceReinstall;
+  if (!forceReinstall) {
+    try {
+      const agentProbe = await probeRemoteAgent(host, 'claude-code');
+      claudeRuntimeReady = agentProbe.installed;
+      if (agentProbe.installed && agentProbe.binaryPath) {
+        claudeBinaryPathCache.set(hostId, agentProbe.binaryPath);
+      } else {
+        log.info('cc-mgr install: Claude Code runtime missing or stale, installing current pin', {
+          hostId,
+          installedVersion: agentProbe.installedVersion,
+        });
+      }
+    } catch (err) {
+      claudeRuntimeReady = false;
+      log.warn('cc-mgr install: Claude Code version probe failed (will attempt install)', {
+        hostId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // Fast path: probe + cache if both bundle and node already there. Also
   // compare bundle version — mismatch surfaces an UpgradeBanner via push, but
   // does NOT force-restart the daemon here (would kill any alive sessions
   // mid-turn). User accepts upgrade explicitly via the banner's button →
   // `runCcMgrUpgrade` calls back with forceReinstall=true to skip this path.
-  if (!forceReinstall) {
+  if (!forceReinstall && claudeRuntimeReady) {
     try {
       const probe = await probeCcManager(host);
       if (probe.ccManagerInstalled && probe.nodeReady) {

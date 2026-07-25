@@ -47,25 +47,31 @@ export const LOGIN_STAGE_MIN_DESIGN_HEIGHT = 600;
 /** designHeight clamp 上限(demo stage 解析 1800)。 */
 export const LOGIN_STAGE_MAX_DESIGN_HEIGHT = 1800;
 
-/** 短屏档(designHeight=1334;inner 几何 347:2884 实测,wave3.5 旧表)。 */
+/**
+ * 短屏档(designHeight=1334;inner 几何 347:2884 实测,wave3.5 旧表)。
+ * 2026-07-24 用户拍板:协议行距屏幕底过近,视觉+功能区整体上移 40 设计px(hero 不动)——
+ * slogan.y 480.33→440.33、word.y 594.48→554.48、loginY 734→694。
+ */
 export const LOGIN_STAGE_SHORT = {
   designHeight: 1334,
   cindy: { x: 75, y: 107, w: 599, h: 720 },
-  slogan: { x: 462.55, y: 480.33, w: 254.01, h: 72.8 },
-  word: { x: 199, y: 594.48, w: 352.93, h: 120.54 },
-  loginY: 734,
+  slogan: { x: 462.55, y: 440.33, w: 254.01, h: 72.8 },
+  word: { x: 199, y: 554.48, w: 352.93, h: 120.54 },
+  loginY: 694,
 } as const;
 
 /**
  * 长屏档(designHeight=1624;358:434 实测)。立绘 y=116 双区统一
  * (〔已拍板 2026-07-19〕国区 116 vs 国际区旧帧 96 为设计稿内部不一致,取最新批次帧)。
+ * 2026-07-24 用户拍板:协议行距屏幕底过近,视觉+功能区整体上移 40 设计px(hero 不动)——
+ * slogan.y 686→646、word.y 814→774、loginY 973→933。
  */
 export const LOGIN_STAGE_LONG = {
   designHeight: 1624,
   cindy: { x: 0, y: 116, w: 750, h: 902 },
-  slogan: { x: 387, y: 686, w: 321, h: 92 },
-  word: { x: 175, y: 814, w: 401, h: 137 },
-  loginY: 973,
+  slogan: { x: 387, y: 646, w: 321, h: 92 },
+  word: { x: 175, y: 774, w: 401, h: 137 },
+  loginY: 933,
 } as const;
 
 function lerp(a: number, b: number, t: number): number {
@@ -79,7 +85,9 @@ function lerpBox(a: LoginStageBox, b: LoginStageBox, t: number): LoginStageBox {
  * 纯函数:物理 viewport → 750 stage 布局(U-8a「照 demo」逐式落码)。
  * - scale = viewportWidth / 750;designHeight = viewportHeight / scale,clamp [600,1800];
  * - dh < 1334:功能区优先——视觉区按 v=max(0.25,(dh-600)/734) 以 (375,0) 为锚连续压缩,
- *   loginY = max(0, dh-600)(功能区 680×560 + 底距不缩放、锚定底部);
+ *   loginY = max(0, dh-640)(功能区 680×560 + 底距不缩放、锚定底部;
+ *   2026-07-24 拍板整体上移 40 设计px 后由 dh-600 改 dh-640,与 SHORT.loginY=694
+ *   在 dh=1334 处保持连续:1334-640=694);
  * - 1334 ≤ dh ≤ 1624:t=(dh-1334)/290 全字段线性插值(含 loginY);
  * - dh > 1624:t clamp 1(长屏几何原样)。
  */
@@ -107,7 +115,8 @@ export function resolveLoginStage(
       cindy: cs(LOGIN_STAGE_SHORT.cindy),
       slogan: cs(LOGIN_STAGE_SHORT.slogan),
       word: cs(LOGIN_STAGE_SHORT.word),
-      loginY: Math.max(0, designHeight - 600),
+      // 2026-07-24 拍板:整体上移 40 设计px(dh-600 → dh-640),dh=1334 边界与 SHORT.loginY=694 连续
+      loginY: Math.max(0, designHeight - 640),
     };
   }
   const t = Math.max(
@@ -338,8 +347,10 @@ export function resolveLoginSurface(
 export const LOGIN_GROUP = { x: 35, width: 680, height: 560 } as const;
 /** 标题(figma §5.1:y=31 h=38 32 Bold 居中)。 */
 export const LOGIN_TITLE = { y: 31, height: 38, font: 32 } as const;
-/** 副标题(figma §5.1:x=41 y=75 w=599 20 Regular 居中)。 */
-export const LOGIN_SUBTITLE = { x: 41, y: 75, width: 599, height: 23, font: 20 } as const;
+/** 说明/提示类行高(DESIGN.md §16.2:20px 字号 → 23px;副标题与 Text_link 槽共用,与桌面 SUBTITLE / SSO_ORG_HINT.lineHeight 同值)。 */
+export const LOGIN_COPY_LINE_HEIGHT = 23;
+/** 副标题:540@70 ≤2 行顶对齐,height=行高(DESIGN.md §16.2,2026-07-24 拍板;原单行 599@41 作废)。 */
+export const LOGIN_SUBTITLE = { x: 70, y: 75, width: 540, height: LOGIN_COPY_LINE_HEIGHT, font: 20, maxLines: 2 } as const;
 /** 输入/主按钮(figma §4.1/§4.3:540×80 r40;文本 x=31 §4.1)。 */
 export const LOGIN_CONTROL = {
   x: 70,
@@ -382,8 +393,51 @@ export const LOGIN_METHOD_ROW = {
 } as const;
 /** 大 loading 环(figma §5.2:64×64 @(308,158 browser / 193 preparing))。 */
 export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size: 64 } as const;
-/** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20)。 */
-export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20 } as const;
+/** Text_link / 倒计时(figma §4.7:@(70,238) 540×50 20;行高走 LOGIN_COPY_LINE_HEIGHT)。 */
+export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20, lineHeight: LOGIN_COPY_LINE_HEIGHT } as const;
+/** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
+export const LOGIN_SSO_ORG_HINT_TOP = 244;
+
+/**
+ * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):
+ * 行 680×40 @登录组下方 22 设计px(组高 560 → 行顶 y=582);radio 命中区 24、
+ * 圈体 20 r9 + 2px 描边(选中态为对勾);文字 20 Regular,radio-文字间距 6.5。
+ * 行内容水平居中(文字宽随语言变化,flex 居中,几何语义与稿等价)。
+ */
+export const LOGIN_CONSENT_ROW = {
+  y: 582,
+  width: 680,
+  height: 40,
+  gap: 6.5,
+  font: 20,
+  /** 声明文字行高(figma 600:661 文本框 23 高,与桌面协议行同值) */
+  lineHeight: 23,
+  /** 行底(622)超出登录组(560)的设计 px,安全区抬升按此追加预留 */
+  bottomOverflow: 62,
+  /**
+   * 对勾线宽 3(figma 600:632 stroke-width 3 round,设计 px)。
+   * pressSize 88 = 无障碍触摸目标(codex P1):登录组 phone 缩放 ~0.5 → 88 设计px
+   * ≈ 44 物理pt(iOS HIG)/ ≥48dp 近似达标;命中区右下锚定扩张(向左/向上),
+   * 右缘与视觉 24 槽位右缘对齐(不侵入协议链接命中区)、底缘与协议行底 622 对齐
+   * (不越父容器 flowBottom bounds——Android 界外触摸不派发,hitSlop 方案已被否)。
+   */
+  radio: { hitSize: 24, ringSize: 20, ringRadius: 9, ringStroke: 2, checkStroke: 3, pressSize: 88 },
+} as const;
+
+/**
+ * 服务条款弹窗(consent PR;figma 602:822/602:1249,与桌面 CONSENT_DIALOG 同参数源):
+ * 面板 680×380 r36(panelBg/panelBorder 双态);标题 Bold 32 @y31;正文 26/40
+ * @(41,122) w599 居中;两钮 260×80 r40 @y260——不同意 x70(次级钮)/ 同意 x350
+ * (强调钮 = primaryButton 族)。遮罩 = consentOverlay 黑 85% 全屏。
+ */
+export const LOGIN_CONSENT_DIALOG = {
+  width: 680,
+  height: 380,
+  radius: 36,
+  title: { y: 31, height: 38, font: 32 },
+  body: { x: 41, y: 122, width: 599, font: 26, lineHeight: 40 },
+  button: { y: 260, width: 260, height: 80, radius: 40, font: 24, disagreeX: 70, agreeX: 350 },
+} as const;
 
 // 态叠层 / 浅底钮白描边 / loading 环底圈色:原 LOGIN_PRESSED_OVERLAY /
 // LOGIN_INVERTED_BORDER / LOGIN_RING_TRACK 字面常量已随暗色实现 PR 并入

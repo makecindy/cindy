@@ -105,6 +105,57 @@ describe('evaluateGhostSetup · 启发式回落(无 setup 声明)', () => {
     expect(status.reauth).toEqual([]);
   });
 
+  it('Node 持久凭证绑定:保险库未保存时拦截,保存后就绪', () => {
+    const m = manifest({
+      slots: ['tool', 'node'],
+      tools: [{ name: 'mail', description: '收发邮件' }],
+      settingsHtml: 'settings.html',
+      node: {
+        entry: 'worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_authorization_code',
+            label: '邮箱授权码',
+            methods: ['mail/action'],
+            hint: '请填写邮箱服务生成的授权码',
+            url: 'https://mail.example/settings',
+          },
+        ],
+      },
+    });
+    expect(evaluateGhostSetup(m, probes()).missingGroups).toEqual([
+      [{ ref: 'secret:mail_authorization_code', label: '邮箱授权码', kind: 'key' }],
+    ]);
+    expect(
+      evaluateGhostSetup(
+        m,
+        probes({ secretSaved: (key) => key === 'mail_authorization_code' }),
+      ),
+    ).toEqual({ ready: true, missingGroups: [], reauth: [] });
+    expect(
+      evaluateGhostSetupAssessment(m, probes(), { revision: 1 }).groups[0]?.items[0],
+    ).toMatchObject({
+      ref: 'secret:mail_authorization_code',
+      kind: 'secret',
+      description: '请填写邮箱服务生成的授权码',
+      actions: [
+        {
+          kind: 'inline_form',
+          form: {
+            fields: [
+              {
+                id: 'value',
+                type: 'secret',
+                externalLink: { url: 'https://mail.example/settings' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
   it('连接声明:零连接未就绪,≥1 条就绪(GitLab 形态)', () => {
     const m = manifest({
       slots: ['tool', 'network'],

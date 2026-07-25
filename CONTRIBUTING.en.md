@@ -13,7 +13,7 @@ is outside the scope of this repository.
 
 - Follow [`docs/dev-rules/environment-setup.md`](docs/dev-rules/environment-setup.md)
   for supported tool versions and installation steps.
-- Read the installation section in [`README.en.md`](README.en.md) and the
+- Read the installation section in [`README.md`](README.md) and the
   applicable [engineering rules](AGENTS.md). `AGENTS.md` contains detailed
   engineering constraints; it is not a replacement for this contribution guide.
 - Follow [`CODE_OF_CONDUCT.en.md`](CODE_OF_CONDUCT.en.md) when participating in

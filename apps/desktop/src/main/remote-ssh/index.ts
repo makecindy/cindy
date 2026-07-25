@@ -253,8 +253,9 @@ const remoteAgentInstalledCache = new Map<string, Set<RemoteAgentKind>>();
  * 把"binary not installed"这类问题从 daemon 启动失败的 stack trace 转成 renderer
  * 能正确 toast 的 SSH_AGENT_NOT_INSTALLED IPC error, 引导用户去 Settings 安装。
  *
- * 实现走 `test -x` 而非完整 probeRemoteAgent — 后者 ~200ms 包含 node version
- * 检查, 这里我们只关心"binary 是否在该路径", 命中 cache 后续 ~0ms。
+ * Claude Code 首次检查走完整 probeRemoteAgent,确保 Cindy 管理的远端 runtime
+ * 与当前 pin 一致；否则客户端升级后旧 binary 会永久命中 `test -x`。Codex 仍
+ * 只做存在性检查。两者命中内存 cache 后续都是 ~0ms。
  */
 export async function ensureRemoteAgentInstalled(
   hostId: string,
@@ -269,15 +270,17 @@ export async function ensureRemoteAgentInstalled(
     throwIpcError('SSH_NOT_CONNECTED', `ssh host ${hostId} not connected`);
   }
 
-  const binPath = agentKind === 'codex'
-    ? '$HOME/.xdt-server/v1/codex-home/packages/standalone/current/codex'
-    : '$HOME/.xdt-server/v1/node_modules/.bin/claude';
-  // 用 test -x; 退出码 0=存在&可执行, 非 0=不存在/不可执行。stdout 不读, exitCode 已足。
-  const result = await host.exec(`test -x ${binPath} && echo OK || echo MISSING`, {
-    timeoutMs: 5_000,
-    label: 'check-agent-installed',
-  });
-  const ok = result.stdout.trim() === 'OK';
+  let ok: boolean;
+  if (agentKind === 'claude-code') {
+    ok = (await probeRemoteAgent(host, agentKind)).installed;
+  } else {
+    const binPath = '$HOME/.xdt-server/v1/codex-home/packages/standalone/current/codex';
+    const result = await host.exec(`test -x ${binPath} && echo OK || echo MISSING`, {
+      timeoutMs: 5_000,
+      label: 'check-agent-installed',
+    });
+    ok = result.stdout.trim() === 'OK';
+  }
   if (!ok) {
     const friendlyKind = agentKind === 'codex' ? 'Codex' : 'Claude Code';
     throwIpcError(

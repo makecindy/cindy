@@ -25,6 +25,7 @@ import {
 } from '@/auth/loginHandoff';
 import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
+import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import { ThemeOverrideProvider, useTheme } from '@/theme';
 
 /**
@@ -153,12 +154,12 @@ export function MobileLoginHandoffStage(props: {
   // 首启亮色门在品牌宿主层消费(DESIGN.md §16.5 主题跟随):splash/闸门/登录
   // 共享同一覆盖,首启不出现「舞台暗 → 登录亮」闪变;覆盖仅限本宿主子树。
   const firstLaunchGate = useLoginFirstLaunchLight();
-  // pending(AsyncStorage 未决,eager kick 下近零时长且宿主在 auth.initialized
-  // 后才挂载,实际几乎不会命中)时不渲染品牌内容:按任何主题渲染都可能产出
-  // 错误主题帧(真首启透传系统暗色 → 判定后切亮),等判定完成再上。
-  if (firstLaunchGate === 'pending') return null;
+  const { mode: systemTheme } = useTheme();
+  const handoff = resolveStartupSplashHandoff(firstLaunchGate, systemTheme);
+  // pending 时由 Android 原生帧复刻层继续覆盖；本舞台不提前猜测主题。
+  if (handoff.targetTheme == null) return null;
   return (
-    <ThemeOverrideProvider mode={firstLaunchGate === 'light' ? 'light' : null}>
+    <ThemeOverrideProvider mode={handoff.targetTheme}>
       <MobileLoginHandoffStageInner {...props} />
     </ThemeOverrideProvider>
   );

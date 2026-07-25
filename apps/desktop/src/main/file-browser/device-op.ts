@@ -8,14 +8,13 @@
  * 过旧"占位。
  *
  * 安全:
- *  - workdir 参数经 `isRemoteWorkingDirAllowed` 收敛(recents → 已有会话
- *    workdir → 真实存在目录)。判据顺序对嵌套至关重要:被控端 SSH remote
- *    会话的 workdir 是远端路径,只能靠"已有会话 workdir"命中,fs 存在性
- *    检查对它必然 false。
+ *  - workdir 先经 `checkRemoteWorkingDir` 探测被控端本地可访问性,再结合已有
+ *    SSH session 的 remoteHostId 解析唯一执行端点。本地与 SSH 同时命中或
+ *    多个 SSH host 命中时显式拒绝,不猜测执行位置。
  *  - 路径穿越在 scanner 层拦(assertInsideWorkdir + realpath),与本地一致。
  *
- * 嵌套(device-link 套 SSH):guard 通过但 workdir 非本地目录时,查该 workdir
- * 对应会话的 remoteHostId → 经 RemoteFileBrowserManager 二跳到 SSH daemon,
+ * 嵌套(device-link 套 SSH):本地探测即使失败或超时,唯一 SSH 归属仍经
+ * RemoteFileBrowserManager 二跳到 SSH daemon,
  * 控制端免费获得二级转发(写进 PR 测试路径)。
  *
  * oversize:readFile 结果超 relay 帧限(MAX_FRAME_BYTES=2MiB)前主动预判,
@@ -32,7 +31,6 @@
  * watch;断链清理/重连重放天然覆盖)。事件经 pushToTopicSubscribers 推回。
  */
 
-import { statSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { gzip as gzipCb, gunzip as gunzipCb } from 'node:zlib';
@@ -64,7 +62,13 @@ import { WorkdirWatchManager } from '@cindy/remote-file-service';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import {
+  checkRemoteWorkingDir,
+  remoteWorkingDirRejectionToIpcError,
+  type RemoteWorkingDirCheckResult,
+} from '../device-link/remote-workdir-guard.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
 import * as subscriptions from '../device-link/subscriptions.js';
@@ -161,7 +165,8 @@ interface RemoteOpArgs {
 type WorkdirExecution =
   | { kind: 'local' }
   | { kind: 'ssh'; hostId: string }
-  | { kind: 'ambiguous'; reason: string };
+  | { kind: 'ambiguous'; reason: string }
+  | { kind: 'unavailable'; reason: 'unavailable' | 'timeout' };
 
 /**
  * 判定执行位置。按 workdir 反查天然有歧义面:同一绝对路径可能同时是本地
@@ -172,24 +177,27 @@ type WorkdirExecution =
  * 无歧义时:本地真实目录 → local;唯一 SSH 归属 → ssh;都不命中属边缘态
  * (会话记录的目录已被删),按 local 执行让底层报 ENOENT,错误可读。
  */
-async function resolveWorkdirExecution(workdir: string): Promise<WorkdirExecution> {
-  let isLocalDir = false;
-  try {
-    isLocalDir = statSync(workdir).isDirectory();
-  } catch {
-    // 非本地目录
-  }
+async function resolveWorkdirExecution(
+  workdir: string,
+  localProbe: RemoteWorkingDirCheckResult,
+): Promise<WorkdirExecution> {
+  const isLocalDir = localProbe.allowed;
+  const normalizedWorkdir = normalizeWorkingDirForStorage(workdir);
+  if (!normalizedWorkdir) return { kind: 'local' };
   let sshHosts: string[] = [];
   try {
     const db = getDbClient().drizzle;
     const rows = await db
       .selectDistinct({ remoteHostId: sessions.remoteHostId })
       .from(sessions)
-      .where(and(eq(sessions.workingDir, workdir), isNotNull(sessions.remoteHostId)));
+      .where(and(eq(sessions.workingDir, normalizedWorkdir), isNotNull(sessions.remoteHostId)));
     sshHosts = rows.map((r) => r.remoteHostId).filter((h): h is string => !!h);
   } catch (err) {
     log.warn('workdir execution lookup failed', { error: String(err) });
-    // 查询失败:退回本地语义(与旧行为一致);isLocalDir=false 时底层 ENOENT 可读。
+    if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+      return { kind: 'unavailable', reason: localProbe.reason };
+    }
+    // 查询失败:退回本地语义(与旧行为一致);明确不存在时由底层返回可读错误。
     return { kind: 'local' };
   }
   if (isLocalDir && sshHosts.length > 0) {
@@ -206,6 +214,9 @@ async function resolveWorkdirExecution(workdir: string): Promise<WorkdirExecutio
   }
   if (isLocalDir) return { kind: 'local' };
   if (sshHosts.length === 1) return { kind: 'ssh', hostId: sshHosts[0] };
+  if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+    return { kind: 'unavailable', reason: localProbe.reason };
+  }
   return { kind: 'local' };
 }
 
@@ -354,18 +365,41 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   if (args.op === 'caps') {
     return { ok: true as const, gzip: true as const };
   }
-  if (!(await isRemoteWorkingDirAllowed(args.workdir))) {
-    log.warn('remote-op workdir rejected by guard', { op: args.op, workdir: args.workdir });
+  const guardResult = await checkRemoteWorkingDir(args.workdir);
+  if (!guardResult.allowed && guardResult.reason === 'invalid') {
+    const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+    throwIpcError(rejection.code, rejection.message);
+  }
+
+  const exec = await resolveWorkdirExecution(args.workdir, guardResult);
+  const workdir = args.workdir;
+
+  if (exec.kind === 'unavailable') {
+    const rejection = remoteWorkingDirRejectionToIpcError(exec.reason);
+    throwIpcError(rejection.code, rejection.message);
+  }
+  if (exec.kind === 'ambiguous') {
+    // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
+    // 详细归属只写本机日志,避免把 SSH host ID 等内部路由信息带回控制端。
+    log.warn('remote-op workdir endpoint ambiguous', { op: args.op, workdir, reason: exec.reason });
+    throwIpcError('INVALID_PARAMS', 'Remote working directory endpoint is ambiguous.');
+  }
+  if (exec.kind === 'local' && !guardResult.allowed) {
+    log.warn('remote-op workdir rejected by guard', {
+      op: args.op,
+      workdir: args.workdir,
+      reason: guardResult.reason,
+    });
     // throw(而非 resolve {ok:false}):经 invoke error 信封让 renderer 侧
     // reject,命中既有 catch/loadError 通路——listDir/stat 等成功形状不是
     // {ok} 的 op,resolve 错误对象会被当数据用(坏渲染且无错误提示),与
     // SSH 通道(throwRemoteFsIpcError 抛出)行为对齐。
-    throw new Error(`workdir not allowed: ${args.workdir}`);
+    const rejection = remoteWorkingDirRejectionToIpcError(guardResult.reason);
+    throwIpcError(rejection.code, rejection.message);
   }
 
-  // writeFile 内容的 gzip 形态在入口统一解码:本地与 SSH 二跳分支拿到的都是
-  // 明文,嵌套场景(device-link 套 SSH)天然成立。解码失败(损坏/伪造)返回
-  // 结构化错误,不落任何写操作。
+  // 先完成目录授权和执行端点判定,再处理可能昂贵的压缩输入。解码后的明文
+  // 同时供本地与 SSH 二跳分支使用;失败时不落任何写操作。
   let writeContent = args.content;
   if (typeof args.contentGz === 'string') {
     try {
@@ -378,16 +412,6 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       log.warn('remote-op contentGz decode failed', { op: args.op, error: String(err) });
       return bad('invalid contentGz');
     }
-  }
-
-  const exec = await resolveWorkdirExecution(args.workdir);
-  const workdir = args.workdir;
-
-  if (exec.kind === 'ambiguous') {
-    // 端点不确定时执行任何读写都可能落在错误机器上,显式失败最安全。
-    // throw 理由同上 guard 分支:renderer 需要 reject 才能走 loadError 通路。
-    log.warn('remote-op workdir endpoint ambiguous', { op: args.op, workdir, reason: exec.reason });
-    throw new Error(`workdir endpoint ambiguous: ${exec.reason}`);
   }
 
   // —— SSH 二跳:直接透传给本机的 SSH file-service 路由 ——
@@ -621,10 +645,18 @@ const localWatch = new WorkdirWatchManager((event) => {
 });
 const localWatchWorkdirs = new Set<string>();
 const sshWatchOffs = new Map<string, () => void>();
+/** 最新订阅意图；release / 立即重订阅时由正在启动的同一任务收敛到最新状态。 */
+const fsWatchDesired = new Set<string>();
 /** 启动窗口占位:dedup 判定与首个 await 之间的 TOCTOU 防护(见下)。 */
-const fsWatchStarting = new Set<string>();
+const fsWatchStarting = new Map<string, symbol>();
 
 async function onFsWatchSubscribed(workdir: string): Promise<void> {
+  fsWatchDesired.add(workdir);
+  await startFsWatchIfDesired(workdir);
+}
+
+async function startFsWatchIfDesired(workdir: string): Promise<void> {
+  if (!fsWatchDesired.has(workdir)) return;
   // dedup 必须把"正在启动"也算上:guard/exec 判定要过两个 await(后者查 DB),
   // 窗口内同 workdir 的第二次 subscribe(典型:重连 replay 撞上首次订阅)会
   // 双双通过 has 检查——SSH 嵌套分支就会重复注册 onHostEvent/onHostConnected,
@@ -633,28 +665,57 @@ async function onFsWatchSubscribed(workdir: string): Promise<void> {
   if (localWatchWorkdirs.has(workdir) || sshWatchOffs.has(workdir) || fsWatchStarting.has(workdir)) {
     return;
   }
-  fsWatchStarting.add(workdir);
+  const token = Symbol(workdir);
+  fsWatchStarting.set(workdir, token);
   try {
-    await onFsWatchSubscribedInner(workdir);
+    await onFsWatchSubscribedInner(workdir, token);
   } finally {
-    fsWatchStarting.delete(workdir);
+    if (fsWatchStarting.get(workdir) === token) fsWatchStarting.delete(workdir);
   }
 }
 
-async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
-  if (!(await isRemoteWorkingDirAllowed(workdir))) {
-    log.warn('fs-watch subscribe rejected by guard', { workdir });
+function scheduleFsWatchReconcile(workdir: string): void {
+  const timer = setTimeout(() => {
+    // timer 排队后可能再次 release；reconcile 只消费当前意图，绝不重新
+    // 写回 desired，避免复活已释放 watcher。
+    if (fsWatchDesired.has(workdir)) void startFsWatchIfDesired(workdir);
+  }, 0);
+  timer.unref?.();
+}
+
+function isFsWatchStartCurrent(workdir: string, token: symbol): boolean {
+  return fsWatchDesired.has(workdir) && fsWatchStarting.get(workdir) === token;
+}
+
+async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise<void> {
+  const guardResult = await checkRemoteWorkingDir(workdir);
+  if (!isFsWatchStartCurrent(workdir, token)) return;
+  if (!guardResult.allowed && guardResult.reason === 'invalid') {
+    log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
     return;
   }
-  const exec = await resolveWorkdirExecution(workdir);
+  const exec = await resolveWorkdirExecution(workdir, guardResult);
+  if (!isFsWatchStartCurrent(workdir, token)) return;
+  if (exec.kind === 'unavailable') {
+    log.warn('device fs-watch skipped: workdir unavailable', { workdir, reason: exec.reason });
+    return;
+  }
   if (exec.kind === 'ambiguous') {
     log.warn('device fs-watch skipped: workdir endpoint ambiguous', { workdir, reason: exec.reason });
     return;
   }
+  if (exec.kind === 'local' && !guardResult.allowed) {
+    log.warn('fs-watch subscribe rejected by guard', { workdir, reason: guardResult.reason });
+    return;
+  }
   if (exec.kind === 'local') {
     try {
-      localWatchWorkdirs.add(workdir);
       await localWatch.start(workdir, { hideMetaFiles: true });
+      if (!isFsWatchStartCurrent(workdir, token)) {
+        localWatch.stop(workdir);
+        return;
+      }
+      localWatchWorkdirs.add(workdir);
       log.info('device fs-watch started (local)', { workdir });
     } catch (err) {
       localWatchWorkdirs.delete(workdir);
@@ -674,20 +735,55 @@ async function onFsWatchSubscribedInner(workdir: string): Promise<void> {
   const offReconnect = mgr.onHostConnected(hostId, () => {
     void mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true }).catch(() => undefined);
   });
-  sshWatchOffs.set(workdir, () => {
+  let listenersDisposed = false;
+  const disposeListeners = (): void => {
+    if (listenersDisposed) return;
+    listenersDisposed = true;
     offEvent();
     offReconnect();
+  };
+  const stopWatch = (): void => {
+    disposeListeners();
     void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
-  });
+  };
+  sshWatchOffs.set(workdir, stopWatch);
   try {
     await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+    const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
+    if (!isFsWatchStartCurrent(workdir, token) || !isRegistered) {
+      if (isRegistered) sshWatchOffs.delete(workdir);
+      // release 可能已在 watchStart 完成前发过 stop；完成后再发一次，保证
+      // daemon 不会留下刚启动成功的 watcher。
+      stopWatch();
+      // release 后若已立即重新订阅，旧启动先完成清理，再从全新监听器和
+      // watchStart 开始；setTimeout 确保外层 finally 已移除旧 token。
+      if (fsWatchDesired.has(workdir)) {
+        scheduleFsWatchReconcile(workdir);
+      }
+      return;
+    }
     log.info('device fs-watch started (ssh nested)', { workdir, hostId });
   } catch (err) {
+    const isRegistered = sshWatchOffs.get(workdir) === stopWatch;
+    const isCurrent = isFsWatchStartCurrent(workdir, token);
+    if (!isCurrent || !isRegistered) {
+      if (isRegistered) sshWatchOffs.delete(workdir);
+      disposeListeners();
+      // release 后立即重订阅时，旧 watchStart 的失败不能吞掉新的订阅意图。
+      if (fsWatchDesired.has(workdir)) {
+        scheduleFsWatchReconcile(workdir);
+      }
+    }
+    // 当前订阅的初次启动失败时保留 stop/reconnect 监听；host 下次连接会
+    // 通过 offReconnect 对应回调重试 watchStart。
     log.warn('device fs-watch ssh start failed', { workdir, hostId, error: String(err) });
   }
 }
 
 function onFsWatchReleased(workdir: string): void {
+  // guard / DB lookup / watchStart 任一 await 结束后都读取最新订阅意图；
+  // 保留启动 token 可串行吸收紧随 release 到来的重订阅，避免同路径双启动。
+  fsWatchDesired.delete(workdir);
   if (localWatchWorkdirs.delete(workdir)) {
     localWatch.stop(workdir);
     log.info('device fs-watch stopped (local)', { workdir });

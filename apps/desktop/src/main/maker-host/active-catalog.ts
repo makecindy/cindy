@@ -47,7 +47,7 @@ const discoveredByProvider = new Map<string, Partial<Record<AgentKind, CatalogMo
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
   efforts?: string[];
-  defaultEffort?: string;
+  defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
 }
@@ -62,7 +62,7 @@ export interface XdGatewayModelInfo {
   description?: string;
   contextWindow?: number;
   efforts?: string[];
-  defaultEffort?: string;
+  defaultEffort?: string | null;
   sortOrder?: number;
   /** Fast 支持;缺省按 true(未登记模型的确定性默认:开了没效果无害)。 */
   supportsFastMode?: boolean;
@@ -109,6 +109,8 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 type Effort = CatalogModel['efforts'][number];
 /** base + custom + discovered augment 的合并缓存;null = 待重算(惰性)。 */
 let merged: Catalog | null = null;
+/** bundled + active v1 `cindyModelMeta` 的合并索引；目录变化时与 merged 一起失效。 */
+let effectiveCindyModelMetaIndex: Map<string, CindyModelMetaFields> | null = null;
 
 /**
  * 目录修订号。所有会改变 getActiveCatalog() 结果的写入都必须经过 markChanged，
@@ -121,6 +123,7 @@ let changedListener: ((nextRevision: number) => void) | null = null;
 
 function markChanged(): void {
   merged = null;
+  effectiveCindyModelMetaIndex = null;
   revision += 1;
   changedListener?.(revision);
 }
@@ -211,9 +214,10 @@ function projectCodexModelsToClaude(p: Provider): Provider {
 const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
 
 /**
- * cindyModelMeta 里客户端认识的字段子集。展示字段直接覆盖发现条目；effort 字段只在
- * Anthropic 动态通道**没有能力信息**时作为基线，由 model-discovery/anthropic 消费。
- * 上游显式能力始终优先，meta 不在 active catalog overlay 阶段改写能力。
+ * cindyModelMeta 里客户端认识的字段子集。展示字段直接覆盖发现条目；context / effort
+ * 字段只在 Anthropic 动态通道**没有能力信息**时作为基线，由
+ * model-discovery/anthropic 消费。上游显式能力始终优先，meta 不在 active catalog
+ * overlay 阶段改写能力。
  */
 interface CindyModelMetaFields {
   name?: string;
@@ -221,6 +225,7 @@ interface CindyModelMetaFields {
   description?: string;
   sortOrder?: number;
   defaultEnabled?: boolean;
+  contextWindow?: number;
   efforts?: Effort[];
   defaultEffort?: Effort | null;
 }
@@ -247,6 +252,9 @@ function buildCindyModelMetaIndex(meta: unknown): Map<string, CindyModelMetaFiel
     if (typeof e.description === 'string' && e.description.length > 0) fields.description = e.description;
     if (typeof e.sortOrder === 'number' && Number.isFinite(e.sortOrder)) fields.sortOrder = e.sortOrder;
     if (typeof e.defaultEnabled === 'boolean') fields.defaultEnabled = e.defaultEnabled;
+    if (typeof e.contextWindow === 'number' && Number.isFinite(e.contextWindow) && e.contextWindow > 0) {
+      fields.contextWindow = e.contextWindow;
+    }
     if (Array.isArray(e.efforts)) {
       const efforts = e.efforts.filter((value): value is Effort =>
         typeof value === 'string' && VALID_EFFORTS.has(value));
@@ -261,9 +269,48 @@ function buildCindyModelMetaIndex(meta: unknown): Map<string, CindyModelMetaFiel
   return index;
 }
 
+/**
+ * 远端 v1 元数据允许按模型、按字段增量覆盖 bundled v1。旧远端目录经常只带
+ * 部分新字段或缺少新模型；缺口必须回落 bundled，否则已知 200k 模型会落入
+ * 1M 启发式。非 v1 active 信封仍整段忽略，不能拿 bundled v1 混入未知 schema。
+ */
+function buildEffectiveCindyModelMetaIndex(): Map<string, CindyModelMetaFields> {
+  if (effectiveCindyModelMetaIndex) return effectiveCindyModelMetaIndex;
+
+  const bundled = buildCindyModelMetaIndex(BUNDLED_CATALOG.cindyModelMeta);
+  if (!base || base.cindyModelMeta === undefined) {
+    effectiveCindyModelMetaIndex = bundled;
+    return effectiveCindyModelMetaIndex;
+  }
+
+  const activeMeta = base.cindyModelMeta;
+  if (
+    !activeMeta ||
+    typeof activeMeta !== 'object' ||
+    Array.isArray(activeMeta) ||
+    (activeMeta as { version?: unknown }).version !== 1
+  ) {
+    effectiveCindyModelMetaIndex = new Map();
+    return effectiveCindyModelMetaIndex;
+  }
+
+  const effective = new Map<string, CindyModelMetaFields>();
+  for (const [id, fields] of bundled) effective.set(id, { ...fields });
+  for (const [id, fields] of buildCindyModelMetaIndex(activeMeta)) {
+    effective.set(id, { ...effective.get(id), ...fields });
+  }
+  effectiveCindyModelMetaIndex = effective;
+  return effectiveCindyModelMetaIndex;
+}
+
 export interface CindyModelEffortBaseline {
   efforts: Effort[];
   defaultEffort: Effort | null;
+}
+
+/** 返回当前目录的已知上下文窗口；只供动态发现缺少上游明确值时兜底。 */
+export function getCindyModelContextWindow(modelId: string): number | null {
+  return buildEffectiveCindyModelMetaIndex().get(modelId)?.contextWindow ?? null;
 }
 
 /**
@@ -271,7 +318,7 @@ export interface CindyModelEffortBaseline {
  * 模型是否存在仍完全由 HTTP / SDK 动态清单决定。
  */
 export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBaseline | null {
-  const fields = buildCindyModelMetaIndex((base ?? BUNDLED_CATALOG).cindyModelMeta).get(modelId);
+  const fields = buildEffectiveCindyModelMetaIndex().get(modelId);
   if (!fields?.efforts) return null;
   const efforts = [...fields.efforts];
   const defaultEffort =
@@ -366,7 +413,7 @@ function computeMerged(): Catalog {
   // 三层合并:存在性=发现,展示=产品目录,用户 override 永远最高)——订阅通道返回的
   // 家族级名字("Fable")在此归位为产品命名("Fable 5");能力字段仍以发现为准。
   if (anthropicModels.length > 0) {
-    const metaIndex = buildCindyModelMetaIndex(b.cindyModelMeta);
+    const metaIndex = buildEffectiveCindyModelMetaIndex();
     const overlaid = sortModelsByOrder(
       anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
     );
@@ -406,7 +453,8 @@ function computeMerged(): Catalog {
           rawEfforts === undefined
             ? ['low', 'medium', 'high']
             : rawEfforts.filter((e): e is Effort => VALID_EFFORTS.has(e));
-        const rawDefault = ov.defaultEffort ?? gm.defaultEffort;
+        const rawDefault =
+          ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
         const defaultEffort: Effort | null =
           rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
             ? (rawDefault as Effort)

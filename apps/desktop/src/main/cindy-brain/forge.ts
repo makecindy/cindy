@@ -675,12 +675,19 @@ my-ghost/
   "command": "画图",            // 可选:用户 $画图 显式点名(与已装意识查重,冲突拒装)
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
-  "panel": { "title": "面板标题", "html": "panel.html", "position": "right",
-             "minWidth": 240, "defaultFraction": 0.24 },
-  // panel.position:面板显示形态。right(缺省)/ left = 停靠主聊天窗两侧;
+  "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
+             "minWidth": 240, "defaultFraction": 0.24,
+             "systemButtons": { "maximize": false } },
+  // panel.position:面板显示形态。left(缺省)= 停靠主聊天窗左侧;
   // "tab" = 右侧栏页签(与文件/审查/终端同一容器,每会话至多一个,用户从
   // 空态列表或「+」菜单打开;此形态没有拖缝宽度,声明 minWidth /
-  // defaultFraction 会被拒装,请移除)。top/bottom 暂未支持(排期中)
+  // defaultFraction 会被拒装,请移除)。right 已退役(右侧是右侧边栏的地盘;
+  // 旧包声明 right 自动并入 left,用户想放右边可自己拖拽换位)。
+  // top/bottom 暂未支持(排期中)
+  // panel.systemButtons(可选,仅停靠形态):标准头系统按钮开关,缺省全开、
+  // 声明 false 逐个关闭。当前一批:maximize(撑满内容区)、detach(在独立
+  // 窗口中打开)。标题条本体恒由主机绘制、关不掉;未知键拒装;
+  // position:"tab" 时声明本字段拒装
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
 }
@@ -711,7 +718,15 @@ Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机
   "lifecycle": "on-demand",           // 可选:on-demand(缺省)/resident(常驻,单列高风险权限)
   "idleTimeoutSeconds": 120,           // 可选:按需档空闲关闭时间,30–3600;resident 禁写
   "entries": ["node/build.cjs"],       // 可选 ≤4 条:额外工作进程入口(每入口一个独立进程,调用时用 entry 指名,见 §4.12.1;不能与 entry / 浏览器沙箱 entry / 彼此重复)
-  "childSpawn": true                   // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;装入确认框单列一行)
+  "childSpawn": true,                  // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;装入确认框单列一行)
+  "secretBindings": [{                 // 可选 1–4 条:safeStorage 持久化凭证按方法临时注入 Worker
+    "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线
+    "label": "邮箱授权码",             // 安装确认与设置页展示名
+    "methods": ["mail/action"],         // 只在这些 JSON-RPC 方法中注入,每条 1–128 位
+    "entry": "node/worker.cjs",         // 可选:逐字命中 node.entry/entries;缺省仅主入口
+    "hint": "请填写服务商授权码",       // 可选 ≤200 字
+    "url": "https://mail.example.com/settings" // 可选 https 申请页
+  }]
 }
 \`\`\`
 
@@ -800,10 +815,11 @@ node 详单**不接受** \`command\` / \`args\` / \`shell\` / \`env\` 或其它�
 }
 \`\`\`
 
-- 条目三种引用:\`secret:<key>\`(network.secrets 声明的凭证:user 源查已保存、oauth 源
-  查已连接账号;账号全过期时主机弹「重新连接」话术)、\`connection:<key>\`(该连接声明
-  下至少添加一条)、\`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;
-  键名主机无先验,label 必填)。
+- 条目三种引用:\`secret:<key>\`(\`network.secrets\` 或 \`node.secretBindings\` 声明的
+  凭证:Node 绑定与 user 源查已保存、oauth 源查已连接账号;账号全过期时主机弹「重新连接」
+  话术)、\`connection:<key>\`(该连接声明下至少添加一条)、
+  \`{ "kv": "<键名>", "label": "..." }\`(你 /kv 参数里的顶层键非空;键名主机无先验,
+  label 必填)。Node 凭证同样可参与 setup.requires。
 - 引用必须逐字指向已声明的 key,悬空引用**打包期就拒**;\`login-email\` 源凭证恒就绪,
   引用它同样拒(没有配置动作可引导)。kv 引用要求已声明 settingsHtml(没有设置页没人填)。
 - **绝大多数意识不需要写本字段**:不声明时主机走启发式——声明过凭证/连接的意识,
@@ -1352,6 +1368,9 @@ const r = await cindy.fetch({
 **凭证语义(必读)**:你在详单里只声明"需要一条叫什么的凭证、注入到哪个请求头";
 值由主机加密保管、只在代发请求时注入。**保险库里的明文你的代码永远读不回**——
 不要试图让用户把 key 发进聊天,更不要把 key 硬编码在源码里。
+这里说的是 \`network.secrets\` 的浏览器沙箱/HTTP 代发语义；确需本地协议时，
+\`node.secretBindings\` 是唯一允许把对应凭证交给 Node Worker 的显式例外，
+并会在安装权限清单单独披露(见 §4.12.1)。
 
 **调用前缺失的普通 user Secret 由主机统一 Setup 卡收单**：主机只根据你声明的
 \`label\` / \`hint\` 生成密码输入，不把值交给 Agent 或你的代码；提交后直接写保险库并
@@ -1864,6 +1883,51 @@ if (!response.ok) throw new Error(response.message);
 const result = response.result;
 \`\`\`
 
+#### Node Worker 的持久化凭证绑定
+
+本地 IMAP/SMTP 等协议确实需要 Worker 使用凭证明文时，在
+\`node.secretBindings\` 声明凭证键与允许注入的方法。设置页仍只负责收单：
+
+\`\`\`js
+// settings.js:输入框里的值立即交给主机 safeStorage,不要进 /kv / 日志 / BroadcastChannel
+await fetch('/secrets/mail_code', {
+  method: 'PUT',
+  body: JSON.stringify({ value: authorizationCode })
+});
+// GET /secrets 只能看到 { key:'mail_code', saved:true, tail? },永远没有明文
+\`\`\`
+
+浏览器 \`main.js\` 发给 Node 的业务参数里不要放凭证：
+
+\`\`\`js
+await cindy.node.request({
+  method: 'mail/action',
+  params: { action: 'search', query: '账单' }
+});
+\`\`\`
+
+宿主现查清单，只有 method 与目标 entry 同时命中绑定时，才从 safeStorage
+读取本插件自己的键，并在发往 Worker 的 JSON-RPC 保留字段中临时注入：
+
+\`\`\`js
+// worker 收到的 request；cindy 字段由宿主铸造，main.js 自报同名字段会被忽略
+const authorizationCode = request.cindy.secrets.mail_code;
+\`\`\`
+
+规则与红线：
+
+- \`secretBindings\` 最多 4 条，每条 \`methods\` 1–16 个；省略 \`entry\`
+  只绑定主入口，不能借同名方法把凭证送去其它入口；
+- 未保存凭证时宿主在请求进入 Worker 前返回 \`PERMISSION_DENIED\`，设置页可用
+  \`GET /secrets\` 的 saved 状态引导用户；
+- 宿主不会直接把明文交给 \`main.js\`、Agent 参数或写入宿主日志；但 Worker
+  收到明文后可以主动回传、落盘或写日志，浏览器侧代码和 Agent 也可能因此间接
+  获得它。安装/更新权限清单会逐条披露此风险，只安装可信来源插件；
+- Worker 用完不要缓存、落盘、回传或写日志；每次请求都以
+  \`request.cindy.secrets\` 的当次值为准；
+- \`node.secretBindings\` 与 \`network.secrets\` / \`network.connections\`
+  共用插件内凭证键命名空间，撞名拒装；声明它必须同时提供 \`settingsHtml\`。
+
 长任务(构建/打包这类几分钟量级的活)加 \`maxTotalMs\` 开启**有动静就续期**:
 \`timeoutMs\` 变成"沉默窗口"——worker 只要还在输出(stdout 协议消息或 stderr
 日志)就不断续期,绝对上限 \`maxTotalMs\`(最长 15 分钟):
@@ -2072,12 +2136,23 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
 
 ## 5. 面板(panel.html/css/js)
 
-- 显示形态由 \`panel.position\` 决定:\`right\`(缺省)/ \`left\` = 停靠主聊天窗两侧
-  的常驻面板;\`"tab"\` = 右侧栏页签——与文件/审查/终端同一容器,每会话至多
-  一个页签,由用户从右侧栏空态列表或「+」菜单打开(不随装入自动弹出)。页签
-  形态没有拖缝宽度语义,声明 \`minWidth\` / \`defaultFraction\` 会被拒装。两种形态
-  的面板代码完全一样(同一 panel.html,供片/主题/媒体规则不变),只是宿主容器
-  不同;页签形态请把界面做成自适应宽度;
+- 显示形态由 \`panel.position\` 决定:\`left\`(缺省)= 停靠主聊天窗左侧的常驻
+  面板(\`right\` 已退役:右侧是右侧边栏的地盘,旧包声明 right 自动并入 left,
+  用户想放右边可自己拖拽换位);\`"tab"\` = 右侧栏页签——与文件/审查/终端同一
+  容器,每会话至多一个页签,由用户从右侧栏空态列表或「+」菜单打开。当用户在会话视图内装入
+  tab 型插件并勾选「立即开启」时,装入完成后会自动展开右侧栏并打开/聚焦该
+  页签;从插件页(无会话路由)装入或未勾选时,仍由用户手动从空态/「+」菜单
+  打开。页签形态没有拖缝宽度语义,声明 \`minWidth\` / \`defaultFraction\` 会被
+  拒装。两种形态的面板代码完全一样(同一 panel.html,供片/主题/媒体规则不变),
+  只是宿主容器不同;页签形态请把界面做成自适应宽度;
+- 停靠形态的**标题条(标准头)由主机绘制**:标题(\`panel.title\`)+ 一批系统
+  按钮(当前:「撑满内容区」与「在独立窗口中打开」——用户可把你的面板抽进
+  自己的 OS 窗口,关窗/合并即回停靠原位,面板代码零感知;后续新增的系统按钮
+  也长在这里)。你的 panel.html 只画标题条以下的部分,**不要自己再画一条
+  标题栏**。不想要某颗系统按钮时在身份卡声明
+  \`"systemButtons": { "maximize": false, "detach": false }\` 逐个关闭(缺省
+  全开;标题条本体关不掉;未知键拒装;\`position:"tab"\` 没有标准头,声明本
+  字段拒装);
 - 与电子脑同源,用 \`BroadcastChannel('<自定名>')\` 通信(电子脑发,面板收);
 - 取自己的媒体:\`cindy-ghost://<id>/media/<指纹><后缀>\`(主机查账验归属,别人的图 404);
 - 重启回放:\`fetch('cindy-ghost://<id>/gallery')\` 返回本意识作品清单 \`[{src, caption}]\`;
@@ -2169,6 +2244,7 @@ if (!opened.ok) console.warn(opened.errorCode, opened.message);
 - \`id\` 不合法(大写/下划线/超长)· 声明了 command 但没有 tools · command 与已装意识撞名
 - 声明了 tool 槽但缺 tools(或反之)· panel.html 声明了但 slots 没有 "panel"
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
+- panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——页签形态没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2
 - cindy 详单格式错(未知类目/动作、空数组、有详单但 slots 没有 "cindy")
 - agent 详单格式错(有详单但 slots 没有 "agent"，或 background 不是 true；只需点击触发时应省略 agent 字段)

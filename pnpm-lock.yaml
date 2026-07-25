@@ -99,6 +99,9 @@ importers:
       '@cindy/orca-workflow':
         specifier: workspace:*
         version: link:../../packages/orca-workflow
+      '@cindy/plugin-protocol':
+        specifier: workspace:*
+        version: link:../../cindy-protocol/packages/plugin-protocol
       '@cindy/remote-file-service':
         specifier: workspace:*
         version: link:../../packages/remote-file-service
@@ -595,9 +598,6 @@ importers:
       expo-notifications:
         specifier: ~56.0.22
         version: 56.0.22(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@6.0.3)
-      expo-observe:
-        specifier: ~56.0.21
-        version: 56.0.25(expo-router@56.2.15)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       expo-paste-input:
         specifier: 0.2.2
         version: 0.2.2(patch_hash=53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
@@ -716,7 +716,6 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
-
   cindy-protocol/packages/slack-hook-protocol:
     devDependencies:
       '@types/node':
@@ -6582,13 +6581,6 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  expo-app-metrics@56.0.22:
-    resolution: {integrity: sha512-xgpTuQ6uDRqgP0N0XNM5IfyWJRkuVqiwmm61Rp1JGUI/6ZXnlDtyhCZFTluvaiEsaKhF88Q+6TLjOw3+9V0RJA==}
-    peerDependencies:
-      expo: '*'
-      react: '*'
-      react-native: '*'
-
   expo-apple-authentication@56.0.4:
     resolution: {integrity: sha512-y9cIfulRCKyWrbWBx6lV172dnJZ+aNHdyEPC7tIlGJAO2zn3J1Vq6/mcKr2eynzjdt3e5Z02qeZWQN2R7rcbrg==}
     peerDependencies:
@@ -6769,20 +6761,6 @@ packages:
       expo: '*'
       react: '*'
       react-native: '*'
-
-  expo-observe@56.0.25:
-    resolution: {integrity: sha512-IXjKwu34NGdDl6lemL0z65roqeKUyg4MsP+KdXxrbVxwv4Rjs7rWt2FBYsXM5Lu/4Un44y6S2AuROs0yLodv/A==}
-    peerDependencies:
-      '@react-navigation/native': ^7.0.0
-      expo: '*'
-      expo-router: '*'
-      react: '*'
-      react-native: '*'
-    peerDependenciesMeta:
-      '@react-navigation/native':
-        optional: true
-      expo-router:
-        optional: true
 
   expo-paste-input@0.2.2:
     resolution: {integrity: sha512-uDv5qi+/FRsEYwVF0Y9MJE7k9pxTNpI77jOnNqS1TQDQlqSfj11O5yvd+G8e7Hi8fDVBZx/BhyImG0b9sK/zIQ==}
@@ -16843,13 +16821,6 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  expo-app-metrics@56.0.22(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
-    dependencies:
-      expo: 56.0.16(bedb3dfb85b4bb5081482612eab0a2c6)
-      expo-updates-interface: 56.0.2(expo@56.0.16)
-      react: 19.2.3
-      react-native: 0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
-
   expo-apple-authentication@56.0.4(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
     dependencies:
       expo: 56.0.16(bedb3dfb85b4bb5081482612eab0a2c6)
@@ -17048,16 +17019,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
       - typescript
-
-  expo-observe@56.0.25(expo-router@56.2.15)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
-    dependencies:
-      expo: 56.0.16(bedb3dfb85b4bb5081482612eab0a2c6)
-      expo-app-metrics: 56.0.22(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
-      expo-eas-client: 56.0.1
-      react: 19.2.3
-      react-native: 0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3)
-    optionalDependencies:
-      expo-router: 56.2.15(600de089274a49ab6ec9549ee6c8284a)
 
   expo-paste-input@0.2.2(patch_hash=53be555646735a171c1624f074ef30e5ca897a7b8893724bc2d0d51682f769d8)(expo@56.0.16)(react-native@0.85.3(patch_hash=9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d)(@babel/core@7.29.7)(@react-native/metro-config@0.85.3(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3):
     dependencies:

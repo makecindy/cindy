@@ -113,6 +113,7 @@ async function resolveNewSessionConfig(
     permissionMode: string | null;
   },
   log: { warn(msg: string): void },
+  sourceIm?: string | null,
 ): Promise<ResolvedHookSessionConfig> {
   let providers: ProviderView[] | null = null;
   try {
@@ -125,7 +126,7 @@ async function resolveNewSessionConfig(
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () => readImDefaultSettings(),
+      readDefaults: () => readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined),
       getModels: (agentKind) =>
         providers
           ? visibleModelUnion(providers, agentKind, (providerId, model) =>
@@ -348,6 +349,7 @@ export function createMakerHookSessionRunner(deps: {
               permissionMode: req.permissionMode,
             },
             log,
+            req.source?.im,
           )
         : null;
       let workingDir = req.workingDir;
@@ -395,6 +397,7 @@ export function createMakerHookSessionRunner(deps: {
             await resolveNewSessionConfig(
               { agentKind: effectiveAgentKind, model: null, effort: null, permissionMode: null },
               log,
+              req.source?.im,
             )
           ).model;
 

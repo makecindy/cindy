@@ -33,6 +33,8 @@ export interface RsbWindowContext {
 export type RsbWindowCommand =
   | { type: 'open-terminal'; sessionId: string }
   | { type: 'open-web-browser'; sessionId: string; url: string }
+  /** 打开/聚焦插件页签(panel.position:'tab',每会话单例;装入即开与未来入口共用)。 */
+  | { type: 'open-ghost-tab'; sessionId: string; ghostId: string }
   | {
       type: 'ensure-orca-workers-tab';
       sessionId: string;

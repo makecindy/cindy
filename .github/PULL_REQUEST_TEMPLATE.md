@@ -32,6 +32,16 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 
 <!-- 涉及 UI 时附截图或录屏，并注明平台；不涉及则写“不涉及”。 -->
 
+- 引用的设计规范：
+
+<!-- 涉及 UI 时必填：列出本次改动遵循的设计规范章节与约束，并说明如何满足。
+规范正本为 docs/design-rules/DESIGN.md（相关文档索引见
+docs/design-rules/cindy-design-system.md）。写到具体章节/条款，
+如“DESIGN.md §间距与栅格：卡片内边距 16px”。
+改动命中 UI 代码路径但确无视觉/交互/文案变化时，写“不涉及：<理由>”；
+完全不涉及 UI 则写“不涉及”。CI（pr-design-basis）会在变更命中 UI 路径时
+校验本字段，判定逻辑见 scripts/check-pr-design-basis.mjs。 -->
+
 ## 怎么验证的
 
 ### 自动验证
@@ -76,6 +86,7 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 ### 提交前检查
 
 - [ ] 已 review 完整 diff
+- [ ] UI 改动已在「UI 变化」注明引用的设计规范章节（不涉及 UI 则跳过）
 - [ ] 未提交凭证、令牌或授权文件
 - [ ] 已补充必要文档
 - [ ] 已确认测试结果或说明未执行原因

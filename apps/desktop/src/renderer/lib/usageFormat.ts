@@ -4,6 +4,8 @@
  * 保证两处金额口径 / 文案形态一致。
  */
 
+import type { RegionalMoney } from '../../shared/regionalMoney';
+
 /**
  * 软日限额系数: 月度配额 / 30 * 4.5 = 月度配额 * 0.15。
  * 给重度使用的"忙日"留 buffer (即把月配额视作可在 1/4.5 ≈ 6.67 个高强度日内集中消耗)。
@@ -32,6 +34,36 @@ export function formatUsd(n: number): string {
 export function formatTurnCostUsd(n: number): string {
   if (n >= 0.01) return `$${n.toFixed(2)}`;
   return '<$0.01';
+}
+
+function moneyPrefix(money: RegionalMoney): string {
+  return `${money.approximate ? '≈' : ''}${money.currency === 'CNY' ? '¥' : '$'}`;
+}
+
+/** 区域金额的紧凑展示；币种与约值语义来自金额本身。 */
+export function formatCompactMoney(money: RegionalMoney): string {
+  const prefix = moneyPrefix(money);
+  if (money.amount >= 1000) return `${prefix}${(money.amount / 1000).toFixed(1)}k`;
+  return `${prefix}${Math.round(money.amount)}`;
+}
+
+/** 区域金额的常规展示。 */
+export function formatMoney(money: RegionalMoney): string {
+  if (money.amount < 10) return `${moneyPrefix(money)}${money.amount.toFixed(2)}`;
+  return formatCompactMoney(money);
+}
+
+/** 每轮 / 每模型金额：固定两位；小于最小货币展示单位时显示下界。 */
+export function formatTurnCostMoney(money: RegionalMoney): string {
+  const symbol = money.currency === 'CNY' ? '¥' : '$';
+  const approximate = money.approximate ? '≈' : '';
+  if (money.amount === 0) {
+    return `${approximate}${symbol}0.00`;
+  }
+  if (money.amount >= 0.01) {
+    return `${approximate}${symbol}${money.amount.toFixed(2)}`;
+  }
+  return `${approximate}<${symbol}0.01`;
 }
 
 /**

@@ -9,7 +9,7 @@ Cindy 是开源客户端，社区可以帮助确认可复现的问题和改进�
 
 ## 先查什么
 
-- 安装、依赖和开发环境：先看 [README.md](README.md) 和
+- 安装、依赖和开发环境：先看 [README.zh-CN.md](README.zh-CN.md) 和
   [贡献指南](CONTRIBUTING.md)；
 - 安全漏洞、凭证或可利用细节：按照 [SECURITY.md](SECURITY.md) 私下报告；
 - 普通 Bug：提交 GitHub issue，并提供版本、平台、复现步骤和脱敏日志；

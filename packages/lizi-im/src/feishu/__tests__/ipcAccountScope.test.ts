@@ -12,7 +12,9 @@ const mocks = vi.hoisted(() => ({
     () => null as { appId: string; appSecret: string } | null,
   ),
   writeCredentials: vi.fn(() => true),
-  writeOwnerOpenId: vi.fn(),
+  writeOwnerOpenId: vi.fn(() => true),
+  clearAll: vi.fn(),
+  clearOwner: vi.fn(),
   loadOwner: vi.fn(),
   requestRegistration: vi.fn(),
   pollRegistration: vi.fn(),
@@ -33,13 +35,13 @@ vi.mock('../storage.js', () => ({
   writeLifecycleAnnouncement: vi.fn(),
   writeCredentials: mocks.writeCredentials,
   writeOwnerOpenId: mocks.writeOwnerOpenId,
-  clearAll: vi.fn(),
+  clearAll: mocks.clearAll,
 }));
 
 vi.mock('../ownerGuard.js', () => ({
   loadFromDisk: mocks.loadOwner,
   firstAllowed: vi.fn(() => null),
-  clear: vi.fn(),
+  clear: mocks.clearOwner,
 }));
 
 vi.mock('../appRegistration.js', () => ({
@@ -50,6 +52,7 @@ vi.mock('../appRegistration.js', () => ({
 import { FeishuIM } from '../index.js';
 import {
   cancelAppRegistration,
+  clearAndDisconnect,
   reconnectSavedCredentials,
   saveAndConnect,
 } from '../ipc.js';
@@ -125,6 +128,7 @@ beforeEach(() => {
   mocks.stop.mockResolvedValue(undefined);
   mocks.start.mockResolvedValue('connected');
   mocks.writeCredentials.mockReturnValue(true);
+  mocks.writeOwnerOpenId.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -199,6 +203,17 @@ describe('Feishu IPC account scope', () => {
 describe('Feishu credential connection semantics', () => {
   const credentials = { appId: 'cli_test', appSecret: 'secret' };
 
+  it('delegates owner clearing to stop before the idle status is broadcast', async () => {
+    await clearAndDisconnect();
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-cleared',
+      clearOwnerBeforeIdle: true,
+    });
+    expect(mocks.clearOwner).not.toHaveBeenCalled();
+    expect(mocks.clearAll).toHaveBeenCalledOnce();
+  });
+
   it('keeps an already-connected transport untouched when credentials are unchanged', async () => {
     mocks.readCredentials.mockReturnValue(credentials);
     mocks.getCurrentStatus.mockReturnValue('connected');
@@ -208,6 +223,38 @@ describe('Feishu credential connection semantics', () => {
     });
 
     expect(mocks.writeCredentials).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it('persists a registration owner before returning for unchanged credentials', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+    mocks.getCurrentStatus.mockReturnValue('connected');
+
+    await expect(
+      saveAndConnect(credentials.appId, credentials.appSecret, {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).resolves.toEqual({ verdict: 'connected' });
+
+    expect(mocks.writeOwnerOpenId).toHaveBeenCalledWith('ou_registered_owner');
+    expect(mocks.loadOwner).toHaveBeenCalledOnce();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an unchanged registration owner cannot be persisted', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+    mocks.getCurrentStatus.mockReturnValue('connected');
+    mocks.writeOwnerOpenId.mockReturnValue(false);
+
+    await expect(
+      saveAndConnect(credentials.appId, credentials.appSecret, {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).rejects.toThrow('[OWNER_PERSIST_FAILED]');
+
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
     expect(mocks.stop).not.toHaveBeenCalled();
     expect(mocks.start).not.toHaveBeenCalled();
   });
@@ -260,6 +307,72 @@ describe('Feishu credential connection semantics', () => {
       announceLifecycle: false,
       reason: 'manual-reconnect',
     });
+  });
+
+  it('clears the per-app owner before connecting a different app ID', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+
+    await expect(saveAndConnect('cli_other', 'other-secret')).resolves.toEqual({
+      verdict: 'connected',
+    });
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-replaced',
+      clearOwnerBeforeIdle: true,
+    });
+    expect(mocks.start).toHaveBeenCalledWith(
+      { appId: 'cli_other', appSecret: 'other-secret' },
+      { reason: 'credentials-replaced' },
+    );
+  });
+
+  it('installs a replacement app registration owner after clearing the previous owner', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+
+    await expect(
+      saveAndConnect('cli_registered', 'registered-secret', {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).resolves.toEqual({ verdict: 'connected' });
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-replaced',
+      clearOwnerBeforeIdle: true,
+    });
+    expect(mocks.writeOwnerOpenId).toHaveBeenCalledWith('ou_registered_owner');
+    expect(mocks.loadOwner).toHaveBeenCalledOnce();
+    expect(mocks.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.writeOwnerOpenId.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('does not connect when a replacement registration owner cannot be persisted', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+    mocks.writeOwnerOpenId.mockReturnValue(false);
+
+    await expect(
+      saveAndConnect('cli_registered', 'registered-secret', {
+        replacementOwnerOpenId: 'ou_registered_owner',
+      }),
+    ).rejects.toThrow('[OWNER_PERSIST_FAILED]');
+
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it('preserves the owner when only the secret changes for the same app ID', async () => {
+    mocks.readCredentials.mockReturnValue(credentials);
+
+    await expect(saveAndConnect(credentials.appId, 'rotated-secret')).resolves.toEqual({
+      verdict: 'connected',
+    });
+
+    expect(mocks.stop).toHaveBeenCalledWith({
+      reason: 'credentials-replaced',
+      clearOwnerBeforeIdle: false,
+    });
+    expect(mocks.writeOwnerOpenId).not.toHaveBeenCalled();
+    expect(mocks.loadOwner).not.toHaveBeenCalled();
   });
 
   it('does not tear down the current transport when saving new credentials fails', async () => {

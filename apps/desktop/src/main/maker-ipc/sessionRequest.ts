@@ -36,7 +36,8 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    */
   makerMemoryEnabled?: boolean;
   /**
-   * 附加只读引用目录列表。Claude 透传到 SDK additionalDirectories；Codex 收到会忽略。
+   * 附加只读引用目录列表。Claude 透传到 SDK additionalDirectories；
+   * Codex 透传到 app-server runtimeWorkspaceRoots + 只读 permission profile。
    * main 端仍统一校验，防 IPC 直调 / 老 DB 残留 / bug 数据。
    */
   extraDirs?: string[];

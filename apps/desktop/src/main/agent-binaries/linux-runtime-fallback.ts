@@ -156,6 +156,25 @@ export function runtimeVersionMatchesPin(
   return parseVersionOutput(versionOutput) === CONFIG[kind].version;
 }
 
+/** User-managed runtimes may be newer than the pin, but not older or prerelease-equivalent. */
+export function systemRuntimeVersionSupportsPin(
+  kind: LinuxRuntimeFallbackKind,
+  versionOutput: string,
+): boolean {
+  const candidate = parseVersionOutput(versionOutput);
+  const pinned = parseVersionOutput(CONFIG[kind].version);
+  if (!candidate || !pinned) return false;
+  if (candidate.includes('-')) return false;
+  const candidateCore = candidate.split(/[-+]/, 1)[0].split('.').map(Number);
+  const pinnedCore = pinned.split(/[-+]/, 1)[0].split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (candidateCore[index] !== pinnedCore[index]) {
+      return candidateCore[index] > pinnedCore[index];
+    }
+  }
+  return true;
+}
+
 function probeCancelledError(command: string): Error {
   return new Error(`${path.basename(command)} install cancelled`);
 }
@@ -233,9 +252,11 @@ async function findSystemBinaryAsync(
   if (!candidate) return null;
   const versionOutput = await readExecutableVersion(candidate, signal);
   if (!versionOutput) return null;
-  // Preserve the historical behavior for a user-managed Claude CLI. Codex's
-  // app-server protocol is versioned and must match the repository pin.
+  // Preserve compatible newer user-managed Claude CLIs. Older binaries can
+  // reject newly visible models, while Codex's app-server protocol requires
+  // an exact repository-pin match.
   if (kind === 'claude-code') {
+    if (!systemRuntimeVersionSupportsPin(kind, versionOutput)) return null;
     const nodePath = await findCommandAsync('node', signal);
     if (!nodePath) return candidate;
     try {

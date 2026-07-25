@@ -3,7 +3,7 @@ import type { RemoteSession } from '@/session/types';
 
 // 「首页设备 + 会话列表」冷启动持久缓存:冷启动时先用上次 loadHome 成功后的 last-known 快照
 // 乐观画出列表(消除首屏强制 spinner),fresh loadHome 回来后由 store 正常对账覆盖并回写缓存。
-// 后端与 mobileSessionMessageCache 保持一致(AsyncStorage),遵守仓库根 DESIGN.md:
+// 后端与 mobileSessionMessageCache 保持一致(AsyncStorage),遵守 docs/design-rules/DESIGN.md:
 // 先画缓存、拿到新数据再刷新、绝不闪空白。
 // 瘦身原则:只存列表渲染 / 分组 / 跳转需要的字段白名单(coerceCachedSession),不 dump 整个 store;
 // 长文本字段截断、live-only 状态(attached / 运行态)一律不缓存——缓存的设备不是 live 设备,

@@ -14,6 +14,8 @@
  *   - vendor / lastByVendor / fastModeByModel / workingDir → 保留
  *   - 文本(composerDraftStore) → 保留
  *   - 附件 → 丢失(产品决策)
+ *   - extraDirs → 丢失(2026-07-25 用户定稿:引用目录是单次草稿的临时授权范围,
+ *     不是偏好记忆;静默还原会让旧目录无感知地带进新会话)
  */
 
 import { useSyncExternalStore } from 'react';
@@ -114,8 +116,9 @@ export interface NewMakerDraft {
   effortByModel: Record<string, Effort>;
   /**
    * 草稿期间用户加的附加只读引用目录列表(绝对路径)。draft-wide,不分 vendor。
-   * 仅 Claude session 实际生效;Codex 创建时 ChatInput 不显示按钮 → 数组保持原样
-   * 但发出去也会被 Codex agent 忽略 (capability=false)。
+   * Claude 与 Codex session 都会透传，并支持会话中途覆盖。
+   * 生命周期是"单次草稿":发送后清空(resetDraftWorkspaceAfterSend)、进入草稿页
+   * 清空(NewMakerDraftRoute mount)、**不跨重启还原**(sanitize 一律置空)。
    */
   extraDirs: string[];
   /** 每个 vendor 的"上次使用配置"——切回该 vendor 时自动恢复。 */
@@ -233,10 +236,10 @@ function sanitize(raw: unknown): NewMakerDraft {
       )
       .map(([modelId, effort]) => [modelId, effort as Effort]),
   );
-  // extraDirs 校验: 必须是字符串数组, 单条非空。脏数据走默认空数组兜底(不抛)。
-  const extraDirs: string[] = Array.isArray(r.extraDirs)
-    ? r.extraDirs.filter((s): s is string => typeof s === 'string' && s.length > 0)
-    : [];
+  // extraDirs **故意不跨重启持久化**(同 deviceLinkDeviceId 先例):引用目录是
+  // 单次草稿的临时授权范围,静默还原会让用户无感知地把旧目录带进新会话。
+  // NewMakerDraftRoute mount 时也会清空(同一决定的双保险)。
+  const extraDirs: string[] = [];
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   // 防御性互斥: workingDir==null 时 enabled 应该为 false (隐藏入口的兜底,
   // 防止历史脏数据让用户看到协同 ON 但 workdir 为空的不可达状态)。

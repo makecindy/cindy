@@ -12,6 +12,8 @@ interface ImportMeta {
 
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
+type VoiceInputPowerStatePayload =
+  import('../shared/voiceInputPowerIpc').VoiceInputPowerStatePayload;
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
@@ -214,6 +216,7 @@ type LocalThemeWriteRequest = import('../shared/local-themes').LocalThemeWriteRe
 type LocalThemeWriteResult = import('../shared/local-themes').LocalThemeWriteResult;
 type ImDefaultSettingsPatch = import('../shared/imDefaultSettings').ImDefaultSettingsPatch;
 type ImDefaultSettingsState = import('../shared/imDefaultSettings').ImDefaultSettingsState;
+type ImDefaultSettingsChannel = import('../shared/imDefaultSettings').ImDefaultSettingsChannel;
 type SubagentModelSettingsPatch = import('../shared/subagentModelSettings').SubagentModelSettingsPatch;
 type SubagentModelSettingsState = import('../shared/subagentModelSettings').SubagentModelSettingsState;
 
@@ -935,6 +938,7 @@ interface ElectronAPI {
   pageZoomReset: () => Promise<{ ok: true; zoomLevel: number }>;
   onApplicationMenuCommand: (callback: (command: ApplicationMenuCommand) => void) => () => void;
   setApplicationMenuLocale: (locale: ApplicationMenuLocale) => Promise<{ ok: true }>;
+  billing: import('../shared/billing').BillingRendererApi;
 
   // lifecycle 兜底 catch 到瞬时网络错误时推一次。renderer 收到后由
   // systemNetworkErrorToast.ts 负责节流 + 多语言 toast。
@@ -1016,12 +1020,12 @@ interface ElectronAPI {
       lizFilePath: string,
       /** enable:装入后立即开启(确认框勾选决定;缺省沉睡)。 */
       opts: { enable?: boolean; expectedPackageSha256: string },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost } | { canceled: true }>;
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
       lizFilePath: string,
       opts: { expectedPackageSha256: string },
-    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost } | { canceled: true }>;
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
      * 等能力键;image/video 各一份下拉数据,defaultModel = 目录默认
@@ -1216,6 +1220,18 @@ interface ElectronAPI {
     ) => Promise<{ states?: Record<string, string>; state?: string }>;
   };
 
+  /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
+  pluginMarket: {
+    snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
+    detail: (
+      pluginId: string,
+    ) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
+    install: (
+      pluginId: string,
+      options?: { allowPermissionExpansion?: boolean },
+    ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
+    uninstall: (pluginId: string) => Promise<{ ok: true }>;
+  };
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<{ ok: true; path: string; wav: ArrayBuffer } | { ok: false }>;
@@ -1326,6 +1342,8 @@ interface ElectronAPI {
     onDictionaryLearningEvidence: (
       callback: (payload: { evidence: Pick<VoiceInputDictionaryAdviceInput, 'source' | 'rawTranscriptText' | 'beforeText' | 'afterText' | 'context'> }) => void,
     ) => () => void;
+    /** 系统挂起/锁屏 → 释放 fast activation 的保活麦克风。 */
+    onPowerStateChange: (callback: (payload: VoiceInputPowerStatePayload) => void) => () => void;
     notifyGlobalOverlayReady: () => void;
     pasteIntoFocusedTarget: (text: string, rawTranscriptText?: string) => Promise<VoiceInputGlobalResult>;
     restoreGlobalPasteTargetFocus: () => Promise<VoiceInputGlobalResult>;
@@ -1396,6 +1414,23 @@ interface ElectronAPI {
       }) => void,
     ) => () => void;
     onCommand: (cb: (cmd: RsbWindowCommand) => void) => () => void;
+  };
+
+  /** 插件停靠面板独立窗口(每 ghostId 一扇窗;状态机在 main)。 */
+  ghostPanelWindow: {
+    /** 首帧同步读全量状态(ghostId → entry)。 */
+    getStateSync: () => import('../shared/ghostPanelWindow').GhostPanelWindowsState;
+    getState: () => Promise<import('../shared/ghostPanelWindow').GhostPanelWindowsState>;
+    /** 幂等:已开则 show + focus。 */
+    open: (ghostId: string) => Promise<void>;
+    /** 写偏好;true 开窗抽离,false 关窗回停靠。返回新全量 state。 */
+    setDetached: (
+      ghostId: string,
+      detached: boolean,
+    ) => Promise<import('../shared/ghostPanelWindow').GhostPanelWindowsState>;
+    onStateChanged: (
+      cb: (state: import('../shared/ghostPanelWindow').GhostPanelWindowsState) => void,
+    ) => () => void;
   };
 
   agentIsland: {
@@ -1522,6 +1557,7 @@ interface ElectronAPI {
         status: FeishuBotStatus;
         error?: string;
         botAppId: string | null;
+        ownerOpenId: string | null;
       }) => void,
     ) => () => void;
     onConflict: (callback: (payload: { appId: string }) => void) => () => void;
@@ -2905,7 +2941,11 @@ interface ElectronAPI {
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // today aggregate 已搬到 electronAPI.maker.usage.* (Claude USD + Codex token 统一)。
   onUsageSessionSpendChanged: (
-    cb: (data: { sessionId: string; totalCostUsd: number }) => void,
+    cb: (data: {
+      sessionId: string;
+      totalMoney: import('../shared/regionalMoney').RegionalMoney;
+      totalCostUsd?: number;
+    }) => void,
   ) => () => void;
   onUsageSessionTokensChanged: (
     cb: (data: { sessionId: string; totalTokens: number }) => void,
@@ -2916,9 +2956,11 @@ interface ElectronAPI {
     cb: (data: {
       sessionId: string;
       clientId: string;
-      turnCostUsd: number;
+      turnMoney: import('../shared/regionalMoney').RegionalMoney;
+      turnCostUsd?: number;
       turnCostIsEstimate: boolean;
-      userTurnCostUsd: number;
+      userTurnMoney: import('../shared/regionalMoney').RegionalMoney;
+      userTurnCostUsd?: number;
       userTurnCostIsEstimate: boolean;
       turnUsageDetails?: import('../shared/turnUsageDetails').TurnUsageDetails;
     }) => void,
@@ -3189,8 +3231,14 @@ interface ElectronAPI {
       estimatedSessionValue: (
         sessionId: string,
       ) => Promise<{
-        totalValueUsd: number;
-        entries: Array<{ clientId: string; costUsd: number }>;
+        totalValueMoney?: import('../shared/regionalMoney').RegionalMoney | null;
+        totalValueUsd?: number;
+        entries: Array<{
+          clientId: string;
+          money?: import('../shared/regionalMoney').RegionalMoney;
+          costUsd?: number;
+          turnUsageDetails?: unknown;
+        }>;
       }>;
       around: (
         sessionId: string,
@@ -3908,10 +3956,13 @@ interface ElectronAPI {
       codexRestartDeferred: boolean;
     }>;
 
-    /** IM 新会话默认 agent/model/effort/provider。仅影响新 IM session 和 Feishu `/new` */
-    imDefaultSettingsGet: () => Promise<ImDefaultSettingsState>;
-    imDefaultSettingsSet: (patch: ImDefaultSettingsPatch) => Promise<ImDefaultSettingsState>;
-    imDefaultSettingsReset: () => Promise<ImDefaultSettingsState>;
+    /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */
+    imDefaultSettingsGet: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
+    imDefaultSettingsSet: (
+      patch: ImDefaultSettingsPatch,
+      channel?: ImDefaultSettingsChannel,
+    ) => Promise<ImDefaultSettingsState>;
+    imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
@@ -4120,6 +4171,7 @@ interface ElectronAPI {
     usage: {
       getToday: (agentKind: 'claude-code' | 'codex') => Promise<{
         day: string;
+        money?: import('../shared/regionalMoney').RegionalMoney;
         costUsd?: number;
         totalTokens?: number;
         promptTokens?: number;
@@ -4128,52 +4180,24 @@ interface ElectronAPI {
         cachedTokens?: number;
       }>;
       getAccount: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
-      /** 模型单价表 (model id → USD/Mtok), main 端内存 + 磁盘缓存, 拉取失败时 null。 */
-      getModelPricing: () => Promise<Record<
-        string,
-        {
-          inputUsdPerMtok: number;
-          outputUsdPerMtok: number;
-        }
-      > | null>;
+      /** provider-scoped 模型单价表；XD 价格与 model-access /models 同快照更新。 */
+      getModelPricing: () => Promise<
+        import('../shared/regionalMoney').ModelPricingCatalog | null
+      >;
+      onModelPricingChanged: (
+        cb: (
+          pricing: import('../shared/regionalMoney').ModelPricingCatalog | null,
+        ) => void,
+      ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
-      getHistory: (opts?: { days?: number; forceRefresh?: boolean }) => Promise<{
-        generatedAt: number;
-        todayKey: string;
-        stale?: boolean;
-        estimatesPending?: boolean;
-        days: Array<{ day: string; costUsd: number; tokens: number }>;
-        modelDaily: Array<{
-          day: string;
-          agentKind: 'claude-code' | 'codex';
-          model: string;
-          amountUsd: number;
-          apiCostUsd: number;
-          subscriptionEstimateUsd: number;
-          tokens: number;
-        }>;
-        models: Array<{
-          agentKind: 'claude-code' | 'codex';
-          model: string;
-          costUsd: number;
-          estimatedCostUsd: number | null;
-          inputTokens: number;
-          outputTokens: number;
-          cacheReadTokens: number;
-          cacheCreateTokens: number;
-        }>;
-        streak: { current: number; longest: number };
-        totals: {
-          today: number;
-          last30Days: number;
-          last30DaysWithEstimatedValue: number;
-          last30DaysEstimatedValue: number;
-          todayTokens: number;
-          last30DaysTokens: number;
-        };
-        anomaly: { isAnomalous: boolean; trailing7DayAvg: number | null };
-      }>;
-      onTodaySpendChanged: (cb: (p: { day: string; costUsd: number }) => void) => () => void;
+      getHistory: (
+        opts?: { days?: number; forceRefresh?: boolean },
+      ) => Promise<import('../main/usage/usageHistory').UsageHistoryPayload>;
+      onTodaySpendChanged: (cb: (p: {
+        day: string;
+        money: import('../shared/regionalMoney').RegionalMoney;
+        costUsd?: number;
+      }) => void) => () => void;
       onTodayTokensChanged: (cb: (p: CodexUsageSnapshot) => void) => () => void;
       onClaudeAccountChanged: (
         cb: (p: {

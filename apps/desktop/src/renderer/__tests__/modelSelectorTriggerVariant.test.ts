@@ -19,6 +19,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         value?: string;
         model?: string;
         effort?: string;
+        price?: string;
       },
     ) => {
       const translations: Record<string, string> = {
@@ -176,9 +177,18 @@ vi.mock('@/hooks/useConnectedSource', () => ({
 
 vi.mock('@/hooks/useModelPricing', () => ({
   useModelPricing: () => ({
-    'claude-opus-4-8': {
-      inputUsdPerMtok: 3,
-      outputUsdPerMtok: 15,
+    anthropic: {
+      'claude-opus-4-8': {
+        providerId: 'anthropic',
+        modelId: 'claude-opus-4-8',
+        currency: 'USD',
+        source: 'subscription-reference',
+        approximate: true,
+        inputPerMtok: 3,
+        outputPerMtok: 15,
+        cacheReadPerMtok: 0.3,
+        cacheCreatePerMtok: 3.75,
+      },
     },
   }),
 }));
@@ -552,13 +562,20 @@ describe('ModelSelector trigger variants', () => {
     expect(within(options).getByText('Most capable for ambitious work')).toBeTruthy();
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
-    const price = within(options).getByText('Input $3 · Output $15 per 1M tokens');
+    const priceTitle = within(options).getByText('newChat.modelSelector.pricing.title');
+    expect(within(options).getByText('≈¥20.1')).toBeTruthy();
+    expect(within(options).getByText('≈¥100.5')).toBeTruthy();
+    expect(within(options).getByText('≈¥2.01')).toBeTruthy();
+    expect(within(options).getByText('≈¥25.13')).toBeTruthy();
+    expect(
+      within(options).getByText('newChat.modelSelector.pricing.subscriptionEstimate'),
+    ).toBeTruthy();
     const firstChoice = within(options).getByRole('option', { name: 'low' });
     const description = within(options).getByText('Most capable for ambitious work');
     expect(
       description.compareDocumentPosition(firstChoice) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(firstChoice.compareDocumentPosition(price) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    expect(firstChoice.compareDocumentPosition(priceTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(row.getAttribute('data-model-options-active')).toBe('true');

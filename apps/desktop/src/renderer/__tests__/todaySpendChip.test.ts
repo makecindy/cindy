@@ -15,12 +15,14 @@ const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 
 describe('TodaySpendChip dashboard routing', () => {
   it('separates the latest user-round total from final-segment token details', () => {
+    expect(source).toContain('message.userTurnMoney?.amount');
     expect(source).toContain('const userTurnCostUsd = typeof message.userTurnCostUsd');
-    expect(source).toContain('? { costUsd: userTurnCostUsd }');
-    expect(source).toContain('isUserTurnTotal: userTurnCostUsd != null');
+    expect(source).toContain('? { money: userTurnMoney }');
+    expect(source).toContain('isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null)');
     expect(source).toContain("'todaySpend.tooltip.latestUserTurnTitle'");
+    expect(source).toContain('segmentMoney: message.turnMoney');
     expect(source).toContain('segmentCostUsd: message.turnCostUsd');
-    expect(source).toContain('costUsd: summary.isUserTurnTotal ? summary.segmentCostUsd : summary.costUsd');
+    expect(source).toContain('money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money');
     expect(source).toContain("'chat.messageActionBar.userTurnCostDetailsTitle'");
   });
 
@@ -111,7 +113,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain('CODEX_CREDIT_USD_RATE');
     expect(source).not.toContain('usdFormatted');
     expect(source).not.toContain('function getSessionCostSegment(');
-    expect(source).toContain("t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` })");
+    expect(source).toContain('const cost = formatTurnCostMoney(sessionMoney)');
     expect(source).toContain("tooltipLabel: t('todaySpend.tooltip.sessionUsed'");
     expect(source).toContain("session: { label: t('todaySpend.sessionCostLabel', { cost: '$—' })");
     // spend hook 对 device-link 远程会话无条件启用(形态未知,累计 cost 镜像不可丢)
@@ -132,7 +134,7 @@ describe('TodaySpendChip dashboard routing', () => {
       "chipSegments.push(t('todaySpend.codex.sessionValueLabel'",
     );
     expect(source).toContain('tooltipNode = buildCodexTooltipNode(');
-    expect(source).toContain('sessionEstimatedValueUsd,');
+    expect(source).toContain('sessionEstimatedValueMoney,');
     expect(source).toContain("t('todaySpend.codex.sessionValueLabel'");
     expect(source).toContain('getCodexWindowUsages(snapshot, t, nowMs)');
     expect(source).toContain('todaySpend.codex.planCreditsLine');
@@ -146,6 +148,16 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain('todaySpend.codex.remainingSegment');
     expect(source).not.toContain('todaySpend.codex.sessionTokensSegment');
     expect(source).not.toContain('todaySpend.codex.creditsShort');
+  });
+
+  it('formats gateway quota amounts with the build-region currency', () => {
+    expect(source).toContain(
+      'formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION))',
+    );
+    expect(source).toContain(
+      'formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION))',
+    );
+    expect(source).not.toContain('formatCompactUsd(claudeQuota.');
   });
 
   it('uses token and explicit empty-state fallbacks for Codex API sessions', () => {

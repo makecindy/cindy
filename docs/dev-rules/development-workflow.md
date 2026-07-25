@@ -38,8 +38,12 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   具备 bypass 权限的维护者明确选择，并执行本节的额外门禁。
 - PR 的 Title／Description 以 [`../../.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md)
   为准（这次改了什么／怎么验证的／风险）；涉及 SQLite migration、system prompt、协议、
-  原生层或跨平台差异时必须在「风险」里说明。Reviewer 只看 Title + Description 决定要不要
-  review，写不清直接退回。
+  原生层或跨平台差异时必须在「风险」里说明；涉及 UI 时必须在「UI 变化」注明引用的
+  设计规范章节与约束（正本为 `docs/design-rules/DESIGN.md`）。CI 的
+  `pr-design-basis` 会在 PR 变更命中 UI 路径时轻校验该字段（非空、引用了
+  design-rules 文档，或「不涉及：<理由>」豁免；判定逻辑见
+  `scripts/check-pr-design-basis.mjs`），但通过 CI 不代表内容合格，质量仍由
+  review 把关。Reviewer 只看 Title + Description 决定要不要 review，写不清直接退回。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
   仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在

@@ -124,6 +124,7 @@ export function toSdkModelString(model: string, contextWindow?: number | null): 
 
 /** 目录窗口未知时的兜底映射链(与窗口规则引入前一致;haiku 日期重写已移除,见函数头)。 */
 function legacyToSdkModelString(model: string): string {
+  if (model === 'claude-opus-5') return 'claude-opus-5[1m]';
   if (model.includes('opus-4-8')) return 'claude-opus-4-8[1m]';
   if (model.includes('opus-4-7')) return 'claude-opus-4-7[1m]';
   if (model.includes('opus-4-6')) return 'claude-opus-4-6[1m]';
@@ -210,6 +211,37 @@ function clampEffortForClaude(e: Effort): ClaudeSdkEffort {
   if (e === 'minimal') return 'low';
   if (e === 'ultra') return 'max';
   return e;
+}
+
+function isUnsupportedClaudeEffortError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+  return (
+    /effort(?:Level|[ _-]level)/i.test(message) &&
+    /\b(?:invalid|unsupported|not supported|unknown|unrecognized)\b/i.test(message)
+  );
+}
+
+async function applyClaudeEffortFlagSettings(
+  q: Query,
+  effort: ClaudeSdkEffort,
+  maxFallback: Exclude<ClaudeSdkEffort, 'max'>,
+): Promise<ClaudeSdkEffort> {
+  // Claude Code 2.1.219 accepts session-scoped `max` through apply_flag_settings.
+  // Only an explicit effort-level rejection is compatibility evidence; transport
+  // and process failures must keep their original failure semantics.
+  try {
+    await q.applyFlagSettings({ effortLevel: effort } as Settings);
+    return effort;
+  } catch (error) {
+    if (effort !== 'max' || !isUnsupportedClaudeEffortError(error)) throw error;
+    await q.applyFlagSettings({ effortLevel: maxFallback } as Settings);
+    return maxFallback;
+  }
 }
 
 function rawMentionText(block: { path: string; kind?: 'file' | 'dir' | 'agent' }): string {
@@ -371,11 +403,11 @@ const WAKE_BACKGROUND_TASK_TYPES: ReadonlySet<string> = new Set(['local_agent', 
 // (见 apps/desktop/src/main/maker-host/catalog-to-descriptors.ts)。
 
 const CLAUDE_EFFORTS: EffortDescriptor[] = [
-  { id: 'low',    displayName: 'Low',    description: 'Fast responses with minimal reasoning' },
-  { id: 'medium', displayName: 'Medium', description: 'Balanced reasoning depth' },
-  { id: 'high',   displayName: 'High',   description: 'Deeper reasoning for harder tasks' },
-  { id: 'xhigh',  displayName: 'Extra',  description: 'Extended reasoning (Opus only)' },
-  { id: 'max',    displayName: 'Max',    description: 'Maximum reasoning budget' },
+  { id: 'low',    displayName: 'Low',        description: 'Most efficient, with lower token use' },
+  { id: 'medium', displayName: 'Medium',     description: 'Balanced capability and token use' },
+  { id: 'high',   displayName: 'High',       description: 'High capability for complex work' },
+  { id: 'xhigh',  displayName: 'Extra High', description: 'Extended capability for long-horizon work' },
+  { id: 'max',    displayName: 'Max',        description: 'Maximum capability with unconstrained token use' },
 ];
 
 // 注: plan 不再作为权限档暴露 —— 计划模式已独立成 Capabilities.planMode 一级开关
@@ -481,6 +513,16 @@ export class ClaudeCodeAgent extends BaseAgent {
     const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
     if (descriptor && descriptor.efforts.length === 0) return undefined;
     return clampEffortForClaude(effort);
+  }
+
+  private sdkMaxEffortFallbackForModel(model: string): Exclude<ClaudeSdkEffort, 'max'> {
+    const descriptor = this.capabilities.availableModels.find((m) => m.id === model);
+    if (!descriptor) return 'xhigh';
+    const supported = new Set(descriptor.efforts.map(clampEffortForClaude));
+    for (const candidate of ['xhigh', 'high', 'medium', 'low'] as const) {
+      if (supported.has(candidate)) return candidate;
+    }
+    return 'high';
   }
 
   /**
@@ -1081,6 +1123,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const enableFileCheckpointing = this.capabilities.rewind.supported;
     const getSdkEffortForModel = (model: string, effort: Effort) =>
       this.sdkEffortForModel(model, effort);
+    const getSdkMaxEffortFallbackForModel = (model: string) =>
+      this.sdkMaxEffortFallbackForModel(model);
 
     // memoryOverride 闭包以前抽过 getter, buildSettings 接管后直接读 this.memoryOverride。
 
@@ -2747,11 +2791,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           replayed = true;
           const targetEffort = mutableEffort;
           const sdkEffort = getSdkEffortForModel(mutableModel, targetEffort);
-          const clamped = sdkEffort === 'max' ? 'xhigh' : sdkEffort;
-          if (clamped) {
+          if (sdkEffort) {
             try {
-              await q.applyFlagSettings({ effortLevel: clamped });
-              log.debug(`${label}: replayed setEffort`, { effort: targetEffort });
+              const appliedEffort = await applyClaudeEffortFlagSettings(
+                q,
+                sdkEffort,
+                getSdkMaxEffortFallbackForModel(mutableModel),
+              );
+              log.debug(`${label}: replayed setEffort`, {
+                effort: targetEffort,
+                sdk: appliedEffort,
+                downgraded: appliedEffort !== sdkEffort,
+              });
             } catch (e) {
               log.warn(`${label}: replay setEffort failed`, { error: String(e) });
             }
@@ -3399,18 +3450,28 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async setEffort(newEffort: Effort) {
-        // applyFlagSettings 不接受 'max' / 'minimal' —— clamp 同 startSession 时
-        // 'minimal' 降 'low', 'max' 降 'xhigh' (最接近的 runtime 可设值)
+        // maker 的 minimal / ultra 先归一成 Claude 的 low / max；2.1.219 起
+        // applyFlagSettings 可原样接收 max，不能再静默降成 xhigh。
         const sdkEffort = getSdkEffortForModel(mutableModel, newEffort);
-        const clamped = sdkEffort === 'max' ? 'xhigh' : sdkEffort;
         const isControlBlocked = controlRequestsBlocked();
-        log.debug('setEffort', { from: mutableEffort, to: newEffort, sdk: clamped, controlRequestsBlocked: isControlBlocked });
-        if (!clamped) {
+        log.debug('setEffort', { from: mutableEffort, to: newEffort, sdk: sdkEffort, controlRequestsBlocked: isControlBlocked });
+        if (!sdkEffort) {
           mutableEffort = newEffort;
           return;
         }
         if (!isControlBlocked) {
-          await q.applyFlagSettings({ effortLevel: clamped });
+          const appliedEffort = await applyClaudeEffortFlagSettings(
+            q,
+            sdkEffort,
+            getSdkMaxEffortFallbackForModel(mutableModel),
+          );
+          if (appliedEffort !== sdkEffort) {
+            log.warn('setEffort: runtime rejected max; applied model-compatible fallback', {
+              model: mutableModel,
+              requested: sdkEffort,
+              applied: appliedEffort,
+            });
+          }
         }
         mutableEffort = newEffort;
       },

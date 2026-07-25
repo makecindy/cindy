@@ -3,7 +3,7 @@
  *
  * - types：Provider / CatalogModel / RoutingDescriptor（models.dev 形状 + agents/routing/runtime 扩展）
  * - catalog：内置目录 BUNDLED_CATALOG + parseCatalog 校验
- * - source：目录源解析与加载（OSS / 本地 / 缓存 / 兜底，IO 由 host 注入）
+ * - source：目录源解析与加载（公共 API / 旧 OSS / 本地 / bundled 兜底，IO 由 host 注入）
  * - registry：连接状态合成、按 agent 算可见性、resolveRoute 解析路由素材
  */
 
@@ -28,13 +28,16 @@ export type {
   OAuthProviderDescriptor,
 } from './types.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, sanitizePresets, sortPresetsForLocale } from './catalog.js';
+export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from './catalog.js';
 
 export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
 
 export {
+  CATALOG_API_PATH,
   CATALOG_CFG_PATH,
+  DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   resolveCatalogUrl,
+  resolveFallbackCatalogUrl,
   mergeWithBundled,
   loadCatalog,
 } from './source.js';

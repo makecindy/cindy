@@ -3,6 +3,7 @@ import { createHashRouter, Navigate } from 'react-router-dom';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
 import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
+import { GhostPanelWindowLayout } from '@/components/layout/GhostPanelWindowLayout';
 import { SettingsView } from '@/components/settings/SettingsView';
 import { LoginPage } from '@/components/login/LoginPage';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
@@ -63,6 +64,13 @@ export const router = createHashRouter([
           {
             path: 'sidebar-window',
             element: <SidebarWindowLayout />,
+            errorElement: <RouteErrorFallback variant="section" />,
+          },
+          // 插件面板独立窗口(?ghostPanelWindow=<id>)的根路由 —— 同样与
+          // MainLayout 平级,只挂 46px chrome + 面板体。
+          {
+            path: 'ghost-panel-window',
+            element: <GhostPanelWindowLayout />,
             errorElement: <RouteErrorFallback variant="section" />,
           },
           {
@@ -145,6 +153,10 @@ export const router = createHashRouter([
                   },
                   { path: 'settings', element: <SettingsView /> },
                   { path: 'plugins', element: <GhostPluginPage /> },
+                  {
+                    path: 'billing',
+                    element: <Navigate to="/settings?tab=billing" replace />,
+                  },
                   // Maker IPC / agent event 链路诊断页(独立路由,不影响标准 chat)。
                   { path: 'maker-experimental', element: <MakerExperimentalView /> },
                 ],

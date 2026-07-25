@@ -1070,35 +1070,41 @@ export function useVoiceInput(
       refinementEnabled: voiceInputSettings.refinementEnabled,
     }).catch(() => undefined);
     void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
-    if (voiceInputSettings.fastActivationEnabled) {
-      const permission = window.electronAPI.voiceInput.getMicrophonePermissionCached();
-      if (permission.ok) {
-        void prewarmVoiceInputMicrophoneWithAutomaticFallback(
-          {
-            workletUrl,
-            deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
-            ...createVoiceInputAudioProfile(true),
-          },
-          () => {
-            log.warn('fast activation selected microphone unavailable, prewarming automatic microphone');
-          },
-        ).catch((error) => {
-          log.warn('fast activation microphone prewarm failed', {
-            error: error instanceof Error ? error.message : String(error),
-            workletUrl,
-            hasDeviceId: Boolean(voiceInputSettings.microphoneDeviceId),
-          });
-        });
-      }
-    } else {
-      void disposeKeepAliveVoiceInputMicrophone('setting_disabled').catch(() => undefined);
-    }
     if (import.meta.env.DEV) void prewarmVoiceInputBenchmarkFixture().catch(() => undefined);
+  }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
+
+  // Microphone keep-alive is deliberately a separate effect: unlike the prewarm
+  // above it opens a real capture device and turns on the OS privacy indicator,
+  // so it must not re-run for settings unrelated to the microphone. Language and
+  // refinement changes used to re-assert keep-alive intent here, which kept the
+  // device warm for reasons the user never asked for.
+  useEffect(() => {
+    if (disabledRef.current) return;
+    if (!voiceInputSettings.fastActivationEnabled) {
+      void disposeKeepAliveVoiceInputMicrophone('setting_disabled').catch(() => undefined);
+      return;
+    }
+    const permission = window.electronAPI.voiceInput.getMicrophonePermissionCached();
+    if (!permission.ok) return;
+    void prewarmVoiceInputMicrophoneWithAutomaticFallback(
+      {
+        workletUrl,
+        deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
+        ...createVoiceInputAudioProfile(true),
+      },
+      () => {
+        log.warn('fast activation selected microphone unavailable, prewarming automatic microphone');
+      },
+    ).catch((error) => {
+      log.warn('fast activation microphone prewarm failed', {
+        error: error instanceof Error ? error.message : String(error),
+        workletUrl,
+        hasDeviceId: Boolean(voiceInputSettings.microphoneDeviceId),
+      });
+    });
   }, [
     voiceInputSettings.fastActivationEnabled,
-    voiceInputSettings.language,
     voiceInputSettings.microphoneDeviceId,
-    voiceInputSettings.refinementEnabled,
   ]);
 
   const start = useCallback(async () => {
@@ -1236,6 +1242,22 @@ export function useVoiceInput(
       elapsedMs,
     });
     if (!captureStart.ok) {
+      // 电源释放(锁屏/挂起)取消了启动:静默回收,不显示错误态 —— 用户是主动
+      // 离开,内部的 disposed 消息不该出现在界面上。
+      if (captureStart.cancelled) {
+        log.debug('microphone start cancelled by power release');
+        resolveStartReadyState(attemptId, { ok: false, error: captureStart.error });
+        invalidateStartAttempt();
+        void startResultPromise.then((result) => {
+          if (result.ok) {
+            void window.electronAPI.voiceInput.cancel({ runId: result.runId });
+          }
+        });
+        await restoreSystemAudioForRecording();
+        setVoiceState('idle');
+        restoreEditorFocusAfterVoiceInput();
+        return;
+      }
       log.warn('microphone start failed:', captureStart.error);
       resolveStartReadyState(attemptId, { ok: false, error: captureStart.error });
       invalidateStartAttempt();

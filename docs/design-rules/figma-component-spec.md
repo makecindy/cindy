@@ -1,6 +1,6 @@
 # Cindy 登录新设计稿组件与色彩规范速查手册
 
-> Figma 文件：`CINDY`，fileKey `xNK3qh7zVfrO3zrKj5tEf8`，页面 `0:1 Design`。本文只记录设计规范，不改源码。所有尺寸单位均为 Figma px；实现到 375pt 移动设计宽时，可按 `Figma px / 2` 作为基础换算。
+> Figma 文件：`CINDY`，页面 `0:1 Design`。本文只记录设计规范，不改源码。所有尺寸单位均为 Figma px；实现到 375pt 移动设计宽时，可按 `Figma px / 2` 作为基础换算。
 
 ## 0. 读取口径与平台规则
 
@@ -169,9 +169,9 @@ Color System 文字样式：`PingFang SC` Semibold，色名 36px，hex 28px，�
 | 国区手机登录中 | `347:999` | filled | `139 6666 6666`，stroke `#D4D4D4` |
 | 国区手机报错 | `347:1040` | error | `133 45`，错误文案 `请输入正确手机号` |
 | 国际区邮箱默认 | `347:1489` | default | `请输入邮箱` |
-| 国际区邮箱输入中 | `347:1540` | focus | `Praise@`，stroke `#2A2828` |
-| 国际区邮箱继续中 | `347:1587` | filled | `Praise@xd.com`，stroke `#D4D4D4` |
-| 国际区邮箱错误 | `347:1744` | error | `Praise@`，错误文案 `请输入正确邮箱` |
+| 国际区邮箱输入中 | `347:1540` | focus | `user@`，stroke `#2A2828` |
+| 国际区邮箱继续中 | `347:1587` | filled | `user@example.com`，stroke `#D4D4D4` |
+| 国际区邮箱错误 | `347:1744` | error | `user@`，错误文案 `请输入正确邮箱` |
 | 移动国区长屏 | `347:2642` | default | `请输入手机号(含国家区号）` |
 | 移动国区短屏 | `347:2680` | default | `请输入手机号` |
 | 移动国际长屏 | `347:2875` | default | `请输入手机号(含国家区号）` |
@@ -196,7 +196,7 @@ Color System 文字样式：`PingFang SC` Semibold，色名 36px，hex 28px，�
 | 国区验证码空 | `347:1104` | default | x=71 y=158，文案 `6 位验证码` |
 | 国区验证码填完 | `347:1166` | focus | 文案 `666666`，stroke `#2A2828` |
 | 国区验证码登录中 | `347:1208` | filled | 文案 `666666`，stroke `#D4D4D4` |
-| 国际区验证码空 | `347:1830` | default | 副标题 `验证码已发送至 Praise@xd.com` |
+| 国际区验证码空 | `347:1830` | default | 副标题 `验证码已发送至 user@example.com` |
 | 国际区验证码填完 | `347:1858` | focus | 文案 `666666`，stroke `#2A2828` |
 | 国际区验证码登录中 | `347:1892` | filled | 文案 `666666`，stroke `#D4D4D4` |
 
@@ -329,7 +329,7 @@ Symbol `247:2158`，尺寸 680 x 50。
 | 企业身份 | `347:1696` | x=70 y=158，540 x 100 | `以企业身份登录`; `通过 Example SSO 单点登录` |
 | 个人身份 | `347:1697` | x=70 y=278，540 x 100 | `以个人身份登录`; `通过邮箱发送验证码` |
 
-wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧参数一致；按第二排 `358:689` / `358:711` / `358:733` 入规范，第一排同参数帧为 `358:511` / `358:601` / `358:631`。选择列表页新实例 `358:745` 为单行企业 SSO：x=70 y=148 w=540 h=100，fill `#EEEEEE`，stroke `#D4D4D4`，radius 60；标题 `以企业身份登录`，副文案 `通过 Praise@xd.com SSO 单点登录`。组件集仍为 `329:957`，normal/hover/pressed 节点分别是 `329:956` / `329:991` / `329:1009`。
+wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧参数一致；按第二排 `358:689` / `358:711` / `358:733` 入规范，第一排同参数帧为 `358:511` / `358:601` / `358:631`。选择列表页新实例 `358:745` 为单行企业 SSO：x=70 y=148 w=540 h=100，fill `#EEEEEE`，stroke `#D4D4D4`，radius 60；标题 `以企业身份登录`，副文案 `通过 user@example.com SSO 单点登录`。组件集仍为 `329:957`，normal/hover/pressed 节点分别是 `329:956` / `329:991` / `329:1009`。
 
 ### 4.10 `Global` pill
 
@@ -388,11 +388,11 @@ wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧�
 | 状态 | nodeId | 面板 / 关键组件 | 差异 |
 |---|---|---|---|
 | 邮箱默认 | `347:1472` | input `347:1489`; button `347:1490`; third-party `347:1493` | `Global` pill visible；placeholder `请输入邮箱`；第三方 Apple / Google / SSO |
-| 邮箱输入中 | `347:1523` | input `347:1540`; button `347:1541` | 文本 `Praise@`，input focus stroke `#2A2828` |
+| 邮箱输入中 | `347:1523` | input `347:1540`; button `347:1541` | 文本 `user@`，input focus stroke `#2A2828` |
 | 邮箱错误 | `347:1727` | input `347:1744`; error `347:1776` | input stroke `#D91F37`；错误文案 `请输入正确邮箱` |
-| 邮箱继续中 | `347:1570` | input `347:1587`; button `347:1588` | 文本 `Praise@xd.com`；按钮 `继续中...` + spinner |
-| 选择登录方式 | `347:1620` | SSO rows `347:1696`, `347:1697`; back `347:1723` | 标题 `选择登录方式`；副标题 `Praise@xd.com 属于企业「示例企业」` |
-| 个人验证码空 | `347:1779` | input `347:1830`; link `347:1831`; button `347:1832`; back `347:1801` | 副标题 `验证码已发送至 Praise@xd.com`; button disabled |
+| 邮箱继续中 | `347:1570` | input `347:1587`; button `347:1588` | 文本 `user@example.com`；按钮 `继续中...` + spinner |
+| 选择登录方式 | `347:1620` | SSO rows `347:1696`, `347:1697`; back `347:1723` | 标题 `选择登录方式`；副标题 `user@example.com 属于企业「示例企业」` |
+| 个人验证码空 | `347:1779` | input `347:1830`; link `347:1831`; button `347:1832`; back `347:1801` | 副标题 `验证码已发送至 user@example.com`; button disabled |
 | 个人验证码填完 | `347:1837` | input `347:1858`; link `347:1859`; button `347:1860` | `666666`; button normal；link `重新发送` |
 | 个人验证码登录中 | `347:1871` | input `347:1892`; button `347:1894` | button `登录中...` + spinner；input stroke `#D4D4D4` |
 | 浏览器等待屏 | `347:1906` | loading `347:1925`; button `347:1923` | 与国区等待屏同构，按钮 `取消` |
@@ -465,7 +465,7 @@ wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧�
 | 标题行 | `欢迎使用 CINDY`，标题 x=222 w=236 | `欢迎使用 CINDY` + `Global` pill；标题 x=185 w=236，pill x=425 | 国际区多 pill，面板尺寸不变 |
 | 第三方入口 | Apple + SSO；group x=225 w=230 | Apple + Google + SSO；group x=150 w=380 | 圆钮尺寸 80、gap 70 一致 |
 | 输入框默认文案 | `请输入手机号` / `请输入手机号(含国家区号）` | 桌面 `请输入邮箱`；移动仍是手机号文案 | 移动国际文案需确认 |
-| 验证码副标题 | `验证码已发送至 +86 13666666666` | `验证码已发送至 Praise@xd.com` | 组件尺寸一致，文案不同 |
+| 验证码副标题 | `验证码已发送至 +86 13666666666` | `验证码已发送至 user@example.com` | 组件尺寸一致，文案不同 |
 | 浏览器三态 | 等待 / 准备 / 错误 | 等待 / 准备 / 错误 | 参数同构 |
 | 回调卡 | 国区节点一套 | 国际区节点一套 | Light/Dark 与文案同构 |
 
@@ -506,8 +506,8 @@ wave3 追加 · 2026-07-19：桌面 `LOG IN_企业 SSO 登录` 两排同名帧�
 |---|---|---|
 | 两排一致性 | 第一排 `358:511` / `358:601` / `358:631`; 第二排 `358:689` / `358:711` / `358:733` | 三态逐项一致；仅 page 绝对 x/y 与 nodeId 不同。规范以下按第二排，第一排作为同参数副本 |
 | 组织输入 | `358:689` | frame 1819 x 2098；面板 `358:697` 680 x 440，fill `#FBFBFB`，r36；title `358:700` `企业 SSO 登录`，x=236 y=31 w=209 h=38，Bold 32 `#252222`; subtitle `358:701` x=41 y=75 w=599 h=23，Regular 20 `#6F6F6F`；input `358:698` x=70 y=158 w=540 h=80，fill `#EEEEEE`，stroke `#D4D4D4`，r40，placeholder `请输入企业 ID` Regular 24 `#D4D4D4`; button `358:699` x=70 y=300 w=540 h=80，disabled：白 70% over `#2A2828`，stroke `#B4B4B4`，text `继续` Bold 24 `#D4D4D4` opacity 80%；back `358:704` x=20 y=20 w=60 h=60；Text_link `358:702` x=70 y=380 w=540 h=50，text `358:703` `不知道企业 id？请联系企业管理员` Regular 20 `#2A2828`，x=270.5 top=`calc(50%-1.5px)` w=539 |
-| 已填 example | `358:711` | 同 `358:689`；input `358:720` 文案 `Praise@xd.com`，Bold 24 `#252222`，fill `#EEEEEE`，stroke `#D4D4D4`，r40；button `358:721` normal：fill `#2A2828`，stroke `#434343`，text `继续` Bold 24 `#D4D4D4`；Text_link `358:724` / text `358:725` 同组织输入 |
-| 选择登录方式列表 | `358:733` | 面板 `358:741` 680 x 440，fill `#FBFBFB`，r36；title `358:742` `选择登录方式` x=244 y=31 w=192 h=38，Bold 32 `#252222`; subtitle `358:743` `选择企业「Praise@xd.com」的单点登录方式` x=41 y=75 w=599 h=23，Regular 20 `#6F6F6F`; back `358:744` x=20 y=20 w=60 h=60；列表行 `358:745` x=70 y=148 w=540 h=100，fill `#EEEEEE`，stroke `#D4D4D4`，r60，left icon 24 x 24 at x=27 y=37，right icon 24 x 24 at x=487 y=37，title `以企业身份登录` x=67 top=`calc(50%-14px)` w=409 Bold 24 `#252222`，subtitle `通过 Praise@xd.com SSO 单点登录` x=67 top=`calc(50%+19.5px)` w=409 Regular 20 `#6F6F6F` |
+| 已填 example | `358:711` | 同 `358:689`；input `358:720` 文案 `user@example.com`，Bold 24 `#252222`，fill `#EEEEEE`，stroke `#D4D4D4`，r40；button `358:721` normal：fill `#2A2828`，stroke `#434343`，text `继续` Bold 24 `#D4D4D4`；Text_link `358:724` / text `358:725` 同组织输入 |
+| 选择登录方式列表 | `358:733` | 面板 `358:741` 680 x 440，fill `#FBFBFB`，r36；title `358:742` `选择登录方式` x=244 y=31 w=192 h=38，Bold 32 `#252222`; subtitle `358:743` `选择企业「user@example.com」的单点登录方式` x=41 y=75 w=599 h=23，Regular 20 `#6F6F6F`; back `358:744` x=20 y=20 w=60 h=60；列表行 `358:745` x=70 y=148 w=540 h=100，fill `#EEEEEE`，stroke `#D4D4D4`，r60，left icon 24 x 24 at x=27 y=37，right icon 24 x 24 at x=487 y=37，title `以企业身份登录` x=67 top=`calc(50%-14px)` w=409 Bold 24 `#252222`，subtitle `通过 user@example.com SSO 单点登录` x=67 top=`calc(50%+19.5px)` w=409 Regular 20 `#6F6F6F` |
 
 ### 9.3 `LOG IN_手机登录_默认` WeChat 绿钮帧
 

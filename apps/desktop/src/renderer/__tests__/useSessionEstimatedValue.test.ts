@@ -7,6 +7,27 @@ import {
 } from '@/hooks/useSessionEstimatedValue';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
+import type { RegionalMoney } from '../../shared/regionalMoney';
+
+function usdEstimate(amount: number): RegionalMoney {
+  return {
+    amount,
+    currency: 'USD',
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['subscription-value'],
+  };
+}
+
+function legacyCnyEstimate(amount: number): RegionalMoney {
+  return {
+    amount,
+    currency: 'CNY',
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+  };
+}
 
 function assistantMessage(
   clientId: string,
@@ -18,7 +39,7 @@ function assistantMessage(
     content: 'ok',
     createdAt: new Date(0).toISOString(),
     ...(typeof costUsd === 'number'
-      ? { turnCostUsd: costUsd, turnCostIsEstimate: true }
+      ? { turnMoney: usdEstimate(costUsd), turnCostIsEstimate: true }
       : {}),
   } as ChatMessage;
 }
@@ -36,7 +57,7 @@ if (!GPT_DETAILS) {
 
 describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
   it('preserves DB-backed costs before chat history has loaded', () => {
-    const current = new Map([['persisted', 0.12]]);
+    const current = new Map([['persisted', usdEstimate(0.12)]]);
     const result = syncEstimatedValueCostsFromStoreSnapshot(
       current,
       new Set(),
@@ -48,7 +69,10 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
 
   it('clears all costs when /clear leaves an authoritative empty transcript', () => {
     const result = syncEstimatedValueCostsFromStoreSnapshot(
-      new Map([['persisted', 0.12], ['visible', 0.03]]),
+      new Map([
+        ['persisted', usdEstimate(0.12)],
+        ['visible', usdEstimate(0.03)],
+      ]),
       new Set(['visible']),
       { messages: [], historyLoaded: true, hasMoreMessages: false },
     );
@@ -59,7 +83,10 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
 
   it('removes stale visible ids while keeping DB-only hidden history costs', () => {
     const result = syncEstimatedValueCostsFromStoreSnapshot(
-      new Map([['hidden-history', 0.12], ['old-visible', 0.03]]),
+      new Map([
+        ['hidden-history', usdEstimate(0.12)],
+        ['old-visible', usdEstimate(0.03)],
+      ]),
       new Set(['old-visible']),
       {
         messages: [
@@ -71,8 +98,8 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
       },
     );
 
-    expect(result?.costs.get('hidden-history')).toBe(0.12);
-    expect(result?.costs.get('new-visible')).toBe(0.04);
+    expect(result?.costs.get('hidden-history')?.amount).toBe(0.12);
+    expect(result?.costs.get('new-visible')?.amount).toBe(0.04);
     expect(result?.costs.has('old-visible')).toBe(false);
     expect(result?.costs.has('visible-no-cost')).toBe(false);
   });
@@ -82,19 +109,28 @@ describe('resolveEstimatedValueTurnCostEntry', () => {
   it('corrects realtime stale full-cache estimates before merging session value', () => {
     expect(resolveEstimatedValueTurnCostEntry({
       clientId: 'stale',
-      turnCostUsd: 8.76,
+      turnMoney: usdEstimate(8.76),
       turnCostIsEstimate: true,
       turnUsageDetails: GPT_DETAILS,
-    })?.costUsd).toBeCloseTo(2.011);
+    })?.money.amount).toBeCloseTo(2.011);
+  });
+
+  it('corrects stale legacy estimates after their CN fixed-FX projection', () => {
+    expect(resolveEstimatedValueTurnCostEntry({
+      clientId: 'stale-cn',
+      turnMoney: legacyCnyEstimate(8.76 * 6.7),
+      turnCostIsEstimate: true,
+      turnUsageDetails: GPT_DETAILS,
+    })?.money.amount).toBeCloseTo(2.011 * 6.7);
   });
 
   it('preserves realtime live pricing estimates that do not match stale full-cache formulas', () => {
     expect(resolveEstimatedValueTurnCostEntry({
       clientId: 'live',
-      turnCostUsd: 3.14,
+      turnMoney: usdEstimate(3.14),
       turnCostIsEstimate: true,
       turnUsageDetails: GPT_DETAILS,
-    })?.costUsd).toBe(3.14);
+    })?.money.amount).toBe(3.14);
   });
 
   it('ignores non-estimate realtime entries', () => {

@@ -11,7 +11,7 @@ desktop、mobile 及共享 packages；服务端位于独立仓库，不在本仓
 
 - 开发环境版本和安装步骤以
   [`docs/dev-rules/environment-setup.md`](docs/dev-rules/environment-setup.md) 为准。
-- 先阅读 [README.md](README.md) 的安装说明，以及适用的
+- 先阅读 [README.zh-CN.md](README.zh-CN.md) 的安装说明，以及适用的
   [工程规则](AGENTS.md)。`AGENTS.md` 是详细工程约束，不是本指南的替代品。
 - 参与社区时请遵守 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)；普通使用问题见
   [`SUPPORT.md`](SUPPORT.md)。

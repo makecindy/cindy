@@ -47,6 +47,7 @@ import { GhostToolCard } from './GhostToolCard';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import type { AgentKind as RendererAgentKind } from '@/lib/ccAgent.types';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import type { RegionalMoney } from '../../../shared/regionalMoney';
 import { useAgentCapabilities, type AgentKind as MakerAgentKind } from '@/hooks/useAgentCapabilities';
 import { useSessionFileOrigin } from './ChatSessionFileContext';
 import { originDeviceId } from '@/lib/sessionFileOrigin';
@@ -172,9 +173,11 @@ interface AssistantMessageProps {
    *  opacity-0 也占 24px 布局高度,每句都挂会拉散消息流)。默认 false。 */
   showActionBar?: boolean;
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
+  turnMoney?: RegionalMoney;
   turnCostUsd?: number;
   /** true = 订阅模式下的 token 价值;false = API 账单 cost / API 单价折算 cost。 */
   turnCostIsEstimate?: boolean;
+  userTurnMoney?: RegionalMoney;
   userTurnCostUsd?: number;
   userTurnCostIsEstimate?: boolean;
   /** Per-turn token/cache 明细。 */
@@ -201,8 +204,10 @@ export const AssistantMessage = memo(function AssistantMessage({
   forkBlocked,
   sessionRunning,
   showActionBar = false,
+  turnMoney,
   turnCostUsd,
   turnCostIsEstimate,
+  userTurnMoney,
   userTurnCostUsd,
   userTurnCostIsEstimate,
   turnUsageDetails,
@@ -365,8 +370,10 @@ export const AssistantMessage = memo(function AssistantMessage({
           onFork={canFork ? handleFork : undefined}
           onAddToChat={messageDeepLink ? handleAddToChat : undefined}
           onDelete={currentSessionId && messageClientId ? handleDelete : undefined}
+          turnMoney={turnMoney}
           turnCostUsd={turnCostUsd}
           turnCostIsEstimate={turnCostIsEstimate}
+          userTurnMoney={userTurnMoney}
           userTurnCostUsd={userTurnCostUsd}
           userTurnCostIsEstimate={userTurnCostIsEstimate}
           turnUsageDetails={turnUsageDetails}

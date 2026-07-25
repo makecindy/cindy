@@ -54,14 +54,14 @@ const TEST_MODELS: ModelDescriptor[] = [
     id: 'claude-opus-4-6',
     displayName: 'Claude Opus 4.6',
     contextWindow: 1_000_000,
-    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    efforts: ['low', 'medium', 'high', 'max'],
     defaultEffort: 'high',
   },
   {
     id: 'claude-sonnet-5',
     displayName: 'Claude Sonnet 5',
     contextWindow: 500_000,
-    efforts: ['low', 'medium', 'high'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     defaultEffort: 'high',
   },
 ];
@@ -237,6 +237,92 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('passes max through when changing effort in a live Sonnet 5 session', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+
+    await handle.setModel?.('claude-sonnet-5');
+    await handle.setEffort?.('max');
+
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'max' });
+
+    await handle.close();
+  });
+
+  it('falls back to the model-supported xhigh when an older runtime rejects max', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    firstQuery.applyFlagSettings
+      .mockRejectedValueOnce(new Error('invalid effortLevel: max'))
+      .mockResolvedValueOnce(undefined);
+
+    await handle.setModel?.('claude-sonnet-5');
+    await expect(handle.setEffort?.('max')).resolves.toBeUndefined();
+
+    expect(firstQuery.applyFlagSettings.mock.calls.slice(-2)).toEqual([
+      [{ effortLevel: 'max' }],
+      [{ effortLevel: 'xhigh' }],
+    ]);
+
+    await handle.close();
+  });
+
+  it('falls back to high when the selected model does not support xhigh', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    firstQuery.applyFlagSettings
+      .mockRejectedValueOnce(new Error('invalid effortLevel: max'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(handle.setEffort?.('max')).resolves.toBeUndefined();
+
+    expect(firstQuery.applyFlagSettings.mock.calls.slice(-2)).toEqual([
+      [{ effortLevel: 'max' }],
+      [{ effortLevel: 'high' }],
+    ]);
+
+    await handle.close();
+  });
+
+  it('does not retry max when applyFlagSettings fails at the transport layer', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    firstQuery.applyFlagSettings.mockRejectedValueOnce(
+      new Error('ProcessTransport is not ready for writing'),
+    );
+
+    await expect(handle.setEffort?.('max')).rejects.toThrow(
+      'ProcessTransport is not ready for writing',
+    );
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledTimes(1);
+
+    await handle.close();
+  });
+
+  it('does not retry failures for non-max effort levels', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    firstQuery.applyFlagSettings.mockRejectedValueOnce(new Error('transport failed'));
+
+    await expect(handle.setEffort?.('high')).rejects.toThrow('transport failed');
+    expect(firstQuery.applyFlagSettings).toHaveBeenCalledTimes(1);
+
+    await handle.close();
+  });
+
+  it('replays max without downgrading it when effort changes during query rebuild', async () => {
+    const { handle } = await startRewindableSession();
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockImplementationOnce(() => {
+      void handle.setModel?.('claude-sonnet-5');
+      void handle.setEffort?.('max');
+      return secondQuery;
+    });
+
+    await handle.send({ type: 'user', content: 'use max after rewind' });
+
+    expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({ effortLevel: 'max' });
+
+    await handle.close();
+  });
+
   it('setModel / setEffort / setFastMode / setPermissionMode skip the closed query and apply on rebuild', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 

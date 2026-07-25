@@ -36,7 +36,13 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
 import { cn } from '@/lib/utils';
-import { DAILY_SOFT_LIMIT_FACTOR, formatCompactTokens, formatCompactUsd, formatTurnCostUsd } from '@/lib/usageFormat';
+import {
+  DAILY_SOFT_LIMIT_FACTOR,
+  formatCompactMoney,
+  formatCompactTokens,
+  formatTurnCostMoney,
+  formatTurnCostUsd,
+} from '@/lib/usageFormat';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
@@ -68,6 +74,8 @@ import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLi
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { gatewayMoney, type RegionalMoney } from '../../../shared/regionalMoney';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import {
   RESET_PENDING_MAX_MS,
@@ -129,7 +137,7 @@ interface MetricSlot {
  */
 function computeMetricSlots(
   claudeQuota: ClaudeAccountUsageSnapshot | null,
-  sessionCostUsd: number | null,
+  sessionMoney: RegionalMoney | null,
   t: TFunction,
 ): Record<MetricKey, MetricSlot> {
   const slots: Record<MetricKey, MetricSlot> = {
@@ -142,8 +150,8 @@ function computeMetricSlots(
     // monthly 永远跟 cycle 一起拿到; daily 走单独 endpoint 可能拉不到 (todaySpend=null) → 隐藏
     slots.monthly = {
       label: t('todaySpend.monthlyLimitLabel', {
-        spend: formatCompactUsd(claudeQuota.spend),
-        limit: formatCompactUsd(claudeQuota.maxBudget),
+        spend: formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION)),
+        limit: formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION)),
       }),
       available: true,
     };
@@ -151,18 +159,21 @@ function computeMetricSlots(
       const softLimit = (claudeQuota.maxBudget / 30) * DAILY_SOFT_LIMIT_FACTOR;
       slots.daily = {
         label: t('todaySpend.dailyLimitLabel', {
-          spend: formatCompactUsd(claudeQuota.todaySpend),
-          limit: formatCompactUsd(softLimit),
+          spend: formatCompactMoney(
+            gatewayMoney(claudeQuota.todaySpend, CURRENT_CINDY_REGION),
+          ),
+          limit: formatCompactMoney(gatewayMoney(softLimit, CURRENT_CINDY_REGION)),
         }),
         available: true,
       };
     }
   }
 
-  if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
+  if (sessionMoney && sessionMoney.amount > 0) {
+    const cost = formatTurnCostMoney(sessionMoney);
     slots.session = {
-      label: t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` }),
-      tooltipLabel: t('todaySpend.tooltip.sessionUsed', { cost: `$${sessionCostUsd.toFixed(2)}` }),
+      label: t('todaySpend.sessionCostLabel', { cost }),
+      tooltipLabel: t('todaySpend.tooltip.sessionUsed', { cost }),
       available: true,
     };
   }
@@ -439,7 +450,7 @@ function getCodexApiEmptyState(
 function buildCodexTooltipNode(
   snapshot: RateLimitSnapshot | null,
   sessionTokens: number | null,
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   t: TFunction,
   usageDashboardLabel: string | null,
   nowMs: number,
@@ -477,7 +488,7 @@ function buildCodexTooltipNode(
   } else if (credits?.hasCredits && !parsedCredits) {
     lines.push(t('todaySpend.codex.balanceAvailable'));
   }
-  pushSessionValueLines(lines, sessionValueUsd, sessionTokens, t);
+  pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
 
   for (const window of getCodexWindowUsages(snapshot, t, nowMs)) {
     const base = t('todaySpend.codex.windowLine', {
@@ -645,7 +656,7 @@ function isClaudeSubscriptionAlerting(
 function buildClaudeSubscriptionTooltipNode(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,
   modelId: string | null | undefined,
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   t: TFunction,
   usageDashboardLabel: string | null,
   latestTurnUsage: LatestTurnUsageSummary | null,
@@ -662,9 +673,9 @@ function buildClaudeSubscriptionTooltipNode(
   if (planLabel) {
     lines.push(t('todaySpend.claude.planLine', { plan: planLabel }));
   }
-  if (typeof sessionValueUsd === 'number' && Number.isFinite(sessionValueUsd) && sessionValueUsd > 0) {
+  if (sessionValueMoney?.amount) {
     lines.push(t('todaySpend.claude.sessionValueLabel', {
-      cost: `$${sessionValueUsd.toFixed(2)}`,
+      cost: formatTurnCostMoney(sessionValueMoney),
     }));
   }
 
@@ -718,8 +729,10 @@ function buildClaudeSubscriptionTooltipNode(
 
 /** 最近一轮 tooltip 使用的 assistant 消息明细。 */
 interface LatestTurnUsageSummary {
+  money?: RegionalMoney;
   costUsd?: number;
   isEstimate?: boolean;
+  segmentMoney?: RegionalMoney;
   segmentCostUsd?: number;
   segmentIsEstimate?: boolean;
   isUserTurnTotal: boolean;
@@ -730,25 +743,38 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant' || !message.turnUsageDetails) continue;
+    const userTurnMoney =
+      message.userTurnMoney?.amount
+        ? message.userTurnMoney
+        : undefined;
     const userTurnCostUsd = typeof message.userTurnCostUsd === 'number' && message.userTurnCostUsd > 0
       ? message.userTurnCostUsd
       : undefined;
     return {
-      ...(userTurnCostUsd != null
-        ? { costUsd: userTurnCostUsd }
+      ...(userTurnMoney
+        ? { money: userTurnMoney }
+        : userTurnCostUsd != null
+          ? { costUsd: userTurnCostUsd }
+          : message.turnMoney?.amount
+            ? { money: message.turnMoney }
         : typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
           ? { costUsd: message.turnCostUsd }
         : {}),
-      ...((userTurnCostUsd != null
+      ...((userTurnMoney || userTurnCostUsd != null
         ? message.userTurnCostIsEstimate
         : message.turnCostIsEstimate) === true ? { isEstimate: true } : {}),
-      ...(userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
+      ...((userTurnMoney || userTurnCostUsd != null) && message.turnMoney?.amount
+        ? {
+            segmentMoney: message.turnMoney,
+            segmentIsEstimate: message.turnCostIsEstimate === true,
+          }
+        : userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
         ? {
             segmentCostUsd: message.turnCostUsd,
             segmentIsEstimate: message.turnCostIsEstimate === true,
           }
         : {}),
-      isUserTurnTotal: userTurnCostUsd != null,
+      isUserTurnTotal: Boolean(userTurnMoney || userTurnCostUsd != null),
       details: message.turnUsageDetails,
     };
   }
@@ -789,10 +815,15 @@ function appendLatestTurnUsageLines(
 ): void {
   if (!summary) return;
   if (lines.length > 0) lines.push('');
-  if (summary.isUserTurnTotal && summary.costUsd != null) {
+  if (
+    summary.isUserTurnTotal &&
+    (summary.money?.amount || summary.costUsd != null)
+  ) {
     lines.push(t('todaySpend.tooltip.latestUserTurnTitle'));
     lines.push(t(summary.isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', {
-      cost: formatTurnCostUsd(summary.costUsd),
+      cost: summary.money
+        ? formatTurnCostMoney(summary.money)
+        : formatTurnCostUsd(summary.costUsd ?? 0),
     }));
   }
   lines.push(...buildTurnUsageTooltipLines({
@@ -800,6 +831,7 @@ function appendLatestTurnUsageLines(
     t,
     // Token / model detail remains scoped to the final SDK segment. Keep its
     // cost line separate from the user-turn total shown above.
+    money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money,
     costUsd: summary.isUserTurnTotal ? summary.segmentCostUsd : summary.costUsd,
     isEstimate: summary.isUserTurnTotal ? summary.segmentIsEstimate : summary.isEstimate,
     title: t(summary.isUserTurnTotal
@@ -825,12 +857,14 @@ function pushDashboardLinkLine(lines: string[], label: string | null): void {
 /** 「本会话价值 / token 累计」两行 —— codex 订阅与 xai bridge tooltip 共用(同 i18n key 同格式)。 */
 function pushSessionValueLines(
   lines: string[],
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   sessionTokens: number | null,
   t: TFunction,
 ): void {
-  if (typeof sessionValueUsd === 'number' && Number.isFinite(sessionValueUsd) && sessionValueUsd > 0) {
-    lines.push(t('todaySpend.codex.sessionValueLabel', { cost: `$${sessionValueUsd.toFixed(2)}` }));
+  if (sessionValueMoney?.amount) {
+    lines.push(t('todaySpend.codex.sessionValueLabel', {
+      cost: formatTurnCostMoney(sessionValueMoney),
+    }));
   }
   if (typeof sessionTokens === 'number' && Number.isFinite(sessionTokens) && sessionTokens > 0) {
     lines.push(t('todaySpend.codex.sessionTokensLine', {
@@ -846,13 +880,13 @@ function pushSessionValueLines(
 function buildXaiTooltipNode(
   rateLimit: XaiRateLimitSnapshot | null,
   sessionTokens: number | null,
-  sessionValueUsd: number | null,
+  sessionValueMoney: RegionalMoney | null,
   t: TFunction,
   usageDashboardLabel: string | null,
   latestTurnUsage: LatestTurnUsageSummary | null,
 ): React.ReactNode {
   const lines: string[] = [];
-  pushSessionValueLines(lines, sessionValueUsd, sessionTokens, t);
+  pushSessionValueLines(lines, sessionValueMoney, sessionTokens, t);
   if (rateLimit && typeof rateLimit.remainingRequests === 'number' && typeof rateLimit.limitRequests === 'number') {
     lines.push(t('todaySpend.xai.requestsLine', {
       remaining: rateLimit.remainingRequests.toLocaleString(),
@@ -901,6 +935,7 @@ interface TodaySpendChipProps {
   /** session 累计需要 sessionId + 初始值。Claude / Codex API 显示真实 USD cost。 */
   sessionId?: string;
   /** 来自 session.totalCostUsd（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
+  sessionInitialMoney?: RegionalMoney | null;
   sessionInitialCostUsd?: number | null;
   /** 来自 session.totalTokenUsage（sessionService.get 拿到）— mount 后由 IPC push 更新。 */
   sessionInitialTokens?: number | null;
@@ -919,6 +954,7 @@ export function TodaySpendChip({
   modelId,
   providerId,
   sessionId,
+  sessionInitialMoney,
   sessionInitialCostUsd,
   sessionInitialTokens,
   remoteHostId,
@@ -1004,10 +1040,13 @@ export function TodaySpendChip({
   // 订阅直连 bridge 轮真实计费恒 0(不写 sessions.total_cost_usd),spend hook 无意义 → 关。
   // device-link 远程会话形态未知 → 无条件启用(与 tokens / 估算价值同口径),否则被控端
   // 若是本机判不出的形态(如 codex+xai)累计 cost 镜像永远不展示。
-  const sessionCostUsd = useSessionSpend(
+  const sessionMoney = useSessionSpend(
     (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
       ? sessionId
       : undefined,
+    (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
+      ? sessionInitialMoney
+      : null,
     (vendorKey === 'cc' && !isSubscriptionBridge) || isCodexApi || isDeviceLinkRemote
       ? sessionInitialCostUsd
       : null,
@@ -1020,7 +1059,7 @@ export function TodaySpendChip({
   );
   // 订阅会话的"本会话价值"估算 (isEstimate 消息汇总): Codex OAuth / Claude 订阅 / bridge 订阅同管道。
   // device-link 远程会话形态未知(被控端账号事实拿不到)→ 无条件启用,有估算数据就显示。
-  const sessionEstimatedValueUsd = useSessionEstimatedValue(
+  const sessionEstimatedValueMoney = useSessionEstimatedValue(
     sessionId,
     isCodexSubscription || isClaudeSubscription || isSubscriptionBridge || isDeviceLinkRemote,
   );
@@ -1201,30 +1240,34 @@ export function TodaySpendChip({
     // turn-cost 推送)与真实累计 cost(usage:session-spend-changed 镜像)有哪个显哪个;
     // 被控端账号的限额窗口本机拿不到,不显示、不猜。
     const chipSegments: string[] = [];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
-    if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
-      chipSegments.push(t('todaySpend.sessionCostLabel', { cost: `$${sessionCostUsd.toFixed(2)}` }));
+    if (sessionMoney?.amount) {
+      chipSegments.push(t('todaySpend.sessionCostLabel', {
+        cost: formatTurnCostMoney(sessionMoney),
+      }));
     }
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">$</span>;
     const tooltipLines: string[] = [];
-    pushSessionValueLines(tooltipLines, sessionEstimatedValueUsd, sessionTokens, t);
-    if (typeof sessionCostUsd === 'number' && sessionCostUsd > 0) {
-      tooltipLines.push(t('todaySpend.tooltip.sessionUsed', { cost: `$${sessionCostUsd.toFixed(2)}` }));
+    pushSessionValueLines(tooltipLines, sessionEstimatedValueMoney, sessionTokens, t);
+    if (sessionMoney?.amount) {
+      tooltipLines.push(t('todaySpend.tooltip.sessionUsed', {
+        cost: formatTurnCostMoney(sessionMoney),
+      }));
     }
     appendLatestTurnUsageLines(tooltipLines, latestTurnUsage, t);
     tooltipNode = tooltipLines.length > 0 ? buildTooltipNode(tooltipLines) : null;
   } else if (usesCodexQuotaForm) {
     // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户,复用同一套限额窗口 + 价值估算渲染。
     const chipSegments = [...windowSegments];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
     labelNode = chipSegments.length > 0
@@ -1233,7 +1276,7 @@ export function TodaySpendChip({
     tooltipNode = buildCodexTooltipNode(
       accountUsage,
       sessionTokens,
-      sessionEstimatedValueUsd,
+      sessionEstimatedValueMoney,
       t,
       usageDashboardLabel,
       windowLabelNowMs,
@@ -1242,9 +1285,9 @@ export function TodaySpendChip({
   } else if (usesXaiQuotaForm) {
     // xAI 无订阅窗口数据源:主 chip 只显示本会话价值估算,限流细节(若 bridge 抓到)进 tooltip。
     const chipSegments: string[] = [];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.codex.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
     labelNode = chipSegments.length > 0
@@ -1253,7 +1296,7 @@ export function TodaySpendChip({
     tooltipNode = buildXaiTooltipNode(
       xaiRateLimit,
       sessionTokens,
-      sessionEstimatedValueUsd,
+      sessionEstimatedValueMoney,
       t,
       usageDashboardLabel,
       latestTurnUsage,
@@ -1262,9 +1305,9 @@ export function TodaySpendChip({
     // Claude 订阅形态 (方案 B): chip 显示「剩余时长 剩余%」倒计时段 + 本会话价值,
     // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒); tooltip 保留精确时间。
     const chipSegments = [...windowSegments];
-    if (typeof sessionEstimatedValueUsd === 'number' && sessionEstimatedValueUsd > 0) {
+    if (sessionEstimatedValueMoney) {
       chipSegments.push(t('todaySpend.claude.sessionValueLabel', {
-        cost: `$${sessionEstimatedValueUsd.toFixed(2)}`,
+        cost: formatTurnCostMoney(sessionEstimatedValueMoney),
       }));
     }
     labelNode = chipSegments.length > 0
@@ -1273,13 +1316,13 @@ export function TodaySpendChip({
     tooltipNode = buildClaudeSubscriptionTooltipNode(
       claudeSubscriptionUsage,
       modelId,
-      sessionEstimatedValueUsd,
+      sessionEstimatedValueMoney,
       t,
       usageDashboardLabel,
       latestTurnUsage,
     );
   } else {
-    const slots = computeMetricSlots(claudeQuota, sessionCostUsd, t);
+    const slots = computeMetricSlots(claudeQuota, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback = isCodexApi
       && !slots.session.available

@@ -9,8 +9,8 @@
  * Lifecycle (用户明确要求, 比 refcount 模型更简单):
  *   - 懒启动: 第一个 acquire/subscribeThread 触发 spawn + initialize
  *   - server 一旦起来, 跟 CodexAgent (= app 进程) 同生命周期, **不随 session 数升降**
- *   - session.close → subscription.release(): 仅从路由表删掉 + 不再收 notification
- *     server 端 thread state 仍在内存中 (server 自己 GC, 我们不主动 thread/unsubscribe — Phase 2 再优化)
+ *   - session.close → subscription.release(): 删除本地路由并发送 thread/unsubscribe,
+ *     释放该 thread 的 live runtime；共享 app-server 继续服务其他 session
  *   - app.before-quit → 上层显式调 host.shutdown() (Windows 子进程不会随父进程死)
  *
  * 真值参考:
@@ -53,6 +53,7 @@ import {
   type JsonRpcId,
   type ThreadStartedNotification,
   type ThreadTokenUsageUpdatedNotification,
+  type ThreadUnsubscribeResponse,
   type TurnPlanUpdatedNotification,
   type TurnCompletedNotification,
   type TurnStartedNotification,
@@ -105,6 +106,8 @@ const NOTIFICATIONS_TO_OPT_OUT = [
   // 后续要做实时 patch / plan 流时再去掉:
   'turn/diff/updated',
 ];
+
+const DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 
 /** thread/started 之外的 notification 都直接 params.threadId; thread/started 走 params.thread.id。 */
 function extractThreadId(method: string, params: unknown): string | null {
@@ -194,8 +197,8 @@ export interface ServerRequestMeta {
 }
 
 export interface ThreadSubscription {
-  /** 幂等; 调用后不再收到 notification + 触发 refcount 递减 (可能触发 idle 关停)。 */
-  release(): void;
+  /** 幂等地解除本地路由，并释放 app-server 内对应 thread 的 live runtime。 */
+  release(): Promise<void>;
 }
 
 export interface AppServerHostOptions {
@@ -213,6 +216,8 @@ export interface AppServerHostOptions {
    * 解决 thread/started 比 subscribeThread() 早到的固有竞争。
    */
   notificationBufferTtlMs?: number;
+  /** thread/unsubscribe 的最大等待时间，避免 session close 被失联 app-server 卡死。 */
+  threadUnsubscribeTimeoutMs?: number;
   /**
    * 关联中的 JSON-RPC response 明确返回 cloudRequirements Auth/relogin 时调用一次
    * (单次 latch 在 client 内)。stderr 始终只作为诊断日志。
@@ -240,6 +245,7 @@ export class AppServerHost {
   private readonly connectionId = randomUUID();
   private readonly logger: Logger;
   private readonly bufferTtlMs: number;
+  private readonly threadUnsubscribeTimeoutMs: number;
 
   private client: AppServerClient | null = null;
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
@@ -263,6 +269,8 @@ export class AppServerHost {
     }
     this.logger = opts.logger.child('codex-app-server-host');
     this.bufferTtlMs = opts.notificationBufferTtlMs ?? 5_000;
+    this.threadUnsubscribeTimeoutMs =
+      opts.threadUnsubscribeTimeoutMs ?? DEFAULT_THREAD_UNSUBSCRIBE_TIMEOUT_MS;
   }
 
   isCodexProxyActive(): boolean {
@@ -483,6 +491,17 @@ export class AppServerHost {
     return this.client.request<R>(method, params);
   }
 
+  /** Release one thread's live runtime without archiving or deleting its history. */
+  async unsubscribeThread(threadId: string): Promise<void> {
+    const client = this.client;
+    if (!client) return;
+    await client.request<ThreadUnsubscribeResponse>(
+      Method.ThreadUnsubscribe,
+      { threadId },
+      { timeoutMs: this.threadUnsubscribeTimeoutMs },
+    );
+  }
+
   /**
    * 强制关停 (app.before-quit / 测试 cleanup / transport error 恢复)。幂等。
    * 清空 subscribers + close client (杀子进程)。**结束后允许 ensureStarted 重新 spawn**
@@ -538,14 +557,13 @@ export class AppServerHost {
   // ── 订阅 / 路由 ───────────────────────────────────────────────────────────
 
   /**
-   * 为 thread_id 注册一组 handler, release() 仅取消订阅 (不影响 server 生命周期)。
+   * 为 thread_id 注册一组 handler。release() 先移除本地路由，再通知 app-server
+   * 解除这个 thread 的 live subscription；rollout/history 不会被 archive 或 delete。
    * 如果 thread/started (或更早的 notification) 在 subscribe 之前就到了, drain
    * buffered 队列里匹配的项, 按到达顺序 dispatch — 保证不丢事件。
    *
-   * **不**做 refcount → shutdown — server 只跟 host.shutdown() 绑定。session.close
-   * 仅清掉路由表, server 自己会 GC 闲置 ThreadState。Phase 2 可考虑发
-   * `thread/unsubscribe` 给 server 显式释放 listener (当前 server-side 内存
-   * 占用极小, 跳过)。
+ * 不做 refcount → shutdown：共享 server 仍只跟 host.shutdown() 绑定。这里仅释放
+ * 已关闭 session 对应的 thread state，避免它继续持有 MCP/app-server 子进程资源。
    */
   subscribeThread(threadId: string, handlers: ThreadEventHandlers): ThreadSubscription {
     if (this.retired) {
@@ -577,15 +595,38 @@ export class AppServerHost {
       }
     }
 
-    let released = false;
+    let localReleased = false;
+    let serverReleased = false;
+    let releasePromise: Promise<void> | null = null;
     return {
       release: () => {
-        if (released) return;
-        released = true;
-        const cur = this.subscribers.get(threadId);
-        if (cur === handlers) {
+        if (serverReleased) return Promise.resolve();
+        if (releasePromise) return releasePromise;
+
+        if (!localReleased) {
+          const cur = this.subscribers.get(threadId);
+          // A later subscription for the same thread owns the live server state now.
+          if (cur !== handlers) {
+            serverReleased = true;
+            return Promise.resolve();
+          }
           this.subscribers.delete(threadId);
+          this.buffered.delete(threadId);
+          localReleased = true;
+        } else if (this.subscribers.has(threadId)) {
+          // A retry must not unsubscribe a newer local owner for the same thread.
+          serverReleased = true;
+          return Promise.resolve();
         }
+
+        releasePromise = this.unsubscribeThread(threadId)
+          .then(() => {
+            serverReleased = true;
+          })
+          .finally(() => {
+            releasePromise = null;
+          });
+        return releasePromise;
       },
     };
   }

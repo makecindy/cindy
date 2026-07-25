@@ -324,6 +324,14 @@ export function ScheduleFormDialog({
     }
     applyTemplateAgentFields(template);
     if (template.useWorktree !== undefined) setField('useWorktree', template.useWorktree);
+    // useWorktree 只在 project workspace 且无会话绑定时会被 buildScheduleInput 保留；
+    // 模板要求 worktree 时把表单切到 project 模式并清掉绑定会话（绑定与 worktree
+    // 互斥，语义同 setDestination('worktree')），否则保存会被静默打回 false，与
+    // 卡片上的「隔离工作区」承诺不符（workingDir 为空时 validate 会要求选目录）。
+    if (template.useWorktree) {
+      setField('workspaceKind', 'project');
+      setField('targetSessionId', '');
+    }
     if (template.persistentSession !== undefined) setField('persistentSession', template.persistentSession);
     if (template.silentWhenIdle !== undefined) setField('silentWhenIdle', template.silentWhenIdle);
     if (template.notify) {

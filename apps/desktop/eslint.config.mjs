@@ -11,11 +11,13 @@ export default tseslint.config(
   },
   {
     files: ['src/main/**/*.{ts,tsx}'],
-    // watcher-host 与 Ghost Node broker 是受测的 utilityProcess 宿主，和
-    // localDb 一样属于“进程边界基建”，只对精确入口豁免导入限制。
+    // watcher-host、workdir-probe-host 与 Ghost Node broker 是受测的
+    // utilityProcess 宿主，和 localDb 一样属于“进程边界基建”，只对精确
+    // 入口豁免导入限制。
     ignores: [
       'src/main/localDb/**/*.{ts,tsx}',
       'src/main/watcher-host/**/*.{ts,tsx}',
+      'src/main/workdir-probe-host/**/*.{ts,tsx}',
       'src/main/cindy-brain/nodeRuntimeBroker.ts',
       'src/main/__spike__/**/*.{ts,tsx}',
     ],

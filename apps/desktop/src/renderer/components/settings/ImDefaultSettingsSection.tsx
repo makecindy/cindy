@@ -1,14 +1,11 @@
 /**
- * IM 默认会话设置。
+ * 单个 IM 渠道的新会话设置。
  *
- * 只影响新建 IM 普通会话、Slack 新 thread 会话和 Feishu `/new`；现有 IM
- * 会话不会因为这里保存而被静默改写。
+ * 每个渠道保存自己的 Agent / 模型路由。现有 IM 会话不会因为这里保存而被
+ * 静默改写；非 thread 渠道通过 `/new` 显式应用。
  */
 
-import {
-  connectedProvidersForAgent,
-  providerOffersModel,
-} from '@cindy/model-providers';
+import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
 import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -16,9 +13,6 @@ import { useTranslation } from 'react-i18next';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
-import { useAuth } from '@/contexts/AuthContext';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
-import { showDiscordBot } from './imBotVisibility';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -30,15 +24,13 @@ import {
   IM_DEFAULT_SETTINGS,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
+  type ImDefaultSettingsChannel,
   type ImDefaultSettingsPatch,
   type ImDefaultSettingsState,
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import {
-  buildAgentSettingsPatch,
-  mergeSettingsPatch,
-} from './imDefaultSettingsLogic';
+import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
 
 const AGENT_OPTIONS: Array<{
   kind: ImDefaultAgentKind;
@@ -52,15 +44,21 @@ function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' {
   return agentKind === 'codex' ? 'codex' : 'cc';
 }
 
-export function ImDefaultSettingsSection() {
+export interface ImDefaultSettingsSummary {
+  agentKind: ImDefaultAgentKind;
+  model: string;
+}
+
+export function ImDefaultSettingsSection({
+  channel,
+  embedded = false,
+  onSummaryChange,
+}: {
+  channel: ImDefaultSettingsChannel;
+  embedded?: boolean;
+  onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
+}) {
   const { t } = useTranslation();
-  const { mode, dataOwnerId, user } = useAuth();
-  // 国区个人账号既没有 Cindy(Slack)分栏也没有 Discord —— 描述只提飞书。
-  const feishuOnly = !showDiscordBot({
-    region: CURRENT_CINDY_REGION,
-    mode,
-    membershipKind: user?.membershipKind ?? null,
-  });
   const { providers } = useProviders();
   const cc = useAgentCapabilities('claude-code');
   const codex = useAgentCapabilities('codex');
@@ -72,7 +70,7 @@ export function ImDefaultSettingsSection() {
     setSettings(null);
     setPending(false);
     void window.electronAPI.maker
-      .imDefaultSettingsGet()
+      .imDefaultSettingsGet(channel)
       .then((state) => {
         if (!cancelled) setSettings(state);
       })
@@ -84,7 +82,15 @@ export function ImDefaultSettingsSection() {
     return () => {
       cancelled = true;
     };
-  }, [dataOwnerId, t]);
+  }, [channel, t]);
+
+  useEffect(() => {
+    if (!settings) return;
+    onSummaryChange?.({
+      agentKind: settings.agentKind,
+      model: settings.agents[settings.agentKind].model,
+    });
+  }, [onSummaryChange, settings]);
 
   const modelsByAgent = useMemo<Record<ImDefaultAgentKind, ModelDescriptor[]>>(() => {
     const fromProviders = {
@@ -94,17 +100,19 @@ export function ImDefaultSettingsSection() {
     return {
       'claude-code': fromProviders['claude-code'].length
         ? fromProviders['claude-code']
-        : cc.capabilities?.availableModels ?? [],
+        : (cc.capabilities?.availableModels ?? []),
       codex: fromProviders.codex.length
         ? fromProviders.codex
-        : codex.capabilities?.availableModels ?? [],
+        : (codex.capabilities?.availableModels ?? []),
     };
   }, [providers, cc.capabilities, codex.capabilities]);
 
   const resolveProviderId = useCallback(
     (agentKind: ImDefaultAgentKind, modelId: string, providerId: string | null): string | null => {
       if (!providerId) return null;
-      const provider = connectedProvidersForAgent(providers, agentKind).find((p) => p.id === providerId);
+      const provider = connectedProvidersForAgent(providers, agentKind).find(
+        (p) => p.id === providerId,
+      );
       return provider && providerOffersModel(provider, modelId, agentKind) ? providerId : null;
     },
     [providers],
@@ -134,7 +142,7 @@ export function ImDefaultSettingsSection() {
       setPending(true);
       setSettings(mergeSettingsPatch(settings, patch));
       try {
-        const next = await window.electronAPI.maker.imDefaultSettingsSet(patch);
+        const next = await window.electronAPI.maker.imDefaultSettingsSet(patch, channel);
         setSettings(next);
       } catch (err) {
         setSettings(previous);
@@ -143,25 +151,32 @@ export function ImDefaultSettingsSection() {
         setPending(false);
       }
     },
-    [pending, settings, t],
+    [channel, pending, settings, t],
   );
 
   const reset = useCallback(async () => {
     if (pending) return;
     setPending(true);
     try {
-      setSettings(await window.electronAPI.maker.imDefaultSettingsReset());
+      setSettings(await window.electronAPI.maker.imDefaultSettingsReset(channel));
       toast.success(t('settings.defaults.restored'));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
     } finally {
       setPending(false);
     }
-  }, [pending, t]);
+  }, [channel, pending, t]);
 
   if (!settings) {
     return (
-      <div className="rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-5 text-[13px] text-[var(--text-tertiary)]">
+      <div
+        className={cn(
+          'text-[13px] text-[var(--text-tertiary)]',
+          embedded
+            ? 'py-2'
+            : 'rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-5',
+        )}
+      >
         {t('settings.imBot.defaults.loading')}
       </div>
     );
@@ -200,9 +215,14 @@ export function ImDefaultSettingsSection() {
   return (
     <section
       className={cn(
-        'flex flex-col gap-[18px] rounded-xl p-4',
-        'border border-[var(--settings-theme-card-border)]',
-        'bg-[var(--settings-theme-card-bg)]',
+        'flex flex-col gap-[18px]',
+        embedded
+          ? 'py-1'
+          : [
+              'rounded-xl p-4',
+              'border border-[var(--settings-theme-card-border)]',
+              'bg-[var(--settings-theme-card-bg)]',
+            ],
       )}
       aria-label={t('settings.imBot.defaults.title')}
     >
@@ -216,13 +236,7 @@ export function ImDefaultSettingsSection() {
               {t('settings.imBot.defaults.title')}
             </h3>
             <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
-              {t(
-                feishuOnly
-                  ? 'settings.imBot.defaults.feishuOnlyDescription'
-                  : mode === 'local'
-                    ? 'settings.imBot.defaults.localDescription'
-                    : 'settings.imBot.defaults.description',
-              )}
+              {t(`settings.imBot.defaults.channelDescriptions.${channel}`)}
             </p>
           </div>
         </div>
@@ -263,9 +277,7 @@ export function ImDefaultSettingsSection() {
                   )}
                 >
                   <Mark size={14} className="shrink-0" />
-                  <span className="truncate">
-                    {t(`settings.imBot.defaults.agents.${kind}`)}
-                  </span>
+                  <span className="truncate">{t(`settings.imBot.defaults.agents.${kind}`)}</span>
                 </button>
               );
             })}

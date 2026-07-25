@@ -11,9 +11,11 @@ import {
   ensureGhostPanelsRegistered,
   useGhostPanelsSync,
 } from '../cindy-brain/ghostPanels';
+import { isGhostPanelKindDetached, useGhostPanelWindowsState } from '../lib/ghostPanelWindowState';
 import { registerBuiltinPanels } from '../panels/builtinPanels';
 import { getPanelKind } from '../panels/registry';
 import { installLayoutDevTools } from './layoutDevTools';
+import { PanelMaximizeContext, type PanelMaximizeState } from './panelMaximize';
 import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
 
 /**
@@ -49,10 +51,19 @@ const CHAT_MIN_PX = 400;
  */
 const NON_CHAT_FLOOR_PX = 120;
 
-/** 单个 pane 的挂载点:查注册表渲染;未注册 kind = 隐藏(数据保留在树里)。 */
+/**
+ * pane 是否在本窗口渲染:未注册 kind(未安装/停用的插件残留)与已抽离进
+ * 独立窗口的面板都不渲染 —— 树数据一律保留,重装/合并即原位恢复
+ * (architecture-invariants「已抽离的面板允许保留在存档中但不渲染」)。
+ */
+function isPanelKindVisible(kind: string): boolean {
+  return getPanelKind(kind) !== null && !isGhostPanelKindDetached(kind);
+}
+
+/** 单个 pane 的挂载点:查注册表渲染;不可见 kind = 隐藏(数据保留在树里)。 */
 function PanelHost({ node }: { node: PaneNode }): ReactNode {
   const def = getPanelKind(node.panelKind);
-  if (!def) return null;
+  if (!def || isGhostPanelKindDetached(node.panelKind)) return null;
   const Component = def.Component;
   return <Component paneId={node.id} />;
 }
@@ -63,11 +74,11 @@ interface SplitChildEntry {
   node: LayoutNode;
 }
 
-/** 过滤出可见子项(未注册 kind 的 pane 不可见),保留树内原始下标供 fraction 操作寻址。 */
+/** 过滤出可见子项(未注册/已抽离 kind 的 pane 不可见),保留树内原始下标供 fraction 操作寻址。 */
 function visibleSplitChildren(children: { fraction: number; node: LayoutNode }[]): SplitChildEntry[] {
   return children
     .map((c, treeIndex) => ({ treeIndex, fraction: c.fraction, node: c.node }))
-    .filter((e) => e.node.type !== 'pane' || getPanelKind(e.node.panelKind) !== null);
+    .filter((e) => e.node.type !== 'pane' || isPanelKindVisible(e.node.panelKind));
 }
 
 /** 面板的最小像素宽:chat 硬下限 400,其余只有防拖丢兜底(见 NON_CHAT_FLOOR_PX)。 */
@@ -133,7 +144,7 @@ function computePanelWidths(
   for (const child of layout.content.children) {
     const node = child.node;
     if (node.type !== 'pane' || node.panelKind === 'chat-main') continue;
-    if (!getPanelKind(node.panelKind)) continue;
+    if (!isPanelKindVisible(node.panelKind)) continue;
     const fraction = live?.[node.id] ?? child.fraction;
     const min = paneMinPx(node);
     const max = Math.max(min, avail - CHAT_MIN_PX);
@@ -174,12 +185,14 @@ function NodeView({ node }: { node: LayoutNode }): ReactNode {
 
 interface RootDividerPropsExtra {
   /**
-   * chat-main 的**实际渲染宽**(px)。chat 是弹性 flex-1,会吸收隐藏面板
-   * (卸载残留)与折叠面板的份额,账面 fraction 严重低估它的真实宽度——
+   * chat-main 渲染宽的**账本估值**(px,仅兜底用)。chat 是弹性 flex-1,会吸收
+   * 隐藏面板(卸载残留)与折叠面板的份额,账面 fraction 严重低估它的真实宽度——
    * 按账面算余量会把拖缝整个钳死(2026-07-09 mac 实测"纹丝不动"的根因)。
-   * 折叠工具栏的份额此处未剔除(其折叠态在面板内部,引擎不可见),导致
-   * 估值偏保守:拖动会提前一点到头,不会越界。份额记忆与活跃份额分账的
-   * 根治方案暂未纳入布局树职责。
+   * 本估值仍把折叠/抽离面板按账面份额记成"占着地方"(右侧栏收起时误差可达
+   * 数百像素,2026-07-25 Lizi 实测"拖不到头"的根因),所以拖缝的事实来源改为
+   * **起拖时实测 chat-main 元素矩形**(见 onPointerDown;一次布局读取,符合
+   * 起拖测量口径);本值只在量不到元素(测试环境等)时兜底。份额记忆与活跃
+   * 份额分账的根治方案暂未纳入布局树职责。
    */
   chatRenderedPx: number;
 }
@@ -227,15 +240,22 @@ function RootDivider({ splitId, left, right, avail, chatRenderedPx, onLive, onCo
     const startL = left.fraction;
     const startR = right.fraction;
     // delta(给左侧的增量)的允许区间,每侧余量 = min(渲染余量, 账面余量):
-    // - 渲染余量:chat 用实际渲染宽算(弹性吸收了隐藏/折叠份额,账面失真,
-    //   见 RootDividerPropsExtra);非 chat 面板 px = fraction × avail,账面即渲染。
+    // - 渲染余量:chat 用**起拖时实测的元素宽**算 —— 账本估值会把折叠/抽离
+    //   面板的份额也记成"占着地方"(右侧栏收起时聊天区实际早已吸收那块空间,
+    //   估值一保守拖动就提前到头,见 RootDividerPropsExtra);起拖只量这一次,
+    //   拖动期间界面静止,没有失效场景。非 chat 面板 px = fraction × avail,
+    //   账面即渲染。
     // - 账面余量:transferSplitFraction 低于 0.05 整单拒绝(不收窄),实时
     //   拖动必须同受此限,否则松手回弹。
     const leftIsChat = left.node.type === 'pane' && left.node.panelKind === 'chat-main';
     const rightIsChat = right.node.type === 'pane' && right.node.panelKind === 'chat-main';
     const minLF = Math.max(0.05, paneMinPx(left.node) / avail);
     const minRF = Math.max(0.05, paneMinPx(right.node) / avail);
-    const chatRenderRoom = Math.max(0, (chatRenderedPx - CHAT_MIN_PX) / avail);
+    const measuredChatPx = document
+      .querySelector('[data-panel-drag-root="chat-main"]')
+      ?.getBoundingClientRect().width;
+    const chatPx = measuredChatPx && measuredChatPx > 0 ? measuredChatPx : chatRenderedPx;
+    const chatRenderRoom = Math.max(0, (chatPx - CHAT_MIN_PX) / avail);
     const roomL = leftIsChat ? Math.min(startL - 0.05, chatRenderRoom) : startL - minLF;
     const roomR = rightIsChat ? Math.min(startR - 0.05, chatRenderRoom) : startR - minRF;
     const dMin = -Math.max(0, roomL);
@@ -323,6 +343,8 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
 
   // 装/卸广播 → 注册表对齐 + 重渲(卸下不动布局树,靠这里让引擎重过滤在场面板)。
   const ghostSyncVersion = useGhostPanelsSync();
+  // 抽离状态广播 → 重渲(isPanelKindVisible 读的是模块级镜像,靠这个 hook 感知变化)。
+  const ghostWindowsState = useGhostPanelWindowsState();
 
   // 首帧同步读取(sendSync):布局在第一帧就位,不出现默认布局闪现。
   const [layout, setLayout] = useState<Layout>(() => window.electronAPI.layout.getStateSync().layout);
@@ -331,14 +353,26 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     [],
   );
 
+  // 撑满态(panelMaximize.tsx):会话级视图态,树账本不动。同 kind 再点还原。
+  const [maximizedKind, setMaximizedKind] = useState<string | null>(null);
+  const maximizeCtx = useMemo<PanelMaximizeState>(
+    () => ({
+      maximizedKind,
+      toggle: (kind) => setMaximizedKind((cur) => (cur === kind ? null : kind)),
+    }),
+    [maximizedKind],
+  );
+
   // 分割线拖动中的瞬时 fraction 覆盖(paneId → fraction);面板宽度实时跟手,
   // 松手清空回落树值 —— 拖动全程不写 IPC。
   const [liveFractions, setLiveFractions] = useState<Record<string, number> | null>(null);
   const availCtx = useContentAvailableWidth();
   const avail = availCtx ?? AVAILABLE_WIDTH_FALLBACK;
+  // eslint 会说 ghostWindowsState 没被直接读——它是 computePanelWidths 里
+  // isPanelKindVisible 的隐式数据源(模块级镜像),必须进 deps 才能感知抽离变化。
   const widths = useMemo(
     () => computePanelWidths(layout, liveFractions, avail),
-    [layout, liveFractions, avail],
+    [layout, liveFractions, avail, ghostWindowsState],
   );
   // chat 实际渲染宽 ≈ 可用宽 − 可见非 chat 面板宽度之和(拖缝余量用,见
   // RootDividerPropsExtra;折叠面板的误差偏保守)。
@@ -354,13 +388,26 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     // 接管态下可用宽是接管方的(设置页全宽),按它改账本会失真 —— 不自愈。
     if (suppressNonChatPanels || availCtx === null || liveFractions !== null) return;
     const timer = setTimeout(() => {
-      const fixed = normalizeSubMinFractions(layout, availCtx, (kind) => getPanelKind(kind) !== null);
+      const fixed = normalizeSubMinFractions(layout, availCtx, isPanelKindVisible);
       if (!fixed) return;
       setLayout(fixed);
       void window.electronAPI.layout.set(fixed).catch(() => undefined);
     }, 250);
     return () => clearTimeout(timer);
-  }, [availCtx, ghostSyncVersion, layout, liveFractions, suppressNonChatPanels]);
+  }, [availCtx, ghostSyncVersion, ghostWindowsState, layout, liveFractions, suppressNonChatPanels]);
+
+  // 撑满目标失效自动还原:面板被卸下/停用(kind 注销)、抽离进独立窗口或
+  // pane 离开树时清态,免得下次回来以陈年撑满态惊回。接管态(设置页)只是
+  // 暂不渲染,不清 —— 退出接管原样恢复。
+  useEffect(() => {
+    if (maximizedKind === null || suppressNonChatPanels) return;
+    const c = layout.content;
+    const present =
+      c.type === 'split' &&
+      c.children.some((ch) => ch.node.type === 'pane' && ch.node.panelKind === maximizedKind) &&
+      isPanelKindVisible(maximizedKind);
+    if (!present) setMaximizedKind(null);
+  }, [layout, ghostSyncVersion, ghostWindowsState, maximizedKind, suppressNonChatPanels]);
 
   const content = layout.content;
   let body: ReactNode;
@@ -370,6 +417,40 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     const visible = visibleSplitChildren(content.children).filter(
       (e) => !suppressNonChatPanels || (e.node.type === 'pane' && e.node.panelKind === 'chat-main'),
     );
+    // 撑满态:目标 pane 独占一行(自身经 PanelMaximizeContext 切成 flex-1),
+    // 兄弟收成 0 宽裁切 —— 保持挂载不动 display:webview 卸载丢 webContents,
+    // display:none 对 webview 也不友好;分割线整组不画。树账本(fraction/顺序)
+    // 一字不动,还原即回原样 —— 不触碰布局树结构不变量(chat-main 仍在树中,
+    // 与 RSB maximize 隐藏主区同档的视图态先例)。
+    const maximizedEntry =
+      maximizedKind === null
+        ? undefined
+        : visible.find(
+            (e) =>
+              e.node.type === 'pane' &&
+              e.node.panelKind === maximizedKind &&
+              e.node.panelKind !== 'chat-main',
+          );
+    if (maximizedEntry) {
+      body = (
+        <>
+          {visible.map((entry) =>
+            entry === maximizedEntry ? (
+              <NodeView key={entry.node.id} node={entry.node} />
+            ) : (
+              <div key={entry.node.id} aria-hidden className="flex w-0 flex-none overflow-hidden">
+                <NodeView node={entry.node} />
+              </div>
+            ),
+          )}
+        </>
+      );
+      return (
+        <PanelMaximizeContext.Provider value={maximizeCtx}>
+          <PaneWidthProvider value={widths}>{body}</PaneWidthProvider>
+        </PanelMaximizeContext.Provider>
+      );
+    }
     const items: ReactNode[] = [];
     visible.forEach((entry, i) => {
       if (i > 0) {
@@ -400,5 +481,9 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
   } else {
     body = <NodeView node={content} />;
   }
-  return <PaneWidthProvider value={widths}>{body}</PaneWidthProvider>;
+  return (
+    <PanelMaximizeContext.Provider value={maximizeCtx}>
+      <PaneWidthProvider value={widths}>{body}</PaneWidthProvider>
+    </PanelMaximizeContext.Provider>
+  );
 }

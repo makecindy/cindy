@@ -8,6 +8,8 @@ describe('canonicalModelFamilyKey', () => {
     expect(canonicalModelFamilyKey('claude-opus-4-8-20260301')).toBe('opus-4-8');
     expect(canonicalModelFamilyKey('us.anthropic.claude-fable-5-20260115')).toBe('fable-5');
     expect(canonicalModelFamilyKey('Claude-Sonnet-5-LATEST')).toBe('sonnet-5');
+    expect(canonicalModelFamilyKey('claude-opus-5[1m]')).toBe('opus-5');
+    expect(canonicalModelFamilyKey('claude-opus-4-5')).toBe('opus-4-5');
   });
 
   it('点横等价,非字符串 / 空串安全返回空', () => {
@@ -48,6 +50,11 @@ describe('detectClaudeModelMismatch', () => {
     expect(
       detectClaudeModelMismatch('claude-fable-5[1m]', [
         { model: 'claude-fable-5-20260115', outputTokens: 500 },
+      ]),
+    ).toBeNull();
+    expect(
+      detectClaudeModelMismatch('claude-opus-5', [
+        { model: 'claude-opus-5[1m]', outputTokens: 500 },
       ]),
     ).toBeNull();
   });

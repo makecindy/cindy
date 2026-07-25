@@ -231,8 +231,10 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
-  // 模型单价表 (LiteLLM /model_group/info, main 端内存 + 磁盘缓存, 启动预热) — 模型选择器 hover tooltip 用
+  // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
+  // Desktop renderer v2:provider-scoped + currency-aware 模型单价表。
+  USAGE_MODEL_PRICING_V2: 'maker:usage:model-pricing-v2',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
@@ -542,6 +544,18 @@ export const MAKER_INVOKE = {
   RSB_WINDOW_READY: 'maker:rsb-window:ready',
   RSB_WINDOW_SEND_COMMAND: 'maker:rsb-window:send-command',
   /**
+   * 插件停靠面板独立窗口(ghost panel window)——每 ghostId 一扇窗。
+   * 状态机见 main/ghost-panel-window/controller.ts。
+   *  - GET_STATE: 拉全量 { <ghostId>: { detached, lastOpen, open } }
+   *  - OPEN(ghostId): 幂等开(已开则 focus);资格不符清条目
+   *  - SET_DETACHED(ghostId, boolean): true 开窗抽离,false 关窗回停靠;返回新全量 state
+   * 首帧同步读走裸 sendSync 通道 'ghost-panel-window:get-state-sync'
+   * (与 layout:get / ghosts:list 同模式,规则 7 首帧无跳变)。
+   */
+  GHOST_PANEL_WINDOW_GET_STATE: 'maker:ghost-panel-window:get-state',
+  GHOST_PANEL_WINDOW_OPEN: 'maker:ghost-panel-window:open',
+  GHOST_PANEL_WINDOW_SET_DETACHED: 'maker:ghost-panel-window:set-detached',
+  /**
    * 会话内 /goal 自主续跑(goal-host)——
    *  - GOAL_SET: 设/替换目标并立刻发首轮。入参 { sessionId, objective, agentKind, budgetTokens? }(budgetTokens 留空=不设预算)
    *  - GOAL_CLEAR: 用户清除目标(删行 + 停续跑 + 推 null 状态)
@@ -701,6 +715,11 @@ export const MAKER_PUSH = {
   RSB_WINDOW_CONTEXT_CHANGED: 'maker:rsb-window:context-changed',
   /** main → 子窗口命令(如 open-terminal),只发子窗口。payload = RsbWindowCommand。 */
   RSB_WINDOW_COMMAND: 'maker:rsb-window:command',
+  /**
+   * 插件面板独立窗口状态广播(全量 GhostPanelWindowsState)——发所有窗口
+   * (主窗布局过滤 + 各子窗口自身都消费)。
+   */
+  GHOST_PANEL_WINDOW_STATE_CHANGED: 'maker:ghost-panel-window:state-changed',
 } as const;
 
 /**

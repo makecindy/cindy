@@ -16,6 +16,7 @@
  */
 
 import type { RemoteHost } from '../RemoteHost.js';
+import claudeLatest from '../../../../tools/claude/latest.json';
 import codexLatest from '../../../../tools/codex/latest.json';
 import {
   BOOTSTRAP_SH,
@@ -29,6 +30,7 @@ export { REMOTE_SERVER_SCHEMA_VERSION };
 
 export type RemoteAgentKind = 'claude-code' | 'codex';
 
+export const PINNED_CLAUDE_CODE_VERSION = claudeLatest.version;
 export const PINNED_CODEX_RELEASE_VERSION = codexLatest.version;
 
 export interface ProbeResult {
@@ -85,6 +87,7 @@ export async function probeRemoteAgent(
 set -u
 AGENT_KIND="${'$'}{1:-}"
 SERVER_VER="${'$'}{2:-v1}"
+CLAUDE_RELEASE="${'$'}{3:-}"
 case "$AGENT_KIND" in
   claude-code) BIN_NAME="claude" ;;
   codex)       BIN_NAME="codex"  ;;
@@ -110,7 +113,12 @@ ${PROBE_BUNDLED_NODE_SH}
 export PATH="$NODE_DIR/bin:$PATH"
 if [ -f "$SENTINEL" ] && { [ -x "$BIN_PATH" ] || [ -f "$BIN_PATH" ]; }; then
   V="$("$BIN_PATH" --version 2>/dev/null | head -1 || true)"
-  if [ -n "$V" ]; then printf 'READY %s\n' "$V"; exit 0; fi
+  if [ -n "$V" ]; then
+    if [ "$AGENT_KIND" != "claude-code" ] || [ "${'$'}{V%% *}" = "$CLAUDE_RELEASE" ]; then
+      printf 'READY %s\n' "$V"
+      exit 0
+    fi
+  fi
 fi
 printf 'NOT_INSTALLED\n'; exit 0
 `;
@@ -118,7 +126,12 @@ printf 'NOT_INSTALLED\n'; exit 0
   // `bash -l` so login profile (~/.bash_profile / ~/.profile) gets sourced.
   // Mostly defensive — bundled Node design means we don't actually depend on
   // the user's profile setting PATH. Kept for parity with install command.
-  const result = await host.exec(`bash -l -s -- ${agentKind} ${REMOTE_SERVER_SCHEMA_VERSION}`, {
+  const args = [
+    agentKind,
+    REMOTE_SERVER_SCHEMA_VERSION,
+    PINNED_CLAUDE_CODE_VERSION,
+  ].map(shellQuoteArg).join(' ');
+  const result = await host.exec(`bash -l -s -- ${args}`, {
     input: probeScript,
     timeoutMs: PROBE_TIMEOUT_MS,
   });
@@ -152,7 +165,8 @@ export async function installRemoteAgent(
     REMOTE_SERVER_SCHEMA_VERSION,
     BUNDLED_NODE_VERSION,
     NODE_DIST_BASE_URL_DEFAULT,
-    agentKind === 'codex' ? PINNED_CODEX_RELEASE_VERSION : '',
+    PINNED_CODEX_RELEASE_VERSION,
+    PINNED_CLAUDE_CODE_VERSION,
   ].map(shellQuoteArg).join(' ');
 
   const result = await host.exec(`bash -l -s -- ${args}`, {

@@ -14,7 +14,8 @@
  *  - ✅ oneShot:   走 host 临时 thread (起标题), Phase 4 删 SDK dep 后唯一通路
  *
  * 输出契约:
- *  - 不在 AgentSessionHandle 上加 codex-only 方法
+ *  - AgentSessionHandle 只暴露 provider-neutral 的可选能力，不泄漏 Codex
+ *    thread / app-server 协议类型
  *  - 事件流只 emit 已存在的 AgentEvent type union 成员
  *  - renderer 不感知 thread_id / app-server 任何概念
  */
@@ -321,6 +322,18 @@ function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean 
 }
 
 /**
+ * Runtime workspace roots and named permission profiles were verified against
+ * the app-server bundled with Codex 0.144.6. Keep older remote daemons
+ * fail-closed: without profiles, legacy workspace-write would make every
+ * runtime root writable.
+ */
+function supportsCodexReadonlyReferenceDirs(userAgent: string | undefined): boolean {
+  return supportsCodexApprovalsReviewer(userAgent);
+}
+
+const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
+
+/**
  * SandboxMode (thread/start 用 kebab enum) → SandboxPolicy (turn/start 用 tag union)。
  * 两者**字段名 + 类型都不一样**, 是 Codex 协议的不对称设计 — turn/start 接 SandboxPolicy
  * 让 server 能在 turn 中途切换更细粒度的沙盒配置。
@@ -619,7 +632,7 @@ const CODEX_EFFORTS: EffortDescriptor[] = [
   { id: 'low', displayName: 'Low', description: 'Fast responses with minimal reasoning' },
   { id: 'medium', displayName: 'Medium', description: 'Balanced reasoning depth' },
   { id: 'high', displayName: 'High', description: 'Deeper reasoning for harder tasks' },
-  { id: 'xhigh', displayName: 'Extra', description: 'Extended reasoning budget' },
+  { id: 'xhigh', displayName: 'Extra High', description: 'Extended reasoning budget' },
   // max/ultra 仅部分模型支持(如 GPT-5.6 Sol);实际是否可选由该模型目录 efforts 决定,
   // 这里只提供 agent 级档名/描述兜底(桌面 i18n effortLevels.* 优先)。
   { id: 'max', displayName: 'Max', description: 'Very high reasoning budget (model-dependent)' },
@@ -668,15 +681,9 @@ const CAPABILITIES: Capabilities = {
     // 通知所有 live thread, 真正立即生效
     setEnabledMidSession: { supported: true },
   },
-  // Codex developerInstructions 在 thread/start 一次性装配, 中途无法 hot-reload。
-  // 要中途生效得改成 per-turn input prefix (每 turn 多 100-200 tokens), 团队讨论后
-  // 否决了这个 token 代价。首版 capability=false, UI 在 Codex session 上不渲染入口。
-  // 未来若 Codex 协议支持 mid-session systemPrompt 更新, 可重开此项。
-  extraDirs: {
-    supported: false,
-    reason: 'sdk-missing',
-    message: 'Codex developerInstructions 是 thread/start 一次性装配, 中途无法修改',
-  },
+  // Codex app-server 0.144.6+ 支持 runtimeWorkspaceRoots + named permission
+  // profiles；每 turn 覆盖 roots，因此会话中途增删可在下一 turn 生效。
+  extraDirs: { supported: true },
 };
 
 // ── UserMessage → app-server UserInput[] ─────────────────────────────────────
@@ -1774,7 +1781,7 @@ export class CodexAgent extends BaseAgent {
     if (opts?.maxTokens !== undefined) {
       log.warn(`maxTokens=${opts.maxTokens} ignored — Codex host protocol does not expose max_tokens`);
     }
-    let subscription: { release: () => void } | null = null;
+    let subscription: ThreadSubscription | null = null;
     try {
       const { host } = await this.getUtilityHost();
       await host.ensureStarted();
@@ -1881,7 +1888,7 @@ export class CodexAgent extends BaseAgent {
       // 网络/host 启动等未分类失败统一归 'network' (跟 claude 端 mapAnthropicError 一致)
       throw new OneShotError('network', err instanceof Error ? err.message : String(err));
     } finally {
-      try { subscription?.release(); } catch { /* no-op */ }
+      try { await subscription?.release(); } catch { /* no-op */ }
     }
   }
 
@@ -1901,14 +1908,6 @@ export class CodexAgent extends BaseAgent {
       remoteHostId: opts.remoteHostId ?? null,
       mcpProvidersCount: this.deps.mcpProviders?.length ?? 0,
     });
-
-    // extraDirs 仅 Claude 支持; Codex capability=false, 这里收到非空数组只 debug 一行
-    // 留痕, 不影响主流程 (UI 应该不会让用户在 Codex session 上设, 这是兜底)。
-    if (opts.extraDirs && opts.extraDirs.length > 0) {
-      log.debug('startSession: extraDirs ignored (codex capability=false)', {
-        count: opts.extraDirs.length,
-      });
-    }
 
     // ── Maker Memory: 启动时预拉 MEMORY.md 索引 + 写入规范段 ────────────────
     // thread/start 仍把 developerInstructions 写入新 thread; thread/resume 在非 proxy
@@ -1981,6 +1980,7 @@ export class CodexAgent extends BaseAgent {
     let mutableModel = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'ask';
+    let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     // 计划模式(与 permissionMode 正交, **一次性选择**): mutablePlanMode 是 UI 勾选的
     // "武装"态 —— send 消耗它并立即 emit plan_mode_changed(false) 让勾选熄灭;
     // 本轮「计划 → 审阅 → 修订/批准」循环由 planCycleActive 承载:
@@ -2070,6 +2070,13 @@ export class CodexAgent extends BaseAgent {
     }
     if (initResp.codexHome) this.codexHome = initResp.codexHome;
     const approvalsReviewerSupported = supportsCodexApprovalsReviewer(initResp.userAgent);
+    const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
+    if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     if (mutablePermissionMode === 'auto' && !approvalsReviewerSupported) {
       log.warn('Codex Auto falling back to untrusted approvals: app-server lacks verified auto-review support', {
         userAgent: initResp.userAgent,
@@ -2089,6 +2096,25 @@ export class CodexAgent extends BaseAgent {
         ? `${this.codexHome.replace(/\/+$/, '')}/${sub}`
         : path.join(this.codexHome ?? '', sub);
     const codexExtraWritableRoots = this.codexHome ? [joinCodexHome('memories')] : [];
+    const runtimeWorkspaceRoots = (): string[] => [opts.workingDir, ...mutableExtraDirs];
+    const readonlyReferencesConfig: Record<string, unknown> = {
+      [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
+        filesystem: {
+          ':root': 'read',
+          ':workspace_roots': 'read',
+          ':tmpdir': 'write',
+          ':slash_tmp': 'write',
+          [opts.workingDir]: {
+            '.': 'write',
+            '.git': 'read',
+            '.agents': 'read',
+            '.codex': 'read',
+          },
+          ...(codexExtraWritableRoots[0] ? { [codexExtraWritableRoots[0]]: 'write' } : {}),
+        },
+        network: { enabled: false },
+      },
+    };
     // Codex same-turn 插话走 `turn/steer` 方法，不走
     // `experimentalFeature/enablement/set`。这里特意不 push `{ steer: true }`:
     // 2026-06 实测当前内置 app-server 的 enablement 白名单没有 `steer`，
@@ -2140,6 +2166,71 @@ export class CodexAgent extends BaseAgent {
     };
     function currentApprovalConfig(): CodexPermissionConfig {
       return mapPermissionToCodex(mutablePermissionMode, approvalsReviewerSupported);
+    }
+
+    function currentThreadWorkspaceConfig(): Pick<
+      ThreadStartParams,
+      | 'approvalPolicy'
+      | 'approvalsReviewer'
+      | 'sandbox'
+      | 'permissions'
+      | 'runtimeWorkspaceRoots'
+      | 'config'
+    > {
+      const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const shared = {
+        approvalPolicy,
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
+        ...(readonlyReferenceDirsSupported
+          ? {
+              runtimeWorkspaceRoots: runtimeWorkspaceRoots(),
+              config: readonlyReferencesConfig,
+            }
+          : {}),
+      };
+      if (
+        readonlyReferenceDirsSupported &&
+        mutableExtraDirs.length > 0 &&
+        mutablePermissionMode !== 'bypassPermissions'
+      ) {
+        return {
+          ...shared,
+          permissions: READONLY_REFERENCES_PERMISSION_PROFILE,
+        };
+      }
+      return { ...shared, sandbox };
+    }
+
+    function currentTurnWorkspaceConfig(): Pick<
+      TurnStartParams,
+      | 'approvalPolicy'
+      | 'approvalsReviewer'
+      | 'sandboxPolicy'
+      | 'permissions'
+      | 'runtimeWorkspaceRoots'
+    > {
+      const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const shared = {
+        approvalPolicy,
+        ...(approvalsReviewer ? { approvalsReviewer } : {}),
+        ...(readonlyReferenceDirsSupported
+          ? { runtimeWorkspaceRoots: runtimeWorkspaceRoots() }
+          : {}),
+      };
+      if (
+        readonlyReferenceDirsSupported &&
+        mutableExtraDirs.length > 0 &&
+        mutablePermissionMode !== 'bypassPermissions'
+      ) {
+        return {
+          ...shared,
+          permissions: READONLY_REFERENCES_PERMISSION_PROFILE,
+        };
+      }
+      return {
+        ...shared,
+        sandboxPolicy: sandboxModeToPolicy(sandbox, codexExtraWritableRoots),
+      };
     }
 
     /**
@@ -2343,7 +2434,6 @@ export class CodexAgent extends BaseAgent {
           });
         }
       }
-      const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       const developerInstructions = buildCodexDeveloperInstructions({
         makerMemoryRules,
         runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
@@ -2354,9 +2444,7 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
         cwd: opts.workingDir,
-        approvalPolicy,
-        ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        sandbox,
+        ...currentThreadWorkspaceConfig(),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
         ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
@@ -2400,7 +2488,6 @@ export class CodexAgent extends BaseAgent {
         throw new Error(message);
       }
     } else {
-      const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
       // developerInstructions 五段拼接 (协议见 thread/start.developerInstructions):
       //   [2] MAKER_CODEX_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
       //   [3] makerMemoryRules                 — maker memory 写入规范 (条件式)
@@ -2420,9 +2507,7 @@ export class CodexAgent extends BaseAgent {
       const useProxyChannel = isCodexProxyChannelReady();
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
-        approvalPolicy,
-        ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        sandbox,
+        ...currentThreadWorkspaceConfig(),
         ...(shouldRegisterAskUserDynamicTool(opts) ? { dynamicTools: [ASK_USER_DYNAMIC_TOOL] } : {}),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
         ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
@@ -3922,12 +4007,13 @@ export class CodexAgent extends BaseAgent {
         });
 
         // Phase 3: 把 mutable 配置每 turn 透传 — server 接受 per-turn 覆盖。
-        // **关键**: turn/start 的 sandbox 字段是 sandboxPolicy: SandboxPolicy (tag union),
-        // 不是 thread/start 的 sandbox: SandboxMode (kebab enum)。写错 server 直接忽略,
-        // mid-session 切 mode 不生效 — 这是已经踩过的坑 (v2.rs:5778)。
+        // **关键**: 无引用目录时用 sandboxPolicy: SandboxPolicy；有引用目录时改用
+        // named permissions profile，两者不能同时发送。turn/start 的 legacy 字段也不是
+        // thread/start 的 sandbox: SandboxMode，写错 server 会直接忽略。
         // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
-        const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+        const turnWorkspaceConfig = currentTurnWorkspaceConfig();
+        const { approvalPolicy, approvalsReviewer } = turnWorkspaceConfig;
         // 记录本 turn 是否由无人值守策略发射。Auto-review 也需要在切回 Ask
         // 时中断当前 turn,避免 reviewer 继续替用户批准新的越界操作。
         turnLaunchedUnattended = approvalPolicy === 'never' || approvalsReviewer === 'auto_review';
@@ -3966,9 +4052,7 @@ export class CodexAgent extends BaseAgent {
         const turnParams: TurnStartParams = {
           threadId,
           input: turnInput,
-          approvalPolicy,
-          ...(approvalsReviewer ? { approvalsReviewer } : {}),
-          sandboxPolicy: sandboxModeToPolicy(sandbox, codexExtraWritableRoots),
+          ...turnWorkspaceConfig,
           effort: clampEffortForCodex(mutableEffort),
           // 强制 reasoning summary='auto' — 不依赖用户 ~/.codex/config.toml 写没写
           // model_reasoning_summary, 让 thinking 文本在所有用户机器上一致流式出。
@@ -4061,9 +4145,7 @@ export class CodexAgent extends BaseAgent {
               const resumeParams: ThreadResumeParams = {
                 threadId,
                 cwd: opts.workingDir,
-                approvalPolicy,
-                ...(approvalsReviewer ? { approvalsReviewer } : {}),
-                sandbox,
+                ...currentThreadWorkspaceConfig(),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
               };
@@ -4267,6 +4349,10 @@ export class CodexAgent extends BaseAgent {
         }
       },
 
+      getCurrentTurnId() {
+        return currentTurnId;
+      },
+
       async close() {
         if (closed) return;
         closed = true;
@@ -4276,7 +4362,7 @@ export class CodexAgent extends BaseAgent {
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
         try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
         try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
-        try { subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
+        try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
         try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       },
 
@@ -4326,7 +4412,7 @@ export class CodexAgent extends BaseAgent {
           (newMode === 'ask' && wasOpen) ||
           (newMode === 'auto' && wasBypass);
         mutablePermissionMode = newMode;
-        // 下一 turn 通过 TurnStartParams.approvalPolicy + sandbox 透传。
+        // 下一 turn 通过 approvalPolicy + permissions profile / sandboxPolicy 透传。
         //
         // 收紧兜底 (auto/bypass → ask): 见 interruptTurnForPermissionTighten 顶注。
         // turn id 已知 → 立即中断; turn/start 在飞 (id 未回) → 置标记, 由
@@ -4343,6 +4429,16 @@ export class CodexAgent extends BaseAgent {
             pendingTightenInterrupt = true;
           }
         }
+      },
+
+      async setExtraDirs(newDirs: string[]) {
+        if (newDirs.length > 0 && !readonlyReferenceDirsSupported) {
+          throw new Error(
+            `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+          );
+        }
+        mutableExtraDirs = [...newDirs];
+        log.debug('setExtraDirs', { count: mutableExtraDirs.length });
       },
 
       async setPlanMode(enabled: boolean) {
@@ -4417,11 +4513,26 @@ export class CodexAgent extends BaseAgent {
         const nextThreadId = rollbackResp.thread.id || previousThreadId;
         if (nextThreadId !== previousThreadId) {
           try {
-            subscription?.release();
+            await subscription?.release();
           } catch {
             // no-op: stale subscription cleanup should not fail a successful rollback.
           }
           unregisterCodexMcpContext(previousThreadId);
+          if (closed) {
+            try {
+              await host.unsubscribeThread(nextThreadId);
+            } catch (e) {
+              log.warn('thread/unsubscribe replacement after close threw', {
+                error: String(e),
+                threadId: nextThreadId,
+              });
+            }
+            log.info('commitRewindFiles discarded replacement after concurrent close', {
+              previousThreadId,
+              nextThreadId,
+            });
+            return sdkSessionId ? { sdkSessionId } : {};
+          }
           threadId = nextThreadId;
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);

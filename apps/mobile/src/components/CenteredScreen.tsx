@@ -1,7 +1,12 @@
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { MobileLoginHandoffStage } from '@/components/MobileLoginHandoffStage';
-import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import {
+  fontWeight,
+  useTheme,
+  useThemedStyles,
+  type ThemeColors,
+} from '@/theme';
 import { spacing, typeScale } from '@/theme/tokens';
 
 /**

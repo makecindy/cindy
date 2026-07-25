@@ -34,6 +34,7 @@ import {
 import type { AgentKind } from '@cindy/maker-core';
 
 import { createLogger } from './logger';
+import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
 
@@ -51,14 +52,16 @@ export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-chan
 export interface TodaySpendPayload {
   /** 本地时区 YYYY-MM-DD。 */
   day: string;
-  /** 当日累计 USD。 */
-  costUsd: number;
+  money: RegionalMoney;
+  /** Global/旧客户端兼容；CN 新金额绝不伪装为 USD。 */
+  costUsd?: number;
 }
 
 /** 跨 agent 统一的 today usage 形状 —— maker:usage:today(agentKind) 返回值。 */
 export interface AgentTodayUsage {
   day: string;
-  /** Claude 有值, Codex undefined (SDK 不报 cost)。 */
+  money?: RegionalMoney;
+  /** 仅 USD 时的旧客户端兼容投影。 */
   costUsd?: number;
   /** Codex 有值, Claude undefined (Claude 链路走 cost 不走 token)。 */
   totalTokens?: number;
@@ -101,10 +104,19 @@ export interface RateLimitSnapshot {
  * - costUsd 是 per-turn delta (cumulative - lastReported, 在 register.ts 里算好)
  * - 写库 + 广播是同步调用,不阻塞 turn 收尾 (SQLite better-sqlite3 是同步的, O(1) upsert)
  */
-export async function recordTurnSpend(costUsd: number, ts: number = Date.now()): Promise<void> {
+export async function recordTurnSpend(
+  money: RegionalMoney,
+  ts: number = Date.now(),
+): Promise<void> {
   try {
-    const result = await incrementDailySpend(costUsd, ts);
-    broadcastTodaySpend({ day: result.day, costUsd: result.costUsd });
+    const result = await incrementDailySpend(money, ts);
+    broadcastTodaySpend({
+      day: result.day,
+      money: result.money,
+      ...(result.money.currency === 'USD'
+        ? { costUsd: result.money.amount }
+        : {}),
+    });
   } catch (err) {
     // 写库失败不应阻塞主流程 —— 仅日志
     log.warn(
@@ -116,9 +128,11 @@ export async function recordTurnSpend(costUsd: number, ts: number = Date.now()):
 
 /** Claude 今日 USD 累计 (供 IPC handler / 内部消费)。 */
 export async function readTodaySpend(): Promise<TodaySpendPayload> {
+  const money = await getTodaySpend();
   return {
     day: localDayKey(),
-    costUsd: await getTodaySpend(),
+    money,
+    ...(money.currency === 'USD' ? { costUsd: money.amount } : {}),
   };
 }
 
@@ -244,7 +258,11 @@ function readCodexTodaySnapshot(): CodexTokenSnapshot {
 export async function readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTodayUsage> {
   if (agentKind === 'claude-code') {
     const s = await readTodaySpend();
-    return { day: s.day, costUsd: s.costUsd };
+    return {
+      day: s.day,
+      money: s.money,
+      ...(s.costUsd !== undefined ? { costUsd: s.costUsd } : {}),
+    };
   }
   if (agentKind === 'codex') {
     const s = readCodexTodaySnapshot();

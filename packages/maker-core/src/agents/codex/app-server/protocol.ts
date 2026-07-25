@@ -208,10 +208,16 @@ export interface ThreadStartParams {
    */
   modelProvider?: string;
   cwd?: string;
+  /** EXPERIMENTAL. Runtime-visible workspace roots; replaces the thread's current roots. */
+  runtimeWorkspaceRoots?: string[];
   approvalPolicy?: AskForApproval;
   /** Route interactive approvals to the user or Codex's built-in reviewer. */
   approvalsReviewer?: ApprovalsReviewer;
+  /** Named permission profile from config (mutually exclusive with sandbox). */
+  permissions?: string;
   sandbox?: SandboxMode;
+  /** Per-request config overrides, including named permission profile definitions. */
+  config?: Record<string, unknown>;
   /** Fast mode override. Undefined = 不覆盖; null = 清空/standard; 'fast' = Fast mode. */
   serviceTier?: ServiceTier | null;
   /**
@@ -244,6 +250,8 @@ export interface ThreadStartResponse {
   model: string;
   modelProvider: string;
   cwd: string;
+  runtimeWorkspaceRoots?: string[];
+  activePermissionProfile?: { id: string; extends?: string | null };
   serviceTier?: ServiceTier | null;
   [k: string]: unknown;
 }
@@ -295,6 +303,8 @@ export interface CollaborationModeParam {
 export interface TurnStartParams {
   threadId: string;
   input: UserInput[];
+  /** EXPERIMENTAL. Replaces the runtime-visible roots before this turn starts. */
+  runtimeWorkspaceRoots?: string[];
   /** 覆盖 thread 的默认 model (用于运行时切换 — Phase 3)。 */
   model?: string;
   /** 覆盖 reasoning effort (v2.rs:5800). thread/start 不接, 只在 turn/start 这里透传。 */
@@ -309,6 +319,8 @@ export interface TurnStartParams {
   approvalPolicy?: AskForApproval;
   /** Route interactive approvals to the user or Codex's built-in reviewer. */
   approvalsReviewer?: ApprovalsReviewer;
+  /** Named permission profile from thread config (mutually exclusive with sandboxPolicy). */
+  permissions?: string;
   /** Fast mode override. Undefined = 不覆盖; null = 清空/standard; 'fast' = Fast mode. */
   serviceTier?: ServiceTier | null;
   /**
@@ -366,10 +378,16 @@ export interface ThreadResumeParams {
   /** 同 ThreadStartParams.modelProvider —— resume 也接受 provider 覆盖(v2.rs ThreadResumeParams)。 */
   modelProvider?: string;
   cwd?: string;
+  /** EXPERIMENTAL. Runtime-visible workspace roots; replaces the resumed thread's roots. */
+  runtimeWorkspaceRoots?: string[];
   approvalPolicy?: AskForApproval;
   /** Route interactive approvals to the user or Codex's built-in reviewer. */
   approvalsReviewer?: ApprovalsReviewer;
+  /** Named permission profile from config (mutually exclusive with sandbox). */
+  permissions?: string;
   sandbox?: SandboxMode;
+  /** Per-request config overrides, including named permission profile definitions. */
+  config?: Record<string, unknown>;
   /** Fast mode override. Undefined = 不覆盖; null = 清空/standard; 'fast' = Fast mode. */
   serviceTier?: ServiceTier | null;
   /**
@@ -385,6 +403,8 @@ export interface ThreadResumeResponse {
   model: string;
   modelProvider: string;
   cwd: string;
+  runtimeWorkspaceRoots?: string[];
+  activePermissionProfile?: { id: string; extends?: string | null };
   approvalPolicy: AskForApproval;
   sandbox: SandboxPolicy;
   serviceTier?: ServiceTier | null;
@@ -421,10 +441,16 @@ export interface ThreadForkParams {
   persistExtendedHistory?: boolean;
   model?: string;
   cwd?: string;
+  /** EXPERIMENTAL. Runtime-visible workspace roots for the forked thread. */
+  runtimeWorkspaceRoots?: string[];
   approvalPolicy?: AskForApproval;
   /** Route interactive approvals to the user or Codex's built-in reviewer. */
   approvalsReviewer?: ApprovalsReviewer;
+  /** Named permission profile from config (mutually exclusive with sandbox). */
+  permissions?: string;
   sandbox?: SandboxMode;
+  /** Per-request config overrides, including named permission profile definitions. */
+  config?: Record<string, unknown>;
   [k: string]: unknown;
 }
 
@@ -444,6 +470,17 @@ export interface ThreadRollbackParams {
 export interface ThreadRollbackResponse {
   thread: { id: string; [k: string]: unknown };
   [k: string]: unknown;
+}
+
+/** Release the app-server's live state for a thread without archiving its history. */
+export interface ThreadUnsubscribeParams {
+  threadId: string;
+}
+
+export type ThreadUnsubscribeStatus = 'notLoaded' | 'notSubscribed' | 'unsubscribed';
+
+export interface ThreadUnsubscribeResponse {
+  status: ThreadUnsubscribeStatus;
 }
 
 // ── ThreadSettingsUpdate (v2.rs ThreadSettingsUpdateParams) ──────────────────
@@ -1064,6 +1101,7 @@ export const Method = {
   ThreadResume: 'thread/resume',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadUnsubscribe: 'thread/unsubscribe',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

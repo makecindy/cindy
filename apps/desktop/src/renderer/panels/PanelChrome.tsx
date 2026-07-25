@@ -1,4 +1,8 @@
 import type { CSSProperties, ReactNode } from 'react';
+import { Maximize2, Minimize2, PictureInPicture2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import { usePanelMaximize } from '../layout/panelMaximize';
 
 /**
  * PanelChrome —— 面板标准头。
@@ -10,20 +14,36 @@ import type { CSSProperties, ReactNode } from 'react';
  *      PanelDragController 识别;窗口拖动走 46px 顶带,见 B3 口径);
  *   3. 左标题 / 右 actions 槽:标题给面板身份,actions 给面板自定义控件。
  *
- * 右端两颗系统按钮(独立窗口 / 撑满页面)**暂缺**:对应的引擎级能力
- * (任意面板 detach / maximize)还没泛化,能力落地时由本组件统一
- * 长出,面板作者无感 —— 这正是"标准头由引擎提供"的意义。
+ * 右端系统按钮(一批,由引擎统一长出,面板作者无感;身份卡
+ * panel.systemButtons 可逐个关闭):
+ *  - 「独立窗口」(detach):传 onDetach 即得,点击把面板抽进自己的 OS 窗口
+ *    (状态机在 main 的 ghost-panel-window/controller.ts);
+ *  - 「撑满内容区」(maximize):传 panelKind 即得,状态在 LayoutRoot 的
+ *    PanelMaximizeContext。
  *
- * 视觉走主题 token(规则 16);组件自身无文案(标题由调用方传入并自行 i18n)。
+ * 视觉走主题 token(规则 16);按钮 aria 文案走 i18n(panelChrome.*),
+ * 标题由调用方传入并自行 i18n。
  */
 export interface PanelChromeProps {
   /** 左侧标题(调用方自行 i18n;可以是文本或自定义节点)。 */
   title: ReactNode;
-  /** 右端自定义控件槽(排在未来系统按钮的左侧)。 */
+  /** 右端自定义控件槽(排在系统按钮的左侧)。 */
   actions?: ReactNode;
+  /**
+   * 面板在布局树里的 panelKind。传入且处于 LayoutRoot 的
+   * PanelMaximizeContext 之下时,标准头长出「撑满内容区」系统按钮;
+   * 不传(或脱离引擎单渲)则不渲染,行为与旧版完全一致。
+   */
+  panelKind?: string;
+  /** 传入即长出「独立窗口」系统按钮(排在撑满按钮左侧),点击回调归调用方。 */
+  onDetach?: () => void;
 }
 
-export function PanelChrome({ title, actions }: PanelChromeProps): ReactNode {
+export function PanelChrome({ title, actions, panelKind, onDetach }: PanelChromeProps): ReactNode {
+  const { t } = useTranslation();
+  const maximize = usePanelMaximize();
+  const showMaximize = panelKind !== undefined && maximize !== null;
+  const isMaximized = showMaximize && maximize.maximizedKind === panelKind;
   return (
     <>
       {/* 窗口 chrome 让位带(§6 规则 3:顶部 46px 是系统领地,任何面板不得占用)。
@@ -42,7 +62,33 @@ export function PanelChrome({ title, actions }: PanelChromeProps): ReactNode {
         <div className="min-w-0 truncate text-[12px] font-medium text-[var(--text-secondary)]">
           {title}
         </div>
-        {actions && <div className="flex shrink-0 items-center gap-0.5">{actions}</div>}
+        {(actions || showMaximize || onDetach) && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {actions}
+            {onDetach && (
+              <button
+                type="button"
+                aria-label={t('panelChrome.detachAria')}
+                onClick={onDetach}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                <PictureInPicture2 size={14} />
+              </button>
+            )}
+            {showMaximize && (
+              // 按下命中 button 时 PanelDragController 会让路(标准头手势面的
+              // 交互元素豁免),点击不会误触"拿起面板"。
+              <button
+                type="button"
+                aria-label={t(isMaximized ? 'panelChrome.restoreAria' : 'panelChrome.maximizeAria')}
+                onClick={() => maximize.toggle(panelKind)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

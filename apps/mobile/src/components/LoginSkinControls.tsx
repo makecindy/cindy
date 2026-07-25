@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Animated,
+  BackHandler,
   Easing,
   Pressable,
   StyleSheet,
@@ -12,6 +13,8 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import {
   formatResendCountdown,
   LOGIN_BACK,
+  LOGIN_CONSENT_DIALOG,
+  LOGIN_CONSENT_ROW,
   LOGIN_CONTROL,
   LOGIN_DISABLED_TEXT_OPACITY,
   LOGIN_ERROR_TEXT,
@@ -26,6 +29,7 @@ import {
   RESEND_COUNTDOWN_TICK_MS,
   resendCountdownRemaining,
 } from '@/auth/loginSkinLayout';
+import { parseLegalSegments } from '@/auth/legalText';
 import { Text, TextInput } from '@/components/AppText';
 import { useTheme, useThemedStyles } from '@/theme';
 import { fontWeight, loginSizes, radius, type ThemeColors } from '@/theme/tokens';
@@ -82,6 +86,365 @@ function StateOverlay({
   );
 }
 
+/* ── 协议同意族(consent PR;figma wave5 radiobutton 600:627 + 弹窗 602:822/1249,
+      与桌面 LoginControls 同参数源) ── */
+
+/**
+ * 协议声明内联渲染:文本段原样、`<terms>/<privacy>` 链接段 = Bold + underline 可点
+ * (RN 嵌套 Text onPress;颜色继承正文,点击只开系统浏览器不冒泡切 radio)。
+ */
+function LegalStatementText({
+  statement,
+  color,
+  fontSize,
+  lineHeight,
+  onOpenTerms,
+  onOpenPrivacy,
+  testIDPrefix,
+}: {
+  statement: string;
+  color: string;
+  fontSize: number;
+  lineHeight: number;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
+  testIDPrefix: string;
+}) {
+  const base = { color, fontSize, lineHeight } as const;
+  return (
+    <Text style={[base, { textAlign: 'center' }]}>
+      {parseLegalSegments(statement).map((segment, index) =>
+        segment.kind === 'text' ? (
+          // eslint-disable-next-line react/no-array-index-key
+          <Text key={index} style={base}>
+            {segment.text}
+          </Text>
+        ) : (
+          <Text
+            // eslint-disable-next-line react/no-array-index-key
+            key={index}
+            accessibilityRole="link"
+            onPress={segment.kind === 'terms' ? onOpenTerms : onOpenPrivacy}
+            suppressHighlighting
+            style={[
+              base,
+              { fontWeight: fontWeight.bold, textDecorationLine: 'underline' },
+            ]}
+            testID={`${testIDPrefix}.${segment.kind}Link`}
+          >
+            {segment.text}
+          </Text>
+        ),
+      )}
+    </Text>
+  );
+}
+
+/** radio 选中对勾(figma 600:632:约 8.65×5.13 @圈内,stroke 3 round;静态矢量)。 */
+function ConsentCheckGlyph({ color }: { color: string }) {
+  const s = LOGIN_CONSENT_ROW.radio.ringSize;
+  return (
+    <Svg fill="none" height={s} viewBox={`0 0 ${s} ${s}`} width={s}>
+      <Path
+        d="M6.6 10.4 L9.3 12.9 L15 8.2"
+        stroke={color}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={LOGIN_CONSENT_ROW.radio.checkStroke}
+      />
+    </Svg>
+  );
+}
+
+/**
+ * 协议同意行(figma 600:660:登录组下方 22 设计px @y582,680×40 内容居中):
+ * radio 四态双模式反色(选中 = 对勾),文字 20 Regular controlText 双态,
+ * 「服务条款」「隐私协议」为 Bold underline 内联链接。radio 态切换只变圈色
+ * (仓规 7:无布局跳变、无常驻动画)。
+ */
+export function LoginConsentRow({
+  checked,
+  onToggle,
+  statement,
+  onOpenTerms,
+  onOpenPrivacy,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  statement: string;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
+}) {
+  const { colors } = useTheme();
+  const login = colors.login;
+  const { radio } = LOGIN_CONSENT_ROW;
+  // 行容器向上扩出 pressSize-height(48 设计px)容纳放大的命中区:行底 622 不变,
+  // paddingTop 把文字/视觉内容压回原 40 高内容带(582..622),视觉零变化
+  const pressExpand = radio.pressSize - LOGIN_CONSENT_ROW.height;
+  // 读屏标签 = 协议声明整行纯文本(剥掉 <terms>/<privacy> 标记;四语随 i18n;codex P1)
+  const statementLabel = parseLegalSegments(statement)
+    .map((segment) => segment.text)
+    .join('');
+  return (
+    <View
+      style={{
+        alignItems: 'center',
+        flexDirection: 'row',
+        gap: LOGIN_CONSENT_ROW.gap,
+        height: radio.pressSize,
+        justifyContent: 'center',
+        left: 0,
+        paddingTop: pressExpand,
+        position: 'absolute',
+        top: LOGIN_CONSENT_ROW.y - pressExpand,
+        width: LOGIN_CONSENT_ROW.width,
+      }}
+      testID="login.consentRow"
+    >
+      {/* 命中区 88×88 设计px(≈44 物理pt,codex P1),不加 hitSlop(父 bounds 裁剪、
+          Android 界外不派发——历史结论)。右下锚定:右缘 = 视觉 24 槽位右缘(不越 gap 6.5
+          侵入协议链接命中区,ja 句首即链接)、底缘 = 行底 622(不越父容器 bounds);
+          布局占位仍 24(marginLeft 负回收),视觉圆圈位置与 24×24 时代逐像素一致 */}
+      <Pressable
+        accessibilityLabel={statementLabel}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked }}
+        onPress={onToggle}
+        style={{
+          alignItems: 'flex-end',
+          alignSelf: 'flex-end',
+          height: radio.pressSize,
+          justifyContent: 'flex-end',
+          marginLeft: -(radio.pressSize - radio.hitSize),
+          paddingBottom: (LOGIN_CONSENT_ROW.height - radio.ringSize) / 2,
+          paddingRight: (radio.hitSize - radio.ringSize) / 2,
+          width: radio.pressSize,
+        }}
+        testID="login.consentRadio"
+      >
+        <View
+          style={{
+            alignItems: 'center',
+            backgroundColor: checked ? login.consentRadioCheckedBg : login.consentRadioBg,
+            borderColor: checked ? login.consentRadioCheckedBg : login.consentRadioBorder,
+            borderRadius: radio.ringRadius,
+            borderWidth: radio.ringStroke,
+            height: radio.ringSize,
+            justifyContent: 'center',
+            width: radio.ringSize,
+          }}
+        >
+          {checked ? <ConsentCheckGlyph color={login.consentRadioCheck} /> : null}
+        </View>
+      </Pressable>
+      <LegalStatementText
+        color={login.controlText}
+        fontSize={LOGIN_CONSENT_ROW.font}
+        lineHeight={LOGIN_CONSENT_ROW.lineHeight}
+        onOpenPrivacy={onOpenPrivacy}
+        onOpenTerms={onOpenTerms}
+        statement={statement}
+        testIDPrefix="login.consent"
+      />
+    </View>
+  );
+}
+
+/** 弹窗双色小按钮(wave5 §11.3:260×80 r40 Bold 24;primary=强调 / secondary=普通)。 */
+function ConsentDialogButton({
+  x,
+  label,
+  kind,
+  onPress,
+  testID,
+}: {
+  x: number;
+  label: string;
+  kind: 'primary' | 'secondary';
+  onPress: () => void;
+  testID: string;
+}) {
+  const { colors } = useTheme();
+  const login = colors.login;
+  const B = LOGIN_CONSENT_DIALOG.button;
+  const [pressed, setPressed] = useState(false);
+  const primary = kind === 'primary';
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      style={{
+        alignItems: 'center',
+        backgroundColor: primary ? login.primaryButtonBg : login.secondaryButtonBg,
+        borderColor: primary ? login.primaryButtonBorder : login.secondaryButtonBorder,
+        borderRadius: B.radius,
+        borderWidth: 1,
+        height: B.height,
+        justifyContent: 'center',
+        left: x,
+        overflow: 'hidden',
+        position: 'absolute',
+        top: B.y,
+        width: B.width,
+      }}
+      testID={testID}
+    >
+      <Text
+        numberOfLines={1}
+        style={{
+          color: primary ? login.primaryButtonText : login.secondaryButtonText,
+          fontSize: B.font,
+          fontWeight: fontWeight.bold,
+        }}
+      >
+        {label}
+      </Text>
+      {pressed ? (
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: primary
+                ? login.overlayButtonPressed
+                : login.overlaySecondaryPressed,
+              borderRadius: B.radius,
+            },
+          ]}
+        />
+      ) : null}
+    </Pressable>
+  );
+}
+
+/**
+ * 服务条款弹窗(figma 602:822/602:1249):stage 内全屏遮罩(黑 85%,继承首启亮色门
+ * 主题上下文,不用 RN Modal)+ 680×380 r36 面板按 groupScale 缩放居中;标题 Bold 32、
+ * 正文 26/40(secondaryText,内联链接可点),不同意 = 次级钮 / 同意 = 强调钮。
+ * 遮罩不可点穿:协议确认必须显式选择(仓规 9 确定性分支)。
+ */
+export function LoginConsentDialog({
+  scale,
+  title,
+  body,
+  agreeLabel,
+  disagreeLabel,
+  onAgree,
+  onDisagree,
+  onOpenTerms,
+  onOpenPrivacy,
+}: {
+  /** 面板缩放 = stage.scale × loginGroupScale(与登录组同口径,750 设计 px → 物理 px) */
+  scale: number;
+  title: string;
+  body: string;
+  agreeLabel: string;
+  disagreeLabel: string;
+  onAgree: () => void;
+  onDisagree: () => void;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
+}) {
+  const { colors } = useTheme();
+  const login = colors.login;
+  const D = LOGIN_CONSENT_DIALOG;
+  // Android 硬件返回键 = 不同意(与 Esc/遮罩语义一致);非 Modal 弹窗需自行拦截,
+  // 否则返回键会触发路由默认行为绕过协议门(codex 审查 P2)。iOS 无此按键,no-op。
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onDisagree();
+      return true;
+    });
+    return () => sub.remove();
+  }, [onDisagree]);
+  return (
+    <View
+      accessibilityViewIsModal
+      style={[
+        StyleSheet.absoluteFill,
+        {
+          alignItems: 'center',
+          backgroundColor: login.consentOverlay,
+          justifyContent: 'center',
+          zIndex: 100,
+        },
+      ]}
+      testID="login.consentDialog"
+    >
+      {/* 外层物理尺寸盒(设计尺寸 × scale),内层 680×380 设计坐标系整层缩放 */}
+      <View style={{ height: D.height * scale, width: D.width * scale }}>
+        <View
+          style={{
+            backgroundColor: login.panelBg,
+            borderColor: login.panelBorder,
+            borderRadius: D.radius,
+            borderWidth: 1,
+            height: D.height,
+            left: 0,
+            position: 'absolute',
+            top: 0,
+            transform: [{ scale }],
+            transformOrigin: 'top left',
+            width: D.width,
+          }}
+        >
+          <Text
+            numberOfLines={1}
+            style={{
+              color: login.titleText,
+              fontSize: D.title.font,
+              fontWeight: fontWeight.bold,
+              left: 0,
+              lineHeight: D.title.height,
+              position: 'absolute',
+              textAlign: 'center',
+              top: D.title.y,
+              width: D.width,
+            }}
+            testID="login.consentDialogTitle"
+          >
+            {title}
+          </Text>
+          <View
+            style={{
+              left: D.body.x,
+              position: 'absolute',
+              top: D.body.y,
+              width: D.body.width,
+            }}
+          >
+            <LegalStatementText
+              color={login.secondaryText}
+              fontSize={D.body.font}
+              lineHeight={D.body.lineHeight}
+              onOpenPrivacy={onOpenPrivacy}
+              onOpenTerms={onOpenTerms}
+              statement={body}
+              testIDPrefix="login.consentDialog"
+            />
+          </View>
+          <ConsentDialogButton
+            kind="secondary"
+            label={disagreeLabel}
+            onPress={onDisagree}
+            testID="login.consentDisagree"
+            x={D.button.disagreeX}
+          />
+          <ConsentDialogButton
+            kind="primary"
+            label={agreeLabel}
+            onPress={onAgree}
+            testID="login.consentAgree"
+            x={D.button.agreeX}
+          />
+        </View>
+      </View>
+    </View>
+  );
+}
+
 /** 面板(figma §4:680×440 r36 panelBg;wave4 1px inside 描边 368:1383 → RN borderWidth 1)。 */
 export function LoginPanel({
   children,
@@ -98,7 +461,8 @@ export function LoginPanel({
   );
 }
 
-/** 标题块(figma §5.1:标题 y=31 h=38 32 Bold 居中;副标题 x=41 y=75 w=599 20 Regular 居中)。 */
+/** 标题块(figma §5.1:标题 y=31 h=38 32 Bold 居中;副标题 @(70,75) 540 宽 ≤2 行
+ *  顶对齐 20 Regular——2026-07-24 拍板,原单行 599@41 作废,见 DESIGN.md §16.2)。 */
 export function LoginTitleBlock({
   title,
   subtitle,
@@ -115,7 +479,7 @@ export function LoginTitleBlock({
         {title}
       </Text>
       {subtitle != null ? (
-        <Text numberOfLines={1} style={styles.subtitle}>
+        <Text numberOfLines={LOGIN_SUBTITLE.maxLines} style={styles.subtitle}>
           {subtitle}
         </Text>
       ) : null}
@@ -747,14 +1111,24 @@ export function LoginTextLinkSlot({
   children,
   top,
   tone = 'placeholder',
+  align = 'center',
 }: {
   children: ReactNode;
   top?: number;
   tone?: 'placeholder' | 'secondary';
+  /** align="top":说明/提示类顶对齐 ≤2 行槽,槽高=行高×2(DESIGN.md §16.2,与桌面 SSO_ORG_HINT 同构);"center":与倒计时/重发同位垂直居中。 */
+  align?: 'center' | 'top';
 }) {
   const styles = useThemedStyles(makeStyles);
   return (
-    <View pointerEvents="none" style={[styles.textLinkSlotBox, top != null && { top }]}>
+    <View
+      pointerEvents="none"
+      style={[
+        styles.textLinkSlotBox,
+        top != null && { top },
+        align === 'top' && styles.textLinkSlotBoxTop,
+      ]}
+    >
       <Text
         numberOfLines={2}
         style={[
@@ -967,6 +1341,8 @@ const makeStyles = (colors: ThemeColors) =>
     fontSize: LOGIN_SUBTITLE.font,
     fontWeight: fontWeight.regular,
     left: LOGIN_SUBTITLE.x,
+    // 显式行高:两行槽高 = 行高 × maxLines,折行只向下伸展(§16.2 折行分级 2)
+    lineHeight: LOGIN_SUBTITLE.height,
     // 同查:不设固定 height(设计 h=23 仅几何参考),盒随字形,descender 不受裁切
     position: 'absolute',
     textAlign: 'center',
@@ -1172,6 +1548,11 @@ const makeStyles = (colors: ThemeColors) =>
     top: LOGIN_TEXT_LINK.y,
     width: LOGIN_TEXT_LINK.width,
   },
+  // 顶对齐变体:说明/提示类 ≤2 行,槽高=行高×2,折行只向下伸展(DESIGN.md §16.2)
+  textLinkSlotBoxTop: {
+    height: LOGIN_TEXT_LINK.lineHeight * 2,
+    justifyContent: 'flex-start',
+  },
   resendLinkText: {
     color: colors.login.linkText,
     fontSize: LOGIN_TEXT_LINK.font,
@@ -1181,6 +1562,8 @@ const makeStyles = (colors: ThemeColors) =>
   textLinkSlotText: {
     fontSize: LOGIN_TEXT_LINK.font,
     fontWeight: fontWeight.regular,
+    // 显式行高:两行(numberOfLines=2)共 46 ≤ 槽高 50,不再依赖平台默认行高
+    lineHeight: LOGIN_TEXT_LINK.lineHeight,
     textAlign: 'center',
     width: LOGIN_TEXT_LINK.width,
   },

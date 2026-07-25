@@ -1044,6 +1044,26 @@ describe('远程交互接线不变式', () => {
     }
   });
 
+  it('F6: scheduler 新会话在首条消息落库后广播 created 给 device-link 列表订阅者', () => {
+    const runnerSrc = mainSrc('scheduler-host/runner.ts');
+    const hostSrc = mainSrc('scheduler-host/index.ts');
+    expect(runnerSrc).toContain('this.deps.onSessionCreated?.(session.id)');
+    expect(hostSrc).toContain('onSessionCreated: broadcastSessionCreated');
+  });
+
+  it('F7: 周期 sessions:list 是有界窗口，只能 merge，不能截断远程分片', () => {
+    const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
+    expect(src).toContain("snapshotMode: 'merge'");
+    expect(src).toContain("coalescingMode: 'weak'");
+  });
+
+  it('F8: 周期对账从实际 link status 启动，且状态 push 不被迟到快照覆盖', () => {
+    const src = read('features/device-link/useDeviceLinkRemoteProjects.ts');
+    expect(src).toContain('let linkOnline = false');
+    expect(src).toContain("if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online'");
+    expect(src).toContain('linkStatusPushSeen = true');
+  });
+
   it('F4: extraDirs 远程跳过 sessionService.update(getSessionDeviceId 守卫,避免阻断 setExtraDirs)', () => {
     const src = read('features/cc-agent/CCAgentSessionView.tsx');
     const start = src.indexOf('handleExtraDirsChange');

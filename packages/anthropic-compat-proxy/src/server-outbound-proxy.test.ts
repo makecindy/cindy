@@ -6,10 +6,10 @@ import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import type { ProxyHandle } from './types.js';
 
 /**
- * 出站代理链路的 server 级验证。技巧:上游统一用保证不可解析的 `.invalid` 假域 ——
+ * 出站代理链路的 server 级验证。代理路径用保证不可解析的 `.invalid` 假域 ——
  * 经代理转发时压根不需要解析上游域名(http 走绝对形式、https 由代理端拨号),
- * 因此「请求打到了 mini 代理」本身就证明代理路径生效;直连分支则以 DNS 失败收尾,
- * 验证 fail-open 不炸链路。
+ * 因此「请求打到了 mini 代理」本身就证明代理路径生效；直连回退则使用本机测试
+ * 上游，确定性验证 fail-open 后请求确实抵达直连目标。
  */
 describe('anthropic-compat-proxy outbound proxy wiring', () => {
   let proxy: ProxyHandle | null = null;
@@ -110,28 +110,40 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
   });
 
   it('falls back to direct connection when the resolver throws or returns unsupported urls', async () => {
+    let directRequests = 0;
+    const upstream = createHttpServer((_req, res) => {
+      directRequests += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ direct: true }));
+    });
+    const upstreamPort = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((r) => upstream.close(() => r())));
+
     const warns: string[] = [];
     proxy = await createAnthropicCompatProxy({
-      upstream: 'http://upstream.invalid:8080',
+      // URL parsing keeps 0.0.0.0 distinct from the explicit loopback forms that
+      // bypass the resolver, while Node routes it to this local test server.
+      upstream: `http://0.0.0.0:${upstreamPort}`,
       transformRequest: [],
       resolveOutboundProxy: () => { throw new Error('resolver boom'); },
       logger: { warn: (msg) => { warns.push(msg); } },
     });
 
-    // 直连假域必然失败,但必须是 502(fail-open 走到了直连),而非 resolver 异常炸链路。
+    // resolver 异常不能炸掉请求；fail-open 后必须实际抵达直连上游。
     const res = await fetch(`${proxy.url}/v1/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', messages: [] }),
     });
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ direct: true });
     expect(warns.some((m) => m.includes('outbound proxy resolver threw'))).toBe(true);
 
     await proxy.dispose();
 
     const warns2: string[] = [];
     proxy = await createAnthropicCompatProxy({
-      upstream: 'http://upstream.invalid:8080',
+      upstream: `http://0.0.0.0:${upstreamPort}`,
       transformRequest: [],
       resolveOutboundProxy: () => 'socks5://127.0.0.1:1080',
       logger: { warn: (msg) => { warns2.push(msg); } },
@@ -141,7 +153,9 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', messages: [] }),
     });
-    expect(res2.status).toBe(502);
+    expect(res2.status).toBe(200);
+    expect(await res2.json()).toEqual({ direct: true });
     expect(warns2.some((m) => m.includes('unsupported outbound proxy url'))).toBe(true);
+    expect(directRequests).toBe(2);
   });
 });

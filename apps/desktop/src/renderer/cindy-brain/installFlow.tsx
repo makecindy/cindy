@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import type { ReactNode } from 'react';
 
+import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
@@ -10,6 +11,7 @@ import {
   type GhostTrustInfo,
   type InstalledGhost,
 } from '../../shared/ghost';
+import { openGhostTabInSidebar } from '../features/right-sidebar/lib/openGhostTabInSidebar';
 import {
   GhostInstallReview,
   GhostPermissionDiffView,
@@ -19,7 +21,8 @@ import { ghostInstallErrorKey } from './installErrorKey';
 
 /**
  * 装入/更新意识的统一编排:inspect(验明正身)→ Renderer 权限清单 →
- * install / update。若含 Node，Main 会在真正写盘前再弹一次系统安全确认。
+ * install / update。Node 高风险条目在权限清单里如实展示
+ * (2026-07-24 起不再有 Main 原生二次确认弹窗)。
  *
  * 「装意识前弹确认」是 README 定下的安全原则:确认框展示的是**意识自称的身份**
  * (名字/版本/形态/是否带面板),不是文件名 —— 文件名可以随便改,身份卡不会陪它演。
@@ -56,10 +59,19 @@ interface InstallFlowDeps {
     cancelText?: string;
     checkboxLabel: string;
   }) => Promise<{ ok: boolean; checked: boolean }>;
+  /**
+   * 当前右侧栏会话 id;无会话视图的入口(插件页)不传或返回 null。
+   * 只在「tab 型插件 + 勾选立即开启」时消费:装完自动展开右侧栏并打开页签。
+   */
+  getSidebarSessionId?: () => string | null;
+  /** 打开/聚焦插件页签;缺省 openGhostTabInSidebar,测试注入用。 */
+  openGhostTab?: (sessionId: string, ghostId: string) => Promise<void>;
 }
 
 /** 意识装入/更新确认框统一宽度:权限清单是富内容,默认 400px 折行到累。 */
 const GHOST_CONFIRM_MAX_WIDTH = 520;
+
+const installFlowLog = createLogger('ghost-install-flow');
 
 /** 同 id 已装清单查询(sendSync,极小)。 */
 function findInstalled(id: string): InstalledGhost | null {
@@ -103,12 +115,9 @@ async function confirmAndRunUpdate(
   });
   if (!ok) return;
   try {
-    const result = await window.electronAPI.ghosts.update(lizFilePath, {
+    const { ghost } = await window.electronAPI.ghosts.update(lizFilePath, {
       expectedPackageSha256: packageSha256,
     });
-    // Node 的 Main 原生安全确认取消属于正常返回，不显示错误或成功提示。
-    if ('canceled' in result) return;
-    const { ghost } = result;
     toast.success(
       t('settings.ghosts.toast.updated', {
         name: ghost.manifest.name,
@@ -160,6 +169,10 @@ export async function confirmAndInstallGhost(
     : t('settings.ghosts.installConfirm.meta', { version: manifest.version });
   // "立即开启"勾选(2026-07-09 Lizi 定案):默认不勾 = 装入即沉睡,
   // 用户显式勾选才带电。装入 ≠ 授权运行。
+  // tab 型插件(panel.position:'tab')在有会话可落时,勾选语义升级为
+  // 「立即开启并打开页签」——文案与真实行为一致,无会话入口不许诺"打开"。
+  const sidebarSessionId = deps.getSidebarSessionId?.() ?? null;
+  const willOpenTab = manifest.panel?.position === 'tab' && sidebarSessionId !== null;
   const { ok, checked: enable } = await confirmWithCheckbox({
     title: t('settings.ghosts.installConfirm.title', { name: manifest.name }),
     content: (
@@ -173,23 +186,47 @@ export async function confirmAndInstallGhost(
     maxWidth: GHOST_CONFIRM_MAX_WIDTH,
     confirmText: t('settings.ghosts.installConfirm.confirm'),
     cancelText: t('settings.ghosts.installConfirm.cancel'),
-    checkboxLabel: t('settings.ghosts.installConfirm.enableNow'),
+    checkboxLabel: t(
+      willOpenTab
+        ? 'settings.ghosts.installConfirm.enableNowOpenTab'
+        : 'settings.ghosts.installConfirm.enableNow',
+    ),
   });
   if (!ok) return;
 
-  // 3) 真装(main 侧同一主体:来源校验 + Node 原生确认 + 落盘 + 停靠)。
+  // 3) 真装(main 侧同一主体:来源校验 + 落盘 + 停靠)。Node 高风险提示
+  // 已在上面的权限清单里如实展示,不再有 Main 原生二次确认。
   try {
-    const result = await window.electronAPI.ghosts.install(lizFilePath, {
+    const { ghost } = await window.electronAPI.ghosts.install(lizFilePath, {
       enable,
       expectedPackageSha256: packageSha256,
     });
-    if ('canceled' in result) return;
-    const { ghost } = result;
     toast.success(
       enable
         ? t('settings.ghosts.toast.installed', { name: ghost.manifest.name })
         : t('settings.ghosts.toast.installedAsleep', { name: ghost.manifest.name }),
     );
+    if (enable && willOpenTab) {
+      // 兑现勾选文案:展开右侧栏并打开/聚焦页签(侧栏抽离时路由到子窗口)。
+      // main 在 install() resolve 前已广播 ghosts:changed,Tab 注册表通常已就位;
+      // 极端竞态下 Shell 的 PlaceholderBody 兜底,注册到位即自愈。
+      // 打开失败不回滚安装,只记日志——装入本身已成功,toast 不改口。
+      // 重新读取会话 ID——用户可能在确认弹窗/安装期间切换了会话,
+      // 用安装完成时的当前会话,而非弹窗出现时的快照。
+      const currentSessionId = deps.getSidebarSessionId?.() ?? null;
+      if (currentSessionId !== null) {
+        const openGhostTab = deps.openGhostTab ?? openGhostTabInSidebar;
+        try {
+          await openGhostTab(currentSessionId, ghost.manifest.id);
+        } catch (err) {
+          installFlowLog.warn('open ghost tab after install failed', {
+            ghostId: ghost.manifest.id,
+            sessionId: currentSessionId,
+            err,
+          });
+        }
+      }
+    }
   } catch (err) {
     toast.error(t(ghostInstallErrorKey(extractIpcError(err)?.code)));
   }

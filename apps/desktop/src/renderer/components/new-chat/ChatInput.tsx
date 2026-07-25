@@ -479,7 +479,7 @@ interface ChatInputProps {
    * 与 onExtraDirsChange 成对出现:
    *   - 创建时(NewMakerDraftRoute):传 draft.extraDirs + 写 newMakerDraft store
    *   - 中途(CCAgentSessionView):传 session.extraDirs + 双 IPC(sessionService.update + maker.setExtraDirs)
-   * 不传 / 传 undefined → 不显示引用目录段(老调用方零迁移)。引用目录仍是 cc 专属;
+   * 不传 / 传 undefined → 不显示引用目录段(老调用方零迁移)。Claude 与 Codex 共用;
    * 但「+」按钮本身在有 onNewGoal(新建目标入口)时两端都会出现。
    */
   extraDirs?: string[];
@@ -4814,6 +4814,34 @@ export function ChatInput({
     voiceInput.state === 'submitting' ||
     voiceInput.state === 'refining',
   );
+  // Send / Stop 双槽语义 (voice busy = voiceInput.isBusy = listening|submitting|refining,
+  // 判定为何用 isBusy 而不是 isListening 见下方第三段):
+  // - 主槽 (最右, 永远占位, sendButtonRef 钉在这里):
+  //     · 发送瞬间 (inflight=true) → Stop  (Send 原位被替换, 不抖左侧 layout)
+  //     · streaming idle (无内容 且 无 voice busy) → Stop  (取代 Send 占主槽)
+  //     · 其它 (idle / streaming+canSend / voice busy) → Send
+  // - 次槽 (语音按钮左边, 即本组最左; 仅 streaming+(canSend||voice busy)+!inflight 时出现): Stop
+  // 设计意图: Send 是最显眼的主行动按钮, 应当永远在最右; streaming idle 时由 Stop 顶替
+  // Send 主槽 (原位替换, 不抖); streaming 中用户输入下一条要送入 PendingQueue 时, Send 回
+  // 到主槽, Stop 退到次槽. sendDispatchInFlight 锁次槽, 避免 send 瞬间主槽 Send→Stop 切换
+  // 的同帧再多出一个 Stop 把模型选择推一下又复位的 bug.
+  //
+  // 次槽必须在语音按钮**左边**, 不能夹在语音与 Send 之间 (2026-07-25): 本组右对齐, 语音
+  // 按钮永远紧邻主槽左侧, 于是它的右边缘恒等于「容器右 - 主槽宽 - gap」, 与是否 streaming /
+  // 是否有草稿 / 是否录音全部无关 —— 录音时计时胶囊只向左生长, 原来的麦克风命中点始终留在
+  // 按钮内, 用户可以"原地再点一下"停止录音. 若把 Stop 塞进语音与 Send 之间, 语音按钮会随
+  // Stop 的出现/消失整格横跳, 而它让出的位置正好被 Stop 占据, 原地再点一下就会误停任务.
+  //
+  // 槽位判定用 isBusy 而不是 isListening (2026-07-25): 停止录音的瞬间 state 就离开
+  // listening 进入 submitting/refining, 但转写文本要等润色完才落进草稿, 中间这一小段
+  // canSend 仍是 false —— 若按 isListening 判定, 这一帧会退化成"streaming idle", Stop 弹
+  // 回主槽、Send 消失, 等草稿落地再弹回来, 肉眼可见闪一下. isBusy 覆盖整个语音生命周期
+  // (listening + submitting + refining), 让槽位从开录到润色结束保持不变; 润色期间主槽是
+  // 禁用态 Send (见 sendButtonDisabled), 停止任务的能力由次槽 Stop 承担.
+  const mainSlotIsStop =
+    showStopButton && (sendDispatchInFlight || (!canSend && !voiceInput.isBusy));
+  const showSecondaryStop =
+    showStopButton && (canSend || voiceInput.isBusy) && !sendDispatchInFlight;
   useEffect(() => {
     voiceInputCanStopAndSendRef.current = !sendButtonDisabled;
     composerCanSubmitRef.current = !sendButtonDisabled;
@@ -5238,24 +5266,22 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):新建目标 + 计划模式(两端通用、同级)+ 引用目录(仅 cc)。
+                {/* composer 「+」菜单(权限左侧):新建目标 + 计划模式 + 引用目录(两端通用、同级)。
                 显示条件:有新建目标入口(会话内 → 内部 NewGoalDialog;首页 → onNewGoal 回调)、
-                计划模式入口(capability + 接线齐备),或 cc 有引用目录。
-                agentKind 透传真实 vendor(ExtraDirsButton 内部按能力裁剪菜单)。 */}
+                计划模式入口(capability + 接线齐备),或有引用目录接线。 */}
                 {(inSessionGoalEnabled ||
                   onNewGoal ||
                   planModeEntry ||
                   pluginsForMenu.length > 0 ||
-                  (vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange)) && (
+                  (extraDirs !== undefined && onExtraDirsChange)) && (
                   <ExtraDirsButton
                     extraDirs={extraDirs ?? []}
                     workingDir={workingDir}
-                    agentKind={vendorKey === 'cc' ? 'cc' : 'codex'}
                     planMode={planModeEntry}
                     plugins={pluginsForMenu}
                     pluginAvailableIds={pluginAvailableIds}
                     onPluginSelect={handlePluginSelect}
-                    onChange={onExtraDirsChange ?? (() => {})}
+                    onChange={onExtraDirsChange}
                     onNewGoal={
                       inSessionGoalEnabled || onNewGoal
                         ? () => {
@@ -5370,6 +5396,16 @@ export function ChatInput({
                       : 'flex items-center gap-2'
                   }
                 >
+                  {/* 次槽 Stop 必须在语音按钮左边 —— 见 showSecondaryStop 定义处的
+                 双槽语义与"语音按钮位置守恒"说明, 不要挪到语音与 Send 之间。 */}
+                  {showSecondaryStop && (
+                    <SendButton
+                      disabled={false}
+                      onClick={onStop ?? (() => {})}
+                      isStreaming
+                      visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                    />
+                  )}
                   <VoiceInputButton
                     state={voiceInput.state}
                     disabled={!!disabled || !editor}
@@ -5384,87 +5420,55 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}
                   />
-                  {/* Send / Stop 双槽语义:
-                 - 主槽 (最右, 永远占位, sendButtonRef 钉在这里):
-                     · 发送瞬间 (inflight=true) → Stop  (Send 原位被替换, 不抖左侧 layout)
-                     · streaming idle (无内容 / 无 voice) → Stop  (取代 Send 占主槽)
-                     · 其它 (idle / streaming+canSend / voice listening) → Send
-                 - 次槽 (主槽左边, 仅 streaming+(canSend||listening)+!inflight 时出现): Stop
-                 设计意图: Send 是最显眼的主行动按钮, 应当永远在最右; streaming
-                 idle 时由 Stop 顶替 Send 主槽 (原位替换, 不抖); streaming 中用户输入
-                 下一条要送入 PendingQueue 时, Send 回到主槽, Stop 退到次槽 (Send 在
-                 Stop 右边). dispatchSendInFlight 锁次槽, 避免 send 瞬间主槽
-                 Send→Stop 切换的同帧再多出一个 Stop 把模型选择推一下又复位的 bug. */}
-                  {(() => {
-                    const mainSlotIsStop =
-                      showStopButton &&
-                      (sendDispatchInFlight || (!canSend && !voiceInput.isListening));
-                    const showSecondaryStop =
-                      showStopButton &&
-                      (canSend || voiceInput.isListening) &&
-                      !sendDispatchInFlight;
-                    return (
-                      <>
-                        {showSecondaryStop && (
-                          <SendButton
-                            disabled={false}
-                            onClick={onStop ?? (() => {})}
-                            isStreaming
-                            visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                          />
-                        )}
-                        <span ref={sendButtonRef} className="inline-flex rounded-full">
-                          {mainSlotIsStop ? (
-                            <SendButton
-                              disabled={false}
-                              onClick={onStop ?? (() => {})}
-                              isStreaming
-                              visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                            />
-                          ) : (
-                            <Tip
-                              text={
-                                voiceReleaseToSendActive
-                                  ? t('newChat.chatInput.voiceInput.releaseToSend')
-                                  : voiceInput.isListening && !sendButtonDisabled
-                                    ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`
-                                    : showStopButton
-                                      ? t('newChat.sendButton.queueTooltip', {
-                                          shortcut: steerShortcutLabel,
-                                        })
-                                      : !sendButtonDisabled
-                                        ? `${t('newChat.sendButton.send')} · Enter`
-                                        : selectedSourceDisconnected
-                                          ? t('newChat.sourceDisconnected.sendBlocked')
-                                          : null
-                              }
-                              side="top"
-                              forceOpen={voiceReleaseToSendActive}
-                            >
-                              {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
+                  <span ref={sendButtonRef} className="inline-flex rounded-full">
+                    {mainSlotIsStop ? (
+                      <SendButton
+                        disabled={false}
+                        onClick={onStop ?? (() => {})}
+                        isStreaming
+                        visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                      />
+                    ) : (
+                      <Tip
+                        text={
+                          voiceReleaseToSendActive
+                            ? t('newChat.chatInput.voiceInput.releaseToSend')
+                            : voiceInput.isListening && !sendButtonDisabled
+                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`
+                              : showStopButton
+                                ? t('newChat.sendButton.queueTooltip', {
+                                    shortcut: steerShortcutLabel,
+                                  })
+                                : !sendButtonDisabled
+                                  ? `${t('newChat.sendButton.send')} · Enter`
+                                  : selectedSourceDisconnected
+                                    ? t('newChat.sourceDisconnected.sendBlocked')
+                                    : null
+                        }
+                        side="top"
+                        forceOpen={voiceReleaseToSendActive}
+                      >
+                        {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
                             disabled button 不会可靠地产生 hover/focus 事件；曾经因此让
                             running 时“排队/快捷键插话”提示完全不出现。 */}
-                              <span className="inline-flex rounded-full">
-                                <SendButton
-                                  disabled={sendButtonDisabled}
-                                  highlighted={voiceReleaseToSendActive}
-                                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                                  ariaLabel={
-                                    showStopButton
-                                      ? t('newChat.sendButton.queue')
-                                      : t('newChat.sendButton.send')
-                                  }
-                                  onClick={() => {
-                                    void handleClickSend();
-                                  }}
-                                />
-                              </span>
-                            </Tip>
-                          )}
+                        <span className="inline-flex rounded-full">
+                          <SendButton
+                            disabled={sendButtonDisabled}
+                            highlighted={voiceReleaseToSendActive}
+                            visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                            ariaLabel={
+                              showStopButton
+                                ? t('newChat.sendButton.queue')
+                                : t('newChat.sendButton.send')
+                            }
+                            onClick={() => {
+                              void handleClickSend();
+                            }}
+                          />
                         </span>
-                      </>
-                    );
-                  })()}
+                      </Tip>
+                    )}
+                  </span>
                 </div>
               </div>
             </div>

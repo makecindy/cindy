@@ -105,6 +105,9 @@ function deriveRequirementGroups(manifest: GhostManifest): GhostSetupRequirement
     if (s.source === 'login-email') continue; // 登录派生恒就绪,不构成配置需求
     implicit.push({ kind: 'secret', key: s.key });
   }
+  for (const s of manifest.node?.secretBindings ?? []) {
+    implicit.push({ kind: 'secret', key: s.key });
+  }
   for (const c of manifest.network?.connections ?? []) {
     implicit.push({ kind: 'connection', key: c.key });
   }
@@ -177,9 +180,10 @@ function toStatusItem(manifest: GhostManifest, req: GhostSetupRequirement): Ghos
     return { ref: `connection:${req.key}`, label: decl?.label ?? req.key, kind: 'connection' };
   }
   const decl = manifest.network?.secrets?.find((s) => s.key === req.key);
+  const nodeDecl = manifest.node?.secretBindings?.find((s) => s.key === req.key);
   return {
     ref: `secret:${req.key}`,
-    label: decl?.label ?? req.key,
+    label: decl?.label ?? nodeDecl?.label ?? req.key,
     kind: decl?.source === 'oauth' ? 'oauth' : 'key',
   };
 }
@@ -210,9 +214,10 @@ function verdictOf(
     return probes.connectionCount(req.key) > 0 ? 'satisfied' : 'missing';
   }
   const decl = manifest.network?.secrets?.find((s) => s.key === req.key);
+  const nodeDecl = manifest.node?.secretBindings?.find((s) => s.key === req.key);
   // 旧插件页保留 fail-open；真正 ghost_call gate 用 strict=true，避免
   // manifest 更新竞态把失效引用误判为已就绪。
-  if (!decl) {
+  if (!decl && !nodeDecl) {
     if (strict) {
       throw new GhostSetupAssessmentError(
         `setup requirement ${requirementRef(req)} is not declared`,
@@ -220,6 +225,8 @@ function verdictOf(
     }
     return 'satisfied';
   }
+  if (nodeDecl) return probes.secretSaved(req.key) ? 'satisfied' : 'missing';
+  if (!decl) return 'satisfied';
   if (decl.source === 'login-email') {
     if (strict) {
       throw new GhostSetupAssessmentError(
@@ -254,15 +261,20 @@ function toAssessmentItem(
     req.kind === 'secret'
       ? manifest.network?.secrets?.find((secret) => secret.key === req.key)
       : undefined;
+  const nodeSecretDecl =
+    req.kind === 'secret'
+      ? manifest.node?.secretBindings?.find((secret) => secret.key === req.key)
+      : undefined;
+  const userSecretDecl = secretDecl ?? nodeSecretDecl;
   return {
     ref,
     kind,
     label: legacy.label,
-    ...(secretDecl?.hint ? { description: secretDecl.hint } : {}),
+    ...(userSecretDecl?.hint ? { description: userSecretDecl.hint } : {}),
     state: verdictOf(manifest, req, probes, strict),
     actions:
-      kind === 'secret' && secretDecl
-        ? inlineSecretAction(manifest, ref, legacy.label, secretDecl.hint, secretDecl.url)
+      kind === 'secret' && userSecretDecl
+        ? inlineSecretAction(manifest, ref, legacy.label, userSecretDecl.hint, userSecretDecl.url)
         : actionFor(kind, ref, { oauthClientConfigured }),
   };
 }

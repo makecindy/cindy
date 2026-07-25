@@ -12,16 +12,22 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { formatCompactTokens } from '@/lib/usageFormat';
+import { formatCompactTokens, formatMoney } from '@/lib/usageFormat';
+import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import {
+  regionalCurrencyForRegion,
+  type RegionalMoney,
+} from '../../../shared/regionalMoney';
 
 const CELL_PX = 12;
 const GAP_PX = 3;
+const EMPTY_MONEY_CURRENCY = regionalCurrencyForRegion(CURRENT_CINDY_REGION);
 /** 非零值分桶的 color-mix 浓度阶梯 (level 1..4)。 */
 const LEVEL_MIX = [0.22, 0.42, 0.68, 1];
 
 interface HeatCell {
   day: string;
-  costUsd: number;
+  money: RegionalMoney;
   /** 当日 token 合计 (daily_model_usage 上线前的历史日为 0 → tooltip 不显示)。 */
   tokens: number;
   /** 0 = 无消费, 1..4 = 分位桶。 */
@@ -55,16 +61,16 @@ export function UsageHeatmap({
   todayKey,
   windowDays,
 }: {
-  days: Array<{ day: string; costUsd: number; tokens?: number }>;
+  days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   todayKey: string;
   windowDays: number;
 }): React.JSX.Element {
   const { t, i18n } = useTranslation();
 
   const { columns, monthLabels } = useMemo(() => {
-    const spendByDay = new Map(days.map((d) => [d.day, d.costUsd]));
+    const spendByDay = new Map(days.map((d) => [d.day, d.money]));
     const tokensByDay = new Map(days.map((d) => [d.day, d.tokens ?? 0]));
-    const nonZero = days.map((d) => d.costUsd).filter((v) => v > 0).sort((a, b) => a - b);
+    const nonZero = days.map((d) => d.money.amount).filter((v) => v > 0).sort((a, b) => a - b);
     const q = (p: number): number => (nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(p * nonZero.length))] : 0);
     const thresholds: [number, number, number] = [q(0.25), q(0.5), q(0.75)];
 
@@ -77,19 +83,35 @@ export function UsageHeatmap({
     const cursor = new Date(start);
     while (cursor <= today) {
       const key = toDayKey(cursor);
-      const cost = spendByDay.get(key) ?? 0;
+      const money = spendByDay.get(key) ?? {
+        amount: 0,
+        currency: days[0]?.money.currency ?? EMPTY_MONEY_CURRENCY,
+        approximate: false,
+        kind: 'actual-cost' as const,
+      };
       cells.push({
         day: key,
-        costUsd: cost,
+        money,
         tokens: tokensByDay.get(key) ?? 0,
-        level: levelFor(cost, thresholds),
+        level: levelFor(money.amount, thresholds),
         placeholder: false,
       });
       cursor.setDate(cursor.getDate() + 1);
     }
     // 末列补满 7 行 (未来日占位, 保持网格矩形)
     while (cells.length % 7 !== 0) {
-      cells.push({ day: '', costUsd: 0, tokens: 0, level: 0, placeholder: true });
+      cells.push({
+        day: '',
+        money: {
+          amount: 0,
+          currency: days[0]?.money.currency ?? EMPTY_MONEY_CURRENCY,
+          approximate: false,
+          kind: 'actual-cost',
+        },
+        tokens: 0,
+        level: 0,
+        placeholder: true,
+      });
     }
 
     const cols: HeatCell[][] = [];
@@ -134,7 +156,7 @@ export function UsageHeatmap({
               ) : (
                 <div
                   key={ri}
-                  title={`${cell.day} · $${cell.costUsd.toFixed(2)}${
+                  title={`${cell.day} · ${formatMoney(cell.money)}${
                     cell.tokens > 0
                       ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
                       : ''

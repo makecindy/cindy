@@ -111,7 +111,7 @@ registerColor('login-control-bg', { light: '#eeeeee', dark: '#eeeeee' }, 'Cindy 
 
 | 主题类别 | 建议 |
 |---|---|
-| Default Light / Default Dark | 新 login alias 直接解析为 Figma 值；不继承黑白 Ollama login token |
+| Default Light / Default Dark | 新 login alias 直接解析为 Figma 值；不继承默认主题的旧黑白 login token |
 | Cindy Light / Cindy Dark | 对已有 Cindy 主题基础色无冲突；login alias 保持 Figma 帧值 |
 | Atom One Light / Solarized Light / Eclipse / One Dark Pro / GitHub Dark / Monokai Pro / Material Ocean HC | 不 override login alias。登录是品牌场景，主题只影响登录后工作区 |
 

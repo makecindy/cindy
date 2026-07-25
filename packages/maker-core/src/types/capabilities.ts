@@ -84,9 +84,8 @@ export interface Capabilities {
   /**
    * Session 附加只读引用目录 (extra dirs)。
    *  - Claude: SDK 原生 `additionalDirectories` 字段, supported=true, 改完下一 turn 即时生效
-   *  - Codex:  developerInstructions 在 thread/start 一次性装配, 中途无法 hot-reload,
-   *            首版选 supported=false (UI gate 掉)。未来若协议层支持 mid-session
-   *            systemPrompt 更新可重开。
+   *  - Codex:  app-server runtimeWorkspaceRoots + named permission profile；
+   *            每 turn 覆盖 roots，额外目录保持只读。
    * UI 据此决定是否在 ChatInput 显示 ExtraDirsButton。
    */
   extraDirs: CapabilityStatus;

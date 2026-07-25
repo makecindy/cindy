@@ -9,8 +9,8 @@
  *  - 删除走 IPC `local-db:recent-workdirs:remove` —— 唯一的 renderer 写入口,
  *    语义是"从最近列表移除"(列表卫生),不动 sessions/磁盘。目录下再次创建
  *    session 会经 upsertRecentWorkdir 重新入列,已迁移的死路径则一去不返。
- *    注意:该表同时是 device-link remote-workdir-guard 的白名单来源之一,
- *    删除后被控端若无该目录下的 session,手机端将无法再远程打开它(预期行为)。
+ *    recent 只影响项目列表展示,不再充当 device-link remote-workdir-guard
+ *    的放行依据；远程入口始终实时探测目录当前是否可访问。
  *  - upsert 不暴露 IPC —— 由 main 内部在 session 创建路径上调用 upsertRecentWorkdir,
  *    避免 renderer 私自污染该表。生命周期与 session 解耦:归档 / 删除 session
  *    都不影响这张表。

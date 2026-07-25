@@ -6,6 +6,7 @@
 
 export type SettingsTab =
   | 'general'
+  | 'billing'
   | 'personalization'
   | 'providers'
   | 'api-keys'
@@ -24,6 +25,7 @@ export type SettingsTab =
 
 export const TAB_IDS: ReadonlyArray<SettingsTab> = [
   'general',
+  'billing',
   'personalization',
   'providers',
   // 「工具密钥」(api-keys)已于 2026-07-13 下架:面板里最后一把 mivo key 随
@@ -47,6 +49,7 @@ export const TAB_IDS: ReadonlyArray<SettingsTab> = [
 
 export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   general: 'settings.tabs.general',
+  billing: 'settings.tabs.billing',
   personalization: 'settings.tabs.personalization',
   'api-keys': 'settings.tabs.apiKeys',
   'voice-input': 'settings.tabs.voiceInput',

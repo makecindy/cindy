@@ -249,6 +249,9 @@ export function MainLayout() {
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
+  // 给树内远端消费方(如 GlobalDropImportListener 的装入编排)的稳定 getter:
+  // 读 ref 拿最新值,prop 身份不随会话切换变化,不触发下游 effect 重挂。
+  const getRightSidebarSessionId = useCallback(() => rightSidebarSessionIdRef.current, []);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
@@ -822,6 +825,18 @@ export function MainLayout() {
         void window.electronAPI.rightSidebarWindow.open().catch(() => undefined);
       }
     });
+    // 插件面板独立窗口的重启恢复(同款语义,按 ghostId 逐个):detached &&
+    // lastOpen 的条目重开。open 走 main 复验资格(卸载/停用过的自动清)。
+    try {
+      const ghostWindows = window.electronAPI.ghostPanelWindow?.getStateSync() ?? {};
+      for (const [ghostId, entry] of Object.entries(ghostWindows)) {
+        if (entry.detached && entry.lastOpen && !entry.open) {
+          void window.electronAPI.ghostPanelWindow.open(ghostId).catch(() => undefined);
+        }
+      }
+    } catch {
+      // 桥不可用(测试环境)= 没有可恢复窗口
+    }
   }, []);
 
   // 4) 「在新窗口打开」入口(mac 浮层 / win TabBar 按钮共用):开偏好 + 弹出。
@@ -1215,6 +1230,7 @@ export function MainLayout() {
                   onCloseSidebar={isMac ? undefined : handleToggleRightSidebar}
                   onMaximize={handleMaximizeRightSidebar}
                   isMaximized={isRightSidebarMaximized}
+                  reserveLeftChromeActions={isRightSidebarMaximized && isSidebarCollapsed}
                   sessionId={rightSidebarSessionId}
                   workdir={rightSidebarWorkdirInfo.workdir}
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}
@@ -1327,7 +1343,10 @@ export function MainLayout() {
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
-      <GlobalDropImportListener onOpenShareImport={openShareImport} />
+      <GlobalDropImportListener
+        onOpenShareImport={openShareImport}
+        getRightSidebarSessionId={getRightSidebarSessionId}
+      />
       {shareImportRequest && (
         <SessionShareImportWizard
           key={shareImportRequest.id}
