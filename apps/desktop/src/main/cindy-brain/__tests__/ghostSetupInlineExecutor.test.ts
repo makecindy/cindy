@@ -55,7 +55,11 @@ function manifest(source?: 'user' | 'oauth' | 'login-email'): GhostManifest {
   };
 }
 
-function assessment(actionId = action.id): GhostSetupAssessment {
+function assessment(
+  actionId = action.id,
+  ref = 'secret:api_key',
+  label = 'API Key',
+): GhostSetupAssessment {
   return {
     state: 'required',
     revision: 3,
@@ -65,9 +69,9 @@ function assessment(actionId = action.id): GhostSetupAssessment {
         mode: 'any_of',
         items: [
           {
-            ref: 'secret:api_key',
+            ref,
             kind: 'secret',
-            label: 'API Key',
+            label,
             state: 'missing',
             actions: [{ ...action, id: actionId }],
           },
@@ -94,6 +98,41 @@ describe('executeGhostSetupInlineSubmission', () => {
     expect(result).toEqual({ ok: true });
     expect(storeSecret).toHaveBeenCalledWith('demo', 'api_key', 'actual-value');
     expect(emitChange).toHaveBeenCalledWith('demo', 'api_key');
+  });
+
+  it('stores an assessment-bound node Secret through the same Host vault path', () => {
+    const storeSecret = vi.fn(() => true);
+    const emitChange = vi.fn();
+    const nodeManifest: GhostManifest = {
+      ...manifest(),
+      settingsHtml: 'settings.html',
+      slots: ['tool', 'network', 'node'],
+      node: {
+        entry: 'node/worker.cjs',
+        protocol: 'json-rpc-stdio',
+        secretBindings: [
+          {
+            key: 'mail_code',
+            label: 'Mail code',
+            methods: ['mail/action'],
+          },
+        ],
+      },
+    };
+
+    const result = executeGhostSetupInlineSubmission(
+      {
+        getAssessment: () => assessment(action.id, 'secret:mail_code', 'Mail code'),
+        getManifest: () => nodeManifest,
+        storeSecret,
+        emitChange,
+      },
+      { ghostId: 'demo', action, value: '  node-secret  ' },
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(storeSecret).toHaveBeenCalledWith('demo', 'mail_code', 'node-secret');
+    expect(emitChange).toHaveBeenCalledWith('demo', 'mail_code');
   });
 
   it('rejects forged/stale actions and non-user Secret declarations without writing', () => {

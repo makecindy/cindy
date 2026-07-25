@@ -59,12 +59,14 @@ export function executeGhostSetupInlineSubmission(
   }
 
   const secretKey = boundRef.slice('secret:'.length);
-  const decl = manifest.network?.secrets?.find(
+  const networkDecl = manifest.network?.secrets?.find(
     (secret) =>
       secret.key === secretKey &&
       secret.source !== 'oauth' &&
       secret.source !== 'login-email',
   );
+  const nodeDecl = manifest.node?.secretBindings?.find((secret) => secret.key === secretKey);
+  const decl = networkDecl ?? nodeDecl;
   if (!decl) return { ok: false, message: '凭证声明已变更，请重新尝试' };
   if (!deps.storeSecret(args.ghostId, secretKey, trimmed)) {
     return { ok: false, message: '凭证保存失败' };
