@@ -58,15 +58,24 @@ const FLAG_HAS_WORKING_DIR = 0x0000_0010;
 const FLAG_HAS_ARGUMENTS = 0x0000_0020;
 const FLAG_IS_UNICODE = 0x0000_0080;
 
-function decodeNullTerminated(buffer: Buffer, start: number, unicode: boolean): string {
-  if (start < 0 || start >= buffer.length) return '';
+function decodeNullTerminated(
+  buffer: Buffer,
+  start: number,
+  unicode: boolean,
+  limit: number,
+): string {
+  // Never read past `limit` (the end of the containing structure). A corrupt
+  // `.lnk` can point a path offset past its own structure but still inside the
+  // file; without this bound we would decode unrelated bytes as the path.
+  const stop = Math.min(limit, buffer.length);
+  if (start < 0 || start >= stop) return '';
   if (unicode) {
     let end = start;
-    while (end + 1 < buffer.length && !(buffer[end] === 0 && buffer[end + 1] === 0)) end += 2;
+    while (end + 1 < stop && !(buffer[end] === 0 && buffer[end + 1] === 0)) end += 2;
     return buffer.toString('utf16le', start, end);
   }
   let end = start;
-  while (end < buffer.length && buffer[end] !== 0) end += 1;
+  while (end < stop && buffer[end] !== 0) end += 1;
   return buffer.toString('latin1', start, end);
 }
 
@@ -103,33 +112,38 @@ export function parseWindowsShortcut(buffer: Buffer): LegacyShortcutDetails | nu
     if (linkInfoStart + 4 > buffer.length) return null;
     const linkInfoSize = buffer.readUInt32LE(linkInfoStart);
     if (linkInfoSize < 0x1c || linkInfoStart + linkInfoSize > buffer.length) return null;
+    const linkInfoEnd = linkInfoStart + linkInfoSize;
     const headerSize = buffer.readUInt32LE(linkInfoStart + 4);
     const linkInfoFlags = buffer.readUInt32LE(linkInfoStart + 8);
+    // A path offset is relative to the LinkInfo start and MUST land inside this
+    // structure's data region (after its header, before its end). Anything else
+    // is a corrupt/hostile `.lnk`; return an absolute offset only when in range,
+    // otherwise -1 so the field is skipped rather than aliasing later bytes.
+    const inStructAbs = (rawOffset: number): number =>
+      rawOffset >= headerSize && rawOffset < linkInfoSize ? linkInfoStart + rawOffset : -1;
     if (linkInfoFlags & 0x1) {
       // VolumeIDAndLocalBasePath present.
-      const basePathOffset = buffer.readUInt32LE(linkInfoStart + 16);
-      const suffixOffset = buffer.readUInt32LE(linkInfoStart + 24);
       let base = '';
       let suffix = '';
       if (headerSize >= 0x24 && linkInfoStart + 36 <= buffer.length) {
-        const basePathOffsetUnicode = buffer.readUInt32LE(linkInfoStart + 28);
-        const suffixOffsetUnicode = buffer.readUInt32LE(linkInfoStart + 32);
-        if (basePathOffsetUnicode) {
-          base = decodeNullTerminated(buffer, linkInfoStart + basePathOffsetUnicode, true);
-        }
-        if (suffixOffsetUnicode) {
-          suffix = decodeNullTerminated(buffer, linkInfoStart + suffixOffsetUnicode, true);
+        const baseAbsUnicode = inStructAbs(buffer.readUInt32LE(linkInfoStart + 28));
+        const suffixAbsUnicode = inStructAbs(buffer.readUInt32LE(linkInfoStart + 32));
+        if (baseAbsUnicode >= 0) base = decodeNullTerminated(buffer, baseAbsUnicode, true, linkInfoEnd);
+        if (suffixAbsUnicode >= 0) {
+          suffix = decodeNullTerminated(buffer, suffixAbsUnicode, true, linkInfoEnd);
         }
       }
-      if (!base && basePathOffset) {
-        base = decodeNullTerminated(buffer, linkInfoStart + basePathOffset, false);
+      if (!base) {
+        const baseAbs = inStructAbs(buffer.readUInt32LE(linkInfoStart + 16));
+        if (baseAbs >= 0) base = decodeNullTerminated(buffer, baseAbs, false, linkInfoEnd);
       }
-      if (!suffix && suffixOffset) {
-        suffix = decodeNullTerminated(buffer, linkInfoStart + suffixOffset, false);
+      if (!suffix) {
+        const suffixAbs = inStructAbs(buffer.readUInt32LE(linkInfoStart + 24));
+        if (suffixAbs >= 0) suffix = decodeNullTerminated(buffer, suffixAbs, false, linkInfoEnd);
       }
       target = base + suffix;
     }
-    offset = linkInfoStart + linkInfoSize;
+    offset = linkInfoEnd;
   }
 
   // StringData: NAME, RELATIVE_PATH, WORKING_DIR, COMMAND_LINE_ARGUMENTS,

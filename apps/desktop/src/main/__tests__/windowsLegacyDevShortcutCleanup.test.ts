@@ -300,4 +300,34 @@ describe('parseWindowsShortcut', () => {
     expect(parseWindowsShortcut(Buffer.from('not a shortcut'))).toBeNull();
     expect(parseWindowsShortcut(Buffer.alloc(0x4c))).toBeNull();
   });
+
+  it('does not alias bytes outside LinkInfo when a path offset points past it', () => {
+    // A corrupt LinkInfo whose LocalBasePathOffset points at the trailing bytes
+    // (past linkInfoSize but still inside the file) must NOT decode those bytes
+    // as the target — otherwise a crafted `.lnk` could impersonate a dev Electron
+    // link and get deleted. Expect a safe null instead.
+    const header = Buffer.alloc(0x4c);
+    header.writeUInt32LE(0x4c, 0);
+    SHELL_LINK_CLSID.copy(header, 4);
+    header.writeUInt32LE(0x0000_0002, 20); // HasLinkInfo only
+
+    const linkInfoHeaderSize = 0x1c;
+    const linkInfoSize = linkInfoHeaderSize; // no in-struct path data
+    const linkInfo = Buffer.alloc(linkInfoSize);
+    linkInfo.writeUInt32LE(linkInfoSize, 0);
+    linkInfo.writeUInt32LE(linkInfoHeaderSize, 4);
+    linkInfo.writeUInt32LE(0x1, 8); // VolumeIDAndLocalBasePath
+    linkInfo.writeUInt32LE(0, 12);
+    linkInfo.writeUInt32LE(linkInfoSize, 16); // LocalBasePathOffset == end (out of struct)
+    linkInfo.writeUInt32LE(0, 20);
+    linkInfo.writeUInt32LE(0, 24);
+
+    const trailing = Buffer.from(
+      'C:\\x\\node_modules\\electron\\dist\\electron.exe\0',
+      'latin1',
+    );
+    const malformed = Buffer.concat([header, linkInfo, trailing]);
+
+    expect(parseWindowsShortcut(malformed)).toBeNull();
+  });
 });
