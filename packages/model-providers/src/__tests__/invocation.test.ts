@@ -300,7 +300,7 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     expect(r.effort).toBe('medium');
   });
 
-  it('providerId: 已连接且提供最终模型 → 保留;不提供 → null 默认路由', () => {
+  it('providerId: 已连接且提供最终模型 → 保留;不提供 → 收敛到可见替代源', () => {
     const keep = resolveModelInvocation(
       { model: 'claude-opus-5', providerId: 'anthropic' },
       SCENARIO,
@@ -308,23 +308,26 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     );
     expect(keep.providerId).toBe('anthropic');
 
-    // anthropic 不提供 sonnet → 回默认路由,并记录
+    // anthropic 不提供 sonnet → 不再回 null(下游默认路由不看可见性),直接收敛到
+    // 提供该模型的可见替代源(2026-07 codex review 行为升级)
     const drop = resolveModelInvocation(
       { model: 'claude-sonnet-4-6', providerId: 'anthropic' },
       SCENARIO,
       ctx(),
     );
-    expect(drop.providerId).toBeNull();
-    expect(drop.fallbacksApplied).toContain('provider:default-route');
+    expect(drop.providerId).toBe('xd');
+    expect(drop.fallbacksApplied).toContain('provider:visible-fallback');
   });
 
-  it('providerId: 断开的来源不算可用', () => {
+  it('providerId: 断开的来源不算可用,收敛到提供该模型的可见替代源', () => {
     const r = resolveModelInvocation(
       { agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' },
       { ...SCENARIO, agentKind: 'codex' },
       ctx(),
     );
-    expect(r.providerId).toBeNull();
+    // openai 断开 → xd(已连接且提供 gpt-5.5)顶上,不回 null
+    expect(r.providerId).toBe('xd');
+    expect(r.fallbacksApplied).toContain('provider:visible-fallback');
   });
 
   it('providerId: 目录不可用 → 透传原值(路由层兜底,与 IM/hook 历史降级一致)', () => {
@@ -488,16 +491,18 @@ describe('resolveModelInvocation — 显式 agent 无可用模型时回落能跑
 });
 
 describe('resolveModelInvocation — providerId 校验含 per-provider 可见性(codex review)', () => {
-  it('模型经他源可用、点名来源被 isVisible 排除 → 回默认路由,不绕过来源级契约', () => {
-    // claude-opus-5 在 anthropic 可见、在 xd 被隐藏;显式点名 xd 不能放行
+  it('模型经他源可用、点名来源被 isVisible 排除 → 收敛到可见替代源,不绕过来源级契约', () => {
+    // claude-opus-5 在 anthropic 可见、在 xd 被隐藏;显式点名 xd 不能放行。
+    // 也不能回 null:下游默认路由(nativeDefaultSourceId,claude-code 优先 xd)不看可见性,
+    // 会又选回被隐藏的 xd —— 必须显式收敛到可见的 anthropic(codex review 二轮)。
     const r = resolveModelInvocation(
       { model: 'claude-opus-5', providerId: 'xd' },
       SCENARIO,
       ctx({ isVisible: (pid, m) => !(pid === 'xd' && m.id === 'claude-opus-5') }),
     );
     expect(r.model).toBe('claude-opus-5');
-    expect(r.providerId).toBeNull();
-    expect(r.fallbacksApplied).toContain('provider:default-route');
+    expect(r.providerId).toBe('anthropic');
+    expect(r.fallbacksApplied).toContain('provider:visible-fallback');
   });
 
   it('点名来源可见 → 照常保留(既有语义不变)', () => {
@@ -516,5 +521,66 @@ describe('resolveModelInvocation — 诊断标记区分 unverified 与零可选(
     expect(r.model).toBe('claude-sonnet-4-6');
     expect(r.fallbacksApplied).toContain('model:no-available-models');
     expect(r.fallbacksApplied).not.toContain('model:scenario-default-unverified');
+  });
+});
+
+describe('resolveModelInvocation — codex review 三轮:回落保真度', () => {
+  it('agent 回落后,原 agent 的 model/effort 配对偏好作废(不跨 agent 采纳同名 id)', () => {
+    // pa(codex)零模型 → 回落 claude-code;显式 'gpt-5.5' 在 pb 的 claude-code 目录恰好
+    // 也存在 —— 修复前会被当作新 agent 的显式选择采纳(拿原 agent 的偏好跑新 agent,
+    // 还能绕过 reject 策略),修复后作废,落场景默认链。
+    const provs = [
+      {
+        id: 'pa',
+        name: 'pa',
+        agents: ['codex'],
+        models: { codex: [] },
+        connected: true,
+      },
+      {
+        id: 'pb',
+        name: 'pb',
+        agents: ['claude-code'],
+        models: { 'claude-code': [model('claude-sonnet-4-6'), model('gpt-5.5')] },
+        connected: true,
+      },
+    ] as unknown as ProviderView[];
+    const r = resolveModelInvocation(
+      { agentKind: 'codex', model: 'gpt-5.5', effort: 'low' },
+      SCENARIO,
+      { providers: provs, getPermissionModes: PERM_MODES },
+    );
+    expect(r.agentKind).toBe('claude-code');
+    expect(r.fallbacksApplied).toContain('agent:model-less-fallback');
+    expect(r.model).toBe('claude-sonnet-4-6');
+    expect(r.effort).not.toBe('low');
+  });
+
+  it('first-available 兜底优先 native 默认源(claude-code 优先 xd),不用 rail 序首个', () => {
+    // rail 序 anthropic 在前(首见 'a-first'),但 native 源是 xd —— 兜底必须取 xd 目录序
+    // 首个可用('xd-first'),与 IM 现行 nativeDefaultSourceId 口径一致,否则换来源/计费路由。
+    const provs = [
+      {
+        id: 'anthropic',
+        name: 'anthropic',
+        agents: ['claude-code'],
+        models: { 'claude-code': [model('a-first')] },
+        connected: true,
+      },
+      {
+        id: 'xd',
+        name: 'xd',
+        agents: ['claude-code'],
+        models: { 'claude-code': [model('xd-first'), model('a-first')] },
+        connected: true,
+      },
+    ] as unknown as ProviderView[];
+    const r = resolveModelInvocation(
+      { model: 'gone' },
+      { ...SCENARIO, modelFor: () => 'also-gone' },
+      { providers: provs, getPermissionModes: PERM_MODES },
+    );
+    expect(r.model).toBe('xd-first');
+    expect(r.fallbacksApplied).toContain('model:first-available');
   });
 });

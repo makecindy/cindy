@@ -24,6 +24,7 @@
 import type { AgentKind, CatalogModel } from './types.js';
 import {
   connectedProvidersForAgent,
+  nativeDefaultSourceId,
   providerOffersModel,
   type ProviderView,
 } from './registry.js';
@@ -159,6 +160,9 @@ export function resolveModelInvocation(
   //     review):不回落的话会合成一个「无可执行来源」的会话,比换 agent 更糟。
   //     清单为 null(能力数据不可用)时不猜,维持显式选择。
   let available = availableModelsFor(agentKind, ctx);
+  // model/effort 显式偏好经局部变量参与后续链:agent 回落时置空(见下),不改 prefs 入参。
+  let modelPref = prefs.model ?? null;
+  let effortPref = prefs.effort ?? null;
   if (
     isKnownAgent(prefs.agentKind) &&
     agentKind !== scenario.agentKind &&
@@ -170,6 +174,12 @@ export function resolveModelInvocation(
       agentKind = scenario.agentKind;
       available = scenarioAvailable;
       fallbacks.push('agent:model-less-fallback');
+      // 显式 model/effort 是与**原 agent 配对**的偏好,跨 agent 作废(IM pickModel 换
+      // agent 时用渠道默认,不搬旧模型)。不作废的话,恰好同 id 的模型(gpt-5.5 /
+      // codex/gpt-5.5 两个 agent 目录都有)会被当作新 agent 的显式选择采纳,还会
+      // 绕过 explicitModelPolicy: 'reject' 的严格校验(codex review)。
+      modelPref = null;
+      effortPref = null;
     }
   }
 
@@ -179,23 +189,36 @@ export function resolveModelInvocation(
   const scenarioModel = scenario.modelFor(agentKind);
   let model: string;
   let rejected: ResolvedInvocation['rejected'];
-  if (has(prefs.model)) {
-    model = prefs.model;
+  if (has(modelPref)) {
+    model = modelPref;
     // 目录与 caps 全不可用时 has() 放行一切 —— 值被采纳但未经校验,记入诊断轨迹。
     if (available === null) fallbacks.push('model:explicit-unverified');
   } else {
     // 显式模型经校验确认不可用(available 必非 null,否则上分支已放行):按策略标记拒绝。
     // 其余字段照常合成 —— rejected 是给调用方的硬信号,不是让链条中断。
-    if (prefs.model != null && scenario.explicitModelPolicy === 'reject') {
-      rejected = { field: 'model', value: prefs.model, reason: 'explicit-model-unavailable' };
+    if (modelPref != null && scenario.explicitModelPolicy === 'reject') {
+      rejected = { field: 'model', value: modelPref, reason: 'explicit-model-unavailable' };
       fallbacks.push('model:explicit-rejected');
     }
     if (has(scenarioModel)) {
       model = scenarioModel;
-      if (prefs.model != null) fallbacks.push('model:scenario-default');
+      if (modelPref != null) fallbacks.push('model:scenario-default');
       if (available === null) fallbacks.push('model:scenario-default-unverified');
     } else if (available !== null && available.length > 0) {
-      model = available[0].id;
+      // 「首个可用」的口径与 IM 现行兜底一致:优先 **native 默认源**(claude-code 优先
+      // 'xd'、codex 优先 'openai')上的首个可见模型,该源无可选才退 rail 序首个 ——
+      // raw 目录序首个会把兜底模型换到不同来源/计费路由(codex review)。
+      let fromNative: string | null = null;
+      if (ctx.providers !== null) {
+        const rail = connectedProvidersForAgent([...ctx.providers], agentKind);
+        const nativeId = nativeDefaultSourceId(rail, agentKind);
+        const availableIds = new Set(available.map((m) => m.id));
+        fromNative =
+          rail
+            .find((p) => p.id === nativeId)
+            ?.models[agentKind]?.find((m) => availableIds.has(m.id))?.id ?? null;
+      }
+      model = fromNative ?? available[0].id;
       fallbacks.push('model:first-available');
     } else {
       model = scenarioModel;
@@ -217,10 +240,10 @@ export function resolveModelInvocation(
   let requestedEffort: string | null | undefined;
   if (descriptor && descriptor.efforts.length > 0) {
     requestedEffort =
-      [prefs.effort, scenarioEffort].find((c) => !!c && descriptor.efforts.includes(c)) ??
-      prefs.effort;
+      [effortPref, scenarioEffort].find((c) => !!c && descriptor.efforts.includes(c)) ??
+      effortPref;
   } else {
-    requestedEffort = prefs.effort ?? scenarioEffort;
+    requestedEffort = effortPref ?? scenarioEffort;
   }
   const effort = reconcileInvocationEffort({
     requested: requestedEffort,
@@ -232,7 +255,7 @@ export function resolveModelInvocation(
       ? { noEffortsBehavior: scenario.noEffortsBehavior }
       : {}),
   });
-  if (prefs.effort != null && effort !== prefs.effort) fallbacks.push('effort:reconciled');
+  if (effortPref != null && effort !== effortPref) fallbacks.push('effort:reconciled');
 
   // 4. providerId: 显式 / 场景值收敛到「已连接且真实提供最终模型」的来源,失败回 null。
   //    目录不可用时透传原值(路由层仍有兜底)—— 与 IM/hook 历史降级一致。
@@ -246,20 +269,29 @@ export function resolveModelInvocation(
       // 「真实提供」必须含 per-provider 可见性:同一模型在 B 可见、在 A 被用户隐藏时,
       // 显式点名 A 不能只靠「已连接 + 目录含该模型」就放行 —— 那会绕过 isVisible 的
       // 来源级契约,路由到用户明确排除的来源(codex review)。
-      const providerView = connectedProvidersForAgent([...ctx.providers], agentKind).find(
-        (p) => p.id === requestedProvider,
-      );
-      const catalogModel = providerView?.models[agentKind]?.find((m) => m.id === model);
-      const usable =
-        providerView !== undefined &&
-        catalogModel !== undefined &&
-        providerOffersModel(providerView, model, agentKind) &&
-        (!ctx.isVisible || ctx.isVisible(providerView.id, catalogModel));
-      if (usable) {
+      const rail = connectedProvidersForAgent([...ctx.providers], agentKind);
+      const visiblyOffers = (p: (typeof rail)[number]): boolean => {
+        if (!providerOffersModel(p, model, agentKind)) return false;
+        if (!ctx.isVisible) return true;
+        const cm = p.models[agentKind]?.find((m) => m.id === model);
+        return cm !== undefined && ctx.isVisible(p.id, cm);
+      };
+      const providerView = rail.find((p) => p.id === requestedProvider);
+      if (providerView !== undefined && visiblyOffers(providerView)) {
         providerId = requestedProvider;
       } else {
-        providerId = null;
-        fallbacks.push('provider:default-route');
+        // 点名源不可用(断开/不提供/被隐藏)。回 null 不足以执行可见性决定 —— 下游默认
+        // 路由(nativeDefaultSourceId)不看可见性,可能又选回同一个被隐藏的源:这里直接
+        // 收敛到 native 优先的**可见**替代源;完全没有可见源才回 null 默认路由
+        // (codex review, 2026-07)。
+        const alternatives = rail.filter(visiblyOffers);
+        if (alternatives.length > 0) {
+          providerId = nativeDefaultSourceId(alternatives, agentKind) ?? alternatives[0].id;
+          fallbacks.push('provider:visible-fallback');
+        } else {
+          providerId = null;
+          fallbacks.push('provider:default-route');
+        }
       }
     }
   }
