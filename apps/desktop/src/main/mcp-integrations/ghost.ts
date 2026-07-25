@@ -896,9 +896,24 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }
       }
-      // Final availability check after the session-context await
-      if (!getGhostManager().list().some((g) => g.manifest.id === ghostId && g.enabled)) {
+      // Full revalidation after session-context await (DB query may take time)
+      const postCtx = getGhostManager().list().find((g) => g.manifest.id === ghostId);
+      if (!postCtx || !postCtx.enabled) {
         return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
+      }
+      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+        return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
+      }
+      if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
+      }
+      try {
+        const postCtxAssessment = getGhostSetupAssessment(ghostId);
+        if (postCtxAssessment.state !== 'ready') {
+          return { ok: false, errorCode: 'SETUP_REQUIRED', message: t('newChat.pluginSetup.setupChangedDuringResume'), setup: postCtxAssessment };
+        }
+      } catch {
+        return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
       }
       // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
       // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行

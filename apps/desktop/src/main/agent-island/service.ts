@@ -912,11 +912,14 @@ export class AgentIslandService {
     // only update the detail string without resetting the dismissal state.
     const existing = this.state.sessions.get(hydrated.sessionId);
     if (existing?.pendingInteractionIds.has(requestId)) {
+      const prevDetail = existing.pendingInteractionDetails.get(requestId);
       existing.pendingInteractionDetails.set(requestId, detail);
+      // Only update the displayed detail if this requestId is the one
+      // currently shown (its previous value matches session.detail).
       if (
-        existing.detail !== detail &&
         existing.phase === 'needs-interaction' &&
-        existing.interactionKind === 'plugin_setup'
+        existing.interactionKind === 'plugin_setup' &&
+        existing.detail === prevDetail
       ) {
         existing.detail = detail;
       }
