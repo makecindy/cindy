@@ -3609,7 +3609,31 @@
       "settingsLink": "설정, 현재 사용자: {{name}}",
       "canaryBadge": "Canary 사용자",
       "viewReleaseNotes": "릴리즈 노트 보기",
-      "reopenUpdateBanner": "업데이트 준비됨 — 클릭하여 확인"
+      "reopenUpdateBanner": "업데이트 준비됨 — 클릭하여 확인",
+      "downloadMobile": "Cindy 모바일 다운로드"
+    },
+    "mobileDownload": {
+      "title": "Cindy 원격 제어",
+      "subtitle": "모바일에서 데스크톱으로 연결",
+      "qrAlt": "Cindy 모바일 다운로드 QR 코드",
+      "preparing": "QR 코드 준비 중…",
+      "error": "QR 코드를 만들 수 없습니다. 잠시 후 다시 시도해 주세요.",
+      "openPage": "다운로드 페이지 열기",
+      "openFailed": "다운로드 페이지를 열 수 없습니다. 시스템 브라우저 설정을 확인해 주세요",
+      "scanToOpen": "스캔하여 Cindy 앱을 열고 같은 계정으로 로그인",
+      "scanAnother": "다른 기기 스캔",
+      "scanAnotherHint": "다른 휴대폰에서 Cindy 열기",
+      "myDevices": "내 기기",
+      "deviceOffline": "오프라인",
+      "allowControl": "동일 계정 기기에서 이 컴퓨터를 제어하도록 허용",
+      "deviceId": "이 기기 · {{id}}",
+      "remoteAction": {
+        "checking": "확인 중…",
+        "unavailable": "사용할 수 없음",
+        "enable": "켜기",
+        "enabled": "켜짐"
+      },
+      "close": "다운로드 화면 닫기"
     },
     "vendorReadiness": {
       "loading": "로딩 중"
@@ -3820,7 +3844,6 @@
         "cacheRead": "캐시 읽기",
         "cacheCreate": "캐시 쓰기",
         "free": "기간 한정 무료",
-        "discount": "{{percent}}% 절약",
         "perMillion": "모델 표준 가격",
         "fixedFx": "고정 환율 1 USD = 6.7 CNY 기준 추정",
         "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다"
@@ -3833,7 +3856,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85% 할인",
+        "budget": "GPT 할인",
         "grok": "xAI",
         "google": "Google",
         "china": "국내",
@@ -3851,8 +3874,7 @@
       "meta": {
         "context": "컨텍스트 {{value}}",
         "price": "{{input}}/{{output}} / 100만",
-        "fastBadge": "고속",
-        "budgetDiscount": "85% 할인"
+        "fastBadge": "고속"
       },
       "source": {
         "railLabel": "소스",
@@ -3995,6 +4017,9 @@
       "startFailedContinue": "협업을 시작하지 못했습니다. 단일 세션으로 계속합니다.",
       "createWorkerRefreshFailed": "Worker 상태를 새로 고칠 수 없습니다. 다시 시도해 주세요.",
       "openHint": "Worker 를 불러 함께 작업",
+      "disabledHint": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 프로젝트 설정에서 활성화하세요.",
+      "unavailableHint": "이 프로젝트의 협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "loadingHint": "이 프로젝트의 협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
       "stopHint": "협업 중지",
       "stopAria": "협업 중지",
       "toggleOnAria": "협업 켜짐 — 클릭하여 중지",
@@ -4020,7 +4045,10 @@
         "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "제어 대상 기기에서 선택한 Provider와 모델의 경로를 사용할 수 없습니다. 해당 기기에서 사용 가능한 경로를 선택한 후 재시도하세요.",
         "BUDGET_MODEL_REQUIRES_API_MODE": "이 Codex 모델을 사용하려면 API key가 필요합니다. 설정에서 구성한 뒤 다시 시도하세요.",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "이 Codex 모델을 사용하려면 API key가 필요합니다. 협업은 시작되지 않았고 이 메시지는 단일 세션으로 계속됩니다. 설정에서 구성한 뒤 다시 시도하세요.",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "제어 대상 기기에 이 Codex 모델에 필요한 API key가 설정되어 있지 않습니다. 제어 대상 기기에서 설정한 후 재시도하세요."
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "제어 대상 기기에 이 Codex 모델에 필요한 API key가 설정되어 있지 않습니다. 제어 대상 기기에서 설정한 후 재시도하세요.",
+        "PRECONDITION_FAILED": "이 프로젝트에서 협업 모드가 비활성화되어 있거나 현재 세션에서 협업을 지원하지 않습니다.",
+        "PRECONDITION_FAILED_CONTINUE": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 단일 세션으로 계속합니다.",
+        "PRECONDITION_FAILED_REMOTE": "제어 중인 세션에서는 협업을 지원하지 않습니다."
       }
     },
     "chatInput": {
@@ -5817,7 +5845,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT (85% 할인)",
+          "gpt-budget": "GPT 할인",
           "google": "Google",
           "china": "China"
         },
@@ -7279,6 +7307,7 @@
     "planChange": {
       "targetTitle": "구독 플랜 변경",
       "upgradeBadge": "업그레이드",
+      "sameLevelBadge": "동일 등급",
       "downgradeBadge": "다운그레이드",
       "emptyTitle": "전환 가능한 플랜이 없습니다",
       "emptyDescription": "현재 결제 수단으로 전환할 수 있는 다른 플랜이 아직 설정되지 않았습니다.",
@@ -7300,7 +7329,9 @@
       "expiredBody": "견적이 만료되었습니다. 플랜 변경을 다시 시작해 주세요.",
       "failedTitle": "플랜 변경 실패",
       "failedBody": "플랜 변경이 완료되지 않았습니다. 현재 플랜은 그대로 유지됩니다.",
-      "requestFailed": "요청에 실패했습니다. 다시 시도해 주세요.",
+      "requestFailed": "플랜 변경 요청을 완료하지 못했습니다. 구독 상태를 새로고침한 후 다시 시도하세요.",
+      "quoteRejected": "현재 구독에서는 이 플랜으로 변경할 수 없습니다. 다른 플랜을 선택하세요.",
+      "chooseAnotherPlan": "다른 플랜 선택",
       "resyncHint": "확인 결과를 검증할 수 없습니다. 서버에서 최신 상태를 동기화하는 중…",
       "upgradeDueNow": "이번 기간 차액 {{amount}}을(를) 결제하세요",
       "upgradeNoAmount": "확인 후 업그레이드가 즉시 적용됩니다.",

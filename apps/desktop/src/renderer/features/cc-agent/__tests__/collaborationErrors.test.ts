@@ -8,6 +8,7 @@ const t = ((key: string) => key) as unknown as TFunction;
 describe('getCollaborationStartErrorMessage', () => {
   it.each([
     'INVALID_PARAMS',
+    'PRECONDITION_FAILED',
     'NO_PROVIDER_FOR_AGENT',
     'PROVIDER_ROUTE_UNAVAILABLE',
     'BUDGET_MODEL_REQUIRES_API_MODE',

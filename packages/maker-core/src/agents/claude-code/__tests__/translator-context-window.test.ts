@@ -209,7 +209,7 @@ describe('Claude Code translator context window', () => {
     // 回归(防御性): 即便 SDK modelUsage 仍按 [1m] 历史口径上报 1M(toSdkModelString
     // 已不再给 codex/* 加 [1m], 但此处保留对"SDK 若上报 1M"的兜底覆盖),
     // catalog cc 侧权威值 272k 必须向下覆盖, 否则 auto-compact / memory-flush ratio
-    // 按 1M 算永不触发, 对话冲过骨折网关真实上限(~24 万 token)后空转, 会话"假死"。
+    // 按 1M 算永不触发, 对话冲过折扣网关真实上限(~24 万 token)后空转, 会话"假死"。
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
 
@@ -274,7 +274,7 @@ describe('Claude Code translator context window', () => {
         rt: newRuntimeState(),
         turn: createTurnState(),
         log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-        getModel: () => 'codex/gpt-5.5', // 切到骨折版后, 旧的 gpt-5.5[1m] turn 才收口
+        getModel: () => 'codex/gpt-5.5', // 切到折扣版后, 旧的 gpt-5.5[1m] turn 才收口
         getEffort: () => 'high',
         getPermissionMode: () => 'auto',
         onSessionId: vi.fn(),

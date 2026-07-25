@@ -18,17 +18,14 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const sourcePath = resolve(
-  __dirname,
-  '..',
-  'components',
-  'sidebar',
-  'UserInfoSection.tsx',
-);
+const sourcePath = resolve(__dirname, '..', 'components', 'sidebar', 'UserInfoSection.tsx');
 const source = readFileSync(sourcePath, 'utf8');
 const localePath = resolve(__dirname, '..', 'i18n', 'locales', 'zh-CN', 'common.json');
 const locale = JSON.parse(readFileSync(localePath, 'utf8')) as {
-  sidebar: { user: { settingsLink: string; canaryBadge: string } };
+  sidebar: {
+    user: { settingsLink: string; canaryBadge: string; downloadMobile: string };
+    mobileDownload: { title: string };
+  };
 };
 
 // ── 改动 1: 外层 footer slot + tokenized account capsule ────────────────
@@ -51,30 +48,22 @@ describe('UserInfoSection — outer wrapper takes over full-row hover', () => {
   });
 
   it('capsule owns the hover state via the glass hover token', () => {
-    expect(source).toContain(
-      "'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]'",
-    );
+    expect(source).toContain("'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]'");
   });
 
   it('capsule hover is suppressed while the flame button is hovered (:has() exclusion)', () => {
     // 悬停火焰按钮时胶囊底色还原,只让火焰自己高亮 —— 方案 D 语义
-    expect(source).toContain(
-      "'has-[.flame-btn:hover]:bg-[var(--sidebar-user-card-bg)]'",
-    );
+    expect(source).toContain("'has-[.flame-btn:hover]:bg-[var(--sidebar-user-card-bg)]'");
   });
 });
 
 describe('UserInfoSection — version label', () => {
   it('shows the build region alongside the app version', () => {
-    expect(source).toContain(
-      "import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';",
-    );
+    expect(source).toContain("import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';");
     expect(source).toContain(
       "const appRegionLabel = CURRENT_CINDY_REGION === 'global' ? 'Global' : 'CN';",
     );
-    expect(source).toContain(
-      'const appVersionLabel = `${appRegionLabel} · ${appDisplayVersion}`;',
-    );
+    expect(source).toContain('const appVersionLabel = `${appRegionLabel} · ${appDisplayVersion}`;');
     expect(source).not.toContain('XD.Inc');
     expect(source).toContain('{appVersionLabel}');
     expect(source).toContain('title={appVersionLabelDetail}');
@@ -83,13 +72,43 @@ describe('UserInfoSection — version label', () => {
 
 describe('UserInfoSection — Canary avatar badge', () => {
   it('shows only the shield decoration when isCanary is true', () => {
-    expect(source).toContain("import { Flame, Shield } from 'lucide-react';");
+    expect(source).toContain("import { Flame, Shield, Smartphone } from 'lucide-react';");
     expect(source).toContain('const { user, mode, isCanary } = useAuth();');
     expect(source).toContain('{isCanary && (');
     expect(source).toContain("aria-label={t('sidebar.user.canaryBadge')}");
     expect(source).not.toContain("isCanary && 'ring-[1.5px] ring-foreground'");
     expect(source).not.toContain("user.role === 'admin'");
     expect(locale.sidebar.user.canaryBadge).toBe('灰度用户');
+  });
+});
+
+describe('UserInfoSection — mobile download entry', () => {
+  it('uses the local Lucide Smartphone icon in a matching 22x22 capsule action', () => {
+    expect(source).toContain("import { Flame, Shield, Smartphone } from 'lucide-react';");
+    expect(source).toMatch(/'mobile-download-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
+    expect(source).toContain("!isCollapsed && 'mr-1'");
+    expect(source).toContain('<Smartphone className="h-3 w-3" aria-hidden="true" />');
+  });
+
+  it('suppresses capsule hover while the mobile button owns the hover state', () => {
+    expect(source).toContain("'has-[.mobile-download-btn:hover]:bg-[var(--sidebar-user-card-bg)]'");
+  });
+
+  it('opens the mobile download dialog with an accessible label', () => {
+    expect(source).toContain('onClick={() => setMobileDownloadOpen(true)}');
+    expect(source).toContain("aria-label={t('sidebar.user.downloadMobile')}");
+    expect(source).toContain("navigate('/settings?tab=remote-control')");
+    expect(source).toContain("const remoteAvailable = mode === 'cloud';");
+    expect(source).toContain('remoteAvailable={remoteAvailable}');
+    expect(locale.sidebar.user.downloadMobile).toBe('下载 Cindy 移动端');
+    expect(locale.sidebar.mobileDownload.title).toBe('远程控制 Cindy');
+  });
+
+  it('keeps the same entry and dialog available in the collapsed sidebar', () => {
+    expect(source).toContain(
+      'className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3"',
+    );
+    expect(source).toContain('{mobileDownloadEntry}');
   });
 });
 
@@ -104,9 +123,7 @@ describe('UserInfoSection — inner main button no longer owns hover background'
 
   it('main button does not own hover:bg-sidebar-item-hover (delegated to outer div)', () => {
     // 旧第二行: 'transition-colors text-left hover:bg-sidebar-item-hover',
-    expect(source).not.toMatch(
-      /'transition-colors text-left hover:bg-sidebar-item-hover'/,
-    );
+    expect(source).not.toMatch(/'transition-colors text-left hover:bg-sidebar-item-hover'/);
   });
 
   it('main button keeps its layout classes (flex / w-full / gap)', () => {
@@ -121,9 +138,7 @@ describe('UserInfoSection — inner main button no longer owns hover background'
   it('main button preserves onClick / role="link" / aria-label (跳转和无障碍不破)', () => {
     expect(source).toContain('onClick={handleClick}');
     expect(source).toContain('role="link"');
-    expect(source).toContain(
-      "aria-label={t('sidebar.user.settingsLink', { name: displayName })}",
-    );
+    expect(source).toContain("aria-label={t('sidebar.user.settingsLink', { name: displayName })}");
     expect(locale.sidebar.user.settingsLink).toBe('设置, 当前用户: {{name}}');
   });
 });
@@ -136,11 +151,9 @@ describe('UserInfoSection — Flame button carries .flame-btn marker class', () 
     expect(source).toMatch(/'flame-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
   });
 
-  it("Flame button retains its own hover:bg-sidebar-item-hover (capsule highlight when hovered)", () => {
+  it('Flame button retains its own hover:bg-sidebar-item-hover (capsule highlight when hovered)', () => {
     // Flame 自己的胶囊 hover 不能丢,这是方案 D 的视觉表达
-    expect(source).toMatch(
-      /'transition-colors hover:bg-sidebar-item-hover'/,
-    );
+    expect(source).toMatch(/'transition-colors hover:bg-sidebar-item-hover'/);
   });
 
   it('Flame button keeps rounded-full + 22x22 size inside the account capsule', () => {

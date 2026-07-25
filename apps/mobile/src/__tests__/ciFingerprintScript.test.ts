@@ -4,6 +4,7 @@ import {
   compareFingerprintReports,
   computeFingerprintReport,
   GUARD_COMMENT_MARKER,
+  guardChangedMarker,
   parseFingerprintArgs,
   parseFingerprintCliOutput,
   renderGuardComment,
@@ -85,6 +86,8 @@ describe('ci-fingerprint script', () => {
       ),
     );
     expect(comment.startsWith(GUARD_COMMENT_MARKER)).toBe(true);
+    // 第二行是审查门读的机器可读结论,格式变了会让冷更审查门漏判
+    expect(comment.split('\n')[1]).toBe(guardChangedMarker(true));
     expect(comment).toContain('会改变 mobile 原生 runtime fingerprint');
     expect(comment).toContain('COLD_BUILD_REQUIRED');
     expect(comment).toContain('| ios | `aaa` | `xxx` | ⚠️ 变化 |');
@@ -100,6 +103,7 @@ describe('ci-fingerprint script', () => {
       ),
     );
     expect(comment.startsWith(GUARD_COMMENT_MARKER)).toBe(true);
+    expect(comment.split('\n')[1]).toBe(guardChangedMarker(false));
     expect(comment).toContain('已不再改变 mobile runtime fingerprint');
     expect(comment).toContain('0.19.4 → 0.20.0');
   });

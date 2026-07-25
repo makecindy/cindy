@@ -24,7 +24,7 @@ export type AgentKind = 'claude-code' | 'codex';
 export interface ModelDescriptor {
   id: string;
   displayName: string;
-  /** 目录分组 id(如 'gpt-budget'): 骨折版与官方版 displayName 同名, 靠它区分。 */
+  /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版 displayName 同名, 靠它区分。 */
   group?: string;
   description?: string;
   contextWindow: number;

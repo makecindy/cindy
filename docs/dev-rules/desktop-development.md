@@ -7,11 +7,11 @@
 
 ## Agent 启动入口
 
-Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域与隔离沙箱：
+Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域：
 
 ```bash
-pnpm restart:desktop:remote --region=cn --isolated=cn-<名字>
-pnpm restart:desktop:remote --region=global --isolated=global-<名字>
+pnpm restart:desktop:remote --region=cn
+pnpm restart:desktop:remote --region=global
 ```
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
@@ -23,37 +23,31 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
 
 ## 可选启动参数
 
-两个 restart 命令都支持下列参数。primary dev 必须显式使用 `--isolated[=<名字>]`；无隔离
-参数的共享 primary 会在启动前被拒绝，避免新 checkout 迁移正式版数据库、导致旧 release
-无法打开。只有 `--passive` / `--preserve-running` 可以只读共享正式版 userData。
+两个 restart 命令都支持下列参数；**用户没提就不要主动加**（不带 = 共库 + 正常调度）。
 这些参数只对 dev 生效，不影响用户机器上的正式版。
 
 - `--region=cn|global`（默认 `cn`）：切换构建身份与仓内端点清单（`global` 读
   `config/endpoint.global.json`）。
-- `--isolated` / `--isolated=<名字>`：primary dev 的必选参数，使用独立 userData 沙箱，数据库、登录态、会话、定时
+- `--isolated` / `--isolated=<名字>`：使用独立 userData 沙箱，数据库、登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。用户说「独立数据库／隔离数据／沙箱启动／不要动正式版
-  数据」时用。**primary dev 的 migration 必须在 `--isolated` 沙箱里跑，不得连接共享 userData**
+  数据」时用。**未合入主干的 migration 必须在 `--isolated` 沙箱里跑，不得连共享 userData**
   （见 [`database-and-migrations.md`](database-and-migrations.md)）。沙箱（及任何 dev
   userData 覆写）内不触发首登旧数据迁移（mToc）：不探测老目录、不弹确认窗、不把正式
-  数据复制进沙箱。dev 沙箱目录沿用既有的“按名字复用”契约，不自动按 region 改名；同一
-  机器同时开发 cn / global 时，名字必须分别使用 `cn-<名字>` / `global-<名字>`，避免两区
-  复用数据库和登录态。
-- `--passive`：共享 userData 的只读预览模式，本实例不执行 migration，也不自动触发 schedule；
+  数据复制进沙箱。
+- `--passive`：定时任务被动模式，本实例不自动触发 schedule，但数据仍与其它实例共享；
   多开导致定时任务重复、需要让位给 primary 时用。共享 userData 的 passive 实例对
   userData 布局保持只读：不执行 owner-namespace 迁移（claim 推迟到下次独占启动），
   legacy 数据导入（`hasLegacyOwnerNamespaceClaim` 门控的 secret／IM／brain 搬账）
   一并等待。非 passive 实例执行该迁移前也会先查 `.dev-instances` 实例注册表
-  （dev 与 packaged 实例都登记——passive dev 与正式版可只读共库双开），发现其它存活实例
+  （dev 与 packaged 实例都登记——dev 与正式版共库双开受支持），发现其它存活实例
   共享同一 userData 时同样推迟——搬家式迁移必须独占 userData 才能执行，否则会打断
   还在运行的旧版本实例（2026-07-23 slack-hook.json／网关凭证被搬走事故）。
 - `--preserve-running`：并行 dev，不停止任何已有 Cindy dev 进程，每个新实例强制 passive
   并共享当前 userData／登录态；仅供能证明实例归属的上层编排，或用户明确「不要关当前
   实例／不要重新登录」时用。仅支持 remote，禁止与 `--isolated` 组合。
 
-已手动设 `XDT_USER_DATA_DIR` 时仍须同时声明 `--isolated` / `XDT_ISOLATED=1`；脚本会尊重
-该目录值而不覆盖，但该路径（包括解析符号链接后）不得指向正式版 userData。仅设置目录或
-隔离标记都不足以绕过启动闸。
+已手动设 `XDT_USER_DATA_DIR` 时尊重用户值，不覆盖。
 
 ### 并行多开 dev
 

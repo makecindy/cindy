@@ -51,11 +51,39 @@ pnpm --filter mobile test:smoke
 Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致**的装机上生效,
 指纹一旦变化就必须**冷更出包**(新商店包 / 自建重装),存量装机拿不到该次热更。
 
+### 硬性规则:除非必要,不得提交会改变指纹的改动
+
+触发冷更的代价由全体存量用户承担——他们拿不到本次及后续热更,直到装上新包。性质上这与
+技术框架变动同级,因此:
+
+- 只为实现 JS / UI 需求时,不得顺手改动指纹输入。同样效果能用不动指纹的写法达成时,必须
+  选不动指纹的写法。已知踩点与既有规避写法:调试信息走 `EXPO_PUBLIC_*` 进 JS bundle,不写进
+  `app.config.js` 的 `extra`;新增开发脚本放仓库根 `package.json`,不放
+  `apps/mobile/package.json`(后者的 `scripts` 是指纹输入,见
+  [`simulator-debugging.md`](../../apps/mobile/docs/simulator-debugging.md))。
+- 确实必须冷更时(升原生依赖、改 config plugin / 原生模块、动 production 段 `app.json` /
+  `eas.json`),PR Description 必须写明三件事:为什么冷更不可避免、存量装机影响范围、发版
+  节奏建议。
+- **审查标准:会触发冷更的 PR 与技术框架变动同级,必须由仓库指定的把关人针对冷更明确
+  确认后才能合并。** 不看改动大小,也不看谁提的——提交者是不是维护者、有没有拿到普通
+  Approve、有没有被标回 Ready 都不构成例外;把关人自己提的 PR 同样要留下一条显式的冷更
+  确认。未确认前不进入自动审查与自动合并路径;判定、hold 与放行走与技术架构变更门同一套
+  机制(讨论 issue + 转 draft + 确认后放行),名单与细则属维护者内部 gate。
+- 提交前自查:在改动前后各跑一次
+  `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
+  出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。
+
+### 判断哪些改动会动指纹
+
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹
   中性(如自建线的 `updates.url` 被占位覆盖)。改动前后可用仓内 `@expo/fingerprint` 比对
-  (见 `scripts/ci-fingerprint.mjs`;PR 有 fingerprint guard 自动比对)。
+  (见 `scripts/ci-fingerprint.mjs`)。
+- 除 config 外,这些也是指纹输入:`apps/mobile/package.json` 的依赖与 `scripts`、
+  `eas.json` 的 production 段(`beta-*` profile 由 `fingerprint.config.cjs` 剔除)、
+  `plugins/`、`modules/` 下的原生模块、`fingerprint.config.cjs` 自身,以及原生依赖版本变化
+  (含仅体现在 lockfile 上的传递依赖)。
 - **EAS 账号绑定与凭据不入仓**:`owner` / `extra.eas.projectId` / `updates.url` 及 provider
   凭证由**构建期环境变量**注入(`EAS_OWNER` / `EAS_PROJECT_ID`,provider secrets 走 EAS
   environment / 自建区域配置),仓库留空,外部使用者用自己的 Expo 项目(`eas init`)填 env。

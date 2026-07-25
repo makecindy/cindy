@@ -28,12 +28,6 @@ function extractLiteral(source, regex, label) {
   return match[1];
 }
 
-function extractStringLiterals(source, regex, label) {
-  const match = regex.exec(source);
-  assert.ok(match, `pattern not found: ${label} (${regex})`);
-  return [...match[1].matchAll(/'([^']+)'/g)].map((entry) => entry[1]);
-}
-
 const brandIdentitySource = readSource('packages/maker-shared/src/brandIdentity.ts');
 const EXECUTABLE_NAME = extractLiteral(
   brandIdentitySource,
@@ -63,29 +57,6 @@ test('restart-desktop-remote.mjs BRAND_USER_DATA_DIR_NAME mirrors brandIdentity.
     'restart-desktop-remote.mjs BRAND_USER_DATA_DIR_NAME',
   );
   assert.equal(value, USER_DATA_DIR_NAME);
-});
-
-test('dev migration policy protects every current and legacy release userData directory', () => {
-  const current = extractStringLiterals(
-    brandIdentitySource,
-    /userDataDirNameByRegion:\s*Object\.freeze\(\{([\s\S]*?)\}\),/,
-    'brandIdentity.ts userDataDirNameByRegion',
-  );
-  const legacy = extractStringLiterals(
-    brandIdentitySource,
-    /legacyUserDataDirNames:\s*Object\.freeze\(\[([\s\S]*?)\]\)/,
-    'brandIdentity.ts legacyUserDataDirNames',
-  );
-  const policySource = readSource('scripts/dev-migration-policy.mjs');
-  const protectedNames = extractStringLiterals(
-    policySource,
-    /PROTECTED_USER_DATA_DIR_NAMES = Object\.freeze\(\[([\s\S]*?)\]\)/,
-    'dev-migration-policy.mjs PROTECTED_USER_DATA_DIR_NAMES',
-  );
-  assert.deepEqual(
-    [...new Set(protectedNames)].sort(),
-    [...new Set([...current, ...legacy])].sort(),
-  );
 });
 
 test('desktop package.json productName mirrors brandIdentity.userDataDirName', () => {

@@ -244,7 +244,7 @@ describe('decideCodexRoute', () => {
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'env-key', gatewayKey: 'k' })).toBeNull();
   });
 
-  it('oauth-bearer + codex/ 骨折模型 → 换 gateway key', async () => {
+  it('oauth-bearer + codex/ 折扣模型 → 换 gateway key', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: 'gw' }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
@@ -256,7 +256,7 @@ describe('decideCodexRoute', () => {
       .toEqual({ upstreamOverride: CHATGPT });
   });
 
-  it('oauth-bearer + codex/ 骨折但无 gateway key → null(passthrough)', async () => {
+  it('oauth-bearer + codex/ 折扣但无 gateway key → null(passthrough)', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: 'codex/gpt-5.5', authInjection: 'oauth-bearer', gatewayKey: null })).toBeNull();
   });
@@ -317,7 +317,7 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
     host.setCodexProxyAuthInjection('oauth-bearer');
     host.setCodexProxyGatewayKeyReader(() => 'gw');
     const transform = host.createModelRoutingTransform();
-    // codex/ 骨折模型 + 无 session: 若被桶③劫持会返回 { upstreamOverride: CHATGPT };
+    // codex/ 折扣模型 + 无 session: 若被桶③劫持会返回 { upstreamOverride: CHATGPT };
     // 正确行为是落 ② decideCodexRoute → 换 gateway key。
     expect(transform({ model: 'codex/gpt-5.5', input: [] }, { reqId: 1, method: 'POST', url: '/responses', headers: {} }))
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });

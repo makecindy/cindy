@@ -46,7 +46,7 @@ vi.mock('@cindy/mcps', () => ({
 
 vi.mock('../../maker-host/plugins/builtin-plugins.js', () => ({
   BUILTIN_LIZI_MCP_IDS: ['cindy_orca', 'cindy_helper'],
-  pluginIdForProviderName: (name: string) => name,
+  pluginIdForProviderName: (name: string) => (name === 'cindy_orca' ? 'collab' : name),
 }));
 
 vi.mock('../../maker-host/index.js', () => ({
@@ -142,6 +142,24 @@ describe('collab send outcome semantics', () => {
     mockState.collabService = null;
     mockState.capturedProvidersConfig = null;
     vi.clearAllMocks();
+  });
+
+  it('keeps cindy_orca registered when project policy is disabled at session startup', () => {
+    const providers = createDesktopMcpProviders({
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => false } as never,
+      invokeRemote: vi.fn(),
+    });
+    const orcaProvider = providers.find((provider) => provider.name === 'cindy_orca');
+
+    expect(orcaProvider).toBeDefined();
+    expect(
+      orcaProvider?.isEnabled?.({
+        agentKind: 'claude-code',
+        workingDir: 'C:/projects/cindy',
+      } as never),
+    ).toBe(true);
   });
 
   it('reports enable_collab_mode delegate_task created-and-dispatched distinctly', async () => {

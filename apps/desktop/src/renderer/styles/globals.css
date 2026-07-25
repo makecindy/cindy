@@ -195,6 +195,15 @@
   }
 }
 
+/* 移动端下载卡：只有二维码本身，不加品牌描边、阴影与 3D 倾斜（曾经登记在
+   DESIGN.md §14.4 / §15.7 的旋转折射边已按用户要求撤除）。唯一动效是设备
+   列表刷新驱动的尺寸补间（132 ↔ 228）。 */
+.mobile-download-qr-card {
+  transition:
+    width var(--motion-base) var(--motion-ease-move),
+    height var(--motion-base) var(--motion-ease-move);
+}
+
 /* 按 <html lang> 切换 CJK 字体栈 —— 同一汉字在中/日/韩字体中字形不同
    (康熙体 vs 新字体 vs 한국체)；不按 lang 区分会出现"日文界面里的汉字看起来像中文"。
    useLocale.ts 在 setLocale 时把 lang 写到 <html>，:lang() 选择器自动接管。

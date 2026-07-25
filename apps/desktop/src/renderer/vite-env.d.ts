@@ -3204,23 +3204,9 @@ interface ElectronAPI {
       classifyPath: (request: { path: string }) => Promise<{ kind: 'share' | 'directory' | 'other' }>;
     };
     orcaWorkflows: {
-      create: (input: {
-        id?: string;
-        leadSessionId: string;
-        status?: 'active' | 'completed' | 'cancelled' | 'failed';
-      }) => Promise<OrcaTeamRecord>;
       getByLeadSession: (leadSessionId: string) => Promise<OrcaTeamRecord | null>;
       getByWorkerSession: (workerSessionId: string) => Promise<OrcaTeamRecord | null>;
       listWorkersByLead: (leadSessionId: string) => Promise<OrcaWorkerRecord[]>;
-      addWorker: (input: {
-        id: string;
-        teamId?: string;
-        leadSessionId?: string;
-        sessionId: string;
-        status?: 'idle' | 'running' | 'done' | 'error';
-        label?: string | null;
-        worktreeBranch?: string | null;
-      }) => Promise<OrcaWorkerRecord>;
       updateWorkerStatus: (
         workerId: string,
         status: 'idle' | 'running' | 'done' | 'error',

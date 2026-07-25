@@ -394,9 +394,9 @@ type FullOrca = typeof window.electronAPI.localDb.orcaWorkflows;
 /**
  * orca 读/管理的可路由子集(排除 onOrcaWorkerChanged 订阅,见 subscribeOrcaWorkerChanged)。
  * 只列「确有远程调用方 + channel 在 REMOTE_INVOKE_ALLOWLIST 内」的方法。刻意不暴露
- * create / addWorker / updateWorkerStatus / setCollaborationSetting:它们无远程调用方,且
- * 对应 channel 不在 allowlist(远程调会 CHANNEL_NOT_ALLOWED)。本机调用方仍可直接用
- * window.electronAPI.localDb.orcaWorkflows(FullOrca 是超集,本机分支天然带这些)。
+ * updateWorkerStatus / setCollaborationSetting:它们无远程调用方,且对应 channel 不在
+ * allowlist(远程调会 CHANNEL_NOT_ALLOWED)。Team / Worker 创建只能走 maker lifecycle
+ * IPC，以便 Main 在写入前执行实时项目策略授权。
  * makerTransportOrcaRouting.test.ts 有 drift 守卫:适配器里每个 channel 串都必须在 allowlist 内。
  */
 export interface RoutableOrcaWorkflows {

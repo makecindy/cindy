@@ -3609,7 +3609,31 @@
       "settingsLink": "設定, 現在のユーザー: {{name}}",
       "canaryBadge": "Canary ユーザー",
       "viewReleaseNotes": "リリースノートを表示",
-      "reopenUpdateBanner": "更新の準備完了 — クリックして確認"
+      "reopenUpdateBanner": "更新の準備完了 — クリックして確認",
+      "downloadMobile": "Cindy モバイル版をダウンロード"
+    },
+    "mobileDownload": {
+      "title": "Cindy をリモート操作",
+      "subtitle": "モバイルからデスクトップへ接続",
+      "qrAlt": "Cindy モバイル版ダウンロード用 QR コード",
+      "preparing": "QR コードを準備しています…",
+      "error": "QR コードを作成できませんでした。しばらくしてからお試しください。",
+      "openPage": "ダウンロードページを開く",
+      "openFailed": "ダウンロードページを開けませんでした。システムのブラウザー設定を確認してください",
+      "scanToOpen": "スキャンして Cindy アプリを開き、同じアカウントでログイン",
+      "scanAnother": "別のデバイスをスキャン",
+      "scanAnotherHint": "別のスマートフォンで Cindy を開く",
+      "myDevices": "自分のデバイス",
+      "deviceOffline": "オフライン",
+      "allowControl": "同じアカウントのデバイスによるこのマシンの操作を許可",
+      "deviceId": "このデバイス · {{id}}",
+      "remoteAction": {
+        "checking": "確認中…",
+        "unavailable": "利用できません",
+        "enable": "有効にする",
+        "enabled": "有効"
+      },
+      "close": "ダウンロード画面を閉じる"
     },
     "vendorReadiness": {
       "loading": "読み込み中"
@@ -3820,7 +3844,6 @@
         "cacheRead": "キャッシュ読み取り",
         "cacheCreate": "キャッシュ書き込み",
         "free": "期間限定無料",
-        "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
         "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
@@ -3833,7 +3856,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85%オフ",
+        "budget": "GPT 割引",
         "grok": "xAI",
         "google": "Google",
         "china": "国内",
@@ -3851,8 +3874,7 @@
       "meta": {
         "context": "コンテキスト {{value}}",
         "price": "{{input}}/{{output}} / 100万",
-        "fastBadge": "高速",
-        "budgetDiscount": "85%オフ"
+        "fastBadge": "高速"
       },
       "source": {
         "railLabel": "ソース",
@@ -3995,6 +4017,9 @@
       "startFailedContinue": "協同の開始に失敗しました。単一セッションとして続行します。",
       "createWorkerRefreshFailed": "Worker の状態を更新できませんでした。もう一度お試しください。",
       "openHint": "Worker を呼んで協同する",
+      "disabledHint": "このプロジェクトでは協同モードが無効です。プロジェクト設定で有効にしてください。",
+      "unavailableHint": "このプロジェクトの協同設定を確認できません。しばらくしてから再試行してください。",
+      "loadingHint": "このプロジェクトの協同設定を確認中です。しばらくしてから再試行してください。",
       "stopHint": "協同を停止",
       "stopAria": "協同を停止",
       "toggleOnAria": "協同モード中、クリックで停止",
@@ -4020,7 +4045,10 @@
         "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "被操作デバイスでは、選択した Provider とモデルのルートを利用できません。そのデバイスで利用可能なルートを選んで再試行してください。",
         "BUDGET_MODEL_REQUIRES_API_MODE": "この Codex モデルを使うには API key が必要です。設定で構成してから再試行してください。",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "この Codex モデルを使うには API key が必要です。協同は開始されず、このメッセージは単一セッションとして続行します。設定で構成してから再試行してください。",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "被操作デバイスにこの Codex モデル用の API key が設定されていません。被操作デバイスで設定してから再試行してください。"
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "被操作デバイスにこの Codex モデル用の API key が設定されていません。被操作デバイスで設定してから再試行してください。",
+        "PRECONDITION_FAILED": "このプロジェクトでは協同モードが無効か、このセッションは協同に対応していません。",
+        "PRECONDITION_FAILED_CONTINUE": "このプロジェクトでは協同モードが無効です。単一セッションとして続行します。",
+        "PRECONDITION_FAILED_REMOTE": "制御中のセッションは協同に対応していません。"
       }
     },
     "chatInput": {
@@ -5817,7 +5845,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT（85%オフ）",
+          "gpt-budget": "GPT 割引",
           "google": "Google",
           "china": "China"
         },
@@ -7279,6 +7307,7 @@
     "planChange": {
       "targetTitle": "サブスクリプションプランの変更",
       "upgradeBadge": "アップグレード",
+      "sameLevelBadge": "同じレベル",
       "downgradeBadge": "ダウングレード",
       "emptyTitle": "切り替え可能なプランがありません",
       "emptyDescription": "現在の支払い方法で切り替え可能なプランがまだ設定されていません。",
@@ -7300,7 +7329,9 @@
       "expiredBody": "見積もりの有効期限が切れました。もう一度プラン変更を開始してください。",
       "failedTitle": "プラン変更に失敗しました",
       "failedBody": "プラン変更は完了しませんでした。現在のプランは変わりません。",
-      "requestFailed": "リクエストに失敗しました。もう一度お試しください。",
+      "requestFailed": "プラン変更リクエストを完了できませんでした。サブスクリプションの状態を更新して、もう一度お試しください。",
+      "quoteRejected": "現在のサブスクリプションではこのプランに変更できません。別のプランを選択してください。",
+      "chooseAnotherPlan": "別のプランを選択",
       "resyncHint": "確認結果を検証できませんでした。サーバーから最新の状態を同期しています…",
       "upgradeDueNow": "今期の差額 {{amount}} をお支払いください",
       "upgradeNoAmount": "確認後、アップグレードは即時適用されます。",

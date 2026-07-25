@@ -531,7 +531,7 @@ describe('applyRuntimeSetModelChange', () => {
   });
 
   it('cancels a stale pending switch when a model-only change no longer crosses families', async () => {
-    // review P1(2026-07-04 第二轮):骨折模型(codex/ 前缀)登记 pending 后,用户
+    // review P1(2026-07-04 第二轮):折扣模型(codex/ 前缀)登记 pending 后,用户
     // 通过模型选择器切回普通模型 —— model-only 调用不带 providerId,必须以 pending
     // 的 providerId 为基准重评估;不再跨族 → 取消 pending。
     const sessionId = rememberSession('runtime-set-model-cancel-pending-model-only');

@@ -911,7 +911,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
       return localState;
     }
-    // proxy 路线: 无 OAuth 登录但配了 api key → 仍放行 codex 进程(骨折模型经 proxy 走 gateway 可用)。
+    // proxy 路线: 无 OAuth 登录但配了 api key → 仍放行 codex 进程(折扣模型经 proxy 走 gateway 可用)。
     // 单条 model 的可用性由 ModelSelector + proxy 路由把关, 不在这道全局 gate 上拦。
     if (readClaudeApiKey()) {
       return { authenticated: true, identity: 'API Key · Cindy AI', authSource: 'api-key' };
@@ -1208,7 +1208,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     //   - oauth-bearer (有 OAuth 登录): provider 用 requires_openai_auth, codex 带 auth.json 的 OAuth
     //     token; XDT_CODEX_API_KEY 此时 codex 不读(provider 无 env_key 配置), 注入无害。
     //   - env-key (纯 api key、无 OAuth): provider 用 env_key=XDT_CODEX_API_KEY, codex 带 gateway key。
-    // proxy 自身给骨折 / api 流量换的 gateway key 走 readClaudeApiKey(), 不经此 env。
+    // proxy 自身给折扣 / api 流量换的 gateway key 走 readClaudeApiKey(), 不经此 env。
     const env: Record<string, string> = { CODEX_HOME: this.codexHome };
     const apiKey = readClaudeApiKey();
     if (apiKey) env[CODEX_GATEWAY_ENV_KEY] = apiKey;

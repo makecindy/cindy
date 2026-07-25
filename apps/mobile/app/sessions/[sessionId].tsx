@@ -1424,7 +1424,7 @@ export default function SessionScreen() {
       : null,
     [composerDeviceProviders.providers, composerDeviceProviders.modelVisibilityOverrides, currentSession],
   );
-  // 模型列表元信息(单价 / 骨折版 key presence)—— 与新建会话页同一套隧道缓存 hook。
+  // 模型列表元信息(单价 / 折扣版 key presence)—— 与新建会话页同一套隧道缓存 hook。
   const deviceModelPricing = useDeviceModelPricing(deviceId || undefined);
   const deviceApiKeyStatus = useDeviceApiKeyStatus(deviceId || undefined);
   // 会话「非选中模型」effort/fast 的镜像 accessors:乐观写本地镜像 + 双写穿被控端

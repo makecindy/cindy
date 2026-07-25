@@ -14,8 +14,7 @@
  * 纯函数、零 electron 依赖 —— index.ts 注入 argv / env / 默认 userData 目录,
  * 便于单元测试。packaged 版本一律返回"无覆写",线上零影响。
  */
-import { realpathSync } from 'node:fs';
-import { join, posix, win32 } from 'node:path';
+import { join } from 'node:path';
 
 /**
  * 沙箱名字白名单:字母数字下划线连字符、≤32。同时约束两件事——
@@ -100,9 +99,12 @@ export function shouldRequestSingleInstanceLock(input: {
  *
  * packaged 用真实 userData —— release 之间单实例，双击第二份安装包会聚焦已运行
  * 窗口。dev 用 `<userData>/dev-single-instance-lock` 子目录 —— dev 之间仍单实例
- * （深链 second-instance redirect 保持有效），并与 packaged 锁分域。共享正式版
- * userData 只允许 `--passive`，而 passive 会跳过获取锁；primary dev 必须使用
- * `--isolated`，其 userData 本身独立，锁子目录随之独立。
+ * （深链 second-instance redirect 保持有效），但**不再与共库的正式版互斥**：
+ * dev + release 共享 userData 双开是明确支持的工作流（2026-07-19 dev 改为与
+ * packaged 抢同一把锁曾误伤该工作流，2026-07-20 按 flavor 分域恢复）。跨实例
+ * 并发由 SQLite WAL + busy_timeout、scheduler DB 级原子认领、auth
+ * replacement-retry 等既有仲裁收敛，与 `--passive` 共库多开走的是同一套机制。
+ * `--isolated` 沙箱的 userData 本身独立，锁子目录随之独立，语义不变。
  */
 export function resolveSingleInstanceLockUserDataDir(input: {
   isPackaged: boolean;
@@ -126,60 +128,6 @@ export function shouldEnforcePassiveMigrationCompatibility(input: {
   isolated: boolean;
 }): boolean {
   return !input.isPackaged && input.schedulerPassive && !input.isolated;
-}
-
-/**
- * Primary dev must not open the packaged release's userData. A newer checkout
- * can migrate that database past the installed release's migration history.
- * Isolated dev owns a separate database; passive shared dev is compatibility
- * checked and never runs migrations.
- */
-export function shouldBlockSharedPrimaryDev(input: {
-  isPackaged: boolean;
-  schedulerPassive: boolean;
-  isolated: boolean;
-  userDataDirOverride?: string | null;
-  protectedUserDataDirs?: readonly string[];
-}): boolean {
-  if (input.isPackaged) return false;
-  const override = input.userDataDirOverride;
-  const overrideTargetsProtectedUserData = override
-    ? input.protectedUserDataDirs?.some((shared) =>
-        userDataPathsReferToSameDirectory({
-          candidate: override,
-          shared,
-        }),
-      ) === true
-    : false;
-  // A contradictory passive + isolated launch must fail before passive can
-  // bypass this guard: isolated mode would otherwise keep migrations enabled.
-  if (input.isolated && overrideTargetsProtectedUserData) return true;
-  if (input.schedulerPassive) return false;
-  if (!input.isolated) return true;
-  return false;
-}
-
-export function userDataPathsReferToSameDirectory(input: {
-  candidate: string;
-  shared: string;
-  platform?: NodeJS.Platform;
-  realpath?: (value: string) => string;
-}): boolean {
-  const platform = input.platform ?? process.platform;
-  const realpath = input.realpath ?? realpathSync.native;
-  const pathApi = platform === 'win32' ? win32 : posix;
-  const canonicalize = (value: string): string => {
-    let canonical = pathApi.resolve(value);
-    try {
-      canonical = realpath(canonical);
-    } catch {
-      // A not-yet-created directory still gets a stable lexical identity.
-    }
-    return platform === 'win32' || platform === 'darwin'
-      ? canonical.toLocaleLowerCase('en-US')
-      : canonical;
-  };
-  return canonicalize(input.candidate) === canonicalize(input.shared);
 }
 
 export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {

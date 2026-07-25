@@ -679,7 +679,7 @@ describe('anthropic-compat-proxy routingTransform', () => {
       transformRequest: [],
       routingTransform: (body) => {
         const model = (body as { model?: string }).model ?? '';
-        // 骨折: 默认 upstream(gateway) + 换 gateway key; 普通: override 到 chatgpt + 透传原 auth
+        // 折扣: 默认 upstream(gateway) + 换 gateway key; 普通: override 到 chatgpt + 透传原 auth
         if (model.startsWith('codex/')) return { headerOverride: { authorization: 'Bearer gw-key' } };
         return { upstreamOverride: chatgpt.url };
       },

@@ -100,6 +100,27 @@ describe('sendToSession ordering', () => {
     expect(lifecycleDispatchBlock).not.toContain('.send({');
   });
 
+  it('uses the persisted current project path and live workspace kind for the collaboration gate', () => {
+    const policyGuardBlock = extractBetween(
+      source,
+      'async function assertLeadCollabProjectEnabled',
+      'type SendToSessionDispatchSession',
+    );
+
+    expect(policyGuardBlock).toContain(
+      "const liveWorkspaceKind = (lead as { workspaceKind?: unknown } | undefined)?.workspaceKind;",
+    );
+    expect(policyGuardBlock).toContain(
+      "typeof leadRow?.workingDir === 'string' ? leadRow.workingDir : lead?.workDir;",
+    );
+    expect(policyGuardBlock).toContain(
+      "liveWorkspaceKind === 'project' || liveWorkspaceKind === 'dialogue'",
+    );
+    expectOrder(policyGuardBlock, 'leadRow?.workingDir', 'lead?.workDir');
+    expect(policyGuardBlock).toContain(' : leadRow?.workspaceKind;');
+    expectOrder(policyGuardBlock, 'const liveWorkspaceKind =', 'assertCollabProjectEnabled(');
+  });
+
   it('keeps non-composer direct sends from inheriting armed plan mode', () => {
     const createWorkerReadyBlock = extractBetween(
       source,
@@ -473,6 +494,8 @@ describe('sendToSession ordering', () => {
     );
 
     expect(ipcCreateBlock).toContain('orcaLifecycleService.createWorker({');
+    expect(ipcCreateBlock).toContain('await assertLeadCollabProjectEnabled(b.leadSessionId);');
+    expectOrder(ipcCreateBlock, 'await assertLeadCollabProjectEnabled(b.leadSessionId);', 'const result = await orcaLifecycleService.createWorker({');
     expect(mcpCreateBlock).toContain('return await orcaLifecycleService.createWorker(params);');
     expect(ipcCreateBlock).not.toContain('readCodexAuthMode()');
     expect(mcpCreateBlock).not.toContain('readCodexAuthMode()');

@@ -36,6 +36,12 @@
 - 修改 Desktop 数据库 schema、migration、companion script 或运行期数据库访问前，必须
   先读 `docs/dev-rules/database-and-migrations.md`。
 - 开发、调试或验证 Mobile 时，必须先读 `docs/dev-rules/mobile-development.md`。
+- 修改 `apps/mobile` 的原生配置、原生依赖、config plugin 或原生模块（`app.json`、
+  `app.config.js`、`eas.json`、`apps/mobile/package.json`、`plugins/`、`modules/` 等会
+  进入 runtime fingerprint 的输入）前，必须先读 `docs/dev-rules/mobile-development.md`
+  的「冷更边界」：**除非必要，不得提交会改变指纹的改动**；会触发冷更的 PR 与技术框架
+  变动同级，必须由仓库指定的把关人针对冷更明确确认后才能合并——不看改动大小，也不看谁
+  提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范

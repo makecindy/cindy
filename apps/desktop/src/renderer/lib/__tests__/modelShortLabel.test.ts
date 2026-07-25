@@ -23,7 +23,7 @@ describe('formatModelShortLabel', () => {
     ['claude-nova-5-0', 'Nova 5.0'],
     // vendor/route 前缀剥掉后仍能识别
     ['us.anthropic.claude-haiku-4-5-20251001', 'Haiku 4.5'],
-    // GPT:版本 + 可选 mini/nano,骨折版 codex/ 前缀剥掉
+    // GPT:版本 + 可选 mini/nano,折扣版 codex/ 前缀剥掉
     ['gpt-5.5', 'GPT-5.5'],
     ['gpt-5.4-mini', 'GPT-5.4 Mini'],
     ['codex/gpt-5.5', 'GPT-5.5'],

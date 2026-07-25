@@ -55,7 +55,7 @@ export function formatModelShortLabel(modelId: string | undefined | null): strin
   id = id.replace(/\[1m\]$/i, '');
   // 2) 去尾部 dated 后缀(如 -20251001)
   id = id.replace(/-\d{8}$/, '');
-  // 3) 去已知 vendor/route 前缀(Bedrock/Vertex route、骨折版 codex/ 前缀)
+  // 3) 去已知 vendor/route 前缀(Bedrock/Vertex route、折扣版 codex/ 前缀)
   id = id.replace(/^us\.anthropic\./i, '').replace(/^anthropic\./i, '').replace(/^codex\//i, '');
 
   // 4) Claude <family>-<major>(-<minor>)? → 'Family major.minor' / 'Family major'

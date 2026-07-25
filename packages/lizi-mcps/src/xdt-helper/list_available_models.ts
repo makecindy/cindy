@@ -15,7 +15,7 @@ export interface ModelDescriptor {
   label: string;
 }
 
-/** tier: 'budget' = codex/ 前缀的 gateway 折扣路由 (85% off), 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
+/** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
 type ModelTier = 'budget' | 'standard';
 
 interface TaggedModel extends ModelDescriptor {
@@ -26,7 +26,7 @@ interface TaggedModel extends ModelDescriptor {
  * 给每个 model 打 tier 标记。
  *
  * tier='budget'(gateway 折扣 codex 路由) 的唯一判定依据是 model id 的 `codex/` 前缀 ——
- * 与 renderer ModelSelector.categorize() 的归类规则保持一致 (codex/* → 85% off 分组),
+ * 与 renderer ModelSelector.categorize() 的归类规则保持一致 (codex/* → 折扣分组),
  * 也与 host CODEX_BUDGET_MODELS 的 id 命名约定一致。据此打 tier 后, agent 不必再从
  * label / description 里语义推断, 直接按 tier 精准匹配用户指定的档位。
  * label (= host displayName, 同时是 UI 下拉展示名) 不受影响, 保持干净。
@@ -60,9 +60,9 @@ const DESCRIPTION = [
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier}]',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
-  "- tier='budget': codex/ 前缀的 gateway 折扣路由 (85% off, 如 codex/gpt-5.5)",
+  "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",
   "- tier='standard': 官方原版 (如 gpt-5.5)",
-  '选型规则: 用户明确要求折扣 / 85% off 路由 → 选 tier=budget 的模型; 说「官方 / 原版 / 普通版」→ 选 tier=standard。',
+  '选型规则: 用户明确要求折扣路由 → 选 tier=budget 的模型; 说「官方 / 原版 / 普通版」→ 选 tier=standard。',
   '默认规则: 用户只报模型名 (如 "gpt-5.5") 时, 一律默认 tier=standard (官方原版); 只有用户明确要求折扣路由才允许选 tier=budget。',
   '注意 budget 与 standard 可能 label 同名 (都叫 GPT-5.5), 必须用 tier 区分, 不能只看 label。',
   'tier=budget 仅在 Codex「API key 模式」下可用; OAuth 模式下 create_worker 会返 BUDGET_MODEL_REQUIRES_API_MODE。用户要 budget 档时, 若被拒就如实告知需切到 API key 模式。',

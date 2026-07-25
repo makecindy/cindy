@@ -56,6 +56,9 @@ function assertMainWindowSender(
 
 function throwBillingFetchError(error: unknown): never {
   if (error instanceof ServerApiError) {
+    if (error.code === 'PLAN_CHANGE_NOT_AVAILABLE') {
+      throwIpcError('PLAN_CHANGE_NOT_AVAILABLE', 'target plan is not available');
+    }
     if (error.statusCode === 400) {
       throwIpcError('INVALID_PARAMS', 'billing request was rejected');
     }
@@ -341,6 +344,7 @@ export function createBillingHandlers(
           method: 'POST',
           body: { targetOfferCode },
           headers: { 'Idempotency-Key': idempotencyKey },
+          allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
         }),
         projectBillingPlanChange,
       );

@@ -104,7 +104,7 @@ type ClaudeSdkEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  * [1m] 后缀的唯一决策依据是目录(providers.json)的 contextWindow:
  *   - 窗口已知且 ≥1M → 带 [1m];已知且 <1M → 绝不带(已带的强制剥掉)。
  *     窗口 <1M 却带 [1m] 会让 cc-code 的 has1mContext 把窗口判成 1M,撑大
- *     auto-compact 阈值 → 对话冲过上游真实上限后空转,会话"假死"(骨折 GPT 实踩)。
+ *     auto-compact 阈值 → 对话冲过上游真实上限后空转,会话"假死"(折扣 GPT 实踩)。
  *     真实窗口口径已由 catalog 经 env-builder(XDT_MAKER_MODEL_CONTEXT_WINDOWS,
  *     id 与 id[1m] 双键)注入 cc,[1m] 不再承担窗口语义,只是 wire 串的一部分。
  *   - 窗口未知(目录外模型 / 未传窗口的老调用方)→ 回落下方硬编码映射链,行为不变。
@@ -139,10 +139,10 @@ function legacyToSdkModelString(model: string): string {
   if (model.includes('sonnet')) return `${model}[1m]`;
   // 官方 gpt-5.5 / gpt-5.4 真实支持 1M, 走 [1m] beta 通道。
   if (model === 'gpt-5.5' || model === 'gpt-5.4') return `${model}[1m]`;
-  // 骨折GPT(codex/* 经骨折网关)真实上下文上限远低于 1M(catalog cc 侧 = 272k),
+  // 折扣GPT(codex/* 经折扣网关)真实上下文上限远低于 1M(catalog cc 侧 = 272k),
   // 绝不能带 [1m]: cc-code 的 has1mContext 只要在 model 串里见到 [1m] 就把窗口判成 1M
   // (getContextWindowForModel 直接 return 1_000_000), 撑大 auto-compact 阈值 →
-  // 对话冲过骨折网关真实上限(~24 万 token)后空转, 用户侧表现为会话"假死"。
+  // 对话冲过折扣网关真实上限(~24 万 token)后空转, 用户侧表现为会话"假死"。
   // 路由不依赖 [1m]: isAnthropicWireModel 只按 claude-/sonnet/opus/haiku/fable 前缀判定,
   // codex/ 前缀始终走 provider 网关、不命中 Anthropic wire, 去掉 [1m] 不改变路由判定;
   // 真实窗口由 catalog 经 translator 窗口口径注入(=272k)。

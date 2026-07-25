@@ -3347,8 +3347,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:session-share:classify-path', request),
     },
     orcaWorkflows: {
-      create: (input: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:orca-workflows:create', input),
       getByLeadSession: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('local-db:orca-workflows:get-by-lead', leadSessionId),
       getByWorkerSession: (workerSessionId: string): Promise<unknown> =>
@@ -3358,8 +3356,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ),
       listWorkersByLead: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-lead', leadSessionId),
-      addWorker: (input: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:orca-workflows:add-worker', input),
       updateWorkerStatus: (workerId: string, status: string): Promise<void> =>
         ipcRenderer.invoke(
           'local-db:orca-workflows:update-worker-status',

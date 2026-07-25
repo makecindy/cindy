@@ -82,12 +82,10 @@ companion CommonJS 格式和历史 runtime identity 冻结；不能用单独 typ
 - companion 接收同步 `better-sqlite3` 实例，在受控 migration 事务内使用 `.get()`、
   `.all()`、`.run()` 是契约的一部分；不要把这种同步写法复制到运行期业务代码。
 
-## Dev Migration 与本地数据
+## 未合入 Migration 与本地数据
 
-- primary dev 禁止连接共享 Cindy userData 运行 migration，即使 migration 已进入 `main`；
-  本机安装的 release 仍可能更旧，新 checkout 升级数据库后会让旧 release 无法打开。
-- 未进入 `main` 的 migration 还可能因分支换号或回退，让本地 `schema_version` 与真实结构
-  永久分叉。
+- 未进入 `main` 的 migration 禁止连接共享 Cindy userData 运行；否则分支换号或回退后会让
+  本地 `schema_version` 与真实结构永久分叉。
 - 需要启动验证时，按照 `desktop-development.md` 的参数说明使用显式
   `--isolated[=<名字>]` 沙箱。migration replay 自身使用临时数据库，不污染用户数据。
 - 不得为了测试 migration 临时改写、降级或删除用户数据库；需要历史状态时新增最小 fixture。

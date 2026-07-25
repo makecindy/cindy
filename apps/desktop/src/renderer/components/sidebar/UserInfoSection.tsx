@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Flame, Shield } from 'lucide-react';
+import { Flame, Shield, Smartphone } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { MobileDownloadDialog } from './MobileDownloadDialog';
 
 interface UserInfoSectionProps {
   isCollapsed: boolean;
@@ -19,6 +20,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const navigate = useNavigate();
   const location = useLocation();
   const [avatarError, setAvatarError] = useState(false);
+  const [mobileDownloadOpen, setMobileDownloadOpen] = useState(false);
+  const mobileDownloadButtonRef = useRef<HTMLButtonElement>(null);
   const { t } = useTranslation();
 
   // 火焰按钮双职责:
@@ -47,6 +50,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const appRegionLabel = CURRENT_CINDY_REGION === 'global' ? 'Global' : 'CN';
   const appVersionLabel = `${appRegionLabel} · ${appDisplayVersion}`;
   const appVersionLabelDetail = `${appRegionLabel} · ${appDisplayVersionDetail}`;
+  const remoteAvailable = mode === 'cloud';
 
   const handleClick = () => {
     if (location.pathname !== '/settings') {
@@ -54,63 +58,104 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     }
   };
 
+  const openRemoteSettings = () => {
+    setMobileDownloadOpen(false);
+    navigate('/settings?tab=remote-control');
+  };
+
+  const openLinkedDevices = () => {
+    setMobileDownloadOpen(false);
+    navigate('/settings?tab=remote-control&section=devices');
+  };
+
+  const mobileDownloadEntry = (
+    <button
+      ref={mobileDownloadButtonRef}
+      type="button"
+      onClick={() => setMobileDownloadOpen(true)}
+      aria-label={t('sidebar.user.downloadMobile')}
+      className={cn(
+        'mobile-download-btn',
+        'flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full',
+        !isCollapsed && 'mr-1',
+        'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)]',
+        'text-[var(--sidebar-user-card-text)] transition-colors hover:bg-sidebar-item-hover',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+      )}
+    >
+      <Smartphone className="h-3 w-3" aria-hidden="true" />
+    </button>
+  );
+
   if (isCollapsed) {
     return (
-      <div className="mt-auto flex h-[66px] items-center justify-center px-3">
-        <button
-          onClick={handleClick}
-          role="link"
-          aria-label={t('sidebar.user.settingsLink', { name: displayName })}
-          className="flex min-w-0 items-center justify-center text-left"
-        >
-          <div
-            className="relative h-9 w-9 shrink-0"
-            title={isCanary ? t('sidebar.user.canaryBadge') : undefined}
+      <>
+        <div className="mt-auto flex h-[66px] flex-col items-center justify-center gap-1 px-3">
+          <button
+            onClick={handleClick}
+            role="link"
+            aria-label={t('sidebar.user.settingsLink', { name: displayName })}
+            className="flex min-w-0 items-center justify-center text-left"
           >
-            {user?.avatar && !avatarError ? (
-              <img
-                src={user.avatar}
-                alt={displayName}
-                className="h-9 w-9 rounded-full object-cover"
-                onError={() => setAvatarError(true)}
-              />
-            ) : (
-              <div
-                className={cn(
-                  'flex h-9 w-9 items-center justify-center rounded-full',
-                  'border border-sidebar-border bg-sidebar-item-hover text-base font-medium text-foreground',
-                )}
-              >
-                {initial}
-              </div>
-            )}
-            {isCanary && (
-              <span
-                aria-label={t('sidebar.user.canaryBadge')}
-                className={cn(
-                  'absolute -bottom-0.5 -right-0.5',
-                  'flex h-3 w-3 items-center justify-center rounded-full',
-                  'bg-foreground text-background ring-2 ring-sidebar',
-                )}
-              >
-                <Shield size={8} strokeWidth={2.5} />
-              </span>
-            )}
-          </div>
-        </button>
-      </div>
+            <div
+              className="relative h-9 w-9 shrink-0"
+              title={isCanary ? t('sidebar.user.canaryBadge') : undefined}
+            >
+              {user?.avatar && !avatarError ? (
+                <img
+                  src={user.avatar}
+                  alt={displayName}
+                  className="h-9 w-9 rounded-full object-cover"
+                  onError={() => setAvatarError(true)}
+                />
+              ) : (
+                <div
+                  className={cn(
+                    'flex h-9 w-9 items-center justify-center rounded-full',
+                    'border border-sidebar-border bg-sidebar-item-hover text-base font-medium text-foreground',
+                  )}
+                >
+                  {initial}
+                </div>
+              )}
+              {isCanary && (
+                <span
+                  aria-label={t('sidebar.user.canaryBadge')}
+                  className={cn(
+                    'absolute -bottom-0.5 -right-0.5',
+                    'flex h-3 w-3 items-center justify-center rounded-full',
+                    'bg-foreground text-background ring-2 ring-sidebar',
+                  )}
+                >
+                  <Shield size={8} strokeWidth={2.5} />
+                </span>
+              )}
+            </div>
+          </button>
+          {mobileDownloadEntry}
+        </div>
+        <MobileDownloadDialog
+          open={mobileDownloadOpen}
+          onOpenChange={setMobileDownloadOpen}
+          remoteAvailable={remoteAvailable}
+          onOpenRemoteSettings={openRemoteSettings}
+          onOpenDevices={openLinkedDevices}
+          triggerRef={mobileDownloadButtonRef}
+        />
+      </>
     );
   }
 
   return (
     <div className="mt-auto px-3 pb-3 pt-2">
-      {/* 胶囊整体承载 hover(方案 D):玻璃底色加深一档;悬停火焰按钮时用 :has()
-        把胶囊底色还原,只让火焰自己高亮,避免双层叠色。 */}
+      {/* 胶囊整体承载 hover(方案 D):玻璃底色加深一档;悬停右侧操作按钮时用
+        :has() 把胶囊底色还原,只让当前按钮高亮,避免双层叠色。 */}
       <div
         className={cn(
           'flex h-10 items-center rounded-full border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] px-[7px]',
           'transition-colors hover:bg-[var(--sidebar-user-card-bg-hover)]',
           'has-[.flame-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
+          'has-[.mobile-download-btn:hover]:bg-[var(--sidebar-user-card-bg)]',
         )}
       >
         <button
@@ -128,9 +173,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               <img
                 src={user.avatar}
                 alt={displayName}
-                className={cn(
-                  'h-[27px] w-[27px] rounded-full object-cover',
-                )}
+                className={cn('h-[27px] w-[27px] rounded-full object-cover')}
                 onError={() => setAvatarError(true)}
               />
             ) : (
@@ -181,6 +224,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           </div>
         </button>
 
+        {mobileDownloadEntry}
+
         {/* Flame icon button — 默认打开更新历史;banner 被 dismiss 且有 pending
           update 时切换为「唤回 banner」入口,视觉涂黑(fill 实心 + foreground 主色)
           告诉用户还有更新等待确认。 */}
@@ -219,6 +264,15 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
           </button>
         )}
       </div>
+
+      <MobileDownloadDialog
+        open={mobileDownloadOpen}
+        onOpenChange={setMobileDownloadOpen}
+        remoteAvailable={remoteAvailable}
+        onOpenRemoteSettings={openRemoteSettings}
+        onOpenDevices={openLinkedDevices}
+        triggerRef={mobileDownloadButtonRef}
+      />
     </div>
   );
 }

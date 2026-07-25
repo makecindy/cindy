@@ -81,7 +81,12 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 - 回滚 / 降级方式：
 
 <!-- 命中 SQLite migration、system prompt、协议、原生层、fingerprint/OTA 或跨平台差异时，
-必须写清影响和回滚/降级方式；不涉及风险时明确写“无”。 -->
+必须写清影响和回滚/降级方式；不涉及风险时明确写“无”。
+
+改动会改变 mobile runtime fingerprint（即触发冷更）时，还要写明为什么冷更不可避免、
+存量装机的影响范围与发版节奏建议；这类 PR 与技术框架变动同级，需仓库指定的把关人针对
+冷更明确确认后才能合并（提交者身份不构成例外），规则见
+docs/dev-rules/mobile-development.md 的「冷更边界」。 -->
 
 ### 提交前检查
 

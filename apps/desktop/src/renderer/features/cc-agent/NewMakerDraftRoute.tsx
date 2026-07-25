@@ -103,6 +103,7 @@ import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor, Session } from '@/lib/ccAgent.types';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -427,8 +428,11 @@ export function NewMakerDraftRoute() {
   const showProviderOnboardingCard = providerOnboarding.visible && !isDeviceLinkDraft;
   const effectiveExtraDirs = draft.extraDirs;
   const effectiveCollab = collab;
-  const effectiveCollabEnabled =
-    effectiveCollab.enabled && effectiveWorkingDir != null && effectiveRemoteHostId == null;
+  const collabPolicyEligible =
+    effectiveWorkingDir != null &&
+    effectiveRemoteHostId == null &&
+    effectiveDeviceLinkDeviceId == null;
+  const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible);
   const projectPickerOptions = useProjectPickerOptions();
   const createAgentModeLabel =
     getProjectPickerDisplayName(effectiveWorkingDir, projectPickerOptions) ??
@@ -452,6 +456,22 @@ export function NewMakerDraftRoute() {
     setRightSidebarSessionId?.(draftRightSidebar.sessionId);
     return () => setRightSidebarSessionId?.(null);
   }, [draftRightSidebar.sessionId, setRightSidebarSessionId]);
+
+  useEffect(() => {
+    if (
+      effectiveCollab.enabled &&
+      !collabPolicy.loading &&
+      !collabPolicy.unavailable &&
+      !collabPolicy.enabled
+    ) {
+      patchCollab({ enabled: false });
+    }
+  }, [
+    collabPolicy.enabled,
+    collabPolicy.loading,
+    collabPolicy.unavailable,
+    effectiveCollab.enabled,
+  ]);
 
   useEffect(() => {
     const draftSessionId = draftRightSidebar.sessionId;
@@ -1164,9 +1184,9 @@ export function NewMakerDraftRoute() {
   };
 
   // ─── Send 拦截:vendorAuthGate → createSession → send / background worktree ──
-  // 同步 return false 阻止 ChatInput 立即清空输入(异步流程未必成功)。
+  // 异步流程未接受发送时 resolve false，让 ChatInput 保留当前草稿。
   const handleSend = useCallback(
-    (
+    async (
       message: string,
       model: string,
       effort: Effort,
@@ -1181,8 +1201,31 @@ export function NewMakerDraftRoute() {
         slashCommandRanges?: SlashCommandRange[];
         onAccepted?: () => void;
       },
-    ): boolean | undefined => {
+    ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
+      if (effectiveCollab.enabled && collabPolicy.loading) {
+        toast.warning(t('newChat.collaboration.loadingHint'));
+        return false;
+      }
+      let policyEnabled = collabPolicy.enabled;
+      let policyUnavailable = collabPolicy.unavailable;
+      if (effectiveCollab.enabled && policyUnavailable) {
+        const refreshed = await collabPolicy.refresh();
+        policyEnabled = refreshed.enabled;
+        policyUnavailable = refreshed.unavailable;
+      }
+      if (effectiveCollab.enabled && (policyUnavailable || !policyEnabled)) {
+        toast.warning(
+          t(
+            policyUnavailable
+              ? 'newChat.collaboration.unavailableHint'
+              : 'newChat.collaboration.disabledHint',
+          ),
+        );
+        return false;
+      }
+      const shouldEnableCollab =
+        effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       if (isDeviceLinkDraft && (capabilitiesLoading || deviceProvidersLoading)) return false;
@@ -1512,7 +1555,7 @@ export function NewMakerDraftRoute() {
                 // 才进入 1.6s 平滑期, overlay 从 "空 ChatView" 自然过渡到 "已在
                 // streaming 的 ChatView", 不暴露中间空窗。clear 时机见本 async 块末尾。
 
-                if (effectiveCollabEnabled) {
+                if (shouldEnableCollab) {
                   try {
                     const result = await window.electronAPI.maker.enableOrca(
                       newSession.id,
@@ -1626,7 +1669,7 @@ export function NewMakerDraftRoute() {
           // 不阻断 send 流程。worker 类型由 popover 选择,失败回退到单 session 路由。
           let orcaNavTarget: string | null = null;
           let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
-          if (effectiveCollabEnabled) {
+          if (shouldEnableCollab) {
             try {
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
@@ -1706,7 +1749,12 @@ export function NewMakerDraftRoute() {
       // 漏在依赖里会让"切换后立即发送"用到旧值(bot review P2)。
       effectivePlanMode,
       patchActivePrefs,
-      effectiveCollabEnabled,
+      effectiveCollab.enabled,
+      collabPolicyEligible,
+      collabPolicy.enabled,
+      collabPolicy.loading,
+      collabPolicy.refresh,
+      collabPolicy.unavailable,
       effectiveCollab.worker,
       // workerConfig 也要进依赖:只改角色/模型/effort/初始任务(worker 类型不变)时,
       // 少了它 handleSend 会闭包吃旧的 effectiveCollab,起 Worker 用错配置(codex P2)。
@@ -1728,6 +1776,25 @@ export function NewMakerDraftRoute() {
   // 失败抛错 → NewGoalDialog 内联报错并保持打开。
   const handleCreateGoal = useCallback(
     async (objective: string, limits: GoalLimitValues): Promise<void> => {
+      let policyEnabled = collabPolicy.enabled;
+      if (effectiveCollab.enabled && collabPolicyEligible) {
+        if (collabPolicy.loading) {
+          throw new Error(t('newChat.collaboration.loadingHint'));
+        }
+        if (collabPolicy.unavailable) {
+          const refreshed = await collabPolicy.refresh();
+          if (refreshed.unavailable) {
+            throw new Error(t('newChat.collaboration.unavailableHint'));
+          }
+          policyEnabled = refreshed.enabled;
+        }
+        if (!policyEnabled) {
+          patchCollab({ enabled: false });
+          throw new Error(t('newChat.collaboration.disabledHint'));
+        }
+      }
+      const shouldEnableCollab =
+        effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
       if (isDeviceLinkDraft && (capabilitiesLoading || deviceProvidersLoading)) {
         throw new Error(t('ccAgent.draft.deviceStillLoading'));
       }
@@ -1885,7 +1952,7 @@ export function NewMakerDraftRoute() {
       // session 不匹配返回 stale-context(codex P2)——与 Send 路径同口径,把 reveal
       // 塞进 navigate state,由 CCAgentSessionView mount 后消费。
       let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
-      if (effectiveCollabEnabled) {
+      if (shouldEnableCollab) {
         try {
           const result = await window.electronAPI.maker.enableOrca(
             newSession.id,
@@ -1929,8 +1996,13 @@ export function NewMakerDraftRoute() {
       effectiveRemoteHostId,
       effectiveExtraDirs,
       chatInitialProviderId,
-      effectiveCollabEnabled,
       effectiveCollab,
+      collabPolicyEligible,
+      collabPolicy.loading,
+      collabPolicy.refresh,
+      collabPolicy.unavailable,
+      collabPolicy.enabled,
+      patchCollab,
       navigate,
       t,
     ],
@@ -2127,9 +2199,7 @@ export function NewMakerDraftRoute() {
                       className="shrink-0 text-[var(--create-agent-control-icon)]"
                     />
                     <span className="min-w-0 truncate">
-                      {effectiveCollab.enabled
-                        ? t('newChat.collaboration.pillLabel')
-                        : createAgentModeLabel}
+                      {createAgentModeLabel}
                     </span>
                     <ChevronDown
                       size={12}
@@ -2213,16 +2283,36 @@ export function NewMakerDraftRoute() {
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
                     // (CreateWorkerPopover:role/agent/model/初始任务),与会话内完全一致;OFF 态点击
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。
-                    // createSession 已在 effectiveCollabEnabled 时用 workerConfig 拉起 Worker。
+                    // createSession 后按本次策略校验结果用 workerConfig 拉起 Worker。
                     collaboration={
-                      effectiveWorkingDir != null &&
-                      effectiveRemoteHostId == null &&
-                      effectiveDeviceLinkDeviceId == null
+                      collabPolicyEligible
                         ? {
                             enabled: effectiveCollab.enabled,
                             worker: effectiveCollab.worker,
                             onChange: (next) => patchCollab(next),
                             onOpenDetails: () => setCreateWorkerOpen(true),
+                            onDisabledActivate: collabPolicy.unavailable
+                              ? () => {
+                                  void collabPolicy.refresh().then((policy) => {
+                                    if (policy.enabled && !policy.unavailable) {
+                                      setCreateWorkerOpen(true);
+                                    }
+                                  });
+                                }
+                              : undefined,
+                            disabled:
+                              !effectiveCollab.enabled &&
+                              (collabPolicy.loading ||
+                                collabPolicy.unavailable ||
+                                !collabPolicy.enabled),
+                            disabledReason:
+                              collabPolicy.loading
+                                ? t('newChat.collaboration.loadingHint')
+                                : collabPolicy.unavailable
+                                  ? t('newChat.collaboration.unavailableHint')
+                                  : !collabPolicy.enabled
+                                    ? t('newChat.collaboration.disabledHint')
+                                    : undefined,
                           }
                         : undefined
                     }

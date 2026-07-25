@@ -3610,7 +3610,31 @@
       "settingsLink": "Settings, current user: {{name}}",
       "canaryBadge": "Canary user",
       "viewReleaseNotes": "View release notes",
-      "reopenUpdateBanner": "Update ready — click to review"
+      "reopenUpdateBanner": "Update ready — click to review",
+      "downloadMobile": "Download Cindy Mobile"
+    },
+    "mobileDownload": {
+      "title": "Control Cindy Remotely",
+      "subtitle": "Connect your phone to this desktop",
+      "qrAlt": "QR code to download Cindy mobile",
+      "preparing": "Preparing QR code…",
+      "error": "Couldn’t create the QR code. Try again later.",
+      "openPage": "Open Download Page",
+      "openFailed": "Couldn’t open the download page. Check your system browser settings.",
+      "scanToOpen": "Scan to open the Cindy app and sign in with the same account",
+      "scanAnother": "Scan Another Device",
+      "scanAnotherHint": "Open Cindy on another phone",
+      "myDevices": "My Devices",
+      "deviceOffline": "Offline",
+      "allowControl": "Allow same-account devices to control this machine",
+      "deviceId": "This device · {{id}}",
+      "remoteAction": {
+        "checking": "Checking…",
+        "unavailable": "Unavailable",
+        "enable": "Enable",
+        "enabled": "Enabled"
+      },
+      "close": "Close Download Dialog"
     },
     "vendorReadiness": {
       "loading": "loading"
@@ -3821,7 +3845,6 @@
         "cacheRead": "Cache read",
         "cacheCreate": "Cache write",
         "free": "Limited-time free",
-        "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
         "subscriptionEstimate": "Value estimate, not an actual bill"
@@ -3834,7 +3857,7 @@
       "category": {
         "anthropic": "Anthropic",
         "gpt": "OpenAI",
-        "budget": "85% off",
+        "budget": "GPT Discount",
         "grok": "xAI",
         "google": "Google",
         "china": "Domestic",
@@ -3852,8 +3875,7 @@
       "meta": {
         "context": "{{value}} context",
         "price": "{{input}}/{{output}} per 1M",
-        "fastBadge": "Fast",
-        "budgetDiscount": "85% off"
+        "fastBadge": "Fast"
       },
       "source": {
         "railLabel": "Source",
@@ -3996,6 +4018,9 @@
       "startFailedContinue": "Failed to start collaboration. Continuing as a single session.",
       "createWorkerRefreshFailed": "Unable to refresh Worker status. Please try again.",
       "openHint": "Bring in a Worker to help",
+      "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
+      "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
+      "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",
       "toggleOnAria": "Collaboration on — click to stop",
@@ -4021,7 +4046,10 @@
         "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "The selected provider and model route is unavailable on the controlled device. Choose a route available on that device, then retry.",
         "BUDGET_MODEL_REQUIRES_API_MODE": "This Codex model requires an API key. Configure it in Settings, then try again.",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "This Codex model requires an API key. Collaboration was not started, and this message is continuing as a single session. Configure it in Settings, then try again.",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The controlled device does not have the API key required for this Codex model. Configure it on that device, then retry."
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The controlled device does not have the API key required for this Codex model. Configure it on that device, then retry.",
+        "PRECONDITION_FAILED": "Collaboration is disabled for this project or the session is not eligible.",
+        "PRECONDITION_FAILED_CONTINUE": "Collaboration is disabled for this project. Continuing as a single session.",
+        "PRECONDITION_FAILED_REMOTE": "The controlled session is not eligible for collaboration."
       }
     },
     "chatInput": {
@@ -5827,7 +5855,7 @@
         "category": {
           "anthropic": "Anthropic",
           "gpt": "GPT",
-          "gpt-budget": "GPT (85% off)",
+          "gpt-budget": "GPT Discount",
           "google": "Google",
           "china": "China"
         },
@@ -7290,6 +7318,7 @@
     "planChange": {
       "targetTitle": "Change subscription plan",
       "upgradeBadge": "Upgrade",
+      "sameLevelBadge": "Same tier",
       "downgradeBadge": "Downgrade",
       "emptyTitle": "No plans available to switch to",
       "emptyDescription": "The server has not configured another plan for your current payment method.",
@@ -7311,7 +7340,9 @@
       "expiredBody": "The quote expired. Start the plan change again to get a new quote.",
       "failedTitle": "Plan change failed",
       "failedBody": "The plan change did not complete. Your current plan is unchanged.",
-      "requestFailed": "The request failed. Please try again.",
+      "requestFailed": "The plan change request couldn’t be completed. Refresh your subscription status and try again.",
+      "quoteRejected": "This plan isn’t available for your current subscription. Choose another plan.",
+      "chooseAnotherPlan": "Choose Another Plan",
       "resyncHint": "The confirmation result could not be verified. Syncing the latest status from the server…",
       "upgradeDueNow": "Pay {{amount}} now for the remainder of this period",
       "upgradeNoAmount": "The upgrade takes effect immediately after confirmation.",

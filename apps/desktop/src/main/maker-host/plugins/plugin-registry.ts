@@ -239,6 +239,10 @@ export class PluginRegistry {
   getDisabledRuntimePluginIds(workingDir?: string): string[] {
     return this.plugins
       .filter((plugin) =>
+        // Collaboration is authorized live by the Main Orca lifecycle handlers.
+        // Freezing it here would keep an existing Codex thread disabled after
+        // the project setting is enabled.
+        plugin.id !== 'collab' &&
         !ESSENTIAL_PLUGIN_IDS.has(plugin.id) &&
         !GLOBAL_PLUGIN_IDS.has(plugin.id) &&
         !this.isEnabled(plugin.id, workingDir),

@@ -54,7 +54,7 @@ export interface ApplyRuntimeSetModelChangeInput {
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
    * renderer 持久化失败发起回滚 set-model、用户改选回与当前进程同族的来源、或
-   * model-only 变更后 pending 的目标形态与当前进程重新同族(如从骨折模型切回
+   * model-only 变更后 pending 的目标形态与当前进程重新同族(如从折扣模型切回
    * 普通模型)—— 不清会让已被放弃的 pending 在 turn 结束时照样生效。
    */
   clearPendingCredentialSwitch?: (sessionId: string, opts?: { wake?: boolean }) => void;
@@ -68,7 +68,7 @@ export interface ApplyRuntimeSetModelChangeInput {
    * 读取该会话当前登记的 pending 目标。model-only 调用(providerId=undefined)时
    * pending.providerId 代表用户已选定、尚未生效的来源意图,必须以它为基准评估新
    * 模型是否仍需切换 —— 仍需则更新 pending 的模型,不需则取消 pending(review
-   * P1 2026-07-04:骨折模型 pending 后切回普通模型,旧实现不清 pending)。
+   * P1 2026-07-04:折扣模型 pending 后切回普通模型,旧实现不清 pending)。
    */
   getPendingCredentialSwitch?: (
     sessionId: string,
@@ -241,7 +241,7 @@ export async function applyRuntimeSetModelChange(
     input.clearPendingCredentialSwitch?.(sessionId);
   } else if (pendingTarget !== undefined) {
     // model-only 变更 + 已有 pending:能走到无需切换分支,说明按 pending 来源 +
-    // 新模型评估后凭证形态已与当前进程同族(典型:骨折模型 pending 后切回普通
+    // 新模型评估后凭证形态已与当前进程同族(典型:折扣模型 pending 后切回普通
     // 模型)→ 切换意图不复存在,取消 pending(review P1)。
     input.clearPendingCredentialSwitch?.(sessionId);
     logger?.info('set-model: cancelled stale pending credential switch after model-only change', {

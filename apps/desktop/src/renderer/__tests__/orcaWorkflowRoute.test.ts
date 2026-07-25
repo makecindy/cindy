@@ -165,6 +165,58 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionStatusIconSource).toContain("'text-[var(--cmd-palette-item-meta)]'");
   });
 
+  it('keeps policy reasons scoped to disabled collaboration controls', () => {
+    expect(collaborationModeToggleSource).toContain(
+      'const effectiveDisabledReason = disabled ? disabledReason : undefined;',
+    );
+    expect(collaborationModeToggleSource).toContain(
+      "text={effectiveDisabledReason ?? t('newChat.collaboration.stopHint')}",
+    );
+    expect(collaborationModeToggleSource.match(/disabledWrapperProps\(/g)).toHaveLength(3);
+    expect(collaborationModeToggleSource.match(/aria-hidden=\{disabled \|\| undefined\}/g)).toHaveLength(3);
+    expect(collaborationModeToggleSource).toContain(
+      "'aria-disabled': onDisabledActivate ? undefined : true",
+    );
+    expect(collaborationModeToggleSource).toContain(
+      'onKeyDown: blockDisabledKeyboardActivation',
+    );
+    expect(collaborationModeToggleSource).toContain(
+      "if (event.key !== 'Enter' && event.key !== ' ') return;",
+    );
+    expect(collaborationModeToggleSource).toContain('onClick: onDisabledActivate');
+    expect(collaborationModeToggleSource).toContain('if (!event.repeat) onDisabledActivate?.();');
+  });
+
+  it('keeps the active collaboration tooltip free of policy-disabled reasons', () => {
+    expect(sessionViewSource).toContain(
+      "disabledReason:\n" +
+        "                            !collabEnabled\n" +
+        "                              ? collabPolicy.loading",
+    );
+    expect(sessionViewSource).toContain(
+      "                                  : undefined\n" +
+        "                              : undefined,",
+    );
+  });
+
+  it('retries an unavailable policy from the disabled collaboration control', () => {
+    expect(sessionViewSource).toContain('onDisabledActivate: collabPolicy.unavailable');
+    expect(sessionViewSource).toContain('void collabPolicy.refresh().then((policy) => {');
+    expect(sessionViewSource).toContain('if (policy.enabled && !policy.unavailable) {');
+    expect(chatInputSource).toContain(
+      '!disabled && collaboration.disabled\n' +
+        '                        ? collaboration.disabledReason',
+    );
+  });
+
+  it('does not subscribe to project policy updates from the legacy Orca route', () => {
+    expect(sessionViewSource).toContain(
+      'const collabPolicyEligible =\n' +
+        '    !orcaMode &&\n' +
+        "    session?.orcaRole !== 'worker'",
+    );
+  });
+
   it('keeps /orca as a legacy compatibility redirect to the plain lead route', () => {
     expect(routeSource).toContain('const { sessions, isLoading } = useCCSessions()');
     expect(routeSource).toContain('if (!sessionId || isLoading) return;');

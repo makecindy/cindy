@@ -7,16 +7,16 @@ export function printHelp(log = console.log) {
   log('\n  桌面端启动:');
   log('    # 推荐：先清理已有 Cindy dev 进程，再启动远程 API 模式');
   log('    # 国内版，读取仓内 config/endpoint.json');
-  log('    pnpm restart:desktop:remote --region=cn --isolated=cn-<name>');
+  log('    pnpm restart:desktop:remote --region=cn');
   log('    # 海外版，读取仓内 config/endpoint.global.json');
-  log('    pnpm restart:desktop:remote --region=global --isolated=global-<name>');
+  log('    pnpm restart:desktop:remote --region=global');
   log('    # 海外版，读取对应区域的线上 CDN 端点清单');
-  log('    pnpm restart:desktop:remote --region=global --endpoints-cdn --isolated=global-<name>');
+  log('    pnpm restart:desktop:remote --region=global --endpoints-cdn');
   log('    # Human 可直接启动；不会先清旧进程，Agent 不要使用');
-  log('    pnpm dev:desktop:remote --region=cn --isolated=cn-<name>');
-  log('    pnpm dev:desktop:remote --region=global --isolated=global-<name>');
+  log('    pnpm dev:desktop:remote --region=cn');
+  log('    pnpm dev:desktop:remote --region=global');
   log('    # 连接本地 http://localhost:3333（只起客户端，不起 server）');
-  log('    pnpm restart:desktop:local --region=cn --isolated=cn-<name>');
+  log('    pnpm restart:desktop:local --region=cn');
 
   log('\n  Agent 二进制安装 / 升级（Claude Code、Codex、ripgrep）:');
   log('    # 按 latest.json 当前 pin 安装到本机，不修改 pin');

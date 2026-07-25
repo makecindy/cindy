@@ -547,6 +547,9 @@ interface ChatInputProps {
     worker: CollabWorkerKind;
     onChange: (next: { enabled: boolean; worker: CollabWorkerKind }) => void;
     onOpenDetails?: () => void;
+    onDisabledActivate?: () => void;
+    disabled?: boolean;
+    disabledReason?: string;
   };
 }
 
@@ -4436,7 +4439,7 @@ export function ChatInput({
       const isSourceSessionCurrent = () =>
         isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current);
       // 容量护栏(与 handleModelChange 同款): 切来源若连带换到更小窗口的模型
-      // (典型: 官方 Claude 1M → 骨折 GPT 272K, 在选择器里是跨分组点击、走本路径而非
+      // (典型: 官方 Claude 1M → 折扣 GPT 272K, 在选择器里是跨分组点击、走本路径而非
       // handleModelChange —— 2026-07-06 实测踩中), 同样要先过上下文容量确认。
       // 同模型只切来源不拦: 窗口按 model id 取自目录, 来源不变窗口, 无新增风险。
       // 放在函数最前: 本地分支此前无任何乐观状态写入, 用户取消 = 零副作用直接 return。
@@ -5352,7 +5355,17 @@ export function ChatInput({
                     worker={collaboration.worker}
                     onChange={collaboration.onChange}
                     onOpenDetails={collaboration.onOpenDetails}
-                    disabled={disabled}
+                    onDisabledActivate={
+                      !disabled && collaboration.disabled
+                        ? collaboration.onDisabledActivate
+                        : undefined
+                    }
+                    disabled={disabled || collaboration.disabled}
+                    disabledReason={
+                      !disabled && collaboration.disabled
+                        ? collaboration.disabledReason
+                        : undefined
+                    }
                     dense={effectiveDenseToolbar}
                     iconOnly={effectiveDenseToolbar}
                   />

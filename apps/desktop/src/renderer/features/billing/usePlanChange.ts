@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { extractIpcError } from '@/utils/ipcError';
 import type {
   BillingPendingPlanChange,
   BillingPlanChange,
@@ -27,12 +28,19 @@ export type PlanChangePhase =
   | 'FAILED'
   | 'EXPIRED';
 
+export type PlanChangeTargetSnapshot = Omit<BillingPlanChangeTargetPlan, 'product'> & {
+  product: Omit<BillingPlanChangeTargetPlan['product'], 'level'> & { level: number | null };
+};
+
+export type PlanChangeQuoteFailureReason = 'TARGET_NOT_ALLOWED' | 'REQUEST_FAILED';
+
 export type PlanChangeState = {
   open: boolean;
   phase: PlanChangePhase;
   planChange: BillingPlanChange | null;
-  targetPlan: BillingPlanChangeTargetPlan | null;
+  targetPlan: PlanChangeTargetSnapshot | null;
   error: boolean;
+  quoteFailureReason: PlanChangeQuoteFailureReason | null;
   /**
    * True when the rendered change is a pre-request snapshot that could not be
    * re-read from the server (confirm and the recovery read both failed). A
@@ -49,6 +57,7 @@ const INITIAL_STATE: PlanChangeState = {
   planChange: null,
   targetPlan: null,
   error: false,
+  quoteFailureReason: null,
   stale: false,
 };
 
@@ -86,6 +95,12 @@ function isSettledPhase(phase: PlanChangePhase): boolean {
     phase === 'EXPIRED' ||
     phase === 'SCHEDULED'
   );
+}
+
+function quoteFailureReason(error: unknown): PlanChangeQuoteFailureReason {
+  return extractIpcError(error)?.code === 'PLAN_CHANGE_NOT_AVAILABLE'
+    ? 'TARGET_NOT_ALLOWED'
+    : 'REQUEST_FAILED';
 }
 
 export function usePlanChange(
@@ -132,7 +147,7 @@ export function usePlanChange(
   const applyChange = useCallback(
     (
       change: BillingPlanChange,
-      options?: { targetPlan?: BillingPlanChangeTargetPlan | null; open?: boolean },
+      options?: { targetPlan?: PlanChangeTargetSnapshot | null; open?: boolean },
     ) => {
       const phase = phaseForPlanChange(change);
       if (phase !== 'QUOTE_READY' && phase !== 'AWAITING_PAYMENT') {
@@ -146,6 +161,7 @@ export function usePlanChange(
         planChange: change,
         targetPlan: options?.targetPlan !== undefined ? options.targetPlan : current.targetPlan,
         error: false,
+        quoteFailureReason: null,
         stale: false,
       }));
     },
@@ -175,7 +191,7 @@ export function usePlanChange(
   }, [applyChange]);
 
   const startQuote = useCallback(
-    async (targetOfferCode: string, targetPlan: BillingPlanChangeTargetPlan | null) => {
+    async (targetOfferCode: string, targetPlan: PlanChangeTargetSnapshot | null) => {
       if (!accountId || inFlightRef.current) return;
       const previous = readBillingPlanChangeIntent(accountId);
       const intent: BillingPlanChangeIntentV1 =
@@ -195,6 +211,7 @@ export function usePlanChange(
         planChange: null,
         targetPlan,
         error: false,
+        quoteFailureReason: null,
         stale: false,
       });
       await withRequestLock(async () => {
@@ -202,10 +219,15 @@ export function usePlanChange(
           const change = await billingApi.quotePlanChange(targetOfferCode, intent.idempotencyKey);
           persistIntent({ ...intent, planChangeId: change.planChangeId });
           applyChange(change, { targetPlan });
-        } catch {
+        } catch (error) {
           if (await adoptServerPending()) return;
           if (mountedRef.current) {
-            setState((current) => ({ ...current, phase: 'FAILED', error: true }));
+            setState((current) => ({
+              ...current,
+              phase: 'FAILED',
+              error: true,
+              quoteFailureReason: quoteFailureReason(error),
+            }));
           }
         }
       });
@@ -218,7 +240,12 @@ export function usePlanChange(
     if (!current.planChange || current.planChange.status !== 'QUOTED' || inFlightRef.current)
       return;
     const change = current.planChange;
-    setState((value) => ({ ...value, phase: 'CONFIRMING', error: false }));
+    setState((value) => ({
+      ...value,
+      phase: 'CONFIRMING',
+      error: false,
+      quoteFailureReason: null,
+    }));
     await withRequestLock(async () => {
       try {
         applyChange(await billingApi.confirmPlanChange(change.planChangeId));

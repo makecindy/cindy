@@ -214,10 +214,11 @@ describe('PluginRegistry — scoped priority', () => {
   it('freezes only disabled ordinary plugins into a new runtime policy', async () => {
     await registry.setEnabled('ssh', false);
     await registry.setEnabled('computer', true);
-    writeProjectSettings(workingDir, { feishu_bot: false, ssh: true });
+    writeProjectSettings(workingDir, { collab: false, feishu_bot: false, ssh: true });
 
     const disabled = registry.getDisabledRuntimePluginIds(workingDir);
     expect(disabled).toContain('feishu_bot');
+    expect(disabled).not.toContain('collab');
     expect(disabled).not.toContain('ssh');
     expect(disabled).not.toContain('computer');
     for (const essentialId of ESSENTIAL_PLUGIN_IDS) {

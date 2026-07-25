@@ -68,7 +68,7 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   other: 'newChat.modelSelector.category.other',
 };
 
-// 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 骨折GPT (gateway 低价路由),
+// 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 折扣GPT (gateway 低价路由),
 // gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
 export function categorize(id: string): ModelCategory {
   if (id.startsWith('claude-')) return 'anthropic';

@@ -566,29 +566,11 @@ describe('shouldSkipLegacyMigrationForDevSandbox', () => {
     ).toBe(false);
   });
 
-  it('共享 passive dev → 跳过,不探测、复制或写 marker', () => {
-    expect(
-      shouldSkipLegacyMigrationForDevSandbox({
-        isPackaged: false,
-        envUserDataDir: undefined,
-        envPassiveSharedUserData: '1',
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipLegacyMigrationForDevSandbox({
-        isPackaged: false,
-        envUserDataDir: undefined,
-        envPassiveSharedUserData: '0',
-      }),
-    ).toBe(false);
-  });
-
   it('packaged 永不跳过(即使残留同名 env)', () => {
     expect(
       shouldSkipLegacyMigrationForDevSandbox({
         isPackaged: true,
         envUserDataDir: path.join(BASE, 'anything'),
-        envPassiveSharedUserData: '1',
       }),
     ).toBe(false);
   });
