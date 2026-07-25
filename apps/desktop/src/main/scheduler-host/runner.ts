@@ -268,7 +268,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'runner entry');
       return await this.fireInner(schedule, ctx, holder);
     } finally {
-      holder.releaseHeadlessGhostSetupTurn?.();
+      holder.headlessGhostSetupTurn?.close();
       if (
         holder.sessionId &&
         !holder.keepAlive &&
@@ -666,7 +666,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 登记,后续任何 throw 都能被收尾。
     holder.sessionId = session.id;
     holder.keepAlive = isHeartbeat || !!schedule.persistentSession;
-    holder.releaseHeadlessGhostSetupTurn = beginHeadlessGhostSetupTurn(session.id);
+    holder.headlessGhostSetupTurn = createHeadlessGhostSetupTurnGuard(session.id);
 
     // 4.4.1 heartbeat 模型 / effort 同步：schedule 上的选择与绑定 session 当前值
     // 不一致时，把改动推给 session 运行时。必须显式 setModel / setEffort ——
@@ -889,6 +889,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         origin,
         planMode: false,
         onAccepted: async () => {
+          // createSession 之后到真正 dispatch 之间仍会 await 模型切换、baseline
+          // 等准备工作。复用 desktop session 时不能在这些准备阶段把用户正在跑的
+          // turn 误标成 headless；只在本轮 send 真正跨过接受边界后 acquire。
+          // fire 已收口后才到达的迟发 callback 由 guard 拒绝，避免重新污染 session。
+          if (!holder.headlessGhostSetupTurn?.markDispatched()) return;
           turnAccepted = true;
           // turn 已被会话接受 → 此刻才落定 sessionId → 本轮 runId 反向映射(供按
           // session 静默解析)。在 send 被接受这一刻写,被 SESSION_RUNNING 拒的并发 run
@@ -1665,12 +1670,39 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   sessionId?: string;
-  releaseHeadlessGhostSetupTurn?: () => void;
+  headlessGhostSetupTurn?: HeadlessGhostSetupTurnGuard;
   /** force cleanup when an accepted ephemeral turn is aborted mid-dispatch */
   closeOnAbort?: boolean;
   worktreeSessionId?: string;
   /** true = heartbeat 复用会话或持续会话,收尾时不关闭。 */
   keepAlive?: boolean;
+}
+
+interface HeadlessGhostSetupTurnGuard {
+  /**
+   * Returns false when this fire already reached a terminal path. That also
+   * lets a late onAccepted callback skip all of its otherwise-stale effects.
+   */
+  markDispatched(): boolean;
+  close(): void;
+}
+
+function createHeadlessGhostSetupTurnGuard(sessionId: string): HeadlessGhostSetupTurnGuard {
+  let closed = false;
+  let release: (() => void) | undefined;
+  return {
+    markDispatched() {
+      if (closed) return false;
+      release ??= beginHeadlessGhostSetupTurn(sessionId);
+      return true;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      release?.();
+      release = undefined;
+    },
+  };
 }
 
 class SchedulerOnAcceptedError extends Error {

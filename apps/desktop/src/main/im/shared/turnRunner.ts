@@ -50,6 +50,7 @@ import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
+import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import type {
@@ -148,6 +149,13 @@ interface TurnState {
    * 真 done / error 收口与 cleanup 路径负责退订,防陈旧回调二次收口。
    */
   silentStopSettleUnsub: (() => void) | null;
+  /**
+   * 接管 desktop session 的 IM-owned turn 不能把 Setup interaction 错送到
+   * desktop renderer。marker 严格跟本 TurnState 生命周期绑定；closed 防止
+   * send 已失败/清理后迟到的 onAccepted 重新 acquire。
+   */
+  headlessSetupClosed: boolean;
+  releaseHeadlessSetupTurn: (() => void) | null;
 }
 
 /**
@@ -515,6 +523,8 @@ export function createTurnRunner(
       userMessageId: userMessageId ?? null,
       ackReactionIdPromise,
       silentStopSettleUnsub: null,
+      headlessSetupClosed: false,
+      releaseHeadlessSetupTurn: null,
     };
 
     let state: SessionState;
@@ -651,6 +661,11 @@ export function createTurnRunner(
         // B' 阶段: 把渠道用户消息也写本地 messages 表 — 跟 desktop renderer
         // 写自己 user message 等价 (renderer 走 IPC, 我们 main 端直接调函数)。
         onAccepted: async () => {
+          // attached IM turn 临时替换了 desktop interaction listener，必须从真正
+          // dispatch 起将 Setup 交互视为 headless。未接管的渠道 session 已由
+          // vendorOptions.source 标识，不需要 marker。若本 turn 已终止，跳过迟到
+          // callback 的落库等陈旧副作用。
+          if (!markAttachedImTurnHeadlessDispatched(item.turn, rowId, state.attached)) return;
           // 真实用户消息 → 给 silent-stop 守卫充值自动续跑额度(renderer 发送
           // 走 createMakerSendTransaction 内部已充值;scheduler / hook 与本
           // 路径直接 session.send,必须额外调这里,否则守卫额度恒 0,首次
@@ -1598,7 +1613,34 @@ export function createTurnRunner(
     }
   }
 
+  /**
+   * Mark only attached IM-owned turns. Channel-native sessions already carry
+   * vendorOptions.source and are independently classified as headless.
+   *
+   * false means the turn reached a terminal cleanup before this callback
+   * arrived; callers must skip the rest of that stale onAccepted callback.
+   */
+  function markAttachedImTurnHeadlessDispatched(
+    turn: TurnState,
+    sessionId: string,
+    attached: boolean,
+  ): boolean {
+    if (!attached) return true;
+    if (turn.headlessSetupClosed) return false;
+    turn.releaseHeadlessSetupTurn ??= beginHeadlessGhostSetupTurn(sessionId);
+    return true;
+  }
+
+  function releaseAttachedImTurnHeadless(turn: TurnState): void {
+    if (turn.headlessSetupClosed) return;
+    turn.headlessSetupClosed = true;
+    const release = turn.releaseHeadlessSetupTurn;
+    turn.releaseHeadlessSetupTurn = null;
+    release?.();
+  }
+
   function completeTurnCallback(turn: TurnState): void {
+    releaseAttachedImTurnHeadless(turn);
     // terminal done/error 的普通收口路径。撤 ack 是不等待的尽力清理，
     // 失败由 cancelAckReaction 内部吞掉；pre-dispatch failure 需要更严格
     // 顺序，走 completeTurnCallbackAfterAck。
@@ -1619,6 +1661,7 @@ export function createTurnRunner(
   }
 
   async function completeTurnCallbackAfterAck(turn: TurnState): Promise<void> {
+    releaseAttachedImTurnHeadless(turn);
     await waitForAckCleanupBounded(cancelAckReaction(turn));
     invokeTurnCompleteCallback(turn);
   }
@@ -2075,6 +2118,7 @@ export function createTurnRunner(
     const dropped = state.sendQueue.splice(0, state.sendQueue.length);
     log.warn(`dropping ${dropped.length} queued message(s) on cleanup/detach`);
     for (const item of dropped) {
+      releaseAttachedImTurnHeadless(item.turn);
       void cancelAckReaction(item.turn);
     }
   }
@@ -2083,6 +2127,7 @@ export function createTurnRunner(
    *  settle 订阅, 防定时器 / 陈旧回调泄漏。 */
   function clearQueuedTurnTimers(state: SessionState): void {
     for (const turn of state.queue) {
+      releaseAttachedImTurnHeadless(turn);
       clearActivityTicker(turn);
       clearSilentStopSettleWait(turn);
     }

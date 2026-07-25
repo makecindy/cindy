@@ -72,12 +72,14 @@ type SendImpl = (
 interface FakeSessionHarness {
   session: Session;
   headlessDuringSend: boolean[];
+  headlessAfterAccepted: boolean[];
   emit(event: AgentEvent): void;
 }
 
 function createSessionHarness(opts?: { sendImpl?: SendImpl }): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
   const headlessDuringSend: boolean[] = [];
+  const headlessAfterAccepted: boolean[] = [];
   const sendImpl: SendImpl =
     opts?.sendImpl ??
     (async (_message, sendOpts) => {
@@ -89,7 +91,16 @@ function createSessionHarness(opts?: { sendImpl?: SendImpl }): FakeSessionHarnes
     agentKind: 'codex',
     send: vi.fn<SendImpl>(async (message, sendOpts) => {
       headlessDuringSend.push(isHeadlessGhostSetupTurn('scheduler-session'));
-      return sendImpl(message, sendOpts);
+      const wrappedOpts = sendOpts
+        ? {
+            ...sendOpts,
+            onAccepted: async () => {
+              await sendOpts.onAccepted?.();
+              headlessAfterAccepted.push(isHeadlessGhostSetupTurn('scheduler-session'));
+            },
+          }
+        : sendOpts;
+      return sendImpl(message, wrappedOpts);
     }),
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
@@ -104,6 +115,7 @@ function createSessionHarness(opts?: { sendImpl?: SendImpl }): FakeSessionHarnes
   return {
     session,
     headlessDuringSend,
+    headlessAfterAccepted,
     emit(event: AgentEvent) {
       for (const listener of [...listeners]) listener(event);
     },
@@ -235,7 +247,8 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     expect(maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ vendorOptions: { source: 'scheduler' } }),
     );
-    expect(h.headlessDuringSend).toEqual([true]);
+    expect(h.headlessDuringSend).toEqual([false]);
+    expect(h.headlessAfterAccepted).toEqual([true]);
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
   });
 
@@ -246,7 +259,8 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     await fireToCompletion(runner, baseSchedule({ persistentSession: true }), h);
 
     expect(closeSession).not.toHaveBeenCalled();
-    expect(h.headlessDuringSend).toEqual([true]);
+    expect(h.headlessDuringSend).toEqual([false]);
+    expect(h.headlessAfterAccepted).toEqual([true]);
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
   });
 

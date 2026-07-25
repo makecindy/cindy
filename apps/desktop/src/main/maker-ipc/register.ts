@@ -51,6 +51,7 @@ import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBri
 import {
   initGhostSetupInteractionBridge,
   parseGhostSetupInlineSubmitRequest,
+  projectPendingInteractionsForRemote,
   type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
@@ -6704,7 +6705,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   // 快照:打开/重连/刷新会话时,renderer 拉当前挂起交互重建面板(本机 + device-link 远程共用)。
   ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return [];
-    return getPendingInteractionsForSession(sessionId);
+    const pending = getPendingInteractionsForSession(sessionId);
+    return projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke());
   });
 
   // ── 运行时切换 (Stage 2 B) ───────────────────────────────────────────────

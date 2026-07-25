@@ -168,7 +168,7 @@ export class GhostSetupInteractionBridge {
       this.deps.logger?.warn('plugin setup interaction received invalid inline submission', {
         requestId,
       });
-      return true;
+      return false;
     }
     Promise.resolve(entry.onInlineSubmit(submit)).catch((error) => {
       this.deps.logger?.warn('plugin setup interaction inline submission failed', {
@@ -247,6 +247,99 @@ export class GhostSetupInteractionBridge {
       request: snapshot,
     });
   }
+}
+
+/**
+ * Device-link only projection of a Host-owned setup snapshot.
+ *
+ * Desktop keeps richer presentation helpers (for example an external URL next
+ * to a Secret field). Remote clients only receive the stable interaction
+ * contract. Rebuilding every nested object from an allowlist also keeps future
+ * Desktop-only helper metadata from crossing the device-link boundary.
+ */
+export function sanitizeGhostSetupSnapshotForRemote(
+  snapshot: GhostSetupInteractionSnapshot,
+): GhostSetupInteractionSnapshot {
+  return {
+    kind: snapshot.kind,
+    requestId: snapshot.requestId,
+    revision: snapshot.revision,
+    ...(snapshot.terminal ? { terminal: true as const } : {}),
+    ghost: {
+      id: snapshot.ghost.id,
+      name: snapshot.ghost.name,
+      ...(snapshot.ghost.iconDataUrl ? { iconDataUrl: snapshot.ghost.iconDataUrl } : {}),
+    },
+    ...(snapshot.intro !== undefined ? { intro: snapshot.intro } : {}),
+    steps: snapshot.steps.map((step) => ({
+      id: step.id,
+      groupId: step.groupId,
+      groupMode: step.groupMode,
+      title: step.title,
+      description: step.description,
+      phase: step.phase,
+      ...(step.errorMessage !== undefined ? { errorMessage: step.errorMessage } : {}),
+      ...(step.action
+        ? {
+            action:
+              step.action.kind === 'inline_form'
+                ? {
+                    id: step.action.id,
+                    kind: step.action.kind,
+                    form: {
+                      fields: [
+                        {
+                          id: step.action.form.fields[0].id,
+                          type: step.action.form.fields[0].type,
+                          label: step.action.form.fields[0].label,
+                          ...(step.action.form.fields[0].description !== undefined
+                            ? { description: step.action.form.fields[0].description }
+                            : {}),
+                          ...(step.action.form.fields[0].placeholder !== undefined
+                            ? { placeholder: step.action.form.fields[0].placeholder }
+                            : {}),
+                          required: step.action.form.fields[0].required,
+                          maxLength: step.action.form.fields[0].maxLength,
+                        },
+                      ],
+                    },
+                  }
+                : {
+                    id: step.action.id,
+                    kind: step.action.kind,
+                  },
+          }
+        : {}),
+    })),
+  };
+}
+
+/**
+ * Preserve non-plugin interactions by identity while projecting plugin setup
+ * snapshots at a remote transport boundary.
+ */
+export function sanitizeGhostSetupRequestForRemote<T>(request: T): T {
+  if (
+    !request ||
+    typeof request !== 'object' ||
+    (request as { kind?: unknown }).kind !== 'plugin_setup'
+  ) {
+    return request;
+  }
+  return sanitizeGhostSetupSnapshotForRemote(
+    request as unknown as GhostSetupInteractionSnapshot,
+  ) as T;
+}
+
+export function projectPendingInteractionsForRemote<T extends { request: unknown }>(
+  pending: T[],
+  remote: boolean,
+): T[] {
+  if (!remote) return pending;
+  return pending.map((entry) => ({
+    ...entry,
+    request: sanitizeGhostSetupRequestForRemote(entry.request),
+  }));
 }
 
 export function parseGhostSetupInteractionCommand(

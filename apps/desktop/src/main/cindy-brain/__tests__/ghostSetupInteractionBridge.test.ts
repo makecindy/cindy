@@ -6,6 +6,9 @@ import {
   parseGhostSetupInlineSubmit,
   parseGhostSetupInlineSubmitRequest,
   parseGhostSetupInteractionCommand,
+  projectPendingInteractionsForRemote,
+  sanitizeGhostSetupRequestForRemote,
+  sanitizeGhostSetupSnapshotForRemote,
   type GhostSetupInteractionSnapshot,
 } from '../ghostSetupInteractionBridge';
 
@@ -163,6 +166,153 @@ describe('GhostSetupInteractionBridge', () => {
       value: 'test-secret-value',
     });
     expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an inline submission payload is malformed', () => {
+    const logger = { warn: vi.fn() };
+    const onInlineSubmit = vi.fn();
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn(), logger });
+    bridge.open('session-1', snapshot(), vi.fn(), onInlineSubmit);
+
+    expect(bridge.submitInline('request-1', { value: 'missing action metadata' })).toBe(false);
+    expect(onInlineSubmit).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'plugin setup interaction received invalid inline submission',
+      { requestId: 'request-1' },
+    );
+  });
+
+  it('fails closed when the pending interaction has no inline submit callback', () => {
+    const logger = { warn: vi.fn() };
+    const bridge = new GhostSetupInteractionBridge({ broadcast: vi.fn(), logger });
+    bridge.open('session-1', snapshot(), vi.fn());
+
+    expect(
+      bridge.submitInline('request-1', {
+        actionId: 'inline_form:opaque',
+        expectedRevision: 1,
+        value: 'secret',
+      }),
+    ).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'plugin setup interaction received invalid inline submission',
+      { requestId: 'request-1' },
+    );
+  });
+});
+
+describe('sanitizeGhostSetupSnapshotForRemote', () => {
+  it('allowlists inline form fields without mutating the local Desktop snapshot', () => {
+    const local: GhostSetupInteractionSnapshot = {
+      ...snapshot(),
+      intro: 'Configure access',
+      steps: [
+        {
+          ...snapshot().steps[0],
+          action: {
+            id: 'inline_form:opaque',
+            kind: 'inline_form',
+            form: {
+              fields: [
+                {
+                  id: 'value',
+                  type: 'secret',
+                  label: 'API key',
+                  description: 'Stored locally',
+                  placeholder: 'Paste key',
+                  externalLink: { url: 'https://desktop-only.example/keys' },
+                  required: true,
+                  maxLength: 4096,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    };
+
+    const remote = sanitizeGhostSetupSnapshotForRemote(local);
+
+    expect(remote).not.toBe(local);
+    expect(remote.steps[0].action).toEqual({
+      id: 'inline_form:opaque',
+      kind: 'inline_form',
+      form: {
+        fields: [
+          {
+            id: 'value',
+            type: 'secret',
+            label: 'API key',
+            description: 'Stored locally',
+            placeholder: 'Paste key',
+            required: true,
+            maxLength: 4096,
+          },
+        ],
+      },
+    });
+    expect(
+      local.steps[0].action?.kind === 'inline_form'
+        ? local.steps[0].action.form.fields[0].externalLink
+        : undefined,
+    ).toEqual({ url: 'https://desktop-only.example/keys' });
+  });
+
+  it('preserves non-plugin interaction requests by identity', () => {
+    const permission = { kind: 'permission', requestId: 'permission-1' };
+    expect(sanitizeGhostSetupRequestForRemote(permission)).toBe(permission);
+  });
+
+  it('projects pending rebuilds only for a remote device-link caller', () => {
+    const localSetup = {
+      request: {
+        ...snapshot(),
+        steps: [
+          {
+            ...snapshot().steps[0],
+            action: {
+              id: 'inline_form:opaque',
+              kind: 'inline_form' as const,
+              form: {
+                fields: [
+                  {
+                    id: 'value' as const,
+                    type: 'secret' as const,
+                    label: 'API key',
+                    externalLink: { url: 'https://desktop-only.example/keys' },
+                    required: true as const,
+                    maxLength: 4096,
+                  },
+                ] as [
+                  {
+                    id: 'value';
+                    type: 'secret';
+                    label: string;
+                    externalLink: { url: string };
+                    required: true;
+                    maxLength: number;
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    };
+    const permission = { request: { kind: 'permission', requestId: 'permission-1' } };
+    const pending = [localSetup, permission];
+
+    const local = projectPendingInteractionsForRemote(pending, false);
+    expect(local).toBe(pending);
+    expect(local[0].request).toBe(localSetup.request);
+
+    const remote = projectPendingInteractionsForRemote(pending, true);
+    expect(remote).not.toBe(pending);
+    expect(JSON.stringify(remote[0])).not.toContain('desktop-only.example');
+    expect(remote[1].request).toBe(permission.request);
+    expect(localSetup.request.steps[0].action.form.fields[0].externalLink).toEqual({
+      url: 'https://desktop-only.example/keys',
+    });
   });
 });
 
