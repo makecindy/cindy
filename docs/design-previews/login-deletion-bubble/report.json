@@ -3,9 +3,9 @@
   "toolVersion": "qa-hifi-demo@2026-07-25-p0-hardening",
   "demo": "login-deletion-bubble",
   "inputHashes": {
-    "spec.json": "a0ed363979779db5bd3f7218cc621e29e0d6180593d58e944b5107ac2c42f605",
-    "truth.json": "9917347e3fc667dbfcbddffa88b92a12e7e4ff49aeb8b1194db115481a2f34b2",
-    "index.html": "0ff4634f68b9b324e61af7b6178059ce11f2704f6f2f9b66c2af42e58553fa9f",
+    "spec.json": "e4bb08a4d264f5d155af19db89b54eef88b0fc38b76fbbd48ef4358c048938b6",
+    "truth.json": "1e425070aa31a4bfc9c7b1444c675280ceea505987ee3aae0391c5bacd76556b",
+    "index.html": "25e8c68e55bb154a00515cd4af2a0dd423f6c8119349e61cc8dec066d119a8d2",
     "baselines": {
       "declared": [],
       "files": []
@@ -555,5 +555,5 @@
     "failures": [],
     "cases": []
   },
-  "generatedAt": "2026-07-25T21:46:24.551Z"
+  "generatedAt": "2026-07-25T22:45:45.657Z"
 }

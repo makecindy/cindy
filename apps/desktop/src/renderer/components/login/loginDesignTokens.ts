@@ -38,6 +38,31 @@ export const LOGIN_GROUP = {
 } as const;
 
 /**
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集;桌面实例 679:1172 落位于帧 678:750)。
+ *
+ * ⚠ 全部数值是 **1819×2098 设计画布单位(2x 稿)**,不是 CSS px——渲染时与登录组同乘
+ * `PANEL_FIXED_SCALE`(=0.5),屏幕上得到宽 335 / 顶距 36 CSS px,与登录面板
+ * (680×0.5=340)基本同宽,与设计稿里 670 vs 680 的关系一致。
+ * (2026-07-26 修正:初版把这些设计单位当 CSS px 直接用,气泡在屏幕上宽了整一倍。)
+ *
+ * 内部几何由组件子元素坐标反算自洽:标题 text @(20,20) h=23、正文 text @(20,48) h=23
+ * → padding 20、标题↔正文 5、行高 23、底距 20,无钮变体总高 91 = 20+23+5+23+20。
+ */
+export const LOGIN_DELETION_BUBBLE = {
+  /** 距窗口顶固定间距(顶对齐,不随窗口高度变化;figma y=72) */
+  top: 72,
+  width: 670,
+  radius: 22,
+  padding: 20,
+  font: 20,
+  lineHeight: 23,
+  titleBodyGap: 5,
+  bodyLinkGap: 22,
+  /** 「我知道了」热区上下 padding(视觉间距由等量负 margin 抵消) */
+  linkHitPadding: 11,
+} as const;
+
+/**
  * 登录面板下方的本地模式操作区。
  *
  * 这块区域不再脱离登录 stage 固定在窗口底部：stage 会为它预留空间，避免小窗口
