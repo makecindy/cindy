@@ -9,8 +9,8 @@
  * Lifecycle (用户明确要求, 比 refcount 模型更简单):
  *   - 懒启动: 第一个 acquire/subscribeThread 触发 spawn + initialize
  *   - server 一旦起来, 跟 CodexAgent (= app 进程) 同生命周期, **不随 session 数升降**
- *   - session.close → subscription.release(): 仅从路由表删掉 + 不再收 notification
- *     server 端 thread state 仍在内存中 (server 自己 GC, 我们不主动 thread/unsubscribe — Phase 2 再优化)
+ *   - session.close → subscription.release(): 删除本地路由并发送 thread/unsubscribe,
+ *     释放该 thread 的 live runtime；共享 app-server 继续服务其他 session
  *   - app.before-quit → 上层显式调 host.shutdown() (Windows 子进程不会随父进程死)
  *
  * 真值参考:
@@ -519,8 +519,8 @@ export class AppServerHost {
   // ── 订阅 / 路由 ───────────────────────────────────────────────────────────
 
   /**
- * 为 thread_id 注册一组 handler。release() 先移除本地路由，再通知 app-server
- * 解除这个 thread 的 live subscription；rollout/history 不会被 archive 或 delete。
+   * 为 thread_id 注册一组 handler。release() 先移除本地路由，再通知 app-server
+   * 解除这个 thread 的 live subscription；rollout/history 不会被 archive 或 delete。
    * 如果 thread/started (或更早的 notification) 在 subscribe 之前就到了, drain
    * buffered 队列里匹配的项, 按到达顺序 dispatch — 保证不丢事件。
    *
