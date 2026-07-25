@@ -318,14 +318,6 @@ registerColor('confirm-shadow', {
   light: 'var(--shadow-soft-panel)',
   dark: 'var(--shadow-soft-panel)',
 }, 'confirm-dialog');
-registerColor('mobile-download-qr-shadow', {
-  light: 'var(--shadow-soft-panel)',
-  dark: 'var(--shadow-soft-panel)',
-}, 'Mobile download QR — resting depth on the sanctioned brand surface');
-registerColor('mobile-download-qr-shadow-active', {
-  light: 'var(--shadow-menu)',
-  dark: 'var(--shadow-menu)',
-}, 'Mobile download QR — pointer-tilt depth on the sanctioned brand surface');
 registerColor('confirm-title', {
   light: '#171717',
   dark: '#fafafa',

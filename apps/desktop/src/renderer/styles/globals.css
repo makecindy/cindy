@@ -57,9 +57,6 @@
     --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
-    /* 移动端下载品牌卡的缓慢边缘折射周期。产品要求它常驻流动；实现只旋转
-       HTML wrapper，避免逐帧改背景或触发 React render。 */
-    --mobile-download-edge-cycle: 20s;
   }
 
   body {
@@ -198,55 +195,14 @@
   }
 }
 
-/* 移动端下载卡：官方 App icon 在 1px 裁切边缘内缓慢旋转，形成与卡片一体的
-   红蓝折射。常驻动画仅触碰 HTML wrapper 的 transform；鼠标跟随直接写同一
-   外卡 transform，不进入 React render loop。 */
-@keyframes mobile-download-edge-turn {
-  from {
-    transform: rotate(0deg) scale(1.45);
-  }
-  to {
-    transform: rotate(360deg) scale(1.45);
-  }
-}
-
+/* 移动端下载卡：DESIGN.md §7 的扁平中性处理 —— 不加阴影、不放装饰性品牌
+   图形、不做常驻动效。唯一保留的动效是设备列表刷新驱动的 228px ↔ 132px 尺寸
+   补间，属于 §14.4 的 size change 档（全局 reduced-motion 的
+   `* { transition: none }` 已覆盖它，无需单独登记白名单）。 */
 .mobile-download-qr-card {
-  transform: perspective(760px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1);
-  transform-style: preserve-3d;
-  box-shadow: var(--mobile-download-qr-shadow);
-  isolation: isolate;
-  transition:
-    width var(--motion-base) var(--motion-ease-move),
-    height var(--motion-base) var(--motion-ease-move),
-    transform var(--motion-base) var(--motion-ease-move),
-    box-shadow var(--motion-fast) var(--motion-ease-move);
-}
-
-/* 鼠标跟随时 transform 必须逐帧贴住指针,不能再排队过渡;但 width/height 由
-   设备列表刷新驱动,指针停在卡上时也要照常补间,否则 228px ↔ 132px 会瞬跳。 */
-.mobile-download-qr-card[data-pointer-active='true'] {
-  box-shadow: var(--mobile-download-qr-shadow-active);
   transition:
     width var(--motion-base) var(--motion-ease-move),
     height var(--motion-base) var(--motion-ease-move);
-}
-
-/* 只转 transform,不挂 filter/blur:滤镜会让这层每帧重新走一遍 GPU 滤镜通道,
-   而纯 transform 旋转能整层交给合成器,常驻动画不占 CPU。 */
-.mobile-download-qr-edge {
-  animation: mobile-download-edge-turn var(--mobile-download-edge-cycle) linear infinite;
-  will-change: transform;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mobile-download-qr-card {
-    transform: none !important;
-  }
-
-  .mobile-download-qr-edge {
-    animation: none;
-    transform: rotate(18deg) scale(1.45);
-  }
 }
 
 /* 按 <html lang> 切换 CJK 字体栈 —— 同一汉字在中/日/韩字体中字形不同

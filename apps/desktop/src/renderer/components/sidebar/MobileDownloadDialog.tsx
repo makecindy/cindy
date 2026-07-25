@@ -1,12 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-  type RefObject,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Monitor, QrCode, Settings2, Smartphone, X } from 'lucide-react';
 import * as QRCode from 'qrcode';
@@ -145,8 +138,9 @@ function platformLabel(platform: string | null): string {
 
 /**
  * Desktop promotion surface for the regional Cindy mobile download page.
- * The QR edge reuses the official app artwork, so its brand colors stay
- * coupled to the asset instead of introducing component-level color values.
+ * The card stays flat per DESIGN.md §7 — no shadow, no decorative brand
+ * artwork, no persistent motion; only the linked/onboarding size change
+ * animates (§14.4 size tier).
  */
 export function MobileDownloadDialog({
   open,
@@ -161,39 +155,13 @@ export function MobileDownloadDialog({
   const [qrError, setQrError] = useState(false);
   const [remoteSnapshot, setRemoteSnapshot] = useState<MobileRemoteSnapshot | null>(null);
   const [remoteStatusError, setRemoteStatusError] = useState(false);
-  const qrCardRef = useRef<HTMLButtonElement>(null);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
   const remoteActionRef = useRef<HTMLButtonElement>(null);
   const closeActionRef = useRef<HTMLButtonElement>(null);
-  const qrPointerFrame = useRef<number | null>(null);
-  const pendingQrTransform = useRef<string | null>(null);
   const downloadUrl = useMemo(
     () => resolveMobileDownloadUrl(window.electronAPI.clientEndpoints.websiteUrl),
     [],
   );
-
-  useEffect(
-    () => () => {
-      if (qrPointerFrame.current !== null) {
-        cancelAnimationFrame(qrPointerFrame.current);
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (open) return;
-
-    pendingQrTransform.current = null;
-    if (qrPointerFrame.current !== null) {
-      cancelAnimationFrame(qrPointerFrame.current);
-      qrPointerFrame.current = null;
-    }
-    if (qrCardRef.current) {
-      qrCardRef.current.dataset.pointerActive = 'false';
-      qrCardRef.current.style.transform = '';
-    }
-  }, [open]);
 
   // Prepare the QR before the first click so opening the dialog never waits on
   // canvas encoding. The module-level cache keeps this a once-per-endpoint cost.
@@ -287,36 +255,6 @@ export function MobileDownloadDialog({
       offConnectionIssue();
     };
   }, [remoteAvailable]);
-
-  const handleQrPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (
-      event.pointerType !== 'mouse' ||
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    ) {
-      return;
-    }
-
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100));
-    const y = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100));
-    pendingQrTransform.current = `perspective(760px) rotateX(${(50 - y) * 0.08}deg) rotateY(${(x - 50) * 0.08}deg) scale3d(1.018, 1.018, 1.018)`;
-    event.currentTarget.dataset.pointerActive = 'true';
-
-    if (qrPointerFrame.current === null) {
-      qrPointerFrame.current = requestAnimationFrame(() => {
-        qrPointerFrame.current = null;
-        if (qrCardRef.current && pendingQrTransform.current) {
-          qrCardRef.current.style.transform = pendingQrTransform.current;
-        }
-      });
-    }
-  };
-
-  const resetQrPointer = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    pendingQrTransform.current = null;
-    event.currentTarget.dataset.pointerActive = 'false';
-    event.currentTarget.style.transform = '';
-  };
 
   const remotePresentation = remoteSnapshot
     ? resolveMobileRemotePresentation(remoteSnapshot)
@@ -412,10 +350,7 @@ export function MobileDownloadDialog({
               )}
             >
               <button
-                ref={(node) => {
-                  qrCardRef.current = node;
-                  primaryActionRef.current = node;
-                }}
+                ref={primaryActionRef}
                 type="button"
                 disabled={!downloadUrl}
                 data-testid="mobile-download-qr-card"
@@ -423,6 +358,7 @@ export function MobileDownloadDialog({
                 aria-label={t('sidebar.mobileDownload.openPage')}
                 className={cn(
                   'mobile-download-qr-card relative shrink-0 overflow-hidden rounded-xl',
+                  'border border-[var(--border-default)]',
                   hasLinkedMobile ? 'h-[132px] w-[132px]' : 'h-[228px] w-[228px]',
                   'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                   'disabled:cursor-not-allowed disabled:opacity-60',
@@ -430,25 +366,11 @@ export function MobileDownloadDialog({
                 onClick={() => {
                   if (downloadUrl) void window.electronAPI.openExternal(downloadUrl);
                 }}
-                onPointerMove={handleQrPointerMove}
-                onPointerLeave={resetQrPointer}
               >
                 <span
-                  aria-hidden="true"
-                  className="mobile-download-qr-edge pointer-events-none absolute inset-[-45%]"
-                >
-                  <img
-                    src={cindyIconUrl}
-                    alt=""
-                    className="h-full w-full select-none object-cover"
-                    draggable={false}
-                  />
-                </span>
-                {/* 2px:1px 时红蓝几乎看不见，3px 起就压成相框边了。 */}
-                <span
                   className={cn(
-                    'absolute inset-[2px] flex items-center justify-center overflow-hidden',
-                    'rounded-[10px] bg-[var(--confirm-bg)]',
+                    'absolute inset-0 flex items-center justify-center overflow-hidden',
+                    'rounded-[11px] bg-[var(--confirm-bg)]',
                   )}
                   aria-live="polite"
                 >
