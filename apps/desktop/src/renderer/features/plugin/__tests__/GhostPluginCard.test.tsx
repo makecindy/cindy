@@ -58,6 +58,56 @@ describe('GhostPluginCard', () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
+  it('surfaces the market update state with a badge, target version, and direct action', () => {
+    const onAction = vi.fn();
+    const onUpdate = vi.fn();
+    render(
+      <GhostPluginCard
+        item={installedPlugin}
+        onSelect={vi.fn()}
+        onAction={onAction}
+        onUpdate={onUpdate}
+        updateVersion="1.1.1"
+      />,
+    );
+
+    expect(screen.getByText('settings.ghosts.market.updateAvailable')).toBeTruthy();
+    // Metadata keeps only the installed version; the pending version stays out of
+    // the crowded metadata row (surfaced by the badge and the detail header instead).
+    expect(screen.getByText('v1.0.0')).toBeTruthy();
+    expect(screen.queryByText('v1.1.1')).toBeNull();
+
+    const updateButton = screen.getByRole('button', {
+      name: 'settings.ghosts.market.updateAria',
+    });
+    fireEvent.click(updateButton);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onAction).not.toHaveBeenCalled();
+    // The direct Use entry is replaced by Update while a new release is pending.
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.useAria' })).toBeNull();
+  });
+
+  it('keeps the update action interactive while Use is locked, and blocks it when busy', () => {
+    const onUpdate = vi.fn();
+    render(
+      <GhostPluginCard
+        item={{ ...installedPlugin, enabled: false, canUse: false }}
+        onSelect={vi.fn()}
+        onAction={vi.fn()}
+        onUpdate={onUpdate}
+        updateVersion="1.1.1"
+        updateBusy
+      />,
+    );
+
+    const updateButton = screen.getByRole('button', {
+      name: 'settings.ghosts.market.updateAria',
+    }) as HTMLButtonElement;
+    expect(updateButton.disabled).toBe(true);
+    fireEvent.click(updateButton);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it('disables Use when an installed plugin has no command', () => {
     render(
       <GhostPluginCard

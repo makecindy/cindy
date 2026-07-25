@@ -72,7 +72,11 @@ import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
 type PluginPresentationFilter = 'all' | PluginPresentationOrigin;
-type PresentedGhostPluginItem = GhostPluginListItem & { origin: PluginPresentationOrigin };
+type PresentedGhostPluginItem = GhostPluginListItem & {
+  origin: PluginPresentationOrigin;
+  /** 市场存在更新时的市场记录;列表卡片据此显示更新徽标与直达入口。 */
+  marketUpdate: PluginMarketItem | null;
+};
 
 const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
   'all',
@@ -218,10 +222,20 @@ export function GhostPluginPage() {
             ghost.manifest.id !== 'cindy-mivo' ||
             !ghosts.some((candidate) => candidate.manifest.id === 'xd-mivo'),
         )
-        .map((ghost) => ({
-          ...toGhostPluginListItem(ghost),
-          origin: pluginPresentationOrigin(marketByGhostId.get(ghost.manifest.id)),
-        })),
+        .map((ghost) => {
+          const marketItem = marketByGhostId.get(ghost.manifest.id) ?? null;
+          return {
+            ...toGhostPluginListItem(ghost),
+            origin: pluginPresentationOrigin(marketItem),
+            // 迁移账本(legacy-unresolved)会让 main 把同版本 release 也判成
+            // update-available;列表入口只对版本号确实变化的更新亮牌。
+            marketUpdate:
+              marketItem?.installState === 'update-available' &&
+              marketItem.version !== ghost.manifest.version
+                ? marketItem
+                : null,
+          };
+        }),
     [ghosts, marketByGhostId],
   );
   const installedItems = useMemo(
@@ -344,22 +358,24 @@ export function GhostPluginPage() {
     [ghosts, t],
   );
 
-  const handleUpdate = useCallback(async () => {
-    if (!selectedDetail) return;
-    if (selectedMarketUpdate) {
-      setMarketBusyId(selectedMarketUpdate.pluginId);
+  // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
+  // 权限 diff,经用户确认后才安装,不做静默升级。
+  const handleMarketUpdate = useCallback(
+    async (ghostId: string) => {
+      const marketItem = marketByGhostId.get(ghostId);
+      if (!marketItem || marketItem.installState !== 'update-available') return;
+      const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
+      setMarketBusyId(marketItem.pluginId);
       try {
-        const next = await window.electronAPI.pluginMarket.detail(
-          selectedMarketUpdate.pluginId,
-        );
+        const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         const diff = diffGhostPermissionItems(
-          selectedGhost?.manifest ?? next.manifest,
+          installedGhost?.manifest ?? next.manifest,
           next.manifest,
         );
         const approved = await confirm({
           title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
           description: t('settings.ghosts.updateConfirm.body', {
-            from: selectedGhost?.manifest.version ?? selectedDetail.version,
+            from: installedGhost?.manifest.version ?? next.version,
             to: next.version,
           }),
           content: <GhostPermissionDiffView diff={diff} />,
@@ -368,10 +384,9 @@ export function GhostPluginPage() {
           cancelText: t('settings.ghosts.updateConfirm.cancel'),
         });
         if (!approved) return;
-        const result = await window.electronAPI.pluginMarket.install(
-          selectedMarketUpdate.pluginId,
-          { allowPermissionExpansion: diff.added.length > 0 },
-        );
+        const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
+          allowPermissionExpansion: diff.added.length > 0,
+        });
         toast.success(
           t('settings.ghosts.toast.updated', {
             name: result.ghost.manifest.name,
@@ -384,18 +399,18 @@ export function GhostPluginPage() {
       } finally {
         setMarketBusyId(null);
       }
+    },
+    [confirm, ghosts, marketByGhostId, refreshMarket, t],
+  );
+
+  const handleUpdate = useCallback(async () => {
+    if (!selectedDetail) return;
+    if (selectedMarketUpdate) {
+      await handleMarketUpdate(selectedDetail.id);
       return;
     }
     await pickAndUpdateGhost(selectedDetail.id, { t, confirm, confirmWithCheckbox });
-  }, [
-    confirm,
-    confirmWithCheckbox,
-    refreshMarket,
-    selectedDetail,
-    selectedGhost,
-    selectedMarketUpdate,
-    t,
-  ]);
+  }, [confirm, confirmWithCheckbox, handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
 
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
@@ -618,6 +633,14 @@ export function GhostPluginPage() {
             ? t('settings.ghosts.market.update')
             : undefined
         }
+        updateVersion={
+          selectedMarketUpdate && selectedMarketUpdate.version !== selectedDetail.version
+            ? selectedMarketUpdate.version
+            : undefined
+        }
+        updateBusy={
+          selectedMarketUpdate !== null && marketBusyId === selectedMarketUpdate.pluginId
+        }
         onUninstall={() => void handleUninstall()}
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
       />
@@ -810,6 +833,13 @@ export function GhostPluginPage() {
                     sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
                     onSelect={() => setSelectedId(item.id)}
                     onAction={() => void handleUseGhost(item.id)}
+                    updateVersion={item.marketUpdate?.version}
+                    updateBusy={
+                      item.marketUpdate !== null && marketBusyId === item.marketUpdate.pluginId
+                    }
+                    onUpdate={
+                      item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
+                    }
                     effectiveEnabled={effectiveEnabled(item.id, item.enabled)}
                     toggleDisabled={scopeDir !== null && !item.enabled}
                     onToggle={(enabled) => void handleToggle(item.id, enabled)}
@@ -1003,6 +1033,9 @@ export function GhostPluginCard({
   sourceLabel,
   onSelect,
   onAction,
+  onUpdate,
+  updateVersion,
+  updateBusy = false,
   onToggle,
   effectiveEnabled,
   toggleDisabled = false,
@@ -1011,6 +1044,10 @@ export function GhostPluginCard({
   sourceLabel?: string;
   onSelect: () => void;
   onAction: () => void;
+  /** 市场存在新版本时的直达更新入口;与 updateVersion 同时提供。 */
+  onUpdate?: () => void;
+  updateVersion?: string;
+  updateBusy?: boolean;
   onToggle?: (enabled: boolean) => void;
   effectiveEnabled?: boolean;
   toggleDisabled?: boolean;
@@ -1035,8 +1072,15 @@ export function GhostPluginCard({
       >
         <GhostPluginIcon iconDataUrl={item.iconDataUrl} iconId={item.id} iconName={item.name} />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
-          <span className="truncate text-15 font-medium text-[var(--text-primary)]">
-            {item.name}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-15 font-medium text-[var(--text-primary)]">
+              {item.name}
+            </span>
+            {updateVersion ? (
+              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium leading-4 text-[var(--text-secondary)]">
+                {t('settings.ghosts.market.updateAvailable')}
+              </span>
+            ) : null}
           </span>
           <span className="mt-1 flex min-w-0 items-center gap-1.5 text-11 text-[var(--text-tertiary)]">
             {sourceLabel ? (
@@ -1063,21 +1107,39 @@ export function GhostPluginCard({
             aria-label={t('settings.ghosts.enableAria', { name: item.name })}
           />
         ) : null}
-        <button
-          type="button"
-          onClick={onAction}
-          disabled={!(effectiveEnabled ?? item.enabled) || !item.canUse}
-          className={cn(
-            'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
-            'transition-[background-color,border-color,transform,opacity] duration-150',
-            'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-          )}
-          aria-label={t('settings.ghosts.page.useAria', { name: item.name })}
-        >
-          {t('settings.ghosts.page.useAction')}
-        </button>
+        {updateVersion && onUpdate ? (
+          <button
+            type="button"
+            onClick={onUpdate}
+            disabled={updateBusy}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
+              'transition-[background-color,border-color,transform,opacity] duration-150',
+              'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+            )}
+            aria-label={t('settings.ghosts.market.updateAria', { name: item.name })}
+          >
+            {t('settings.ghosts.market.updateAction')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onAction}
+            disabled={!(effectiveEnabled ?? item.enabled) || !item.canUse}
+            className={cn(
+              'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
+              'transition-[background-color,border-color,transform,opacity] duration-150',
+              'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
+            )}
+            aria-label={t('settings.ghosts.page.useAria', { name: item.name })}
+          >
+            {t('settings.ghosts.page.useAction')}
+          </button>
+        )}
       </div>
     </article>
   );

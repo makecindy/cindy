@@ -67,6 +67,9 @@ interface GhostPluginDetailViewProps {
   onUse: () => void;
   onUpdate: () => void;
   updateLabel?: string;
+  /** 市场存在新版本时的目标版本号;设置后头部展示显著的更新按钮。 */
+  updateVersion?: string;
+  updateBusy?: boolean;
   onUninstall: () => void;
   toggleDisabled: boolean;
 }
@@ -123,6 +126,8 @@ export function GhostPluginDetailView({
   onUse,
   onUpdate,
   updateLabel,
+  updateVersion,
+  updateBusy = false,
   onUninstall,
   toggleDisabled,
 }: GhostPluginDetailViewProps) {
@@ -210,6 +215,21 @@ export function GhostPluginDetailView({
               className="plugin-detail-actions flex shrink-0 items-center gap-3"
               style={WINDOW_NO_DRAG_STYLE}
             >
+              {updateVersion ? (
+                <button
+                  type="button"
+                  onClick={onUpdate}
+                  disabled={updateBusy}
+                  className={cn(
+                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
+                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+                  )}
+                >
+                  {t('settings.ghosts.market.updateTo', { version: updateVersion })}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={onUse}
