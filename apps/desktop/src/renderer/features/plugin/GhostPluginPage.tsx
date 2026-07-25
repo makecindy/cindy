@@ -108,17 +108,20 @@ export function GhostPluginPage() {
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
   const [marketBusyId, setMarketBusyId] = useState<string | null>(null);
   // 市场操作的同步互斥锁。React state 在提交前有窗口期,快速连点会让多个回调
-  // 都读到 null;ref 先到先得,state 只驱动按钮禁用等 UI 展示。
-  const marketBusyLockRef = useRef<string | null>(null);
+  // 都读到 null;ref 先到先得,state 只驱动按钮禁用等 UI 展示。每次占锁都返回
+  // 唯一 lease,避免账号/模式切换后的旧异步流程误释放新流程持有的同 pluginId 锁。
+  const marketBusyLockRef = useRef<{ pluginId: string } | null>(null);
   const acquireMarketBusy = useCallback((pluginId: string) => {
-    if (marketBusyLockRef.current !== null) return false;
-    marketBusyLockRef.current = pluginId;
+    if (marketBusyLockRef.current !== null) return null;
+    const lease = { pluginId };
+    marketBusyLockRef.current = lease;
     setMarketBusyId(pluginId);
-    return true;
+    return lease;
   }, []);
-  const releaseMarketBusy = useCallback((pluginId: string) => {
-    if (marketBusyLockRef.current === pluginId) marketBusyLockRef.current = null;
-    setMarketBusyId((current) => (current === pluginId ? null : current));
+  const releaseMarketBusy = useCallback((lease: { pluginId: string }) => {
+    if (marketBusyLockRef.current !== lease) return;
+    marketBusyLockRef.current = null;
+    setMarketBusyId((current) => (current === lease.pluginId ? null : current));
   }, []);
   const marketRefreshRequestRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
@@ -380,7 +383,8 @@ export function GhostPluginPage() {
       if (!marketItem || marketItem.installState !== 'update-available') return;
       const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
       // 列表每张卡都有直达入口,同步互斥防止并发更新互相覆盖忙碌状态。
-      if (!acquireMarketBusy(marketItem.pluginId)) return;
+      const marketBusyLease = acquireMarketBusy(marketItem.pluginId);
+      if (!marketBusyLease) return;
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         const diff = diffGhostPermissionItems(
@@ -412,7 +416,7 @@ export function GhostPluginPage() {
       } catch (error) {
         toast.error(t(pluginMarketErrorKey(error)));
       } finally {
-        releaseMarketBusy(marketItem.pluginId);
+        releaseMarketBusy(marketBusyLease);
       }
     },
     [acquireMarketBusy, confirm, ghosts, marketByGhostId, refreshMarket, releaseMarketBusy, t],
@@ -539,7 +543,8 @@ export function GhostPluginPage() {
   const handleSelectMarket = useCallback(
     async (pluginId: string) => {
       // 与 handleMarketUpdate 共用同一互斥锁:更新进行中不叠加其它市场操作。
-      if (!acquireMarketBusy(pluginId)) return;
+      const marketBusyLease = acquireMarketBusy(pluginId);
+      if (!marketBusyLease) return;
       const requestId = ++marketDetailRequestRef.current;
       try {
         const detail = await window.electronAPI.pluginMarket.detail(pluginId);
@@ -549,7 +554,7 @@ export function GhostPluginPage() {
           toast.error(t(pluginMarketErrorKey(error)));
         }
       } finally {
-        releaseMarketBusy(pluginId);
+        releaseMarketBusy(marketBusyLease);
       }
     },
     [acquireMarketBusy, releaseMarketBusy, t],
@@ -600,7 +605,8 @@ export function GhostPluginPage() {
       autoFocusConfirm: true,
     });
     if (!confirmed) return;
-    if (!acquireMarketBusy(marketDetail.pluginId)) return;
+    const marketBusyLease = acquireMarketBusy(marketDetail.pluginId);
+    if (!marketBusyLease) return;
     try {
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
       toast.success(
@@ -614,7 +620,7 @@ export function GhostPluginPage() {
     } catch (error) {
       toast.error(t(pluginMarketErrorKey(error)));
     } finally {
-      releaseMarketBusy(marketDetail.pluginId);
+      releaseMarketBusy(marketBusyLease);
     }
   }, [acquireMarketBusy, confirm, marketDetail, refreshMarket, releaseMarketBusy, t]);
 
@@ -865,7 +871,7 @@ export function GhostPluginPage() {
                   <MarketPluginCard
                     key={item.pluginId}
                     item={item}
-                    busy={marketBusyId === item.pluginId}
+                    busy={marketBusyId !== null}
                     onSelect={() => void handleSelectMarket(item.pluginId)}
                     onIconLoadError={handleMarketIconLoadError}
                   />
