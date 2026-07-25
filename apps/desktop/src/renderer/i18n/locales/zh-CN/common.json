@@ -3670,6 +3670,7 @@
     },
     "pluginSetup": {
       "title": "{{name}} 设置",
+      "assessmentReadFailed": "无法读取插件配置状态。",
       "chooseOne": "选择一种配置方式",
       "restoreAria": "展开 {{name}} 设置",
       "minimizeAria": "收起 {{name}} 设置",

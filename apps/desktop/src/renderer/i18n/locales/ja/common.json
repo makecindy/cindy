@@ -3670,6 +3670,7 @@
     },
     "pluginSetup": {
       "title": "{{name}} の設定",
+      "assessmentReadFailed": "プラグインの設定状態を読み取れませんでした。",
       "chooseOne": "設定方法を1つ選択してください",
       "restoreAria": "{{name}} の設定を展開",
       "minimizeAria": "{{name}} の設定を折りたたむ",

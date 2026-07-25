@@ -3671,6 +3671,7 @@
     },
     "pluginSetup": {
       "title": "{{name}} Settings",
+      "assessmentReadFailed": "Couldn't read the plugin setup status.",
       "chooseOne": "Choose one setup method",
       "restoreAria": "Restore {{name}} settings",
       "minimizeAria": "Minimize {{name}} settings",

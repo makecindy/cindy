@@ -677,10 +677,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         .list()
         .find((g) => g.manifest.id === ghostId);
       if (!refreshed || !isGhostAvailableForActiveSession(ghostId)) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
       }
       if (!refreshed.enabled) {
-        return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+        return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
       }
       if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
         return {
@@ -718,10 +718,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           .list()
           .find((g) => g.manifest.id === ghostId);
         if (!grantTarget || !isGhostAvailableForActiveSession(ghostId)) {
-          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
         }
         if (!grantTarget.enabled) {
-          return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+          return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
         }
         if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
           return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
@@ -749,10 +749,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           .list()
           .find((g) => g.manifest.id === ghostId);
         if (!postGrant || !isGhostAvailableForActiveSession(ghostId)) {
-          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
         }
         if (!postGrant.enabled) {
-          return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+          return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
         }
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {
@@ -844,10 +844,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         .list()
         .find((g) => g.manifest.id === ghostId);
       if (!preDispatch || !isGhostAvailableForActiveSession(ghostId)) {
-        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
       }
       if (!preDispatch.enabled) {
-        return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+        return { ok: false, errorCode: 'GHOST_ASLEEP', message: t('newChat.pluginSetup.targetDisabled') };
       }
       if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
         return {
@@ -872,12 +872,17 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       } catch {
         return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
       }
-      // Session-context slot: use the revalidated manifest to decide injection
+      // Session-context slot: use the revalidated manifest to decide injection.
+      // Re-read manifest after the async buildGhostSessionContext to guard against
+      // a same-ID plugin replacement removing the slot during the await.
       if (preDispatch.manifest.slots?.includes('session-context')) {
-        mergedArgs = {
-          ...mergedArgs,
-          session_context: await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir),
-        };
+        const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
+        const postCtxManifest = getGhostManager()
+          .list()
+          .find((g) => g.manifest.id === ghostId)?.manifest;
+        if (postCtxManifest?.slots?.includes('session-context')) {
+          mergedArgs = { ...mergedArgs, session_context: ctx };
+        }
       }
       // ── 卡槽③:callId 在这里预铸并登记给卡片服务 ────────────────────
       // 时序契约:register(供片窗开)→ dispatch(意识拿到同一 callId,执行
