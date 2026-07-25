@@ -211,6 +211,7 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
           ...snapshot().steps[0],
           phase: 'failed',
           errorCode: 'SAVE_FAILED',
+          errorMessage: 'provider-local-detail',
           action: {
             id: 'inline_form:opaque',
             kind: 'inline_form',
@@ -240,6 +241,7 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
       phase: 'failed',
       errorCode: 'SAVE_FAILED',
     });
+    expect(remote.steps[0]).not.toHaveProperty('errorMessage');
     expect(remote.steps[0].action).toEqual({
       id: 'inline_form:opaque',
       kind: 'inline_form',
@@ -262,6 +264,7 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
         ? local.steps[0].action.form.fields[0].externalLink
         : undefined,
     ).toEqual({ url: 'https://desktop-only.example/keys' });
+    expect(local.steps[0].errorMessage).toBe('provider-local-detail');
   });
 
   it('drops unknown error codes at the remote transport boundary', () => {

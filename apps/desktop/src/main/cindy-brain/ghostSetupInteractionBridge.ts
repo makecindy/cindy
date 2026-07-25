@@ -286,7 +286,6 @@ export function sanitizeGhostSetupSnapshotForRemote(
       description: step.description,
       phase: step.phase,
       ...(isGhostSetupErrorCode(step.errorCode) ? { errorCode: step.errorCode } : {}),
-      ...(step.errorMessage !== undefined ? { errorMessage: step.errorMessage } : {}),
       ...(step.action
         ? {
             action:
