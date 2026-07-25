@@ -7,6 +7,7 @@
 | 文档 | 类型 | 状态 | 治理/相关代码 | owner |
 |---|---|---|---|---|
 | [README.md](./README.md) | 索引 | — | `docs/` 文档目录 | — |
+| [linux-headless-host.md](./linux-headless-host.md) | 产品/技术提案 | 参考 | Linux 无界面 Agent 主机、CLI 与手机控制面 | — |
 | [product-rules/README.md](./product-rules/README.md) | 产品规则索引 | authoritative | Cindy 产品行为、体验与边界 | — |
 | [core-product-principles.md](./product-rules/core-product-principles.md) | 产品原则 | authoritative | Cindy Core、Agent、Skill、插件与多端产品边界 | — |
 | [design-rules/README.md](./design-rules/README.md) | 设计规则索引 | authoritative | Cindy UI 视觉、交互与内容设计 | — |

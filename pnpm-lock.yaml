@@ -503,6 +503,64 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@1.21.7)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  apps/headless:
+    dependencies:
+      '@cindy/anthropic-compat-proxy':
+        specifier: workspace:*
+        version: link:../../packages/anthropic-compat-proxy
+      '@cindy/auth-client':
+        specifier: workspace:*
+        version: link:../../packages/auth-client
+      '@cindy/device-link':
+        specifier: workspace:*
+        version: link:../../packages/device-link
+      '@cindy/file-browser-core':
+        specifier: workspace:*
+        version: link:../../packages/file-browser-core
+      '@cindy/maker-core':
+        specifier: workspace:*
+        version: link:../../packages/maker-core
+      '@cindy/maker-scheduler':
+        specifier: workspace:*
+        version: link:../../packages/maker-scheduler
+      '@cindy/maker-shared':
+        specifier: workspace:*
+        version: link:../../packages/maker-shared
+      '@cindy/mcps':
+        specifier: workspace:*
+        version: link:../../packages/lizi-mcps
+      '@cindy/model-providers':
+        specifier: workspace:*
+        version: link:../../packages/model-providers
+      better-sqlite3:
+        specifier: ^12.9.0
+        version: 12.11.1
+      qrcode:
+        specifier: ^1.5.4
+        version: 1.5.4
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.1
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
+      esbuild:
+        specifier: ^0.27.7
+        version: 0.27.7
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   apps/mobile:
     dependencies:
       '@cindy/auth-client':
@@ -716,6 +774,7 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   cindy-protocol/packages/slack-hook-protocol:
     devDependencies:
       '@types/node':
@@ -14133,7 +14192,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
@@ -14601,7 +14662,7 @@ snapshots:
 
   '@types/mute-stream@0.0.4':
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 25.9.5
 
   '@types/node@18.19.130':
     dependencies:

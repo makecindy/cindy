@@ -1,0 +1,47 @@
+{
+  "name": "headless",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cindy Linux headless daemon and terminal control surface",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "bin": {
+    "cindy-headless": "./src/bin/cindy-headless.ts",
+    "cindy": "./src/bin/cindy.ts",
+    "cindyctl": "./src/bin/cindyctl.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/bin/cindy-headless.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bundle": "node scripts/bundle.mjs",
+    "package:linux": "node scripts/package-linux.mjs"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@cindy/anthropic-compat-proxy": "workspace:*",
+    "@cindy/auth-client": "workspace:*",
+    "@cindy/device-link": "workspace:*",
+    "@cindy/file-browser-core": "workspace:*",
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/mcps": "workspace:*",
+    "@cindy/maker-scheduler": "workspace:*",
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/model-providers": "workspace:*",
+    "better-sqlite3": "^12.9.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "*",
+    "tsx": "^4.19.0",
+    "esbuild": "^0.27.7",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

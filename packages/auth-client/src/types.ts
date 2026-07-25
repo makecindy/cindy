@@ -50,6 +50,24 @@ export const ssoOrgDiscoverySchema = z.object({
 });
 export type SsoOrgDiscovery = z.infer<typeof ssoOrgDiscoverySchema>;
 
+/** RFC 8628-style device authorization, used by Cindy Headless for enterprise SSO. */
+export const deviceAuthorizationSchema = z.object({
+  device_code: z.string().min(32),
+  user_code: z.string().min(1),
+  verification_uri: z.string().url(),
+  verification_uri_complete: z.string().url(),
+  expires_in: z.number().int().positive(),
+  interval: z.number().int().positive(),
+});
+export type DeviceAuthorization = z.infer<typeof deviceAuthorizationSchema>;
+
+export const deviceAuthorizationTokenSchema = z.object({
+  access_token: z.string().min(1),
+  refresh_token: z.string().min(1),
+  token_type: z.literal('Bearer'),
+});
+export type DeviceAuthorizationToken = z.infer<typeof deviceAuthorizationTokenSchema>;
+
 export const loginMethodSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("email_code") }),
   z.object({

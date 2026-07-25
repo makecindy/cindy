@@ -100,6 +100,7 @@ export default {
         },
       },
     },
+    requiredUnitWorkspace('headless', 'apps/headless'),
     requiredUnitWorkspace('mobile', 'apps/mobile'),
     requiredUnitWorkspace('@cindy/anthropic-compat-proxy', 'packages/anthropic-compat-proxy'),
     requiredUnitWorkspace('@cindy/anthropic-responses-bridge', 'packages/anthropic-responses-bridge'),
