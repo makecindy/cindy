@@ -14,7 +14,8 @@
  * 纯函数、零 electron 依赖 —— index.ts 注入 argv / env / 默认 userData 目录,
  * 便于单元测试。packaged 版本一律返回"无覆写",线上零影响。
  */
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 /**
  * 沙箱名字白名单:字母数字下划线连字符、≤32。同时约束两件事——
@@ -137,8 +138,38 @@ export function shouldBlockSharedPrimaryDev(input: {
   isPackaged: boolean;
   schedulerPassive: boolean;
   isolated: boolean;
+  userDataDirOverride?: string | null;
+  defaultUserDataDir?: string;
 }): boolean {
-  return !input.isPackaged && !input.schedulerPassive && !input.isolated;
+  if (input.isPackaged || input.schedulerPassive) return false;
+  if (!input.isolated) return true;
+  if (!input.userDataDirOverride || !input.defaultUserDataDir) return false;
+  return userDataPathsReferToSameDirectory({
+    candidate: input.userDataDirOverride,
+    shared: input.defaultUserDataDir,
+  });
+}
+
+export function userDataPathsReferToSameDirectory(input: {
+  candidate: string;
+  shared: string;
+  platform?: NodeJS.Platform;
+  realpath?: (value: string) => string;
+}): boolean {
+  const platform = input.platform ?? process.platform;
+  const realpath = input.realpath ?? realpathSync.native;
+  const canonicalize = (value: string): string => {
+    let canonical = resolve(value);
+    try {
+      canonical = realpath(canonical);
+    } catch {
+      // A not-yet-created directory still gets a stable lexical identity.
+    }
+    return platform === 'win32' || platform === 'darwin'
+      ? canonical.toLocaleLowerCase('en-US')
+      : canonical;
+  };
+  return canonicalize(input.candidate) === canonicalize(input.shared);
 }
 
 export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {

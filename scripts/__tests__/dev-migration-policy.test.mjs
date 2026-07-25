@@ -121,6 +121,39 @@ test('a userData override alone cannot bypass shared primary protection', () => 
   }
 });
 
+test('an isolated declaration cannot point its override back to shared release userData', () => {
+  const fixture = createFixture();
+  try {
+    const sharedUserData = path.join(fixture.repo, 'Cindy');
+    const linkedUserData = path.join(fixture.repo, 'release-link');
+    const env = {
+      APPDATA: fixture.repo,
+      XDT_ISOLATED: '1',
+      XDT_USER_DATA_DIR: sharedUserData,
+    };
+    assert.throws(
+      () => assertSharedDevMigrationPolicy(fixture.repo, ['--wait-ready'], env),
+      /may upgrade the release database and prevent an older release from opening/,
+    );
+    assert.throws(
+      () =>
+        assertSharedDevMigrationPolicy(
+          fixture.repo,
+          ['--wait-ready'],
+          { ...env, XDT_USER_DATA_DIR: linkedUserData },
+          {
+            platform: 'win32',
+            realpath: (value) =>
+              value.toLowerCase().endsWith('release-link') ? sharedUserData : value,
+          },
+        ),
+      /may upgrade the release database and prevent an older release from opening/,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('named isolated dev may run an unmerged migration', () => {
   const fixture = createFixture();
   try {

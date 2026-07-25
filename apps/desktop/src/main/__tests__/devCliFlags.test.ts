@@ -8,6 +8,7 @@ import {
   shouldBlockSharedPrimaryDev,
   shouldEnforcePassiveMigrationCompatibility,
   shouldRequestSingleInstanceLock,
+  userDataPathsReferToSameDirectory,
 } from '../devCliFlags';
 
 const base = {
@@ -293,6 +294,43 @@ describe('shouldBlockSharedPrimaryDev', () => {
         isPackaged: false,
         schedulerPassive: flags.schedulerPassive,
         isolated: flags.isolated,
+      }),
+    ).toBe(true);
+  });
+
+  it('isolated 声明不能把覆写目录指回正式版 userData', () => {
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: false,
+        isolated: true,
+        userDataDirOverride: '/AppData/xdt-maker',
+        defaultUserDataDir: '/AppData/xdt-maker',
+      }),
+    ).toBe(true);
+    expect(
+      shouldBlockSharedPrimaryDev({
+        isPackaged: false,
+        schedulerPassive: false,
+        isolated: true,
+        userDataDirOverride: '/AppData/xdt-maker-dev-feature',
+        defaultUserDataDir: '/AppData/xdt-maker',
+      }),
+    ).toBe(false);
+  });
+
+  it('路径身份检查会解析符号链接并按大小写不敏感平台比较', () => {
+    const shared = join('/AppData', 'Cindy');
+    const linked = join('/AppData', 'release-link');
+    expect(
+      userDataPathsReferToSameDirectory({
+        candidate: linked,
+        shared,
+        platform: 'win32',
+        realpath: (value) =>
+          value.toLowerCase().endsWith('release-link')
+            ? `${value.slice(0, -'release-link'.length)}Cindy`
+            : value,
       }),
     ).toBe(true);
   });

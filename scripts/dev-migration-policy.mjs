@@ -1,6 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
 
 const DRIZZLE_PATH = 'apps/desktop/drizzle';
+const SHARED_USER_DATA_DIR_NAME = 'Cindy';
 
 function git(repoRoot, args, { allowFailure = false } = {}) {
   const result = spawnSync('git', args, {
@@ -57,11 +60,52 @@ export function findUnmergedMigrationArtifacts(repoRoot) {
   };
 }
 
-export function usesIsolatedUserData(argv, env = process.env) {
+function defaultSharedUserDataDir(env, platform) {
+  if (platform === 'win32') {
+    const appData = env.APPDATA || path.join(env.USERPROFILE || '', 'AppData', 'Roaming');
+    return path.join(appData, SHARED_USER_DATA_DIR_NAME);
+  }
+  if (platform === 'darwin') {
+    return path.join(env.HOME || '', 'Library', 'Application Support', SHARED_USER_DATA_DIR_NAME);
+  }
+  const xdgConfig = env.XDG_CONFIG_HOME || path.join(env.HOME || '', '.config');
+  return path.join(xdgConfig, SHARED_USER_DATA_DIR_NAME);
+}
+
+function canonicalUserDataPath(value, { platform, realpath }) {
+  let canonical = path.resolve(value);
+  try {
+    canonical = realpath(canonical);
+  } catch {
+    // A not-yet-created directory still gets a stable lexical identity.
+  }
+  return platform === 'win32' || platform === 'darwin'
+    ? canonical.toLocaleLowerCase('en-US')
+    : canonical;
+}
+
+export function userDataOverrideTargetsSharedUserData(
+  override,
+  env = process.env,
+  {
+    platform = process.platform,
+    realpath = realpathSync.native,
+  } = {},
+) {
+  if (!override?.trim()) return false;
+  const options = { platform, realpath };
   return (
-    argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')) ||
-    env.XDT_ISOLATED === '1'
+    canonicalUserDataPath(override, options) ===
+    canonicalUserDataPath(defaultSharedUserDataDir(env, platform), options)
   );
+}
+
+export function usesIsolatedUserData(argv, env = process.env, options = {}) {
+  const declaredIsolated =
+    argv.some((arg) => arg === '--isolated' || arg.startsWith('--isolated=')) ||
+    env.XDT_ISOLATED === '1';
+  if (!declaredIsolated) return false;
+  return !userDataOverrideTargetsSharedUserData(env.XDT_USER_DATA_DIR, env, options);
 }
 
 export function usesPassiveUserData(argv, env = process.env) {
@@ -80,8 +124,13 @@ export function usesPassiveUserData(argv, env = process.env) {
  *
  * Run this before the restart pipeline stops any existing Cindy instance.
  */
-export function assertSharedDevMigrationPolicy(_repoRoot, argv, env = process.env) {
-  if (usesIsolatedUserData(argv, env) || usesPassiveUserData(argv, env)) return;
+export function assertSharedDevMigrationPolicy(
+  _repoRoot,
+  argv,
+  env = process.env,
+  options = {},
+) {
+  if (usesIsolatedUserData(argv, env, options) || usesPassiveUserData(argv, env)) return;
   throw new Error(
     'Primary desktop dev cannot migrate shared Cindy userData because it may upgrade the release database and prevent an older release from opening it.\n' +
       'Restart with --isolated=<name> for writable dev data, or use --passive / --preserve-running for a shared read-only preview.',

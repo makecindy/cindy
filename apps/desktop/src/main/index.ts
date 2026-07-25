@@ -77,11 +77,12 @@ import {
   shouldEnforcePassiveMigrationCompatibility,
 } from './devCliFlags.js';
 
+const defaultUserDataDir = app.getPath('userData');
 const devFlags = resolveDevCliFlags({
   argv: process.argv,
   isPackaged: app.isPackaged,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
-  defaultUserDataDir: app.getPath('userData'),
+  defaultUserDataDir,
   envIsolated: process.env.XDT_ISOLATED,
   envIsolationName: process.env.XDT_ISOLATED_NAME,
   envDeviceIdOverride: process.env.XDT_DEVICE_ID_OVERRIDE,
@@ -92,6 +93,8 @@ if (shouldBlockSharedPrimaryDev({
   isPackaged: app.isPackaged,
   schedulerPassive: devFlags.schedulerPassive,
   isolated: devFlags.isolated,
+  userDataDirOverride: devFlags.userDataDirOverride,
+  defaultUserDataDir,
 })) {
   stderr.write(
     '[cindy] Primary desktop dev cannot use shared Cindy userData because it may upgrade ' +
