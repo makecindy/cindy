@@ -465,6 +465,17 @@ describe('MobileDownloadDialog', () => {
     expect(globalStyles).toMatch(/\.mobile-download-qr-edge\s*\{\s*animation: none;\s*transform:/);
   });
 
+  it('keeps the flowing edge free of per-frame filters and self-authored brand color', () => {
+    // 红蓝只能来自官方 icon 资产(不自写品牌渐变/色值),且常驻动画必须是纯 transform:
+    // 一旦给这层挂 filter/blur,旋转就每帧重走滤镜通道,常驻动效开始吃机器。
+    expect(source).not.toMatch(/linear-gradient|conic-gradient|#[0-9a-fA-F]{3,8}\b/);
+    const edgeRule = globalStyles.slice(
+      globalStyles.indexOf('.mobile-download-qr-edge {'),
+      globalStyles.indexOf('@media (prefers-reduced-motion: reduce)'),
+    );
+    expect(edgeRule).not.toMatch(/filter:|backdrop-filter:|mask-image:/);
+  });
+
   it('queues one mouse-tilt frame and cancels it when the dialog unmounts', () => {
     const requestFrame = vi.fn(() => 37);
     const cancelFrame = vi.fn();

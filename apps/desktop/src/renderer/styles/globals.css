@@ -227,6 +227,8 @@
   transition: none;
 }
 
+/* 只转 transform,不挂 filter/blur:滤镜会让这层每帧重新走一遍 GPU 滤镜通道,
+   而纯 transform 旋转能整层交给合成器,常驻动画不占 CPU。 */
 .mobile-download-qr-edge {
   animation: mobile-download-edge-turn var(--mobile-download-edge-cycle) linear infinite;
   will-change: transform;

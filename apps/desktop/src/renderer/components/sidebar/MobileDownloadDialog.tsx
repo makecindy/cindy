@@ -444,10 +444,11 @@ export function MobileDownloadDialog({
                     draggable={false}
                   />
                 </span>
+                {/* 2px:1px 时红蓝几乎看不见，3px 起就压成相框边了。 */}
                 <span
                   className={cn(
-                    'absolute inset-px flex items-center justify-center overflow-hidden rounded-lg',
-                    'bg-[var(--confirm-bg)]',
+                    'absolute inset-[2px] flex items-center justify-center overflow-hidden',
+                    'rounded-[10px] bg-[var(--confirm-bg)]',
                   )}
                   aria-live="polite"
                 >
@@ -475,25 +476,25 @@ export function MobileDownloadDialog({
               </button>
 
               <div className={cn(hasLinkedMobile ? 'min-w-0 flex-1' : 'mt-4')}>
-                <p className="text-14 font-medium text-[var(--confirm-title)]">
+                {/* 未连设备时只留扫码这一行说明(要求同时说清"登录同一账号"),
+                    不再补平台支持副标题。 */}
+                <p
+                  className={cn(
+                    'text-14 font-medium text-[var(--confirm-title)]',
+                    !hasLinkedMobile && 'max-w-[260px]',
+                  )}
+                >
                   {t(
                     hasLinkedMobile
                       ? 'sidebar.mobileDownload.scanAnother'
                       : 'sidebar.mobileDownload.scanToOpen',
                   )}
                 </p>
-                <p
-                  className={cn(
-                    'mt-1 text-12 leading-[18px] text-[var(--confirm-desc)]',
-                    !hasLinkedMobile && 'max-w-[260px]',
-                  )}
-                >
-                  {t(
-                    hasLinkedMobile
-                      ? 'sidebar.mobileDownload.scanAnotherHint'
-                      : 'sidebar.mobileDownload.platformHint',
-                  )}
-                </p>
+                {hasLinkedMobile ? (
+                  <p className="mt-1 text-12 leading-[18px] text-[var(--confirm-desc)]">
+                    {t('sidebar.mobileDownload.scanAnotherHint')}
+                  </p>
+                ) : null}
               </div>
             </div>
 
