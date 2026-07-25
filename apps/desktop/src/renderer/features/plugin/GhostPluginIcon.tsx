@@ -61,11 +61,13 @@ export function GhostPluginIcon({
   iconDataUrl,
   iconId,
   iconName,
+  onIconLoadError,
   size = 'md',
 }: {
   iconDataUrl?: string;
   iconId: string;
   iconName: string;
+  onIconLoadError?: () => void;
   size?: GhostPluginIconSize;
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -93,7 +95,10 @@ export function GhostPluginIcon({
           alt=""
           draggable={false}
           referrerPolicy="no-referrer"
-          onError={() => setFailedSrc(resolvedIconDataUrl)}
+          onError={() => {
+            setFailedSrc(resolvedIconDataUrl);
+            onIconLoadError?.();
+          }}
           className={cn(
             svg ? SVG_ICON_CLASSES[size] : 'size-full object-cover',
             iconId === 'cindy-github' && 'plugin-icon--github',

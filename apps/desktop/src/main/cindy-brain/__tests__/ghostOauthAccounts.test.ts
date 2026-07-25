@@ -153,6 +153,37 @@ describe('connectAccount', () => {
     expect(fetchImpl.mock.calls.length).toBe(fetchCalls);
   });
 
+  it('授权回调后目标插件已卸载或声明已替换时不持久化凭证', async () => {
+    const vault = memoryVault({ [`${KEY}-client-id`]: 'cid' });
+    const isConnectTargetCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === DECL.tokenUrl) {
+        return jsonResponse({ access_token: 'at-stale', refresh_token: 'rt-stale', expires_in: 3600 });
+      }
+      if (url === DECL.identity?.url) {
+        return jsonResponse({ email: 'stale@example.com' });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      openExternal: autoBrowser(),
+      isConnectTargetCurrent,
+    });
+
+    await expect(mgr.connectAccount(GHOST, KEY, DECL)).resolves.toMatchObject({
+      ok: false,
+      error: 'INVALID_CONFIG',
+    });
+    expect(isConnectTargetCurrent).toHaveBeenCalledTimes(2);
+    expect(isConnectTargetCurrent).toHaveBeenLastCalledWith(GHOST, KEY, DECL);
+    expect(vault.read(GHOST, `${KEY}-accounts`)).toBeNull();
+    expect([...vault.data.values()]).not.toContain('rt-stale');
+    expect([...vault.data.values()]).not.toContain('at-stale');
+  });
+
   it('声明 avatarPath → 连接时下载头像存库(不带凭证),listAccounts 带 avatarDataUrl,断开清掉', async () => {
     const avatarDecl: GhostOauthDecl = {
       ...DECL,
@@ -523,11 +554,13 @@ describe('getFreshAccessToken', () => {
 
   it('invalid_grant → AUTH_EXPIRED + 账号标 expired + rt 清除', async () => {
     const vault = seededVault('rt-revoked');
+    const onAccountStatusChanged = vi.fn();
     const mgr = new GhostOauthAccountManager({
       vault,
       fetchImpl: vi.fn(async () => jsonResponse({ error: 'invalid_grant' }, 400)) as unknown as typeof fetch,
       openExternal: vi.fn(),
       sleep: instantSleep,
+      onAccountStatusChanged,
     });
     await expect(mgr.getFreshAccessToken(GHOST, KEY, DECL)).resolves.toMatchObject({
       ok: false,
@@ -535,6 +568,62 @@ describe('getFreshAccessToken', () => {
     });
     expect(mgr.listAccounts(GHOST, KEY)[0]).toMatchObject({ status: 'expired' });
     expect(vault.read(GHOST, `${KEY}-rt-acc-1`)).toBeNull();
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'expired',
+    });
+  });
+
+  it('refresh 成功复活 expired 账号后发脱敏状态回调', async () => {
+    const vault = seededVault('rt-restored');
+    vault.store(
+      GHOST,
+      `${KEY}-accounts`,
+      JSON.stringify({
+        defaultAccountId: 'acc-1',
+        accounts: [{ id: 'acc-1', label: 'a@b.com', status: 'expired', createdAt: 1 }],
+      }),
+    );
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn(async () =>
+        jsonResponse({ access_token: 'at-restored', expires_in: 3600 }),
+      ) as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      onAccountStatusChanged,
+    });
+
+    await expect(mgr.getFreshAccessToken(GHOST, KEY, DECL)).resolves.toMatchObject({
+      ok: true,
+      accessToken: 'at-restored',
+    });
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'connected',
+    });
+  });
+
+  it('状态未变化或账号清单写入失败时不发状态回调', async () => {
+    const vault = seededVault('rt-revoked');
+    const store = vault.store;
+    vault.store = (ghostId, key, value) =>
+      key === `${KEY}-accounts` ? false : store(ghostId, key, value);
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault,
+      fetchImpl: vi.fn(async () =>
+        jsonResponse({ error: 'invalid_grant' }, 400),
+      ) as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      sleep: instantSleep,
+      onAccountStatusChanged,
+    });
+
+    await mgr.getFreshAccessToken(GHOST, KEY, DECL);
+    expect(onAccountStatusChanged).not.toHaveBeenCalled();
   });
 
   it('瞬时刷新失败 → REFRESH_FAILED,账号不标过期', async () => {

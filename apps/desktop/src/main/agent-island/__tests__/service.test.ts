@@ -965,6 +965,40 @@ describe('AgentIslandService native publishing', () => {
     expect(service.handleInteractionDismissedByRequestId('req-1')).toBe(false);
   });
 
+  it('tracks plugin setup as a session interaction and returns to running when dismissed', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(
+      (
+        state: AgentIslandDisplayState,
+        frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[],
+      ) => {
+        void state;
+        void frameOrFrames;
+        return true;
+      },
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+
+    syncEnabledForTest(service, publish);
+    service.handlePluginSetupInteraction('s1', 'setup-1', '连接 Google 账号');
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      phase: 'needs-interaction',
+      interactionKind: 'plugin_setup',
+      detail: '连接 Google 账号',
+    });
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(1);
+
+    service.handleInteractionDismissed('s1', 'setup-1');
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      phase: 'running',
+    });
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0].interactionKind).toBeUndefined();
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.pendingInteractionCount).toBe(0);
+  });
+
   it('reveals the next pending permission prompt after approving the current one', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

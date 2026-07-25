@@ -456,12 +456,70 @@ describe('FORGE_GUIDE', () => {
       'panel.position',
       '右侧栏页签',
       // 2026-07-25 标准头系统按钮:主机画标题条,systemButtons 逐个关
-      // (maximize 撑满 / detach 独立窗口);§2 样例与 §5 面板章节同步。
+      // (maximize 撑满 / detach 独立窗口 / minimize 气泡);§2 样例与 §5
+      // 面板章节同步。
       'systemButtons',
       '撑满内容区',
       '在独立窗口中打开',
+      'minimize',
+      '最小化为浮动气泡',
+      // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
+      '十四个卡槽',
+      '捆绑 Agent Skills(skill 槽)',
+      'skill.items',
+      'SKILL.md',
+      '~/.agents/skills',
+      '逐字一致',
+      '不受插件沙箱约束',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }
+  });
+});
+
+describe('packGhostDir · skill 槽', () => {
+  const SKILL_MANIFEST = {
+    ...GOOD_MANIFEST,
+    id: 'skilled',
+    slots: ['tool', 'skill'],
+    skill: { items: [{ dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' }] },
+  };
+  const skillMd = (name: string, description: string) =>
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`;
+
+  it('happy path:SKILL.md 一致 → 打包,产物能被装入侧 inspect 认可', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(SKILL_MANIFEST),
+      'main.js': '// brain',
+      'skills/foo/SKILL.md': skillMd('foo', '教 Agent 用 foo'),
+    });
+    const r = await packGhostDir(dir);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    const inspected = await manager.inspect(r.cindyPath);
+    expect(inspected).toMatchObject({
+      manifest: { skill: { items: [{ dir: 'skills/foo', name: 'foo' }] } },
+    });
+  });
+
+  it('声明的技能目录缺 SKILL.md → ENTRY_MISSING', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(SKILL_MANIFEST),
+      'main.js': '// brain',
+      'skills/foo/notes.md': '不是 SKILL.md',
+    });
+    const r = await packGhostDir(dir);
+    expect(r).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
+  });
+
+  it('frontmatter 与清单声明漂移 → MANIFEST_INVALID(与装入侧同一契约)', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(SKILL_MANIFEST),
+      'main.js': '// brain',
+      'skills/foo/SKILL.md': skillMd('foo', '偷偷换一份说明'),
+    });
+    const r = await packGhostDir(dir);
+    expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
   });
 });

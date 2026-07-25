@@ -646,6 +646,11 @@
       "autoUpdateEnabledToast": "Idle update installation enabled",
       "autoUpdateDisabledToast": "Idle update installation disabled",
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
+      "analyticsLabel": "Usage statistics",
+      "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
+      "analyticsEnabledToast": "Usage statistics enabled",
+      "analyticsDisabledToast": "Usage statistics disabled",
+      "analyticsSaveFailed": "Failed to save usage statistics settings",
       "debugLogLabel": "Debug logs",
       "debugLogDescription": "When enabled, emits verbose debug logs: main/maker logger raised to debug level; new Claude Code sessions also log API request URL/status/latency, Node-level DNS/TCP/TLS handshake timing, and SDK internals. Output is large — turn off after troubleshooting. Always on in dev mode.",
       "social": {
@@ -1730,6 +1735,15 @@
       "directControl": {
         "title": "Computer automation",
         "description": "Let agents inspect windows, read UI, click, and type",
+        "status": {
+          "ready": "Ready to use",
+          "needsPermission": "Needs system access",
+          "notInstalled": "Driver not installed",
+          "disabled": "Turned off",
+          "checking": "Checking access…",
+          "setup": "Set up access",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "Toggle direct computer control",
         "driverInfo": "Computer automation is powered by the open-source CUA Driver. It runs locally to read the screen and perform actions such as clicking and typing.",
         "openSourceProject": "View open-source project",
@@ -1747,14 +1761,25 @@
           "cancel": "Not now"
         },
         "permissionGuide": {
-          "title": "Waiting for system permissions",
-          "description": "In System Settings, grant the permissions below to CuaDriver (look for the app matching the icon on the left). This will continue automatically once everything is granted.",
-          "waiting": "Pending"
+          "waiting": "Waiting for you",
+          "step": "Open computer automation",
+          "completeEyebrow": "Permissions complete",
+          "dragTitle": "Drag CuaDriver into {{permission}}",
+          "turnOnAppTitle": "Turn on CuaDriver in {{permission}}",
+          "dragHint": "Drag",
+          "draggingTitle": "Dragging CuaDriver",
+          "draggingHint": "Drop into {{permission}}",
+          "appName": "CuaDriver",
+          "turnOnTitle": "Turn on {{permission}}",
+          "turnOnDescription": "Turn on this permission in System Settings. Cindy will continue automatically.",
+          "readyTitle": "Computer Use is ready",
+          "readyDescription": "Cindy can now operate this computer when you ask."
         },
         "permissions": {
-          "macosHint": "macOS requires core Accessibility and Screen Recording permissions for Cua Driver. During actual use, the system may still show additional confirmations for a target app or a specific action.",
-          "accessibilityLabel": "CuaDriver Accessibility",
-          "screenRecordingLabel": "CuaDriver Screen Recording",
+          "title": "System access",
+          "macosHint": "Computer Use needs Accessibility and Screen Recording. During actual use, macOS may still show additional confirmations for a target app or action.",
+          "accessibilityLabel": "Accessibility",
+          "screenRecordingLabel": "Screen Recording",
           "grant": "Grant",
           "accessibility": "Accessibility: {{status}}",
           "screenRecording": "Screen Recording: {{status}}",
@@ -1766,6 +1791,8 @@
           "openAccessibility": "Open Accessibility settings",
           "openScreenRecording": "Open Screen Recording settings",
           "recheck": "Recheck",
+          "moreDetails": "More details",
+          "hideDetails": "Hide details",
           "windowsHint": "Windows does not require extra system permissions. Keep the target app visible on the active desktop while the agent works.",
           "linuxHint": "Linux does not use macOS TCC permissions; make sure the current desktop session allows window inspection and input automation."
         },
@@ -1788,9 +1815,10 @@
           "disabled": "Direct computer control disabled",
           "toggleFailed": "Failed to toggle direct computer control",
           "installFailed": "Failed to install cua-driver",
-          "permissionFailed": "cua-driver permissions are not complete",
-          "permissionPending": "Finish Cua Driver system permissions and this will enable automatically",
+          "permissionFailed": "Computer Use permissions are not complete",
+          "permissionPending": "Finish the two system permissions, then return here and click Recheck",
           "permissionSettingsOpened": "System permission settings opened. After granting, come back and click \"Recheck\".",
+          "permissionSettingsMonitoring": "System permission settings opened. Finish the permissions and the status will update automatically.",
           "openPermissionSettingsFailed": "Failed to open system permission settings"
         }
       }
@@ -2404,7 +2432,9 @@
         "preview": "Can open preview pages from the sites below in the sidebar browser",
         "previewDetail": "Only the sites listed below can be opened; every page it opens is attributed to this plugin.",
         "nodeChildSpawn": "Its Node program can ask the host to start declared sub-processes from its package",
-        "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits."
+        "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
+        "skill": "Adds the skill \"{{name}}\" to your AI assistants",
+        "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust."
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -2491,7 +2521,8 @@
         "slotCard": "Message cards",
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
-        "slotFs": "File writing"
+        "slotFs": "File writing",
+        "slotSkill": "Agent skills"
       },
       "commandPaletteTag": "Plugin command",
       "updateConfirm": {
@@ -3087,11 +3118,15 @@
   "panelChrome": {
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
-    "detachAria": "Open in a new window"
+    "detachAria": "Open in a new window",
+    "minimizeAria": "Minimize to floating bubble"
   },
   "ghostPanelWindow": {
     "mergeBack": "Merge back into main window",
     "unavailable": "This plugin panel is currently unavailable"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "Restore {{name}} panel"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -3634,6 +3669,59 @@
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
       "stop": "Stop generating"
     },
+    "pluginSetup": {
+      "title": "{{name}} Settings",
+      "chooseOne": "Choose one setup method",
+      "restoreAria": "Restore {{name}} settings",
+      "minimizeAria": "Minimize {{name}} settings",
+      "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+      "cancel": "Cancel",
+      "cancelling": "Cancelling…",
+      "retry": "Retry",
+      "saveConfiguration": "Save Configuration",
+      "saving": "Saving…",
+      "error": {
+        "ACTION_FAILED": "Couldn't complete this setup action. Try again.",
+        "ACTION_STALE": "This setup changed. Choose the setup action again.",
+        "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
+        "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
+        "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
+        "SAVE_FAILED": "Couldn't save this configuration. Try again.",
+        "WINDOW_CLOSED": "The window that started setup was closed. Return to the session and try again.",
+        "TARGET_UNAVAILABLE": "This plugin is disabled, uninstalled, or unavailable. Check the plugin and try again.",
+        "ASSESSMENT_FAILED": "Couldn't refresh the setup status. Try again.",
+        "TIMEOUT": "Setup timed out. Try again."
+      },
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI Model Service",
+          "description": "Connect an available model service before using the image or video capabilities declared by this plugin."
+        }
+      },
+      "form": {
+        "placeholder": "Enter {{label}}",
+        "required": "Enter {{label}}",
+        "tooLong": "Must be {{maxLength}} characters or fewer",
+        "openLink": "Get {{label}}",
+        "openLinkFailed": "Couldn't open this page. Please try again."
+      },
+      "action": {
+        "oauth_connect": "Authorize",
+        "open_plugin_settings": "Open settings",
+        "manage_connection": "Manage connections",
+        "open_client_settings": "Open model settings"
+      },
+      "phase": {
+        "pending": "Pending",
+        "action_running": "In progress…",
+        "waiting_external": "Waiting for authorization…",
+        "verifying": "Verifying…",
+        "satisfied": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      }
+    },
     "createAgent": {
       "quickStart": "Quick start",
       "quickStarts": {
@@ -3699,6 +3787,8 @@
         "output": "Output",
         "cacheRead": "Cache read",
         "cacheCreate": "Cache write",
+        "free": "Limited-time free",
+        "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
         "subscriptionEstimate": "Value estimate, not an actual bill"
@@ -4851,7 +4941,8 @@
       "card": {
         "awaitingPermission": "Awaiting permission",
         "awaitingQuestion": "Awaiting your reply",
-        "awaitingPlan": "Awaiting plan review"
+        "awaitingPlan": "Awaiting plan review",
+        "awaitingPluginSetup": "Awaiting plugin setup"
       },
       "showAllSessions": "Show all {{count}}",
       "dialogues": "Dialogues",
@@ -7168,7 +7259,6 @@
     "checkout": {
       "creatingTitle": "Creating payment",
       "awaitingTitle": "Awaiting payment",
-      "fulfillingTitle": "Crediting your account",
       "completedTitle": "Payment successful",
       "failedTitle": "Unable to complete",
       "expiredTitle": "Payment expired",
@@ -7183,7 +7273,6 @@
       "redirectHint": "Complete payment on the provider page, then return to Cindy.",
       "openPayment": "Open payment page",
       "refreshingAction": "Loading payment instructions…",
-      "creditingBody": "Payment succeeded. Waiting for the credits to be applied…",
       "paymentCompleted": "Your payment was completed.",
       "requestFailed": "The request failed. Retry safely; an uncertain create result keeps the original idempotency key.",
       "expiredBody": "This payment link expired. Create a new payment to continue.",

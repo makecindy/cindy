@@ -69,6 +69,7 @@ import {
   isNativeProviderAuthBound,
   unbindNativeProviderAuth,
 } from './nativeProviderAuthBinding.js';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 
 const execFileP = promisify(execFile);
 const log = createLogger('auth-adapters');
@@ -399,6 +400,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     if (!removed.success) {
       throw new Error(`failed to remove XD gateway key: ${removed.error ?? 'unknown'}`);
     }
+    getGhostSetupChangeBus().emitAll({
+      source: 'host_config',
+      ref: 'model-provider',
+    });
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {

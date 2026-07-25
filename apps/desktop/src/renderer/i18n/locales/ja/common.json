@@ -646,6 +646,11 @@
       "autoUpdateEnabledToast": "アイドル時の更新インストールを有効にしました",
       "autoUpdateDisabledToast": "アイドル時の更新インストールを無効にしました",
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
+      "analyticsLabel": "利用統計",
+      "analyticsDescription": "Cindy の起動状況や継続利用状況の把握に使います。送信するのはデバイスの機種名、OS バージョン、アプリバージョン、デバイス識別子などのデバイス・利用環境情報と、ログイン後はアカウント ID で、会話内容・ファイル・プロンプトは一切含みません。オフにすると送信は直ちに停止します。",
+      "analyticsEnabledToast": "利用統計を有効にしました",
+      "analyticsDisabledToast": "利用統計を無効にしました",
+      "analyticsSaveFailed": "利用統計の設定を保存できませんでした",
       "debugLogLabel": "デバッグログ",
       "debugLogDescription": "有効にすると詳細なデバッグログを出力します:main/maker logger が debug レベルになり、新しい Claude Code セッションは API リクエスト URL/ステータス/レイテンシ、Node レベルの DNS/TCP/TLS ハンドシェイクのタイミング、SDK 内部情報も出力します。ログ量が大きいため、調査が終わったらオフにしてください。dev モードでは常に有効です。",
       "social": {
@@ -1729,6 +1734,15 @@
       "directControl": {
         "title": "自動操作コンピュータ",
         "description": "エージェントがウィンドウを調べ、UI を読み取り、クリックや入力を実行できます",
+        "status": {
+          "ready": "使用できます",
+          "needsPermission": "システム権限が必要です",
+          "notInstalled": "ドライバー未インストール",
+          "disabled": "オフ",
+          "checking": "権限を確認中…",
+          "setup": "権限を設定",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "コンピュータの直接操作を切り替える",
         "driverInfo": "コンピュータ自動操作はオープンソースの CUA Driver で提供されます。ローカルで動作し、画面の読み取りやクリック、入力などを行います。",
         "openSourceProject": "オープンソースプロジェクトを見る",
@@ -1746,14 +1760,25 @@
           "cancel": "後で"
         },
         "permissionGuide": {
-          "title": "システム権限の許可を待っています",
-          "description": "システム設定で CuaDriver に以下の権限を許可してください（権限リストで左のアイコンのアプリを探してください）。すべて許可されると自動的に続行します。",
-          "waiting": "許可待ち"
+          "waiting": "操作待ち",
+          "step": "コンピュータ操作を有効にする",
+          "completeEyebrow": "権限の設定完了",
+          "dragTitle": "CuaDriver を「{{permission}}」にドラッグ",
+          "turnOnAppTitle": "「{{permission}}」で CuaDriver をオンにする",
+          "dragHint": "ドラッグ",
+          "draggingTitle": "CuaDriver をドラッグ中",
+          "draggingHint": "「{{permission}}」の一覧にドロップ",
+          "appName": "CuaDriver",
+          "turnOnTitle": "「{{permission}}」をオンにする",
+          "turnOnDescription": "システム設定でこの権限をオンにしてください。Cindy が自動的に続行します。",
+          "readyTitle": "Computer Use の準備ができました",
+          "readyDescription": "必要なときに Cindy がこのコンピュータを操作できます。"
         },
         "permissions": {
-          "macosHint": "macOS では Cua Driver に「アクセシビリティ」と「画面収録」の基本権限が必要です。実際の使用中には、対象アプリや具体的な操作ごとに追加の確認が表示されることがあります。",
-          "accessibilityLabel": "CuaDriver アクセシビリティ",
-          "screenRecordingLabel": "CuaDriver 画面収録",
+          "title": "システム権限",
+          "macosHint": "コンピュータ操作には「アクセシビリティ」と「画面収録」が必要です。実際の使用中には、対象アプリや操作ごとに追加確認が表示されることがあります。",
+          "accessibilityLabel": "アクセシビリティ",
+          "screenRecordingLabel": "画面収録",
           "grant": "許可する",
           "accessibility": "アクセシビリティ：{{status}}",
           "screenRecording": "画面収録：{{status}}",
@@ -1765,6 +1790,8 @@
           "openAccessibility": "アクセシビリティ設定を開く",
           "openScreenRecording": "画面収録設定を開く",
           "recheck": "再確認",
+          "moreDetails": "詳細情報",
+          "hideDetails": "詳細を閉じる",
           "windowsHint": "Windows では追加のシステム権限は不要です。agent が作業している間は、対象アプリを現在のアクティブなデスクトップ上で表示したままにしてください。",
           "linuxHint": "Linux では macOS の TCC 権限は使いません。現在のデスクトップセッションでウィンドウ取得と入力自動化が許可されていることを確認してください。"
         },
@@ -1787,9 +1814,10 @@
           "disabled": "コンピュータの直接操作を無効にしました",
           "toggleFailed": "コンピュータの直接操作の切り替えに失敗しました",
           "installFailed": "cua-driver のインストールに失敗しました",
-          "permissionFailed": "cua-driver の権限付与が完了していません",
-          "permissionPending": "Cua Driver のシステム権限を完了すると、ここが自動で有効になります",
+          "permissionFailed": "コンピュータ操作の権限が完了していません",
+          "permissionPending": "2つのシステム権限を許可したら、ここに戻って「再確認」を押してください",
           "permissionSettingsOpened": "システム権限設定を開きました。許可が完了したら、ここに戻って「再チェック」を押してください。",
+          "permissionSettingsMonitoring": "システムの権限設定を開きました。権限を付与すると、状態は自動的に更新されます。",
           "openPermissionSettingsFailed": "システム権限設定を開けませんでした"
         }
       }
@@ -2403,7 +2431,9 @@
         "preview": "以下のサイトのプレビューページをサイドバーのブラウザで開けます",
         "previewDetail": "開けるのは下に列挙されたサイトだけです。ページを開くたびに、どのプラグインが開いたかが表示されます。",
         "nodeChildSpawn": "Node プログラムは、パッケージ内で申告済みのサブプロセスの起動をホストに依頼できます",
-        "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。"
+        "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
+        "skill": "AI アシスタントにスキル「{{name}}」を追加します",
+        "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -2490,7 +2520,8 @@
         "slotCard": "メッセージカード",
         "slotNetwork": "ネットワークアクセス",
         "slotNotify": "システム通知",
-        "slotFs": "ファイル書き込み"
+        "slotFs": "ファイル書き込み",
+        "slotSkill": "エージェントスキル"
       },
       "commandPaletteTag": "プラグインコマンド",
       "updateConfirm": {
@@ -3086,11 +3117,15 @@
   "panelChrome": {
     "maximizeAria": "パネルを最大化",
     "restoreAria": "パネルのサイズを元に戻す",
-    "detachAria": "新しいウィンドウで開く"
+    "detachAria": "新しいウィンドウで開く",
+    "minimizeAria": "フローティングバブルに最小化"
   },
   "ghostPanelWindow": {
     "mergeBack": "メインウィンドウに戻す",
     "unavailable": "このプラグインパネルは現在利用できません"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "{{name}} パネルを元に戻す"
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
@@ -3633,6 +3668,59 @@
       "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
       "stop": "生成を停止"
     },
+    "pluginSetup": {
+      "title": "{{name}} の設定",
+      "chooseOne": "設定方法を1つ選択してください",
+      "restoreAria": "{{name}} の設定を展開",
+      "minimizeAria": "{{name}} の設定を折りたたむ",
+      "completeOnDesktop": "操作対象のデスクトップで設定を完了してください。このカードは自動的に更新されます。",
+      "cancel": "キャンセル",
+      "cancelling": "キャンセル中…",
+      "retry": "再試行",
+      "saveConfiguration": "設定を保存",
+      "saving": "保存中…",
+      "error": {
+        "ACTION_FAILED": "設定操作を完了できませんでした。もう一度お試しください。",
+        "ACTION_STALE": "設定内容が更新されました。設定操作を選び直してください。",
+        "AUTH_CANCELLED": "認証がキャンセルされました。必要に応じてもう一度認証してください。",
+        "AUTH_FAILED": "認証を完了できませんでした。もう一度お試しください。",
+        "INLINE_INVALID": "設定内容が無効です。内容を確認してもう一度お試しください。",
+        "INLINE_UNAVAILABLE": "このバージョンの Cindy ではチャット内でこの設定を保存できません。Cindy を更新してもう一度お試しください。",
+        "SAVE_FAILED": "設定を保存できませんでした。もう一度お試しください。",
+        "WINDOW_CLOSED": "設定を開始したウィンドウが閉じられました。セッションに戻ってもう一度お試しください。",
+        "TARGET_UNAVAILABLE": "プラグインが無効、アンインストール済み、または利用できません。プラグインの状態を確認してもう一度お試しください。",
+        "ASSESSMENT_FAILED": "設定状況を更新できませんでした。もう一度お試しください。",
+        "TIMEOUT": "設定の待機時間を超えました。もう一度お試しください。"
+      },
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AIモデルサービス",
+          "description": "プラグインが宣言した画像または動画機能を使用する前に、利用可能なモデルサービスへ接続してください。"
+        }
+      },
+      "form": {
+        "placeholder": "{{label}}を入力",
+        "required": "{{label}}を入力してください",
+        "tooLong": "{{maxLength}}文字以内で入力してください",
+        "openLink": "{{label}}を取得",
+        "openLinkFailed": "ページを開けませんでした。もう一度お試しください。"
+      },
+      "action": {
+        "oauth_connect": "認証",
+        "open_plugin_settings": "設定を開く",
+        "manage_connection": "接続を管理",
+        "open_client_settings": "モデル設定を開く"
+      },
+      "phase": {
+        "pending": "設定待ち",
+        "action_running": "処理中…",
+        "waiting_external": "認証待ち…",
+        "verifying": "検証中…",
+        "satisfied": "完了",
+        "failed": "失敗",
+        "cancelled": "キャンセル済み"
+      }
+    },
     "createAgent": {
       "quickStart": "クイックスタート",
       "quickStarts": {
@@ -3698,6 +3786,8 @@
         "output": "出力",
         "cacheRead": "キャッシュ読み取り",
         "cacheCreate": "キャッシュ書き込み",
+        "free": "期間限定無料",
+        "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
         "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
@@ -4841,7 +4931,8 @@
       "card": {
         "awaitingPermission": "承認待ち",
         "awaitingQuestion": "返信待ち",
-        "awaitingPlan": "プランの確認待ち"
+        "awaitingPlan": "プランの確認待ち",
+        "awaitingPluginSetup": "プラグイン設定待ち"
       },
       "showAllSessions": "すべて表示 {{count}} 件",
       "dialogues": "会話",
@@ -7157,7 +7248,6 @@
     "checkout": {
       "creatingTitle": "支払いを作成中",
       "awaitingTitle": "支払い待ち",
-      "fulfillingTitle": "クレジットを反映中",
       "completedTitle": "支払い完了",
       "failedTitle": "完了できませんでした",
       "expiredTitle": "支払い期限切れ",
@@ -7172,7 +7262,6 @@
       "redirectHint": "支払いページで完了後、Cindyに戻ってください。",
       "openPayment": "支払いページを開く",
       "refreshingAction": "支払い情報を取得中…",
-      "creditingBody": "支払いが完了しました。クレジットの反映を待っています…",
       "paymentCompleted": "支払いが完了しました。",
       "requestFailed": "リクエストに失敗しました。不明な作成結果では同じ冪等キーで安全に再試行します。",
       "expiredBody": "支払いリンクの期限が切れました。新しい支払いを作成してください。",

@@ -20,12 +20,15 @@ vi.mock('react-i18next', async (importOriginal) => ({
         model?: string;
         effort?: string;
         price?: string;
+        percent?: string;
+        rate?: string;
       },
     ) => {
       const translations: Record<string, string> = {
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
+        'newChat.modelSelector.pricing.free': '限时免费',
       };
       if (key === 'newChat.modelSelector.priceTip') {
         return `Input ${options?.input} · Output ${options?.output} per 1M tokens`;
@@ -41,6 +44,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.trigger.ariaWithEffort') {
         return `Select model. Current: ${options?.model}, effort: ${options?.effort}`;
+      }
+      if (key === 'newChat.modelSelector.pricing.discount') {
+        return `立省 ${options?.percent}%`;
       }
       return translations[key] ?? options?.defaultValue ?? key;
     },
@@ -175,8 +181,8 @@ vi.mock('@/hooks/useConnectedSource', () => ({
   }),
 }));
 
-vi.mock('@/hooks/useModelPricing', () => ({
-  useModelPricing: () => ({
+const pricingRef = vi.hoisted(() => {
+  const DEFAULT_PRICING = {
     anthropic: {
       'claude-opus-4-8': {
         providerId: 'anthropic',
@@ -190,7 +196,14 @@ vi.mock('@/hooks/useModelPricing', () => ({
         cacheCreatePerMtok: 3.75,
       },
     },
-  }),
+  };
+  return { DEFAULT_PRICING, pricing: DEFAULT_PRICING as unknown, renderCalls: 0 };
+});
+vi.mock('@/hooks/useModelPricing', () => ({
+  useModelPricing: () => {
+    pricingRef.renderCalls += 1;
+    return pricingRef.pricing;
+  },
 }));
 
 // 可变 providers mock:默认 = anthropic fixture(分段/hover 用例依赖),
@@ -240,8 +253,9 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: providersRef.providers }),
 }));
 
+const deviceProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [], loading: false }),
+  useDeviceProviders: () => ({ providers: deviceProvidersRef.providers, loading: false }),
 }));
 
 vi.mock('@/lib/providerModels', () => ({
@@ -249,50 +263,48 @@ vi.mock('@/lib/providerModels', () => ({
   // #245 新增:ModelSelector 渲染路径直接调用;fixture providers 无 routing,按不过滤透传。
   isChatBridgedCodexProvider: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
-  resolveVisibleModelAgentKind: ({
-    agentKind,
-  }: {
-    agentKind: 'claude-code' | 'codex' | null;
-  }) => agentKind ?? 'claude-code',
-  selectVisibleModels: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) => [
-    {
-      id: 'claude-opus-4-8',
-      displayName: 'Opus 4.8',
-      description: 'Most capable for ambitious work',
-      contextWindow: 200000,
-      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      defaultEffort: 'high',
-      effortDisplayNames: {
-        xhigh: 'X-High',
+  resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) =>
+    agentKind ?? 'claude-code',
+  selectVisibleModels: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) =>
+    [
+      {
+        id: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        description: 'Most capable for ambitious work',
+        contextWindow: 200000,
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+        effortDisplayNames: {
+          xhigh: 'X-High',
+        },
       },
-    },
-    {
-      id: 'claude-sonnet-4-6',
-      displayName: 'Sonnet 4.6',
-      contextWindow: 200000,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium',
-    },
-    {
-      id: 'claude-haiku-4-5',
-      displayName: 'Haiku 4.5',
-      description: 'Fastest for quick answers',
-      contextWindow: 200000,
-      efforts: [],
-      defaultEffort: null,
-    },
-    {
-      id: 'gpt-5.5',
-      displayName: 'GPT-5.5',
-      contextWindow: 400000,
-      efforts: ['low', 'medium', 'high'],
-      defaultEffort: 'medium',
-    },
-  ].filter((model) => {
-    if (agentKind === 'claude-code') return model.id.startsWith('claude-');
-    if (agentKind === 'codex') return model.id.startsWith('gpt-');
-    return true;
-  }),
+      {
+        id: 'claude-sonnet-4-6',
+        displayName: 'Sonnet 4.6',
+        contextWindow: 200000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+      },
+      {
+        id: 'claude-haiku-4-5',
+        displayName: 'Haiku 4.5',
+        description: 'Fastest for quick answers',
+        contextWindow: 200000,
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'gpt-5.5',
+        displayName: 'GPT-5.5',
+        contextWindow: 400000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+      },
+    ].filter((model) => {
+      if (agentKind === 'claude-code') return model.id.startsWith('claude-');
+      if (agentKind === 'codex') return model.id.startsWith('gpt-');
+      return true;
+    }),
 }));
 
 const modelVisibilityRef = vi.hoisted(
@@ -432,6 +444,194 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.textContent).toContain('Opus 4.8');
     expect(trigger.textContent).toContain('超高');
     expect(trigger.textContent).not.toContain('X-High');
+    expect(trigger.querySelector('[data-model-promotion-badge]')).toBeNull();
+  });
+
+  it('reuses the parent pricing snapshot when the model content opens', () => {
+    pricingRef.renderCalls = 0;
+    render(
+      React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+      }),
+    );
+    expect(pricingRef.renderCalls).toBe(1);
+
+    pricingRef.renderCalls = 0;
+    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    expect(pricingRef.renderCalls).toBe(1);
+  });
+
+  it('shows Gateway discount and free promotions in the selected-model trigger', () => {
+    providersRef.providers = [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-opus-4-8',
+              name: 'Opus 4.8',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+              cost: { input: 6, output: 18 },
+            },
+            {
+              id: 'claude-sonnet-4-6',
+              name: 'Sonnet 4.6',
+              contextWindow: 200000,
+              efforts: ['medium'],
+              defaultEffort: 'medium',
+              cost: { input: 0, output: 0 },
+            },
+          ],
+        },
+      },
+    ];
+    pricingRef.pricing = {
+      xd: {
+        'claude-opus-4-8': {
+          providerId: 'xd',
+          modelId: 'claude-opus-4-8',
+          currency: 'CNY',
+          source: 'gateway',
+          approximate: false,
+          inputPerMtok: 12,
+          outputPerMtok: 36,
+        },
+      },
+    };
+
+    try {
+      const discounted = render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      const discountTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+      const discountBadge = within(discountTrigger).getByText('立省 50%');
+      expect(discountBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
+      expect(discountBadge.className).toContain('bg-[var(--accent-cta-bg)]');
+      expect(discountBadge.className).toContain('text-[var(--accent-pure-cta-fg)]');
+      discounted.unmount();
+
+      pricingRef.pricing = {};
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-sonnet-4-6',
+          effort: 'medium',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      expect(
+        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).getByText('限时免费'),
+      ).toBeTruthy();
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      pricingRef.pricing = pricingRef.DEFAULT_PRICING;
+    }
+  });
+
+  it('does not mix controller prices with remote provider costs', () => {
+    deviceProvidersRef.providers = [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-opus-4-8',
+              name: 'Opus 4.8',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+              cost: { input: 6, output: 18 },
+            },
+          ],
+        },
+      },
+    ];
+    pricingRef.pricing = {
+      xd: {
+        'claude-opus-4-8': {
+          providerId: 'xd',
+          modelId: 'claude-opus-4-8',
+          currency: 'CNY',
+          source: 'gateway',
+          approximate: false,
+          inputPerMtok: 12,
+          outputPerMtok: 36,
+        },
+      },
+    };
+
+    try {
+      const triggerView = render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'remote-device',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      expect(
+        screen
+          .getByRole('button', { name: /Current: Opus 4\.8/ })
+          .querySelector('[data-model-promotion-badge]'),
+      ).toBeNull();
+      triggerView.unmount();
+
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'remote-device',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      const row = screen.getByRole('option', { name: /Opus 4\.8/ });
+      expect(row.textContent).not.toContain('¥12 / ¥36');
+      expect(row.textContent).not.toContain('¥6 / ¥18');
+      expect(within(row).queryByText('立省 50%')).toBeNull();
+
+      fireEvent.pointerEnter(row);
+      expect(
+        within(screen.getByRole('group', { name: /Opus 4\.8/ })).queryByText(
+          'newChat.modelSelector.pricing.title',
+        ),
+      ).toBeNull();
+    } finally {
+      deviceProvidersRef.providers = [];
+      pricingRef.pricing = pricingRef.DEFAULT_PRICING;
+    }
   });
 
   it('uses model effort display names only as fallback when i18n has no translation', () => {
@@ -538,7 +738,7 @@ describe('ModelSelector trigger variants', () => {
     expect(screen.getByTestId('model-options-popover').className).toContain('z-[10020]');
   });
 
-  it('reveals the selected model options on row hover or keyboard focus without an Edit click', () => {
+  it('keeps non-Gateway prices in their source currency without an approximate marker', () => {
     vi.useFakeTimers();
     render(
       React.createElement(ModelSelectorContent, {
@@ -563,10 +763,13 @@ describe('ModelSelector trigger variants', () => {
     expect(within(options).getByText('Source: Anthropic')).toBeTruthy();
     expect(within(options).getByText('200K context')).toBeTruthy();
     const priceTitle = within(options).getByText('newChat.modelSelector.pricing.title');
-    expect(within(options).getByText('≈¥20.1')).toBeTruthy();
-    expect(within(options).getByText('≈¥100.5')).toBeTruthy();
-    expect(within(options).getByText('≈¥2.01')).toBeTruthy();
-    expect(within(options).getByText('≈¥25.13')).toBeTruthy();
+    expect(row.textContent).toContain('$3 / $15');
+    expect(row.textContent).not.toContain('¥');
+    expect(row.textContent).not.toContain('≈');
+    expect(within(options).getByText('$3')).toBeTruthy();
+    expect(within(options).getByText('$15')).toBeTruthy();
+    expect(within(options).getByText('$0.3')).toBeTruthy();
+    expect(within(options).getByText('$3.75')).toBeTruthy();
     expect(
       within(options).getByText('newChat.modelSelector.pricing.subscriptionEstimate'),
     ).toBeTruthy();
@@ -593,6 +796,155 @@ describe('ModelSelector trigger variants', () => {
     fireEvent.scroll(screen.getByRole('listbox', { name: 'Model list' }));
     expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
     vi.useRealTimers();
+  });
+
+  it('keeps discounted Gateway prices aligned between the row and model details', () => {
+    providersRef.providers = [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'qwen-3.7',
+              name: 'Qwen 3.7',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+              cost: { input: 6, output: 18 },
+            },
+          ],
+        },
+      },
+    ];
+    pricingRef.pricing = {
+      xd: {
+        'qwen-3.7': {
+          providerId: 'xd',
+          modelId: 'qwen-3.7',
+          currency: 'CNY',
+          source: 'gateway',
+          approximate: false,
+          inputPerMtok: 12,
+          outputPerMtok: 36,
+        },
+      },
+    };
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'qwen-3.7',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
+      expect(row.textContent).toContain('¥6 / ¥18');
+      expect(row.textContent).toContain('¥12 / ¥36');
+      const rowBadge = within(row).getByText('立省 50%');
+      expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
+      expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
+      const priceStack = within(row).getByText('¥6 / ¥18').parentElement;
+      expect(priceStack?.getAttribute('data-model-price-stack')).toBe('true');
+      expect(priceStack).not.toBe(rowBadge.parentElement);
+      expect(rowBadge.compareDocumentPosition(priceStack as Node)).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+
+      fireEvent.pointerEnter(row);
+      const details = screen.getByRole('group', { name: /Qwen 3\.7/ });
+      expect(within(details).getByText('¥6')).toBeTruthy();
+      expect(within(details).getByText('¥18')).toBeTruthy();
+      expect(within(details).getByText('¥12').className).toContain('line-through');
+      expect(within(details).getByText('¥36').className).toContain('line-through');
+      const detailsBadge = within(details).getByText('立省 50%');
+      expect(detailsBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
+      expect(detailsBadge.parentElement?.className).toContain('ml-auto');
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      pricingRef.pricing = pricingRef.DEFAULT_PRICING;
+    }
+  });
+
+  it('shows explicit double-zero Gateway models as free in the row and model details', () => {
+    providersRef.providers = [
+      {
+        id: 'xd',
+        name: 'Cindy AI',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'free-gateway-model',
+              name: 'Free Gateway Model',
+              contextWindow: 200000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+              cost: { input: 0, output: 0 },
+            },
+          ],
+        },
+      },
+    ];
+    pricingRef.pricing = null;
+
+    try {
+      const loading = render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'free-gateway-model',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+      expect(
+        within(screen.getByRole('option', { name: /Free Gateway Model/ })).queryByText('限时免费'),
+      ).toBeNull();
+      loading.unmount();
+
+      pricingRef.pricing = {};
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'free-gateway-model',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'xd',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const row = screen.getByRole('option', { name: /Free Gateway Model/ });
+      const rowBadge = within(row).getByText('限时免费');
+      expect(rowBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
+      expect(rowBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
+      expect(row.textContent).not.toContain('立省 100%');
+
+      fireEvent.pointerEnter(row);
+      const details = screen.getByRole('group', { name: /Free Gateway Model/ });
+      const detailsBadge = within(details).getByText('限时免费');
+      expect(detailsBadge.parentElement?.hasAttribute('data-model-tags')).toBe(true);
+      expect(detailsBadge.parentElement?.className).toContain('ml-auto');
+      expect(within(details).queryByText('newChat.modelSelector.pricing.perMillion')).toBeNull();
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      pricingRef.pricing = pricingRef.DEFAULT_PRICING;
+    }
   });
 
   it('shows model information even when a model has no configurable options', () => {

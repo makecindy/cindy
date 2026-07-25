@@ -55,8 +55,10 @@ import {
   getGhostCardService,
   getGhostManager,
   getGhostPipeDispatcher,
+  getGhostSetupAssessment,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
+import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
@@ -64,6 +66,7 @@ import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
+import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
@@ -551,16 +554,31 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             (g.manifest.tools?.length ?? 0) > 0 &&
             !isGhostDisabledForWorkdir(g.manifest.id, workdir),
         )
-        .map((g) => ({
-          id: g.manifest.id,
-          name: g.manifest.name,
-          ...(g.manifest.command ? { command: g.manifest.command } : {}),
-          tools: (g.manifest.tools ?? []).map((t) => ({
-            name: t.name,
-            description: t.description,
-            ...(t.parameters ? { parameters: t.parameters } : {}),
-          })),
-        }));
+        .map((g) => {
+          let setup: CindyGhostInfo['setup'];
+          try {
+            setup = getGhostSetupAssessment(g.manifest.id);
+          } catch (error) {
+            // Roster discovery is best-effort per plugin. Keep this plugin
+            // discoverable without claiming it is ready; ghost_call retains
+            // the strict setup gate and will fail before dispatch.
+            log.warn('ghost setup assessment omitted from roster', {
+              ghostId: g.manifest.id,
+              errorType: error instanceof Error ? error.name : typeof error,
+            });
+          }
+          return {
+            id: g.manifest.id,
+            name: g.manifest.name,
+            ...(g.manifest.command ? { command: g.manifest.command } : {}),
+            ...(setup ? { setup } : {}),
+            tools: (g.manifest.tools ?? []).map((t) => ({
+              name: t.name,
+              description: t.description,
+              ...(t.parameters ? { parameters: t.parameters } : {}),
+            })),
+          };
+        });
     },
     async callGhostTool({
       ghostId,
@@ -571,6 +589,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       saveDir,
       agentToolUseId,
       grantOnly,
+      setupPlan,
     }) {
       // Check the account/session capability before granting attachments or
       // directory tickets. A stale roster from a cloud session must not let a
@@ -587,8 +606,9 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
       // 不做半成品授权。全链路见 grantAttachmentUrls。
       let mergedArgs = args;
-      const sessionIdForConfirm = resolveSessionContext()?.sessionId ?? null;
-      const sessionWorkdir = resolveSessionContext()?.workingDir ?? null;
+      const sessionContext = resolveSessionContext();
+      const sessionIdForConfirm = sessionContext?.sessionId ?? null;
+      const sessionWorkdir = sessionContext?.workingDir ?? null;
       // 目录级禁用兜底(防御线):花名册/ghost_list 已过滤,正常路径走不到
       // 这里——只有"会话开着时中途被禁"(快照已含自述)或模型凭上文记忆
       // 硬调才会命中。message 是可直达模型的人话:停手改道,不要自纠重试。
@@ -600,35 +620,95 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             '用户已在当前工作目录停用该插件;不要重试,改用其它可用方式完成任务,必要时如实转告用户。',
         };
       }
-      // 批量预授权(grant_only):只过户不派发——agent 跑批量任务(逐张图
-      // 逐次调用)前先把整批文件申报一次,用户在一张确认卡上批完,后续
-      // 逐次调用命中授权记忆零弹卡。上限放宽到 MAX_GRANT_ONLY_ATTACHMENTS。
+      // Runtime setup gate: resolve the target before creating any durable
+      // attachment grant, directory ticket, sandbox, card call, or dispatch.
+      const target = getGhostManager()
+        .list()
+        .find((g) => g.manifest.id === ghostId);
+      if (!target) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件不存在或已卸载' };
+      }
+      if (!target.enabled) {
+        return {
+          ok: false,
+          errorCode: 'GHOST_ASLEEP',
+          message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
+        };
+      }
+      // grant_only never dispatches and intentionally ignores its tool field.
+      if (
+        !grantOnly &&
+        !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+      ) {
+        return {
+          ok: false,
+          errorCode: 'TOOL_NOT_FOUND',
+          message: `目标插件没有工具 ${tool}`,
+        };
+      }
+      if (grantOnly && (!attachments || attachments.length === 0)) {
+        return {
+          ok: false,
+          errorCode: 'ATTACHMENT_INVALID',
+          message: 'grant_only 调用必须携带 attachments(要预授权的文件地址列表)',
+        };
+      }
+      const setupCoordinator = getGhostSetupCoordinator();
+      if (!setupCoordinator) {
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: '插件设置通道尚未就绪，本次调用未执行。',
+        };
+      }
+      const setup = await setupCoordinator.ensureReady({
+        sessionId: ghostSetupInteractionSessionId(sessionContext),
+        ghostId,
+        ...(!grantOnly ? { tool } : {}),
+        workingDir: sessionWorkdir,
+        ...(setupPlan ? { plan: setupPlan } : {}),
+      });
+      if (!setup.ok) return setup;
+
+      // OAuth/settings may take minutes. Re-resolve mutable target facts after
+      // the waiter completes and before beginning the existing side effects.
+      const refreshed = getGhostManager()
+        .list()
+        .find((g) => g.manifest.id === ghostId);
+      if (!refreshed || !isGhostAvailableForActiveSession(ghostId)) {
+        return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件已卸载或当前不可用' };
+      }
+      if (!refreshed.enabled) {
+        return { ok: false, errorCode: 'GHOST_ASLEEP', message: '目标插件已被停用' };
+      }
+      if (isGhostDisabledForWorkdir(ghostId, sessionWorkdir)) {
+        return {
+          ok: false,
+          errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+          message: '用户已在当前工作目录停用该插件;不要重试。',
+        };
+      }
+      if (
+        !grantOnly &&
+        !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+      ) {
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `目标插件不再提供工具 ${tool}` };
+      }
+      const finalAssessment = getGhostSetupAssessment(ghostId);
+      if (finalAssessment.state !== 'ready') {
+        return {
+          ok: false,
+          errorCode: 'SETUP_REQUIRED',
+          message: '插件配置在调用恢复前发生变化，请完成设置后重试。',
+          setup: finalAssessment,
+        };
+      }
+      // 批量预授权(grant_only):只过户不派发。它与普通调用共用上面的
+      // Host-authoritative setup gate，确保任何授权副作用之前插件已经 ready。
       if (grantOnly) {
-        // 资格闸:grant_only 不经管子派发器(不派发工具),这里自查——
-        // 不存在/沉睡的意识不该拿到授权行,也不该让用户白点一次确认卡。
-        const target = getGhostManager()
-          .list()
-          .find((g) => g.manifest.id === ghostId);
-        if (!target) {
-          return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: '目标插件不存在或已卸载' };
-        }
-        if (!target.enabled) {
-          return {
-            ok: false,
-            errorCode: 'GHOST_ASLEEP',
-            message: '目标插件未启用,可提示用户到主界面侧边栏「插件」中启用',
-          };
-        }
-        if (!attachments || attachments.length === 0) {
-          return {
-            ok: false,
-            errorCode: 'ATTACHMENT_INVALID',
-            message: 'grant_only 调用必须携带 attachments(要预授权的文件地址列表)',
-          };
-        }
         const grant = await grantAttachmentUrls({
           ghostId,
-          urls: attachments,
+          urls: attachments!,
           workdirAbs: sessionWorkdir,
           sessionId: sessionIdForConfirm,
           maxCount: MAX_GRANT_ONLY_ATTACHMENTS,

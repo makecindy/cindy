@@ -18,6 +18,89 @@ export interface CindyGhostToolInfo {
   /** JSON Schema(object)形态的参数声明;无参工具省略。 */
   parameters?: Record<string, unknown>;
 }
+
+/** Host 对单条配置要求的脱敏分类；只描述能力，不携带配置值。 */
+export type CindyGhostSetupRequirementKind =
+  | 'oauth'
+  | 'secret'
+  | 'connection'
+  | 'plugin_config'
+  | 'client_config';
+
+/** Host 对单条配置要求的权威状态。 */
+export type CindyGhostSetupRequirementState = 'missing' | 'expired' | 'satisfied';
+
+/** Agent 可选择、但只能由 Host 执行的配置动作。 */
+export type CindyGhostSetupAllowedAction =
+  | {
+      /** Host 生成的动作引用，Agent 不得自行构造或直接执行。 */
+      id: string;
+      kind:
+        | 'oauth_connect'
+        | 'open_plugin_settings'
+        | 'manage_connection'
+        | 'open_client_settings';
+    }
+  | {
+      /** Host 生成的散列动作引用；不包含 Secret storage key。 */
+      id: string;
+      kind: 'inline_form';
+      form: {
+        fields: [
+          {
+            /** v1 单字段固定为 value；它不是 storage key。 */
+            id: 'value';
+            type: 'secret';
+            label: string;
+            description?: string;
+            placeholder?: string;
+            required: true;
+            maxLength: number;
+          },
+        ];
+      };
+    };
+
+/**
+ * ghost_list 返回的 Host 权威配置评估。只含引用、展示信息和允许动作，
+ * 禁止携带 Secret、Token、OAuth client secret 或 Connection 内容。
+ */
+export interface CindyGhostSetupAssessment {
+  state: 'ready' | 'required';
+  /** Host 单调递增的状态版本；Agent 回传 plan 时必须原样带回。 */
+  revision: number;
+  /** groups 之间 all-of；每组 items 之间按 mode(any-of)判定。 */
+  groups: Array<{
+    id: string;
+    mode: 'any_of';
+    items: Array<{
+      /** Host 生成的稳定 requirement 引用，仅用于关联，不是可执行能力。 */
+      ref: string;
+      kind: CindyGhostSetupRequirementKind;
+      label: string;
+      description?: string;
+      state: CindyGhostSetupRequirementState;
+      actions: CindyGhostSetupAllowedAction[];
+    }>;
+  }>;
+}
+
+/** Agent 为 Ask 风格配置卡编排的展示步骤；Host 校验后才可采用。 */
+export interface CindyGhostSetupPlan {
+  /** 生成本 plan 时看到的 assessment revision。 */
+  assessmentRevision: number;
+  /** 卡片正文；插件名称与 icon 仍只由 Host 提供。 */
+  intro?: string;
+  steps: Array<{
+    id: string;
+    requirementRefs: string[];
+    title: string;
+    description: string;
+    /** 必须来自对应 requirement 的 allowed actions。 */
+    actionId: string;
+  }>;
+}
+
 /** ghost_list 返回的单段意识条目(仅"已装且唤醒"的意识在列)。 */
 export interface CindyGhostInfo {
   id: string;
@@ -25,6 +108,11 @@ export interface CindyGhostInfo {
   /** 显式触发指令(用户敲 /<command> 点名调用);未声明则省略。 */
   command?: string;
   tools: CindyGhostToolInfo[];
+  /**
+   * Host 现查的配置评估。支持 Setup Runtime 的 Host 应尽量返回，但评估
+   * 读取/计算失败时可省略；Agent 不得把字段缺失解释为 ready 或自行放行。
+   */
+  setup?: CindyGhostSetupAssessment;
 }
 
 /** ghost_call 的结构化失败分类(host 侧产生,总机原样透传给 agent)。 */
@@ -35,6 +123,8 @@ export type CindyGhostCallErrorCode =
   | 'TOOL_NOT_FOUND' // 该意识没有这个工具
   | 'GHOST_CRASHED' // 电子脑执行中崩溃
   | 'TIMEOUT' // 执行超时(host 掐掉)
+  | 'SETUP_REQUIRED' // 配置仍未就绪（无交互面或恢复前又变化）；可带脱敏 assessment，未派发插件
+  | 'SETUP_CANCELLED' // 用户取消插件配置；原调用未派发，不要自动重试
   | 'ATTACHMENT_INVALID' // attachments 里的图片地址无法过户(格式/找不到/超数)
   | 'DIR_INVALID' // dir 目录无法过户(不存在/不在会话 workdir 内/超限额)
   | 'INTERNAL'; // 其它 host 侧错误
@@ -53,7 +143,13 @@ export type CindyGhostCallResult =
        */
       producedMedia?: string[];
     }
-  | { ok: false; errorCode: CindyGhostCallErrorCode | (string & {}); message: string };
+  | {
+      ok: false;
+      errorCode: CindyGhostCallErrorCode | (string & {});
+      message: string;
+      /** 仅 SETUP_REQUIRED 可附 Host 生成的脱敏评估，供无交互面明确降级。 */
+      setup?: CindyGhostSetupAssessment;
+    };
 
 /** ghost_forge_pack 的结构化失败分类(host 侧产生,原样透传给 agent)。 */
 export type CindyForgePackErrorCode =
@@ -147,6 +243,12 @@ export interface CindyGhostsMcpDeps {
      * 绝对路径与文件字节。
      */
     saveDir?: string;
+    /**
+     * Agent 基于 ghost_list.setup 编排的展示计划。Host 必须按最新
+     * assessment 校验 revision、requirementRefs、actionId 和覆盖关系；
+     * 本字段永不注入插件 args，也不代表授权或完成。
+     */
+    setupPlan?: CindyGhostSetupPlan;
     /**
      * agent 侧 tool_use id(卡槽③锚定用,可选):claude 路径由 MCP 请求的
      * `_meta["claudecode/toolUseId"]` 提供(未文档化 key,取不到属正常路径);

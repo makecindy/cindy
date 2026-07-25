@@ -11,6 +11,7 @@ interface ImportMeta {
 }
 
 type ModelAccessStatusPayload = import('../shared/modelAccess').ModelAccessStatus;
+type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsSettingsPayload;
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
 type VoiceInputPowerStatePayload =
   import('../shared/voiceInputPowerIpc').VoiceInputPowerStatePayload;
@@ -250,8 +251,10 @@ interface ComputerDriverStatus {
 interface ComputerDriverStatusOptions {
   includeDoctor?: boolean;
   forcePermissionProbe?: boolean;
+  skipPermissionProbe?: boolean;
   freshPermissionProbe?: boolean;
   bypassPermissionProbeCache?: boolean;
+  passivePermissionProbeOnly?: boolean;
 }
 
 type ComputerDriverPermissionPlatform = 'macos' | 'windows' | 'linux' | 'unsupported';
@@ -1070,6 +1073,14 @@ interface ElectronAPI {
     onChanged: (
       callback: (payload: { ghosts: import('../shared/ghost').InstalledGhost[] }) => void,
     ) => () => void;
+    /** Host 校验 setup action 后请求打开固定的本地配置入口。 */
+    onSetupNavigate: (
+      callback: (
+        payload:
+          | { sessionId: string; target: 'plugin_settings'; ghostId: string }
+          | { sessionId: string; target: 'client_settings' },
+      ) => void,
+    ) => () => void;
     /** 双击 .cindy 转交信号:收到后调 takePendingInstall 取路径走确认装入流程。 */
     onInstallRequested: (callback: () => void) => () => void;
     /** 运行时状态广播:crashed / fused 时面板原地显示错误接管态。 */
@@ -1503,6 +1514,15 @@ interface ElectronAPI {
   onAuthStateChange: (callback: (state: AuthStateChangePayload) => void) => () => void;
   onAuthSessionExpired: (callback: (state: AuthSessionExpiredPayload) => void) => () => void;
   onTapdbDailyActive: (callback: (payload: { date: string }) => void) => () => void;
+
+  // ── 使用统计(TapDB)同意闸 ──
+  getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
+  setAnalyticsEnabled: (enabled: boolean) => Promise<AnalyticsSettingsPayload>;
+  resetAnalyticsEnabled: () => Promise<AnalyticsSettingsPayload>;
+  acceptPrivacyConsent: () => Promise<AnalyticsSettingsPayload>;
+  onAnalyticsSettingsChange: (
+    callback: (payload: AnalyticsSettingsPayload) => void,
+  ) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
   profileGetState: () => Promise<{
@@ -3836,6 +3856,14 @@ interface ElectronAPI {
       decision: Record<string, unknown>,
     ) => Promise<void>;
 
+    /** Submit one inline plugin Secret through the local trusted-frame-only IPC. */
+    submitPluginSetupInline: (request: {
+      requestId: string;
+      actionId: string;
+      expectedRevision: number;
+      value: string;
+    }) => Promise<void>;
+
     /** 快照:某会话当前挂起交互(permission/ask/plan),打开/重连/刷新会话时拉一次重建面板。 */
     getPendingInteractions: (
       sessionId: string,
@@ -4364,9 +4392,19 @@ interface ElectronAPI {
     computer: {
       status: (options?: ComputerDriverStatusOptions) => Promise<ComputerDriverStatus>;
       installDriver: () => Promise<ComputerDriverInstallResult>;
-      grantPermissions: () => Promise<ComputerDriverPermissionGrantResult>;
+      grantPermissions: (options?: {
+        showGuide?: boolean;
+        openedPaneUrl?: string;
+      }) => Promise<ComputerDriverPermissionGrantResult>;
       driverIcon: () => Promise<{ iconDataUrl: string | null }>;
+      permissionGuideStatus: () => Promise<ComputerDriverStatus>;
+      startPermissionAppDrag: (iconDataUrl: string) => void;
+      finishPermissionAppDrag: (didCopy: boolean) => Promise<boolean>;
       cancelPermissionGrant: () => Promise<{ cancelled: boolean }>;
+      onPermissionGuideCancelled: (callback: () => void) => () => void;
+      onPermissionGuideStatusChanged: (
+        callback: (status: ComputerDriverStatus) => void,
+      ) => () => void;
       checkUpdate: () => Promise<ComputerDriverUpdateCheck>;
       updateDriver: (opts?: { joinOnly?: boolean }) => Promise<ComputerDriverInstallResult>;
       onUpdateProgress: (

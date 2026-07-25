@@ -170,26 +170,33 @@ describe('mobile settings overview', () => {
     expect(source).not.toContain('clearManualName');
   });
 
-  it('always shows the regional privacy policy above the cn-only App filing number', () => {
+  it('always shows privacy policy + user agreement (regional links via legalLinks) above the cn-only App filing number', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
     const filingCardIndex = source.indexOf("<SettingsGroup title={t('settings.legal.sectionTitle')}>");
     const privacyRowIndex = source.indexOf('testID="settings.privacyPolicy"');
-    const regionGuardIndex = source.indexOf("{AUTH_REGION === 'cn' ? (", privacyRowIndex);
+    const userAgreementRowIndex = source.indexOf('testID="settings.userAgreement"');
+    const regionGuardIndex = source.indexOf("{AUTH_REGION === 'cn' ? (", userAgreementRowIndex);
     const filingNumberIndex = source.indexOf('testID="settings.appFilingNumber"');
     const accountActionsIndex = source.indexOf('testID="settings.accountActions"');
 
-    expect(source).toContain("const PRIVACY_POLICY_URL = AUTH_REGION === 'cn'");
-    expect(source).toContain("'https://cindy.cn/privacy/'");
-    expect(source).toContain("'https://cindy.app/privacy/'");
-    expect(source).toContain('Linking.openURL(PRIVACY_POLICY_URL)');
+    // 链接不再本地写死:与登录页共用 legalLinks 区域分流单点(protocol.xd.cn/.com)
+    expect(source).toContain("import { LEGAL_LINKS } from '@/config/legalLinks';");
+    expect(source).toContain('Linking.openURL(LEGAL_LINKS.privacyPolicy)');
+    expect(source).toContain('Linking.openURL(LEGAL_LINKS.termsOfService)');
+    expect(source).not.toContain('PRIVACY_POLICY_URL');
+    expect(source).not.toContain('cindy.cn/privacy');
+    expect(source).not.toContain('cindy.app/privacy');
     expect(source).toContain("accessibilityLabel={t('settings.legal.openPrivacyPolicy')}");
+    expect(source).toContain("accessibilityLabel={t('settings.legal.openUserAgreement')}");
     expect(source).toContain('accessibilityRole="link"');
     expect(source).toContain("label={t('settings.legal.privacyPolicy')}");
+    expect(source).toContain("label={t('settings.legal.userAgreement')}");
     expect(source).toContain("label={t('settings.legal.appFilingNumber')}");
     expect(source).toContain('value="沪ICP备11033765号-89A"');
     expect(filingCardIndex).toBeGreaterThan(-1);
     expect(privacyRowIndex).toBeGreaterThan(filingCardIndex);
-    expect(regionGuardIndex).toBeGreaterThan(privacyRowIndex);
+    expect(userAgreementRowIndex).toBeGreaterThan(privacyRowIndex);
+    expect(regionGuardIndex).toBeGreaterThan(userAgreementRowIndex);
     expect(filingNumberIndex).toBeGreaterThan(regionGuardIndex);
     expect(accountActionsIndex).toBeGreaterThan(filingNumberIndex);
   });

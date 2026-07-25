@@ -127,10 +127,7 @@ describe('XD 网关权威模型清单重建', () => {
 
   it('defaultEnabled 显式 false 透传;缺省不写键(= 默认可见)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([
-      { id: 'hidden-model', defaultEnabled: false },
-      { id: 'visible-model' },
-    ]);
+    setXdGatewayModels([{ id: 'hidden-model', defaultEnabled: false }, { id: 'visible-model' }]);
     const cc = xdModels('claude-code');
     expect(cc.find((m) => m.id === 'hidden-model')?.defaultEnabled).toBe(false);
     expect('defaultEnabled' in (cc.find((m) => m.id === 'visible-model') ?? {})).toBe(false);
@@ -138,19 +135,81 @@ describe('XD 网关权威模型清单重建', () => {
 
   it('icon(AI Gateway 展示图标设定)透传;缺省不写键(渲染层回落来源供应商标)', () => {
     setActiveCatalog(BUNDLED_CATALOG);
-    setXdGatewayModels([
-      { id: 'claude-fable-5', icon: 'claude' },
-      { id: 'plain-model' },
-    ]);
+    setXdGatewayModels([{ id: 'claude-fable-5', icon: 'claude' }, { id: 'plain-model' }]);
     const cc = xdModels('claude-code');
     expect(cc.find((m) => m.id === 'claude-fable-5')?.icon).toBe('claude');
     expect('icon' in (cc.find((m) => m.id === 'plain-model') ?? {})).toBe(false);
   });
 
+  it('把标准 token 价投影为每百万 token 的折后展示价', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([
+      {
+        id: 'half-price',
+        costDiscount: 0.5,
+        inputCostPerToken: 0.000012,
+        outputCostPerToken: 0.000036,
+      },
+      {
+        id: 'twenty-percent-off',
+        costDiscount: 0.2,
+        inputCostPerToken: 0.00001,
+        outputCostPerToken: 0.00002,
+      },
+      {
+        id: 'free-model',
+        inputCostPerToken: 0,
+        outputCostPerToken: 0,
+      },
+      {
+        id: 'full-price',
+        inputCostPerToken: 0.000012,
+        outputCostPerToken: 0.000036,
+      },
+      {
+        id: 'invalid-discount',
+        costDiscount: 1.2,
+        inputCostPerToken: 0.000012,
+        outputCostPerToken: 0.000036,
+      },
+      {
+        id: 'missing-output',
+        inputCostPerToken: 0.000012,
+      },
+    ]);
+
+    const cc = xdModels('claude-code');
+    expect(cc.find((m) => m.id === 'half-price')?.cost).toEqual({
+      input: 6,
+      output: 18,
+    });
+    expect(cc.find((m) => m.id === 'twenty-percent-off')?.cost).toEqual({
+      input: 8,
+      output: 16,
+    });
+    expect(cc.find((m) => m.id === 'free-model')?.cost).toEqual({
+      input: 0,
+      output: 0,
+    });
+    expect(cc.find((m) => m.id === 'full-price')?.cost).toEqual({
+      input: 12,
+      output: 36,
+    });
+    expect(cc.find((m) => m.id === 'invalid-discount')?.cost).toEqual({
+      input: 12,
+      output: 36,
+    });
+    expect(cc.find((m) => m.id === 'missing-output')?.cost).toBeUndefined();
+  });
+
   it('非法 effort 档位被白名单过滤;defaultEffort 不在档位集内时回落 high 规则', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
-      { id: 'weird-model', efforts: ['high', 'bogus-effort', 'max'], defaultEffort: 'bogus-effort' },
+      {
+        id: 'weird-model',
+        efforts: ['high', 'bogus-effort', 'max'],
+        defaultEffort: 'bogus-effort',
+      },
     ]);
     const cc = xdModels('claude-code');
     expect(cc[0].efforts).toEqual(['high', 'max']);

@@ -638,18 +638,44 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
   });
 
-  it('refreshes the balance once when a checkout becomes completed', async () => {
+  it('refreshes the balance once and shows no recovery action when a top-up succeeds', async () => {
+    const pendingOrder = {
+      orderId: 'order_paid',
+      productCode: 'credit_topup',
+      offerCode: 'credit_topup_custom',
+      amount: '10',
+      currency: 'cny',
+      status: 'PENDING' as const,
+      paymentAction: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    };
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'TOPUP',
+      phase: 'AWAITING_PAYMENT',
+      order: pendingOrder,
+    });
     const getBalance = window.electronAPI.billing.getBalance;
     const view = render(<BillingPage />);
     await waitFor(() => expect(getBalance).toHaveBeenCalledTimes(1));
 
-    Object.assign(checkout.state, { phase: 'AWAITING_PAYMENT' });
-    view.rerender(<BillingPage />);
-    expect(getBalance).toHaveBeenCalledTimes(1);
-
-    Object.assign(checkout.state, { phase: 'COMPLETED' });
+    Object.assign(checkout.state, {
+      phase: 'COMPLETED',
+      order: {
+        ...pendingOrder,
+        status: 'SUCCEEDED',
+        fulfillmentStatus: 'FAILED',
+      },
+    });
     view.rerender(<BillingPage />);
     await waitFor(() => expect(getBalance).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('billing.checkout.completedTitle')).toBeTruthy();
+    expect(screen.getByText('billing.checkout.paymentCompleted')).toBeTruthy();
+    expect(screen.queryByText('billing.recovery.title')).toBeNull();
+    expect(
+      screen.queryByText((text) => text.startsWith('billing.recovery.continueTopup')),
+    ).toBeNull();
 
     view.rerender(<BillingPage />);
     expect(getBalance).toHaveBeenCalledTimes(2);
@@ -922,34 +948,6 @@ describe('BillingPage remote catalog rendering', () => {
     expect(planButtons[1].getAttribute('aria-pressed')).toBe('true');
     expect(await screen.findByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
-  });
-
-  it('shows a crediting state until top-up fulfillment succeeds', async () => {
-    Object.assign(checkout.state, {
-      open: true,
-      kind: 'TOPUP',
-      phase: 'FULFILLING',
-      order: {
-        orderId: 'order_paid',
-        productCode: 'credit_topup',
-        offerCode: 'credit_topup_custom',
-        amount: '10',
-        currency: 'cny',
-        status: 'SUCCEEDED',
-        fulfillmentStatus: 'FAILED',
-        paymentAction: null,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:01:00.000Z',
-      },
-    });
-
-    render(<BillingPage />);
-    await screen.findByText('billing.settings.subscriptionCard.empty');
-
-    expect(screen.getByText('billing.checkout.fulfillingTitle')).toBeTruthy();
-    expect(screen.getByText('billing.checkout.creditingBody')).toBeTruthy();
-    expect(screen.queryByText('billing.checkout.completedTitle')).toBeNull();
-    expect(screen.queryByText('billing.checkout.paymentCompleted')).toBeNull();
   });
 
   it('allows an uncertain failed checkout to be dismissed for later recovery', async () => {

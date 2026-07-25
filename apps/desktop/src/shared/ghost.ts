@@ -56,7 +56,7 @@ export function parseGhostPartition(partition: unknown): string | null {
 const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /**
- * 八个卡槽(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
+ * 十四个卡槽(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
  * 'cindy' = 请 Cindy 本体代办(借主机自带 AI 能力干活;2026-07-11 Lizi 定案
  * 由 'model' 更名——本质是 Cindy 在干活,与选模型无关;旧名在校验层作
  * 静默别名兼容,已装老包不消失)。
@@ -82,6 +82,13 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 'preview' = 面板预览(2026-07-23):插件经管子申请在右侧栏内置浏览器里打开
  * 一个网址标签页。网址范围装入时在 preview.hosts 白名单里定死(同 network
  * 域名白名单语法),运行期主机逐次校验,范围外一律拒——防钓鱼是结构性的。
+ * 'skill' = 捆绑 Agent Skills(2026-07-25):插件随包携带 SKILL.md 技能目录,
+ * 装入且启用后由主机链接进共享技能根 ~/.agents/skills/<id>--<name>(win32 用
+ * junction),Claude Code 与 Codex 都能发现。信任面与其它槽完全不同量级:技能
+ * 指令由主 Agent 以**用户全部权限**执行、对所有项目与会话生效、不受插件沙箱
+ * 约束,也不随"某工作目录停用本插件"而隐藏——仅全局停用/卸载才撤链。因此
+ * manifest 全声明式(items 的 name/description 必须与 SKILL.md frontmatter 逐字
+ * 一致,打包与装入双侧强制),装入确认框逐条列出并置于清单最上部。
  */
 export const GHOST_SLOTS = [
   'subscribe',
@@ -97,6 +104,7 @@ export const GHOST_SLOTS = [
   'session-context',
   'pick',
   'preview',
+  'skill',
 ] as const;
 export type GhostSlot = (typeof GHOST_SLOTS)[number];
 
@@ -320,12 +328,12 @@ export interface GhostPanelDecl {
   defaultFraction?: number;
   /**
    * 标准头系统按钮开关(2026-07-25):缺省全开,声明 false 逐个关闭。
-   * 当前一批:maximize =「撑满内容区」、detach =「在独立窗口中打开」。
-   * 标准头本体(标题条)恒由主机绘制、不可关——可配置的只是系统按钮;
-   * 'tab' 形态没有标准头,声明本字段拒装。未知键按规则 9 收词明确拒绝,
-   * 新按钮上线时在这里扩键。
+   * 当前一批:maximize =「撑满内容区」、detach =「在独立窗口中打开」、
+   * minimize =「最小化为浮动气泡」。标准头本体(标题条)恒由主机绘制、
+   * 不可关——可配置的只是系统按钮;'tab' 形态没有标准头,声明本字段拒装。
+   * 未知键按规则 9 收词明确拒绝,新按钮上线时在这里扩键。
    */
-  systemButtons?: { maximize?: boolean; detach?: boolean };
+  systemButtons?: { maximize?: boolean; detach?: boolean; minimize?: boolean };
 }
 
 /**
@@ -645,16 +653,16 @@ export const GHOST_SECRET_SOURCES = ['user', 'login-email', 'oauth'] as const;
 export type GhostSecretSource = (typeof GHOST_SECRET_SOURCES)[number];
 
 /**
- * 凭证收单(2026-07-13 两次定案,当天收敛):user 凭证的收单**一律**由意识
- * settingsHtml 自绘——经协议 `/secrets` 只写通道一次性入库,存入后意识拿不回
- * 明文,保管(safeStorage)与注入(主机代发时)由主机独占。安全模型弱化点
- * 仅一处:录入瞬间明文经过意识页面(用户主动敲进它的输入框),装入确认框
- * 如实告知。**宿主渲染凭证输入行已整体退役**(基座不再为意识特设凭证 UI,
- * Lizi 定案):清单里遗留的 `input: "ghost"` 接受并忽略(与现状同义),
- * `input: "host"` 直接拒绝;声明 user 凭证必须同时声明 settingsHtml。
+ * user 凭证有两条 Host 受控收单路径:
+ * - 调用前缺失时，Setup Runtime 根据本声明生成统一 inline_form；
+ * - 详情页由 settingsHtml 经 `/secrets` 只写通道长期管理、替换和清除。
+ *
+ * 两条路径都只把明文一次性交给 Main 保险库，插件运行时只能获得 Host 注入后的
+ * 请求，读不回原值。历史 `input` 字段仍退役：`input: "ghost"` 仅兼容接受并忽略，
+ * `input: "host"` 拒绝；当前仍要求 user 凭证同时声明 settingsHtml 作为管理入口。
  */
 
-/** 凭证声明:只有名字与说明——值由用户在该意识设置区填入主机保险库。 */
+/** 凭证声明：Host 用名字与说明生成 Setup 字段，值只写入主机保险库。 */
 export interface GhostSecretDecl {
   /** 凭证键(意识内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
   key: string;
@@ -752,6 +760,41 @@ export const GHOST_PREVIEW_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   '[::1]',
 ]);
 
+/** skill 槽:单插件最多捆绑的 Agent Skill 数(范围越小越好,同 preview 精神)。 */
+export const GHOST_SKILL_MAX_ITEMS = 4;
+/** skill 槽:SKILL.md 单文件字节上限。打包与装入两侧共用,避免契约漂移。 */
+export const GHOST_SKILL_MD_MAX_BYTES = 64 * 1024;
+/** skill 槽:技能 name 长度上限(链接目录名的一半,克制)。 */
+export const GHOST_SKILL_NAME_MAX_CHARS = 64;
+/**
+ * skill 槽:技能 name 形状——小写字母/数字,连字符仅作单段分隔(禁首尾与连续
+ * 连字符)。比 learn-host 的 SKILL_NAME_RE 更严:意识 id 允许含 `--`
+ * (GHOST_ID_RE),共享技能根的链接名是 `<id>--<name>`,只有 name 侧禁 `--`,
+ * 按"最后一个 `--`"拆分才唯一,不同插件才不可能撞出同一个链接名。
+ */
+export const GHOST_SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** skill 槽单条技能声明(全声明式:确认框展示的就是这里的字段)。 */
+export interface GhostSkillItem {
+  /** 包内技能目录(安全相对路径,目录内必须有 SKILL.md)。 */
+  dir: string;
+  /**
+   * 技能名。必须与 SKILL.md frontmatter 的 name 逐字一致(打包与装入双侧
+   * 强制)——确认框里用户看到的,必须就是 Agent 实际读到的。
+   */
+  name: string;
+  /** 技能说明。必须与 SKILL.md frontmatter 的 description 逐字一致(同上)。 */
+  description: string;
+}
+
+/**
+ * skill 槽详单(与 slots 含 'skill' 严格成对——有槽必有详单:捆绑了什么技能
+ * 是本能力的全部知情面,不允许"先装后说")。装入确认框逐条展示。
+ */
+export interface GhostSkillNeeds {
+  items: GhostSkillItem[];
+}
+
 /**
  * preview 槽运行期 URL 守门(纯函数,主机侧调用):
  * - 只收 https;http 仅放行 loopback(localhost / 127.0.0.1 / [::1])——本地
@@ -824,6 +867,19 @@ export const GHOST_NETWORK_FORBIDDEN_INJECT_HEADERS: readonly string[] = [
 export const GHOST_SETUP_MAX_GROUPS = 8;
 /** 每个需求组内 anyOf 条目上限。 */
 export const GHOST_SETUP_MAX_ITEMS_PER_GROUP = 8;
+/** 一张 setup 卡最多需要覆盖 manifest 合法声明的全部可操作条目。 */
+export const GHOST_SETUP_MAX_STEPS =
+  GHOST_SETUP_MAX_GROUPS * GHOST_SETUP_MAX_ITEMS_PER_GROUP;
+/**
+ * Host-owned setup providers may append requirements that do not exist in the
+ * plugin manifest (for example, a shared client capability). Reserve a bounded
+ * number of steps for those Core-owned requirements so a maximally valid
+ * manifest still crosses the Main → Renderer interaction boundary intact.
+ */
+export const GHOST_SETUP_MAX_HOST_STEPS = 8;
+/** setup interaction/plan transport capacity, including Host-owned steps. */
+export const GHOST_SETUP_MAX_INTERACTION_STEPS =
+  GHOST_SETUP_MAX_STEPS + GHOST_SETUP_MAX_HOST_STEPS;
 /** setup kv 引用的键名形状(意识 /kv 顶层键;点号仅作普通字符,不做路径下钻)。 */
 export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
@@ -866,6 +922,140 @@ export interface GhostSetupStatus {
   missingGroups: GhostSetupStatusItem[][];
   /** OAuth 账号存在但全部过期的条目(文案区分「重新连接」)。ready 时恒为空。 */
   reauth: GhostSetupStatusItem[];
+}
+
+/** Setup Runtime 暴露给 Agent / Renderer 的需求类型；不包含任何配置值。 */
+export type GhostSetupRequirementKind =
+  | 'oauth'
+  | 'secret'
+  | 'connection'
+  | 'plugin_config'
+  | 'client_config';
+
+/** Host 对单条 requirement 的权威判定。 */
+export type GhostSetupRequirementState = 'missing' | 'expired' | 'satisfied';
+
+/** Setup Runtime 允许 Agent 选择、但只能由 Host 执行的动作。 */
+export type GhostSetupActionKind =
+  | 'oauth_connect'
+  | 'open_plugin_settings'
+  | 'manage_connection'
+  | 'open_client_settings'
+  | 'inline_form';
+
+/** Secret 输入沿用 /secrets 的字符上限；值本身永远不进入 Shared DTO。 */
+export const GHOST_SECRET_VALUE_MAX_CHARS = 4096;
+
+export interface GhostSetupInlineSecretField {
+  /** v1 只支持单字段，固定 id 防止 Renderer/Agent 构造任意存储键。 */
+  id: 'value';
+  type: 'secret';
+  label: string;
+  description?: string;
+  placeholder?: string;
+  /**
+   * Host 从 manifest 的 network.secrets[].url 生成的辅助入口。
+   * 仅供可信 Desktop UI 展示；MCP 边界会剥离，Agent 不能提供或改写 URL。
+   */
+  externalLink?: {
+    url: string;
+  };
+  required: true;
+  maxLength: number;
+}
+
+export type GhostSetupAllowedAction =
+  | {
+      /** Host 生成的动作引用；执行时必须按最新 assessment 再校验，不能直接当执行参数。 */
+      id: string;
+      kind: Exclude<GhostSetupActionKind, 'inline_form'>;
+    }
+  | {
+      /** Host 生成的散列动作引用；不编码或暴露 Secret storage key。 */
+      id: string;
+      kind: 'inline_form';
+      form: {
+        /** v1 仅支持一个 Secret 字段。 */
+        fields: [GhostSetupInlineSecretField];
+      };
+    };
+
+export interface GhostSetupAssessmentItem {
+  /** requirement 的稳定关联引用；不携带配置值，也不是可执行能力。 */
+  ref: string;
+  kind: GhostSetupRequirementKind;
+  label: string;
+  description?: string;
+  state: GhostSetupRequirementState;
+  actions: GhostSetupAllowedAction[];
+}
+
+export interface GhostSetupAssessmentGroup {
+  id: string;
+  mode: 'any_of';
+  items: GhostSetupAssessmentItem[];
+}
+
+/**
+ * Setup Runtime 的完整判定结果。groups 之间 all-of，组内 any-of；
+ * revision 由 Host 变更总线维护，用于丢弃过期卡片更新。
+ */
+export interface GhostSetupAssessment {
+  state: 'ready' | 'required';
+  revision: number;
+  groups: GhostSetupAssessmentGroup[];
+}
+
+/** Agent 可选提供的展示编排；身份、Action 和完成状态仍由 Host 决定。 */
+export interface GhostSetupPlan {
+  assessmentRevision: number;
+  intro?: string;
+  steps: Array<{
+    id: string;
+    requirementRefs: string[];
+    title: string;
+    description: string;
+    actionId: string;
+  }>;
+}
+
+export type GhostSetupStepPhase =
+  | 'pending'
+  | 'action_running'
+  | 'waiting_external'
+  | 'verifying'
+  | 'satisfied'
+  | 'failed'
+  | 'cancelled';
+
+/**
+ * Setup 卡片跨进程／跨设备传输的稳定错误码。
+ *
+ * Main 可以保留内部错误详情用于诊断，但 interaction snapshot 只携带这些
+ * 与 locale 无关的 code；每个 Renderer 按自己的语言映射可操作文案。
+ */
+export const GHOST_SETUP_ERROR_CODES = [
+  'ACTION_FAILED',
+  'ACTION_STALE',
+  'AUTH_CANCELLED',
+  'AUTH_FAILED',
+  'INLINE_INVALID',
+  'INLINE_UNAVAILABLE',
+  'SAVE_FAILED',
+  'WINDOW_CLOSED',
+  'TARGET_UNAVAILABLE',
+  'ASSESSMENT_FAILED',
+  'TIMEOUT',
+] as const;
+
+export type GhostSetupErrorCode = (typeof GHOST_SETUP_ERROR_CODES)[number];
+
+/** 不可信 interaction payload 的稳定 Setup 错误码守卫。 */
+export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorCode {
+  return (
+    typeof value === 'string' &&
+    (GHOST_SETUP_ERROR_CODES as readonly string[]).includes(value)
+  );
 }
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
@@ -925,8 +1115,9 @@ export interface GhostManifest {
   /**
    * 设置页「自定义设置区」界面入口(可选;安装目录内相对路径,意识自绘)。
    * 与面板同款沙箱 webview 渲染(零桥、分区断网、CSP 'self'),主题 token
-   * 由主机灌入。凭证输入**不**走这里(必须 network.secrets 声明、主机渲染,
-   * 意识摸不到明文);自定义参数持久化走同源 `fetch('/kv')`。
+   * 由主机灌入。调用前缺失的 user Secret 可由 Host Setup 卡收单；详情页仍可
+   * 通过同源只写 `/secrets` 管理、替换和清除。自定义参数持久化走 `/kv`，
+   * Secret 不得写入 `/kv`。
    */
   settingsHtml?: string;
   /**
@@ -965,6 +1156,12 @@ export interface GhostManifest {
    * 打开预览标签页的域名白名单。
    */
   preview?: GhostPreviewNeeds;
+  /**
+   * skill 槽详单(与 slots 含 'skill' 严格成对):随包捆绑的 Agent Skills 清单。
+   * 启用时主机链接进共享技能根,Claude Code 与 Codex 双端可见;字段不参与
+   * 本地化(必须与 SKILL.md 逐字一致,见 GhostSkillItem)。
+   */
+  skill?: GhostSkillNeeds;
   /**
    * 就绪声明(使用前置检查,见 GhostSetupDecl 块注释):作者声明「用之前
    * 必须配好什么」,宿主点「使用」时确定性检查并引导配置。缺省 = 启发式
@@ -1082,6 +1279,8 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'network') keys.push('slotNetwork');
     else if (slot === 'notify') keys.push('slotNotify');
     else if (slot === 'fs') keys.push('slotFs');
+    // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
+    else if (slot === 'skill') keys.push('slotSkill');
     // 'panel' 槽已由 manifest.panel 覆盖,不重复
   }
   return keys;
@@ -1143,7 +1342,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1246,6 +1445,20 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         detailKey: 'nodeChildSpawnDetail',
       });
     }
+  }
+  // skill 槽:技能指令由主 Agent 以用户全部权限执行、全项目生效、不受沙箱
+  // 约束——信任面仅次于拦截钩子,逐条 unshift 到清单上部(倒序遍历保持声明
+  // 顺序)。key 用 name 稳定对齐更新 diff;detail = 作者声明的 description
+  // 原样展示(装入/打包校验已保证与 SKILL.md 逐字一致)。
+  for (const skillItem of [...(manifest.skill?.items ?? [])].reverse()) {
+    items.unshift({
+      key: `skill:${skillItem.name}`,
+      kind: 'skill',
+      labelKey: 'skill',
+      labelArgs: { name: skillItem.name },
+      detailKey: 'skillDetail',
+      detail: skillItem.description,
+    });
   }
   // 多连接声明:逐条列"可连接你添加的 <连接类型>"——地址是用户后来自己加的
   // (且每次新增都过主机受信确认弹窗),装入时只能告知形态,不能列出具体域名。
@@ -1437,11 +1650,27 @@ export function diffGhostPermissionItems(
   const nextItems = ghostPermissionItems(next);
   const prevKeys = new Set(prevItems.map((i) => i.key));
   const nextKeys = new Set(nextItems.map((i) => i.key));
-  return {
-    added: nextItems.filter((i) => !prevKeys.has(i.key)),
-    removed: prevItems.filter((i) => !nextKeys.has(i.key)),
-    unchanged: nextItems.filter((i) => prevKeys.has(i.key)),
-  };
+  const prevDetailByKey = new Map(prevItems.map((i) => [i.key, i.detail ?? '']));
+  const added: GhostPermissionItem[] = [];
+  const removed: GhostPermissionItem[] = [];
+  const unchanged: GhostPermissionItem[] = [];
+  for (const item of nextItems) {
+    if (!prevKeys.has(item.key)) {
+      added.push(item);
+    } else if ((item.detail ?? '') !== prevDetailByKey.get(item.key)) {
+      added.push(item);
+    } else {
+      unchanged.push(item);
+    }
+  }
+  for (const item of prevItems) {
+    if (!nextKeys.has(item.key)) {
+      removed.push(item);
+    } else if ((item.detail ?? '') !== (nextItems.find((n) => n.key === item.key)?.detail ?? '')) {
+      removed.push(item);
+    }
+  }
+  return { added, removed, unchanged };
 }
 
 /**
@@ -2182,7 +2411,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         return { ok: false, reason: 'panel.systemButtons 必须是对象(如 { "maximize": false })' };
       }
       // 收词明确拒绝未知键(规则 9):新系统按钮上线时在白名单里扩键。
-      const knownButtons = ['maximize', 'detach'];
+      const knownButtons = ['maximize', 'detach', 'minimize'];
       for (const key of Object.keys(sb)) {
         if (!knownButtons.includes(key)) {
           return { ok: false, reason: `panel.systemButtons 只认 ${knownButtons.join(' / ')},未知键:${key}` };
@@ -2193,9 +2422,11 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       }
       const maximize = (sb as Record<string, unknown>).maximize;
       const detach = (sb as Record<string, unknown>).detach;
+      const minimize = (sb as Record<string, unknown>).minimize;
       systemButtons = {
         ...(typeof maximize === 'boolean' ? { maximize } : {}),
         ...(typeof detach === 'boolean' ? { detach } : {}),
+        ...(typeof minimize === 'boolean' ? { minimize } : {}),
       };
     }
     let position: GhostPanelPosition | undefined;
@@ -2732,6 +2963,79 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     return { ok: false, reason: 'slots 声明了 "preview" 但缺少 preview 详单(hosts 域名白名单必填)' };
   }
 
+  // skill 槽详单:与 slots 含 'skill' **严格成对**(有槽必有详单——捆绑了什么
+  // 技能是本能力的全部知情面)。name/description 与 SKILL.md 的逐字一致性在
+  // 打包(packGhostDir)与装入(GhostManager.parse)两侧另行强制,这里只管
+  // 声明本身的形状。name/dir 大小写折叠去重:win32 文件系统折叠大小写,
+  // 共享技能根的链接名不允许折叠后相撞。
+  let skill: GhostSkillNeeds | undefined;
+  if (raw.skill !== undefined) {
+    if (!isPlainObject(raw.skill)) {
+      return { ok: false, reason: 'skill 详单必须是对象(如 { "items": [{ "dir": "skills/foo", "name": "foo", "description": "..." }] })' };
+    }
+    if (!slots.includes('skill')) {
+      return { ok: false, reason: '声明了 skill 详单但 slots 未包含 "skill"' };
+    }
+    const skillRaw = raw.skill as Record<string, unknown>;
+    const unknownSkillField = Object.keys(skillRaw).find((key) => key !== 'items');
+    if (unknownSkillField !== undefined) {
+      return { ok: false, reason: `skill 含不允许的字段 ${JSON.stringify(unknownSkillField)}` };
+    }
+    if (!Array.isArray(skillRaw.items) || skillRaw.items.length === 0) {
+      return { ok: false, reason: 'skill.items 必须是非空数组(随包捆绑的技能清单)' };
+    }
+    if (skillRaw.items.length > GHOST_SKILL_MAX_ITEMS) {
+      return { ok: false, reason: `skill.items 最多 ${GHOST_SKILL_MAX_ITEMS} 条` };
+    }
+    const skillItems: GhostSkillItem[] = [];
+    const seenSkillNames = new Set<string>();
+    const seenSkillDirs = new Set<string>();
+    for (const item of skillRaw.items) {
+      if (!isPlainObject(item)) {
+        return { ok: false, reason: 'skill.items 每项必须是对象({ dir, name, description })' };
+      }
+      const itemRaw = item as Record<string, unknown>;
+      const unknownItemField = Object.keys(itemRaw).find(
+        (key) => key !== 'dir' && key !== 'name' && key !== 'description',
+      );
+      if (unknownItemField !== undefined) {
+        return { ok: false, reason: `skill.items 条目含不允许的字段 ${JSON.stringify(unknownItemField)}` };
+      }
+      if (!isSafeGhostRelativePath(itemRaw.dir)) {
+        return { ok: false, reason: `skill.items[].dir 必须是包内安全相对路径(如 "skills/foo"),得到 ${JSON.stringify(itemRaw.dir)}` };
+      }
+      if (
+        typeof itemRaw.name !== 'string' ||
+        itemRaw.name.length > GHOST_SKILL_NAME_MAX_CHARS ||
+        !GHOST_SKILL_NAME_RE.test(itemRaw.name)
+      ) {
+        return { ok: false, reason: `skill.items[].name 必须是小写字母/数字加单连字符分段(禁首尾/连续连字符)、长度 1–${GHOST_SKILL_NAME_MAX_CHARS},得到 ${JSON.stringify(itemRaw.name)}` };
+      }
+      if (
+        typeof itemRaw.description !== 'string' ||
+        itemRaw.description.trim().length === 0 ||
+        itemRaw.description.length > 1024
+      ) {
+        return { ok: false, reason: 'skill.items[].description 必须是 1–1024 字符的非空字符串' };
+      }
+      const nameFold = itemRaw.name.toLowerCase();
+      if (seenSkillNames.has(nameFold)) {
+        return { ok: false, reason: `skill.items 含重复 name ${JSON.stringify(itemRaw.name)}` };
+      }
+      seenSkillNames.add(nameFold);
+      const dirFold = itemRaw.dir.toLowerCase();
+      if (seenSkillDirs.has(dirFold)) {
+        return { ok: false, reason: `skill.items 含重复 dir ${JSON.stringify(itemRaw.dir)}` };
+      }
+      seenSkillDirs.add(dirFold);
+      skillItems.push({ dir: itemRaw.dir, name: itemRaw.name, description: itemRaw.description });
+    }
+    skill = { items: skillItems };
+  }
+  if (slots.includes('skill') && skill === undefined) {
+    return { ok: false, reason: 'slots 声明了 "skill" 但缺少 skill 详单(items 技能清单必填)' };
+  }
+
   // 订阅槽详单(卡槽①):与 slots 含 'subscribe' 成对(有详单必有槽;有槽
   // 无详单允许装入但零事件,同 cindy 语义)。硬规则:声明了 hooks(拦截)
   // 必须 launch:'resident'——要挡路就得常驻在场,每条消息等冷启动不可接受。
@@ -2862,13 +3166,13 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
           if (s.source === 'login-email') source = 'login-email';
           if (s.source === 'oauth') source = 'oauth';
         }
-        // 输入面字段已退役(2026-07-13 宿主凭证渲染整体退役):user 凭证
-        // 一律意识 settingsHtml 收单。遗留 `input: "ghost"` 接受并忽略
-        // (与现状同义、不落清单);其余值(含 'host')一律拒。
+        // 旧 input 字段已退役：Setup Runtime 直接从 Secret 声明生成 Host 表单，
+        // settingsHtml 继续提供详情页管理。遗留 `input: "ghost"` 接受并忽略
+        // (不落清单)；其余值(含 'host')一律拒。
         if (s.input !== undefined && s.input !== 'ghost') {
           return {
             ok: false,
-            reason: 'network.secrets[].input 已退役:宿主收单不存在,用户填写的凭证一律由意识 settingsHtml 收单(删掉 input 字段即可;唯一可接受的遗留值是 "ghost")',
+            reason: 'network.secrets[].input 已退役:Setup 表单直接从 Secret 声明生成,详情页由 settingsHtml 管理(删掉 input 字段即可;唯一可接受的遗留值是 "ghost")',
           };
         }
         // login-email:值取自主机登录态派生,用户不填、没有输入面,
@@ -2883,7 +3187,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         if (!loginDerived && raw.settingsHtml === undefined) {
           return {
             ok: false,
-            reason: 'network.secrets 声明了用户填写的凭证时必须同时声明 settingsHtml(凭证由意识设置界面收单,没有界面就没人收单;宿主渲染输入行已退役)',
+            reason: 'network.secrets 声明了用户填写的凭证时必须同时声明 settingsHtml(调用前可由 Host Setup 卡收单,settingsHtml 仍是长期管理/替换/清除入口)',
           };
         }
         if (loginDerived && s.url !== undefined) {
@@ -3603,6 +3907,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
+      ...(skill !== undefined ? { skill } : {}),
       ...(setup !== undefined ? { setup } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

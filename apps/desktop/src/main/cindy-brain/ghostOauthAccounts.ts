@@ -118,8 +118,28 @@ export interface GhostOauthAccountManagerDeps {
    * 授权成功钩子(2026-07-14):新连与同身份重连两个成功出口都触发,调用方
    * 拿它广播"授权成功"的主机代言 tips(label = 账号展示标签,声明 identity
    * 且拉取成功才有)。抛错不许影响连接结果,实现侧自兜。
-   */
+  */
   onAccountConnected?: (info: { ghostId: string; secretKey: string; label: string | null }) => void;
+  /**
+   * Refresh-path status transition hook. It deliberately carries no token,
+   * label, account id, or provider response and fires only after a real
+   * connected/expired manifest change commits.
+   */
+  onAccountStatusChanged?: (info: {
+    ghostId: string;
+    secretKey: string;
+    status: GhostOauthAccountStatus;
+  }) => void;
+  /**
+   * Fresh lifecycle guard for long-running browser authorization. Production
+   * verifies that the plugin and the exact OAuth declaration still exist
+   * before any callback result is persisted.
+   */
+  isConnectTargetCurrent?: (
+    ghostId: string,
+    secretKey: string,
+    decl: GhostOauthDecl,
+  ) => boolean;
   /** 延时器(仅 invalid_grant 轮换探测用;测试注入即时假体,生产缺省 setTimeout)。 */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -465,6 +485,13 @@ export class GhostOauthAccountManager {
       reclaimPort: isOfficialGhostId(ghostId) ? this.deps.reclaimPort : undefined,
     });
     if (!flow.ok) return { ok: false, error: flow.error, detail: flow.detail };
+    if (this.deps.isConnectTargetCurrent?.(ghostId, secretKey, decl) === false) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: '插件或授权声明已变更',
+      };
+    }
 
     // 身份标签:声明了 identity 才拉,失败降级 null(不阻断授权)。label 是
     // 同身份合并的判定键;display 是展示名(declaration 有 displayTemplate 才有);
@@ -492,6 +519,17 @@ export class GhostOauthAccountManager {
       if (identity.avatarUrl !== null && isOfficialGhostId(ghostId)) {
         avatar = await fetchGhostOauthAvatar({ url: identity.avatarUrl, fetchImpl: this.deps.fetchImpl });
       }
+    }
+
+    // Identity/avatar fetches are asynchronous as well. Recheck immediately
+    // before the first vault read/write so uninstall or manifest replacement
+    // during those requests cannot resurrect stale credentials.
+    if (this.deps.isConnectTargetCurrent?.(ghostId, secretKey, decl) === false) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: '插件或授权声明已变更',
+      };
     }
 
     // 清单在授权**之后**才读:授权流可长达数分钟,期间清单可能被并发写
@@ -824,28 +862,53 @@ export class GhostOauthAccountManager {
     secretKey: string,
     accountId: string,
     mutator: (row: AccountRow) => boolean | undefined,
-  ): void {
+  ): boolean {
     const manifest = parseManifest(this.deps.vault.read(ghostId, accountsKey(secretKey)));
     const row = manifest.accounts.find((a) => a.id === accountId);
-    if (!row) return;
-    if (mutator(row)) {
-      this.deps.vault.store(ghostId, accountsKey(secretKey), JSON.stringify(manifest));
-    }
+    if (!row || !mutator(row)) return false;
+    return this.deps.vault.store(
+      ghostId,
+      accountsKey(secretKey),
+      JSON.stringify(manifest),
+    );
   }
 
   private markExpired(ghostId: string, secretKey: string, accountId: string): void {
-    this.patchAccount(ghostId, secretKey, accountId, (row) => {
+    const changed = this.patchAccount(ghostId, secretKey, accountId, (row) => {
       if (row.status === 'expired') return false;
       row.status = 'expired';
       return true;
     });
+    if (changed) this.notifyStatusChanged(ghostId, secretKey, 'expired');
   }
+
   private markConnected(ghostId: string, secretKey: string, accountId: string): void {
-    this.patchAccount(ghostId, secretKey, accountId, (row) => {
+    const changed = this.patchAccount(ghostId, secretKey, accountId, (row) => {
       if (row.status === 'connected') return false;
       row.status = 'connected';
       return true;
     });
+    if (changed) this.notifyStatusChanged(ghostId, secretKey, 'connected');
+  }
+
+  private notifyStatusChanged(
+    ghostId: string,
+    secretKey: string,
+    status: GhostOauthAccountStatus,
+  ): void {
+    try {
+      this.deps.onAccountStatusChanged?.({ ghostId, secretKey, status });
+    } catch (err) {
+      this.deps.logger?.warn?.(
+        'ghost oauth onAccountStatusChanged 通知失败(不影响状态写入)',
+        {
+          ghostId,
+          secretKey,
+          status,
+          err: String(err),
+        },
+      );
+    }
   }
 
   private cacheKey(ghostId: string, secretKey: string, accountId: string): string {

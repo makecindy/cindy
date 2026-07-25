@@ -52,6 +52,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner';
+import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -493,6 +494,35 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
+  it('marks a direct scheduler turn headless only after acceptance and releases it at terminal', async () => {
+    let releaseSend!: (result: SessionSendResult) => void;
+    let onAccepted: NonNullable<SessionSendOptions>['onAccepted'];
+    const sendGate = new Promise<SessionSendResult>((resolve) => {
+      releaseSend = resolve;
+    });
+    const h = createSessionHarness(async (_message, opts) => {
+      onAccepted = opts?.onAccepted;
+      return sendGate;
+    });
+    const { runner } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
+
+    await onAccepted?.();
+    expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(true);
+    releaseSend({ accepted: true });
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+
+    h.emit({ type: 'done', data: {} });
+    await expect(firePromise).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: undefined,
+    });
+    expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
+  });
+
   it('broadcasts a newly accepted schedule session after its user row is durable', async () => {
     const order: string[] = [];
     mocks.createMessage.mockImplementation(async () => {
@@ -516,5 +546,23 @@ describe('MakerScheduleRunner send outcome policy', () => {
       sessionId: 'scheduler-session',
       resultText: undefined,
     });
+  });
+
+  it('does not reacquire headless state when acceptance arrives after send cleanup', async () => {
+    let lateOnAccepted: NonNullable<SessionSendOptions>['onAccepted'];
+    const h = createSessionHarness(async (_message, opts) => {
+      lateOnAccepted = opts?.onAccepted;
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
+    });
+    const { runner } = createRunnerHarness(h.session);
+
+    await expect(runner.fire(baseSchedule(), createFireContext())).rejects.toThrow(
+      /cancelled-before-dispatch/,
+    );
+    expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
+
+    await lateOnAccepted?.();
+    expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
+    expect(mocks.createMessage).not.toHaveBeenCalled();
   });
 });

@@ -560,11 +560,12 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
   const resourceToolsDir = path.join(appPath, 'Contents', 'Resources', 'tools');
   if (fs.existsSync(resourceToolsDir)) {
     exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
-  exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" {} \\;`);
-  exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} {} \\;`);
+  exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
+  exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
   exec(`${signBase} --entitlements "${mainEntitlementsPath}" "${appPath}"`);
   exec(`/usr/bin/codesign --verify --deep --strict "${appPath}"`);
   verifyMacContactsPermissions(appPath);
@@ -598,6 +599,8 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
   if (fs.existsSync(resourceToolsDir)) {
     console.log('    Signing bundled CLI tools in Contents/Resources/tools/...');
     exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+    console.log('    Signing bundled resource app bundles...');
+    exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)
@@ -606,11 +609,11 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
 
   // 2. Helper apps(V8 JIT entitlements)
   console.log('    Signing helper apps...');
-  exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" {} \\;`);
+  exec(`find "${frameworksDir}" -name "*.app" -exec ${signBase} --entitlements "${helperEntitlementsPath}" "{}" \\;`);
 
   // 3. Framework bundles
   console.log('    Signing frameworks...');
-  exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} {} \\;`);
+  exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
 
   // 4. 主 app bundle
   console.log('    Signing main app...');

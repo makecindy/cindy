@@ -16,14 +16,7 @@ import {
 } from './checkoutIntent';
 
 export type BillingCheckoutPhase =
-  | 'IDLE'
-  | 'CREATING'
-  | 'AWAITING_PAYMENT'
-  | 'FULFILLING'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'EXPIRED'
-  | 'CANCELED';
+  'IDLE' | 'CREATING' | 'AWAITING_PAYMENT' | 'COMPLETED' | 'FAILED' | 'EXPIRED' | 'CANCELED';
 
 export type BillingCheckoutState = {
   open: boolean;
@@ -56,9 +49,7 @@ function phaseForOrder(order: BillingPaymentOrder): BillingCheckoutPhase {
   if (order.status === 'FAILED') return 'FAILED';
   if (order.status === 'EXPIRED') return 'EXPIRED';
   if (order.status === 'CANCELED') return 'CANCELED';
-  if (order.status === 'SUCCEEDED') {
-    return order.fulfillmentStatus === 'SUCCEEDED' ? 'COMPLETED' : 'FULFILLING';
-  }
+  if (order.status === 'SUCCEEDED') return 'COMPLETED';
   return 'AWAITING_PAYMENT';
 }
 
@@ -74,16 +65,8 @@ function isTerminal(phase: BillingCheckoutPhase): boolean {
   return ['COMPLETED', 'FAILED', 'EXPIRED', 'CANCELED'].includes(phase);
 }
 
-function isRecoverableTopup(value: {
-  status: string;
-  fulfillmentStatus?: string;
-  paymentAction: { expiresAt: string } | null;
-}): boolean {
-  return (
-    value.status === 'CREATED' ||
-    value.status === 'PENDING' ||
-    (value.status === 'SUCCEEDED' && value.fulfillmentStatus !== 'SUCCEEDED')
-  );
+function isRecoverableTopup(value: Pick<BillingPaymentOrder, 'status'>): boolean {
+  return value.status === 'CREATED' || value.status === 'PENDING';
 }
 
 function persistIntent(accountId: string | null, intent: BillingCheckoutIntentV1 | null): void {
@@ -578,8 +561,7 @@ export function useBillingCheckout(accountId: string | null) {
   }, [accountId, applyOrder, applySubscription, failCurrentOperation]);
 
   useEffect(() => {
-    const shouldPoll =
-      state.phase === 'FULFILLING' || (state.open && state.phase === 'AWAITING_PAYMENT');
+    const shouldPoll = state.open && state.phase === 'AWAITING_PAYMENT';
     if (!shouldPoll) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshActive();

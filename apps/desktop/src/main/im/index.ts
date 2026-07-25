@@ -17,9 +17,11 @@
  *   ├─────────────────────────────────┼──────────────────────────────────────┤
  *   │ App boot                        │ im.registerIpc + startImOrch         │
  *   │                                 │   (orchestrators only — NO connect)  │
- *   │ User login + localDb ready      │ app:ready-for-bot IPC →              │
- *   │   (LocalDbGate, renderer)       │   startImConnection() → im.init()    │
+ *   │ User login + localDb ready      │ Main localDb onReady →               │
+ *   │                                 │   startImConnection() → im.init()    │
  *   │                                 │   (auto-connect if creds)            │
+ *   │ Renderer ready compatibility    │ app:ready-for-bot IPC → idempotent   │
+ *   │ signal (LocalDbGate)            │   startImConnection() retry          │
  *   │ Logout / account replacement    │ stopImConnection() before DbClient   │
  *   │                                 │   dispose; clear runtime caches      │
  *   │ App quit (before-quit)          │ stopImConnection('quit')             │
@@ -157,8 +159,8 @@ export function startImOrchestrators(): void {
   // bindingStore.preload() 故意不在这里跑 —— 它要 DbClient, 而 localDb 在
   // 用户登录后才 ensureReady (worker spawn + db open + smoke 后才 setCurrentDbClient)。
   // orchestrator 注册和 bot 上线是分阶段的: 这一步只挂 in-process listener
-  // (无 DB 依赖), 真正读表搬到 startImConnection 里 —— 那时 'app:ready-for-bot'
-  // IPC 已触发, DbClient 必然 ready。
+  // (无 DB 依赖), 真正读表搬到 startImConnection 里 —— 那时 Main 的 owner
+  // DB-ready 回调已经完成, DbClient 必然 ready。
 
   // Broadcast binding 变更给所有 renderer window — desktop UI 用这个广播
   // 实时渲染 mask + 收回按钮的 attach/detach 状态。payload 形态固定:
@@ -262,8 +264,8 @@ export function startImOrchestrators(): void {
   });
 
   // Bot connection is intentionally NOT kicked off here — it happens in
-  // `startImConnection()` once the renderer signals the user is logged in
-  // and localDb is ready. See module header table for full lifecycle.
+  // `startImConnection()` after Main confirms the current owner's localDb is
+  // ready. See module header table for full lifecycle.
 }
 
 async function initializeImConnection(): Promise<void> {
@@ -424,8 +426,8 @@ export function startImConnection(): void {
   // 此时 forward map 必须已经填好, 否则会被当成"没接管"误路由到默认 session。
   // 放这里(而不是 startImOrchestrators)是因为 DbClient 要求 localDb 已
   // ensureReady (worker takeover 完成 + setCurrentDbClient 已写入 currentRef),
-  // 而本函数的调用方 'app:ready-for-bot' IPC 由 renderer 在 localDb 就绪后
-  // 才触发, 时序保证 OK。
+  // 而本函数只会在 Main 的 localDb onReady 权威时点，或 renderer 随后的
+  // 'app:ready-for-bot' 兼容信号中调用，时序保证 OK。
   connectionLifecycle.start();
 }
 

@@ -13,6 +13,7 @@ import { Sidebar } from '@/components/sidebar/Sidebar';
 import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
+import { GhostPanelBubbleLayer } from '@/cindy-brain/GhostPanelBubbleLayer';
 import { ContentAvailableWidthProvider } from '@/layout/paneWidths';
 import {
   migrateLegacySidebarCollapsed,
@@ -220,7 +221,12 @@ export function MainLayout() {
   // 仅卡片版(瀑布流多列)给侧栏拖拽挂「2 列最佳最小宽」磁吸停靠点;list(单列满宽)
   // 与 text 不分栏,无需吸附。
   const { mode } = useSidebarCardMode();
-  const { width: sidebarWidth, isDragging, handleDragStart, resetWidth } = useSidebarResize(
+  const {
+    width: sidebarWidth,
+    isDragging,
+    handleDragStart,
+    resetWidth,
+  } = useSidebarResize(
     {
       railMode: isRailMode,
       onRailModeChange: handleRailModeChange,
@@ -345,6 +351,7 @@ export function MainLayout() {
   useEffect(() => {
     syncNotificationsEnabledToMain();
   }, []);
+
   const isSettingsRoute = location.pathname === '/settings';
   const hasInlineControlledBanner = hasInlineControlledBannerPath(location.pathname);
 
@@ -422,10 +429,13 @@ export function MainLayout() {
     return () => window.removeEventListener('focus', syncAgentIslandVisibleSession);
   }, [syncAgentIslandVisibleSession]);
 
-  useEffect(() => () => {
-    if (!isAgentIslandSupported()) return;
-    void window.electronAPI.agentIsland?.setVisibleSession?.(null);
-  }, []);
+  useEffect(
+    () => () => {
+      if (!isAgentIslandSupported()) return;
+      void window.electronAPI.agentIsland?.setVisibleSession?.(null);
+    },
+    [],
+  );
 
   // chat-data-localization V0.4 / M-FE6：corruption 恢复后一次性 toast
   useCorruptionRestoredToast();
@@ -521,8 +531,7 @@ export function MainLayout() {
       if (payload.type === 'project') {
         requestProjectFocus(payload.workingDir);
         const path = currentPathRef.current;
-        const inExpandedView =
-          path.startsWith('/cc-agent') && !path.startsWith('/cc-agent/files/');
+        const inExpandedView = path.startsWith('/cc-agent') && !path.startsWith('/cc-agent/files/');
         if (!inExpandedView) {
           navigate('/cc-agent');
         }
@@ -702,10 +711,7 @@ export function MainLayout() {
     const prev = prevRsbWindowStateRef.current;
     prevRsbWindowStateRef.current = rsbWindow;
     const sessionId = rightSidebarSessionIdRef.current;
-    if (
-      sessionId &&
-      didUserCloseDetachedSidebarWindow(prev, rsbWindow, !isSecondaryWindow())
-    ) {
+    if (sessionId && didUserCloseDetachedSidebarWindow(prev, rsbWindow, !isSecondaryWindow())) {
       writeCollapsedFor(sessionId, true);
     }
   }, [rsbWindow]);
@@ -1180,28 +1186,30 @@ export function MainLayout() {
                   // toggle 永远钉窗口右上角),ContentHeader 右端占位不再分侧别。
                   rightSidebarAvailable={rightSidebarAvailable}
                 >
-                {/* key 取 feature 段（pathname 第一段）而非完整 pathname：
+                  {/* key 取 feature 段（pathname 第一段）而非完整 pathname：
                     跨 Feature 切换（/issues → /cc-agent）触发 FadeSwitcher 重挂跑淡入动画；
                     同一 Feature 内的 detail 切换（/issues/aaa → /issues/bbb）保持同 key，
                     不重挂主区域子树，避免详情页 unmount + 220ms opacity
                     重跑导致的"刷新一帧"闪烁。
                     ContentHeader 在 FadeSwitcher 之外 —— header chrome 不参与路由切换
                     动画，只有注入的中部内容随路由变化。 */}
-                <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
-                  <Outlet
-                    context={{
-                      sidebarWidth,
-                      // detached 模式下"折叠态"= 子窗口是否关闭(chip / 按钮显示口径统一)
-                      rightSidebarCollapsed: rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed,
-                      onToggleRightSidebar: handleToggleRightSidebar,
-                      // B2b:面板所在侧,聊天视图据此决定展开入口落左上还是右上。
-                      rightSidebarSide,
-                      setRightSidebarAvailable,
-                      setRightSidebarSessionId: declareRightSidebarSessionId,
-                      setRightSidebarWorkdir,
-                    }}
-                  />
-                </FadeSwitcher>
+                  <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
+                    <Outlet
+                      context={{
+                        sidebarWidth,
+                        // detached 模式下"折叠态"= 子窗口是否关闭(chip / 按钮显示口径统一)
+                        rightSidebarCollapsed: rsbDetached
+                          ? !rsbWindow.open
+                          : isRightSidebarCollapsed,
+                        onToggleRightSidebar: handleToggleRightSidebar,
+                        // B2b:面板所在侧,聊天视图据此决定展开入口落左上还是右上。
+                        rightSidebarSide,
+                        setRightSidebarAvailable,
+                        setRightSidebarSessionId: declareRightSidebarSessionId,
+                        setRightSidebarWorkdir,
+                      }}
+                    />
+                  </FadeSwitcher>
                 </ContentHeaderSlot>
               </main>
             ),
@@ -1258,6 +1266,10 @@ export function MainLayout() {
             推送到本窗口,这里弹标准 ImageLightbox(整窗一份,纯监听无 UI)。
             sessionId = 当前聊天会话 → lightbox 里「发送到对话」可用。 */}
         <GhostMediaLightboxHost sessionId={rightSidebarSessionId ?? undefined} />
+        {/* 最小化插件面板的浮动气泡层(portal 到 body,z-[9900];点击气泡
+            恢复停靠,拖动换位并持久化)。设置页等接管态也保持在场——气泡是
+            被最小化面板的唯一恢复入口。 */}
+        <GhostPanelBubbleLayer />
         {/* Windows 顶层浮层 chrome：窗口控制按钮(min/max/close)，所有路由常驻
             （含设置页），永远钉在窗口角，开/关右栏都不动 —— 解决「右栏作为 <main>
             sibling 会把窗口按钮挤左」的问题。no-drag（按钮可点），周围窗口拖拽区由

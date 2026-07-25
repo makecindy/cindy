@@ -6,10 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type {
-  AgentInputProjection,
-  AgentInputQueuedMessage,
-} from '../../shared/agentInputQueue';
+import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { Message } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 
@@ -105,7 +102,8 @@ const PERMISSION_MODE = 'default';
 const WORKING_DIR = 'C:\\workspace';
 
 function serverMessage(
-  patch: Omit<Message, 'toolUseId' | 'agentMeta'> & Partial<Pick<Message, 'toolUseId' | 'agentMeta'>>,
+  patch: Omit<Message, 'toolUseId' | 'agentMeta'> &
+    Partial<Pick<Message, 'toolUseId' | 'agentMeta'>>,
 ): Message {
   return {
     toolUseId: null,
@@ -118,6 +116,15 @@ let onEvent: ((data: unknown) => void) | undefined;
 let onStatusChanged: ((data: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
+let onInteractionDismissed: ((data: unknown) => void) | undefined;
+const getPendingInteractions = vi.fn<
+  (sessionId: string) => Promise<
+    Array<{
+      request: { kind: string; requestId: string; [key: string]: unknown };
+      persistId?: string;
+    }>
+  >
+>(async () => []);
 
 const input = {
   getProjection: vi.fn(async (sessionId: string) => projection(sessionId)),
@@ -156,7 +163,7 @@ function projection(
     error: null,
     recovery: null,
     errorRetryText: null,
-  credentialSwitchWait: null,
+    credentialSwitchWait: null,
     ...patch,
   };
 }
@@ -166,6 +173,7 @@ function installElectronBridge(): void {
   onStatusChanged = undefined;
   onDbMessageCreated = undefined;
   onInteractionRequest = undefined;
+  onInteractionDismissed = undefined;
   for (const fn of Object.values(input) as Array<{ mockClear: () => void }>) {
     fn.mockClear();
   }
@@ -188,9 +196,14 @@ function installElectronBridge(): void {
           onInteractionRequest = cb;
           return vi.fn();
         },
-        onInteractionDismissed: vi.fn(() => vi.fn()),
+        onInteractionDismissed: (cb: (data: unknown) => void) => {
+          onInteractionDismissed = cb;
+          return vi.fn();
+        },
         send: vi.fn(async () => ({ accepted: true })),
         resolveInteraction: vi.fn(async () => {}),
+        submitPluginSetupInline: vi.fn(async () => {}),
+        getPendingInteractions,
         steer: vi.fn(async () => true),
         generateTitle: vi.fn(async () => ({ title: 't' })),
         abortSession: vi.fn(async () => {}),
@@ -273,6 +286,59 @@ function emitInteractionRequest(
   sessionId = SESSION_ID,
 ): void {
   onInteractionRequest?.({ sessionId, request, persistId });
+}
+
+function pluginSetupRequest(revision: number) {
+  return {
+    kind: 'plugin_setup',
+    requestId: 'plugin-setup-1',
+    revision,
+    ghost: { id: 'filo-google', name: 'Filo Google' },
+    intro: 'Connect your account',
+    steps: [
+      {
+        id: 'google-account',
+        title: 'Google account',
+        description: 'Authorize access',
+        phase: revision >= 2 ? 'action_running' : 'pending',
+        action: { id: 'oauth:google-account', kind: 'oauth_connect' },
+      },
+    ],
+  };
+}
+
+function inlinePluginSetupRequest(revision: number) {
+  return {
+    ...pluginSetupRequest(revision),
+    ghost: { id: 'art', name: 'Art' },
+    intro: 'Configure Art',
+    steps: [
+      {
+        id: 'api-key',
+        title: 'API Key',
+        description: 'Stored securely on this desktop.',
+        phase: 'pending',
+        action: {
+          id: 'inline:api-key',
+          kind: 'inline_form',
+          form: {
+            fields: [
+              {
+                id: 'value',
+                type: 'secret',
+                label: 'API Key',
+                externalLink: {
+                  url: 'https://console.example.com/keys',
+                },
+                required: true,
+                maxLength: 200,
+              },
+            ],
+          },
+        },
+      },
+    ],
+  };
 }
 
 const flushPromises = async () => {
@@ -399,15 +465,19 @@ describe('makerChatStore text delta batching', () => {
 
     const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(messages.map((m) => m.role)).toEqual(['assistant', 'ask_user']);
-    expect(messages[0]).toEqual(expect.objectContaining({
-      clientId: 'assistant-1',
-      content: 'question lead-in',
-    }));
-    expect(messages[1]).toEqual(expect.objectContaining({
-      clientId: 'ask-message-1',
-      askUserRequestId: 'ask-1',
-      content: 'Continue?',
-    }));
+    expect(messages[0]).toEqual(
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'question lead-in',
+      }),
+    );
+    expect(messages[1]).toEqual(
+      expect.objectContaining({
+        clientId: 'ask-message-1',
+        askUserRequestId: 'ask-1',
+        content: 'Continue?',
+      }),
+    );
 
     vi.advanceTimersByTime(32);
     expect(makerChatStore.getSnapshot(SESSION_ID).messages.map((m) => m.role)).toEqual([
@@ -431,21 +501,355 @@ describe('makerChatStore text delta batching', () => {
 
     const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(messages.map((m) => m.role)).toEqual(['assistant', 'plan_review']);
-    expect(messages[0]).toEqual(expect.objectContaining({
-      clientId: 'assistant-1',
-      content: 'plan lead-in',
-    }));
-    expect(messages[1]).toEqual(expect.objectContaining({
-      clientId: 'plan-message-1',
-      planReviewRequestId: 'plan-1',
-      planReviewPlan: '1. Do the thing',
-    }));
+    expect(messages[0]).toEqual(
+      expect.objectContaining({
+        clientId: 'assistant-1',
+        content: 'plan lead-in',
+      }),
+    );
+    expect(messages[1]).toEqual(
+      expect.objectContaining({
+        clientId: 'plan-message-1',
+        planReviewRequestId: 'plan-1',
+        planReviewPlan: '1. Do the thing',
+      }),
+    );
 
     vi.advanceTimersByTime(32);
     expect(makerChatStore.getSnapshot(SESSION_ID).messages.map((m) => m.role)).toEqual([
       'assistant',
       'plan_review',
     ]);
+  });
+
+  it('accepts plugin_setup snapshots and ignores a lower revision for the same request', () => {
+    emitInteractionRequest(pluginSetupRequest(2));
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-1',
+        revision: 2,
+      }),
+    );
+    expect(makerChatStore.getRunningSnapshot().get(SESSION_ID)?.hasPendingPluginSetup).toBe(true);
+
+    emitInteractionRequest(pluginSetupRequest(1));
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup?.revision).toBe(2);
+  });
+
+  it('keeps terminal setup feedback mounted without reporting a pending interaction', () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(2),
+      terminal: true,
+      steps: pluginSetupRequest(2).steps.map((step) => ({
+        ...step,
+        phase: 'satisfied',
+      })),
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toMatchObject({
+      requestId: 'plugin-setup-1',
+      revision: 2,
+      terminal: true,
+    });
+    expect(
+      makerChatStore.getRunningSnapshot().get(SESSION_ID)?.hasPendingPluginSetup ?? false,
+    ).toBe(false);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'claude-code', data: {} },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).not.toBeNull();
+    expect(
+      makerChatStore.getRunningSnapshot().get(SESSION_ID)?.hasPendingPluginSetup ?? false,
+    ).toBe(false);
+  });
+
+  it('keeps plugin_setup mounted across done and clears only on matching dismissal', () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'claude-code', data: {} },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup?.requestId).toBe(
+      'plugin-setup-1',
+    );
+
+    onInteractionDismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'another-request',
+      reason: 'resolved',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).not.toBeNull();
+
+    onInteractionDismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'plugin-setup-1',
+      reason: 'resolved',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupViewerState).toBe('expanded');
+  });
+
+  it('queues concurrent plugin_setup requests and promotes them in first-seen order', () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+
+    let snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup?.requestId).toBe('plugin-setup-1');
+    expect(snapshot.pendingPluginSetupQueue.map((setup) => setup.requestId)).toEqual([
+      'plugin-setup-2',
+    ]);
+
+    emitInteractionRequest({
+      ...pluginSetupRequest(3),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup?.requestId).toBe('plugin-setup-1');
+    expect(snapshot.pendingPluginSetupQueue[0]).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-2',
+        revision: 3,
+      }),
+    );
+
+    onInteractionDismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'plugin-setup-1',
+      reason: 'ready',
+    });
+    snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-2',
+        revision: 3,
+      }),
+    );
+    expect(snapshot.pendingPluginSetupQueue).toEqual([]);
+
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-2',
+      'run_action',
+      'oauth:google-account',
+    );
+    expect(window.electronAPI.maker.resolveInteraction).toHaveBeenCalledWith(
+      'plugin-setup-2',
+      expect.objectContaining({
+        kind: 'plugin_setup',
+        action: 'run_action',
+        expectedRevision: 3,
+      }),
+    );
+  });
+
+  it('clears stale plugin_setup cards and in-flight state from an authoritative empty snapshot', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    makerChatStore.setPluginSetupViewerState(SESSION_ID, 'minimized');
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-1',
+      'run_action',
+      'oauth:google-account',
+    );
+    expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight).not.toBeNull();
+
+    getPendingInteractions.mockResolvedValueOnce([]);
+    await makerChatStore.reconcilePendingInteractions(SESSION_ID);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup).toBeNull();
+    expect(snapshot.pendingPluginSetupQueue).toEqual([]);
+    expect(snapshot.pluginSetupCommandInFlight).toBeNull();
+    expect(snapshot.pluginSetupViewerState).toBe('expanded');
+  });
+
+  it('promotes the surviving queued plugin_setup from an authoritative snapshot', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    makerChatStore.setPluginSetupViewerState(SESSION_ID, 'minimized');
+
+    getPendingInteractions.mockResolvedValueOnce([
+      {
+        request: {
+          ...pluginSetupRequest(3),
+          requestId: 'plugin-setup-2',
+          ghost: {
+            id: 'second-plugin',
+            name: 'Second Plugin',
+          },
+        },
+      },
+    ]);
+    await makerChatStore.reconcilePendingInteractions(SESSION_ID);
+
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingPluginSetup).toEqual(
+      expect.objectContaining({
+        requestId: 'plugin-setup-2',
+        revision: 3,
+      }),
+    );
+    expect(snapshot.pendingPluginSetupQueue).toEqual([]);
+    expect(snapshot.pluginSetupViewerState).toBe('expanded');
+  });
+
+  it('preserves plugin_setup state when the authoritative snapshot fetch fails', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-2',
+      ghost: {
+        id: 'second-plugin',
+        name: 'Second Plugin',
+      },
+    });
+    makerChatStore.setPluginSetupViewerState(SESSION_ID, 'minimized');
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-1',
+      'run_action',
+      'oauth:google-account',
+    );
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+
+    getPendingInteractions.mockRejectedValueOnce(new Error('device link disconnected'));
+    await expect(makerChatStore.reconcilePendingInteractions(SESSION_ID)).rejects.toThrow(
+      'device link disconnected',
+    );
+
+    const after = makerChatStore.getSnapshot(SESSION_ID);
+    expect(after.pendingPluginSetup).toBe(before.pendingPluginSetup);
+    expect(after.pendingPluginSetupQueue).toBe(before.pendingPluginSetupQueue);
+    expect(after.pluginSetupCommandInFlight).toBe(before.pluginSetupCommandInFlight);
+    expect(after.pluginSetupViewerState).toBe('minimized');
+  });
+
+  it('sends the independent plugin_setup decision and waits for a newer snapshot', async () => {
+    emitInteractionRequest(pluginSetupRequest(1));
+
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-1',
+      'run_action',
+      'oauth:google-account',
+    );
+
+    expect(window.electronAPI.maker.resolveInteraction).toHaveBeenCalledWith('plugin-setup-1', {
+      kind: 'plugin_setup',
+      action: 'run_action',
+      actionId: 'oauth:google-account',
+      expectedRevision: 1,
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).not.toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight).toEqual(
+      expect.objectContaining({ action: 'run_action' }),
+    );
+
+    emitInteractionRequest(pluginSetupRequest(2));
+    expect(makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight).toBeNull();
+    await flushPromises();
+  });
+
+  it('submits an inline Secret only through the local narrow API without retaining it', async () => {
+    emitInteractionRequest(inlinePluginSetupRequest(1));
+
+    makerChatStore.respondToPluginSetup(
+      SESSION_ID,
+      'plugin-setup-1',
+      'submit_form',
+      'inline:api-key',
+      { value: '  secret-value  ' },
+    );
+
+    expect(window.electronAPI.maker.submitPluginSetupInline).toHaveBeenCalledWith({
+      requestId: 'plugin-setup-1',
+      actionId: 'inline:api-key',
+      expectedRevision: 1,
+      value: 'secret-value',
+    });
+    expect(window.electronAPI.maker.resolveInteraction).not.toHaveBeenCalled();
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pluginSetupCommandInFlight).toEqual({
+      requestId: 'plugin-setup-1',
+      action: 'submit_form',
+      actionId: 'inline:api-key',
+    });
+    expect(JSON.stringify(snapshot)).not.toContain('secret-value');
+    await flushPromises();
+  });
+
+  it('rejects oversized or malformed plugin_setup snapshots at the Renderer boundary', () => {
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      intro: 'x'.repeat(501),
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
+
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      steps: [],
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
+
+    const unsafeLink = inlinePluginSetupRequest(1);
+    unsafeLink.steps[0].action.form.fields[0].externalLink.url = 'http://unsafe.example.com';
+    emitInteractionRequest(unsafeLink);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
+  });
+
+  it('accepts all 64 manifest-valid setup steps and rejects a 65th', () => {
+    const step = pluginSetupRequest(1).steps[0];
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      steps: Array.from({ length: 64 }, (_, index) => ({
+        ...step,
+        id: `setup-${index}`,
+        action: { ...step.action, id: `oauth:${index}` },
+      })),
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup?.steps).toHaveLength(64);
+
+    makerChatStore.purgeSession(SESSION_ID);
+    emitInteractionRequest({
+      ...pluginSetupRequest(1),
+      requestId: 'plugin-setup-oversized',
+      steps: Array.from({ length: 65 }, (_, index) => ({
+        ...step,
+        id: `setup-${index}`,
+        action: { ...step.action, id: `oauth:${index}` },
+      })),
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPluginSetup).toBeNull();
   });
 
   it('does not flush pending text for unknown or malformed interaction requests', () => {
@@ -826,7 +1230,9 @@ describe('makerChatStore text delta batching', () => {
       },
     });
 
-    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('Authorization: [REDACTED] (HTTP 401)');
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
+      'Authorization: [REDACTED] (HTTP 401)',
+    );
   });
 
   it('persists the original remote auth error when retry enqueue rejects asynchronously', async () => {
@@ -926,13 +1332,15 @@ describe('makerChatStore text delta batching', () => {
   });
 
   it('preserves semantic references, paste and slash metadata when retrying remote authentication', async () => {
-    const agentReferences = [{
-      kind: 'session' as const,
-      start: 0,
-      end: 5,
-      href: 'cindy://session/source',
-      sessionId: 'source',
-    }];
+    const agentReferences = [
+      {
+        kind: 'session' as const,
+        start: 0,
+        end: 5,
+        href: 'cindy://session/source',
+        sessionId: 'source',
+      },
+    ];
     vi.mocked(sessionService.get).mockResolvedValue({
       agentKind: 'codex',
       remoteHostId: 'remote-host',
@@ -980,22 +1388,22 @@ describe('makerChatStore text delta batching', () => {
 
     const retried = input.enqueue.mock.calls[0]?.[1];
     expect(retried?.chatMessage.agentReferences).toEqual(agentReferences);
-    expect(retried?.chatMessage.pastedTextRanges).toEqual([
-      { start: 0, end: 5, display: 'retry' },
-    ]);
+    expect(retried?.chatMessage.pastedTextRanges).toEqual([{ start: 0, end: 5, display: 'retry' }]);
     expect(retried?.chatMessage.slashCommandRanges).toEqual([]);
   });
 
   it('restores semantic reference metadata from persisted user messages', () => {
-    const agentReferences = [{
-      kind: 'message' as const,
-      start: 4,
-      end: 44,
-      href: 'cindy://session/source?message=message-1',
-      sessionId: 'source',
-      messageClientId: 'message-1',
-      text: 'referenced body',
-    }];
+    const agentReferences = [
+      {
+        kind: 'message' as const,
+        start: 4,
+        end: 44,
+        href: 'cindy://session/source?message=message-1',
+        sessionId: 'source',
+        messageClientId: 'message-1',
+        text: 'referenced body',
+      },
+    ];
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       {
         id: 'row-user-reference',
@@ -1012,10 +1420,12 @@ describe('makerChatStore text delta batching', () => {
       } satisfies Message,
     ]);
 
-    expect(mapped).toEqual(expect.objectContaining({
-      content: 'see cindy://session/source?message=message-1',
-      agentReferences,
-    }));
+    expect(mapped).toEqual(
+      expect.objectContaining({
+        content: 'see cindy://session/source?message=message-1',
+        agentReferences,
+      }),
+    );
   });
 
   it('uses the main projection to preserve a pre-dispatch message in the queue', async () => {
@@ -1514,7 +1924,8 @@ describe('makerChatStore text delta batching', () => {
         clientId: 'tool-result-richer',
         sessionId: SESSION_ID,
         role: 'tool_result',
-        content: '第一段可读输出\n第二段可读输出\n第三段可读输出\n[remote content truncated: payload too large]',
+        content:
+          '第一段可读输出\n第二段可读输出\n第三段可读输出\n[remote content truncated: payload too large]',
         toolUseId: 'toolu-richer',
         agentMeta: { remoteContentTruncated: true },
         createdAt: '2026-06-15T00:00:03.000Z',
@@ -1536,7 +1947,8 @@ describe('makerChatStore text delta batching', () => {
 
     expect(hydrated).toEqual(
       expect.objectContaining({
-        content: '第一段可读输出\n第二段可读输出\n第三段可读输出\n[remote content truncated: payload too large]',
+        content:
+          '第一段可读输出\n第二段可读输出\n第三段可读输出\n[remote content truncated: payload too large]',
         createdAt: '2026-06-15T00:00:03.000Z',
         remoteContentTruncated: true,
         rowid: 2,
@@ -1575,18 +1987,15 @@ describe('makerChatStore text delta batching', () => {
     expect(fullHydrated.remoteContentTruncated).toBeUndefined();
     expect(fullHydrated.remoteRowsTrimmed).toBeUndefined();
 
-    const laterCompact = makerChatStore.__hydratePersistedMessageForTest(
-      fullHydrated,
-      {
-        clientId: 'tool-result-1',
-        role: 'tool_result',
-        content: 'larger truncated placeholder prefix',
-        remoteContentTruncated: true,
-        isStreaming: false,
-        toolUseId: 'toolu-1',
-        createdAt: '2026-06-15T00:00:04.000Z',
-      },
-    );
+    const laterCompact = makerChatStore.__hydratePersistedMessageForTest(fullHydrated, {
+      clientId: 'tool-result-1',
+      role: 'tool_result',
+      content: 'larger truncated placeholder prefix',
+      remoteContentTruncated: true,
+      isStreaming: false,
+      toolUseId: 'toolu-1',
+      createdAt: '2026-06-15T00:00:04.000Z',
+    });
 
     expect(laterCompact).toEqual(
       expect.objectContaining({
@@ -1762,7 +2171,9 @@ describe('makerChatStore text delta batching', () => {
     ];
 
     expect(makerChatStore.__oldestMessageRowForTest(rows, 'newest-first')?.id).toBe('row-z');
-    expect(makerChatStore.__oldestMessageRowForTest([...rows].reverse(), 'oldest-first')?.id).toBe('row-z');
+    expect(makerChatStore.__oldestMessageRowForTest([...rows].reverse(), 'oldest-first')?.id).toBe(
+      'row-z',
+    );
   });
 
   it('keeps same-ms remote pages ordered across existing page boundaries', () => {
@@ -1820,9 +2231,7 @@ describe('makerChatStore text delta batching', () => {
       createdAt: '2026-06-15T00:00:03.000Z',
     });
 
-    expect(
-      makerChatStore.__shouldStopRemoteReconciliationAtOverlapForTest([row], true),
-    ).toBe(true);
+    expect(makerChatStore.__shouldStopRemoteReconciliationAtOverlapForTest([row], true)).toBe(true);
     expect(
       makerChatStore.__shouldStopRemoteReconciliationAtOverlapForTest(
         [{ ...row, agentMeta: { remoteRowsTrimmed: true, remoteOriginalRowCount: 50 } }],
@@ -1860,13 +2269,24 @@ describe('makerChatStore text delta batching', () => {
       { type: 'file', name: 'a.txt', path: 'C:\\workspace\\a.txt' },
     ];
 
-    makerChatStore.sendMessage(SESSION_ID, 'accepted', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR, files, mentions);
+    makerChatStore.sendMessage(
+      SESSION_ID,
+      'accepted',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+      files,
+      mentions,
+    );
     await flushPromises();
 
     const optimistic = makerChatStore
       .getSnapshot(SESSION_ID)
       .messages.find((m) => m.role === 'user' && m.content === 'accepted');
-    expect(optimistic).toEqual(expect.objectContaining({ retryFiles: files, retryMentions: mentions }));
+    expect(optimistic).toEqual(
+      expect.objectContaining({ retryFiles: files, retryMentions: mentions }),
+    );
 
     onDbMessageCreated?.({
       sessionId: SESSION_ID,
@@ -1945,18 +2365,22 @@ describe('makerChatStore text delta batching', () => {
 
   it('rejects fallback direct UI trigger sends when maker.send returns accepted:false', async () => {
     const api = window.electronAPI.maker;
-    vi.mocked(sessionService.get).mockResolvedValueOnce(null as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    vi.mocked(sessionService.get).mockResolvedValueOnce(
+      null as unknown as Awaited<ReturnType<typeof sessionService.get>>,
+    );
     vi.mocked(api.send).mockResolvedValueOnce({ accepted: false, reason: 'workdir-missing' });
 
-    await expect(makerChatStore.sendUiTrigger(SESSION_ID, '[UI_ACTION_TRIGGER] retry')).rejects.toThrow(
-      /workdir-missing/,
-    );
+    await expect(
+      makerChatStore.sendUiTrigger(SESSION_ID, '[UI_ACTION_TRIGGER] retry'),
+    ).rejects.toThrow(/workdir-missing/);
   });
 
   it('requests executor-side interrupted-turn ack for a direct-send continue fallback', async () => {
     const api = window.electronAPI.maker;
     const ackInterrupted = window.electronAPI.localDb.sessions.ackInterrupted;
-    vi.mocked(sessionService.get).mockResolvedValueOnce(null as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    vi.mocked(sessionService.get).mockResolvedValueOnce(
+      null as unknown as Awaited<ReturnType<typeof sessionService.get>>,
+    );
     vi.mocked(api.send).mockResolvedValueOnce({ accepted: true });
 
     await makerChatStore.sendUiTrigger(SESSION_ID, CONTINUE_AFTER_APP_EXIT_PROMPT);
@@ -1973,7 +2397,9 @@ describe('makerChatStore text delta batching', () => {
   it('keeps executor-side interrupted-turn ack requested when direct dispatch is rejected', async () => {
     const api = window.electronAPI.maker;
     const ackInterrupted = window.electronAPI.localDb.sessions.ackInterrupted;
-    vi.mocked(sessionService.get).mockResolvedValueOnce(null as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    vi.mocked(sessionService.get).mockResolvedValueOnce(
+      null as unknown as Awaited<ReturnType<typeof sessionService.get>>,
+    );
     vi.mocked(api.send).mockResolvedValueOnce({ accepted: false, reason: 'session-busy' });
 
     await expect(
@@ -2026,7 +2452,9 @@ describe('makerChatStore text delta batching', () => {
   it('dismisses the error tail after a direct-send continue fallback is accepted', async () => {
     const api = window.electronAPI.maker;
     const ackInterrupted = window.electronAPI.localDb.sessions.ackInterrupted;
-    vi.mocked(sessionService.get).mockResolvedValueOnce(null as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    vi.mocked(sessionService.get).mockResolvedValueOnce(
+      null as unknown as Awaited<ReturnType<typeof sessionService.get>>,
+    );
     vi.mocked(api.send).mockResolvedValueOnce({ accepted: true });
     emitDbMessageCreated({
       clientId: 'persisted-error-tail-direct',
@@ -2058,7 +2486,9 @@ describe('makerChatStore text delta batching', () => {
 
   it('keeps a new direct-send continuation failure visible while dismissing the original error', async () => {
     const api = window.electronAPI.maker;
-    vi.mocked(sessionService.get).mockResolvedValueOnce(null as unknown as Awaited<ReturnType<typeof sessionService.get>>);
+    vi.mocked(sessionService.get).mockResolvedValueOnce(
+      null as unknown as Awaited<ReturnType<typeof sessionService.get>>,
+    );
     emitDbMessageCreated({
       clientId: 'original-error-tail-direct',
       role: 'error',

@@ -19,6 +19,7 @@ import {
   FilePen,
   FolderOpen,
   Globe,
+  GraduationCap,
   KeyRound,
   LayoutTemplate,
   MapPin,
@@ -86,6 +87,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
+  skill: GraduationCap,
 };
 
 /** Chooses a visual affordance without changing the host-owned permission title or meaning. */

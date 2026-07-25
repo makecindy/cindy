@@ -14,9 +14,15 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type {
+  GhostSetupEnsureRequest,
+  GhostSetupEnsureResult,
+} from '../../cindy-brain/ghostSetupCoordinator';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
 const prefsFile = () => path.join(tmpUserData, 'ghost-workdir-prefs.json');
+const logWarnMock = vi.fn();
+const grantAttachmentsMock = vi.fn();
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpUserData } }));
 vi.mock('../../appSessionState.js', () => ({
@@ -26,23 +32,40 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../logger.js', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
+  createLogger: () => ({ info: () => {}, warn: logWarnMock, error: () => {}, debug: () => {} }),
 }));
 // ALS 语境:恒缺省 → resolveSessionContext 走建线闭包 ctx(claude 路径同款)。
 vi.mock('@cindy/mcps', () => ({ getLiziMcpSessionContext: () => undefined }));
 
 const listMock = vi.fn<() => unknown[]>(() => []);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
+const setupAssessmentMock = vi.fn((_ghostId: string) => ({
+  state: 'ready' as const,
+  revision: 0,
+  groups: [],
+}));
+const ensureReadyMock = vi.fn(
+  async (_request: GhostSetupEnsureRequest): Promise<GhostSetupEnsureResult> => ({
+    ok: true as const,
+    assessment: { state: 'ready' as const, revision: 0, groups: [] },
+  }),
+);
 vi.mock('../../cindy-brain/index.js', () => ({
   getGhostManager: () => ({ list: listMock }),
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
   getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
+  getGhostSetupAssessment: setupAssessmentMock,
   isGhostAvailableForActiveSession: () => true,
+}));
+vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
+  getGhostSetupCoordinator: () => ({
+    ensureReady: ensureReadyMock,
+  }),
 }));
 // 以下依赖在本测试路径上不会被触达,但 import 副作用重,一律断开。
 vi.mock('../../cindy-brain/attachmentGrant.js', () => ({
   GrantPolicyError: class extends Error {},
-  grantAttachmentsToGhost: vi.fn(),
+  grantAttachmentsToGhost: grantAttachmentsMock,
   MAX_GRANT_ATTACHMENTS: 4,
   MAX_GRANT_ONLY_ATTACHMENTS: 32,
 }));
@@ -97,6 +120,15 @@ beforeEach(() => {
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   dispatchMock.mockClear();
+  setupAssessmentMock.mockReset();
+  setupAssessmentMock.mockReturnValue({ state: 'ready', revision: 0, groups: [] });
+  ensureReadyMock.mockReset();
+  ensureReadyMock.mockResolvedValue({
+    ok: true,
+    assessment: { state: 'ready', revision: 0, groups: [] },
+  });
+  grantAttachmentsMock.mockReset();
+  logWarnMock.mockClear();
   clearAllPrefs();
 });
 
@@ -139,6 +171,24 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((deps.getRosterItems?.() ?? []).map((r) => r.id)).toEqual(['art', 'other']);
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
+
+  it('单插件 setup assessment 失败只省略该 setup，不拖垮健康清单', async () => {
+    setupAssessmentMock.mockImplementation((ghostId) => {
+      if (ghostId === 'art') throw new SyntaxError('malformed setup storage');
+      return { state: 'ready', revision: 0, groups: [] };
+    });
+
+    const ghosts = await makeDeps().listAwakeGhosts();
+
+    expect(ghosts.map((ghost) => ghost.id)).toEqual(['art', 'other']);
+    expect(ghosts[0]?.setup).toBeUndefined();
+    expect(ghosts[1]?.setup).toEqual({ state: 'ready', revision: 0, groups: [] });
+    expect(logWarnMock).toHaveBeenCalledWith('ghost setup assessment omitted from roster', {
+      ghostId: 'art',
+      errorType: 'SyntaxError',
+    });
+    expect(JSON.stringify(ghosts)).not.toContain('malformed setup storage');
+  });
 });
 
 describe('ghost_call 兜底拒绝', () => {
@@ -156,5 +206,59 @@ describe('ghost_call 兜底拒绝', () => {
     const r = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
     expect(r).toMatchObject({ ok: true, result: 'done' });
     expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('清单 assessment 隔离不放宽 ghost_call 的 strict setup gate', async () => {
+    ensureReadyMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: '插件配置状态读取失败',
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: '插件配置状态读取失败',
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('grant_only 在任何附件授权副作用前完成 setup gate，且忽略 tool', async () => {
+    ensureReadyMock.mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'SETUP_REQUIRED',
+      message: '插件尚未完成设置',
+      setup: {
+        state: 'required',
+        revision: 1,
+        groups: [],
+      },
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'not-a-real-tool',
+      args: {},
+      attachments: ['/tmp/unconfigured.png'],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 's1',
+        ghostId: 'art',
+        workingDir: WORKDIR,
+      }),
+    );
+    expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 });

@@ -121,7 +121,7 @@ describe('ghostConnectionsEndpoint · POST /connections/<key>', () => {
     expect(JSON.parse(thrown.body ?? '{}')).toEqual({ ok: false, error: 'CONFIRM_DENIED' });
   });
 
-  it('同 host 更新 token 不再确认,onChanged 也不再触发(只报真新增)', async () => {
+  it('同 host 更新 token 不再确认,但会触发通用 mutation 回调', async () => {
     const manager = new GhostConnectionManager({ vault: makeVault() });
     manager.upsert(G, 'gitlab', { host: 'gitlab.example.com', token: 'glpat-old', max: 2 });
     const confirm = vi.fn(async () => true);
@@ -136,7 +136,7 @@ describe('ghostConnectionsEndpoint · POST /connections/<key>', () => {
     });
     expect(JSON.parse(out.body ?? '{}')).toMatchObject({ ok: true });
     expect(confirm).not.toHaveBeenCalled();
-    expect(onChanged).not.toHaveBeenCalled();
+    expect(onChanged).toHaveBeenCalledWith('gitlab');
   });
 
   it('非法 host / 空 token / 超长 token / 非法 label 一律结构化拒', async () => {

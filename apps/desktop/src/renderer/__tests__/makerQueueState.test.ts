@@ -16,7 +16,12 @@ import {
   rollbackPreAcceptSendFailure,
   stopQueueState,
 } from '@/lib/makerQueueState';
-import type { AgentStatus, ChatMessage, QueuedMessage, SessionChatState } from '@/lib/makerChatStore';
+import type {
+  AgentStatus,
+  ChatMessage,
+  QueuedMessage,
+  SessionChatState,
+} from '@/lib/makerChatStore';
 
 const agentStatus = (running = false): AgentStatus => ({
   status: running ? 'Running' : 'Idle',
@@ -83,6 +88,10 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   pendingAskUser: null,
   askUserViewerState: 'expanded',
   askUserDraft: null,
+  pendingPluginSetup: null,
+  pendingPluginSetupQueue: [],
+  pluginSetupViewerState: 'expanded',
+  pluginSetupCommandInFlight: null,
   pendingPlanReview: null,
   pendingIssueConfirm: null,
   pendingRenameSessionsConfirm: null,
@@ -138,10 +147,14 @@ describe('makerQueueState', () => {
 
     expect(isDispatchBoundaryBusy(s)).toBe(true);
     expect(isSendBusyForQueue(s)).toBe(true);
-    expect(getDrainableQueueHead(state({
-      pendingQueue: [queued('next')],
-      steeringQueueClientIds: ['steer-1'],
-    }))).toBeNull();
+    expect(
+      getDrainableQueueHead(
+        state({
+          pendingQueue: [queued('next')],
+          steeringQueueClientIds: ['steer-1'],
+        }),
+      ),
+    ).toBeNull();
   });
 
   it('pauses an idle blocked queue without installing an abort lock that no event can release', () => {
@@ -178,15 +191,23 @@ describe('makerQueueState', () => {
     const first = queued('first');
     const second = queued('second');
 
-    expect(getDrainableQueueHead(state({
-      pendingQueue: [first, second],
-      queueEditLocks: [second.clientId],
-    }))).toBe(first);
+    expect(
+      getDrainableQueueHead(
+        state({
+          pendingQueue: [first, second],
+          queueEditLocks: [second.clientId],
+        }),
+      ),
+    ).toBe(first);
 
-    expect(getDrainableQueueHead(state({
-      pendingQueue: [second],
-      queueEditLocks: [second.clientId],
-    }))).toBeNull();
+    expect(
+      getDrainableQueueHead(
+        state({
+          pendingQueue: [second],
+          queueEditLocks: [second.clientId],
+        }),
+      ),
+    ).toBeNull();
   });
 
   it('requeues a pre-accept failed head in front of tail rows and keeps a retry token', () => {
@@ -265,7 +286,11 @@ describe('makerQueueState', () => {
     const first = queued('first');
     const second = queued('second');
     const deliveryCreatedAt = '2026-06-07T01:02:03.000Z';
-    const inFlight = beginSteerDeliveryState(state({ pendingQueue: [first, second] }), first, deliveryCreatedAt);
+    const inFlight = beginSteerDeliveryState(
+      state({ pendingQueue: [first, second] }),
+      first,
+      deliveryCreatedAt,
+    );
 
     expect(canStartQueuedSteer(inFlight, second.clientId)).toBe(false);
     expect(canStartComposerSteer(inFlight)).toBe(false);

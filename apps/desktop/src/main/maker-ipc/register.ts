@@ -49,6 +49,25 @@ import { getDesktopCommandRegistry } from '../commands/index.js';
 import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index.js';
 import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import {
+  initGhostSetupInteractionBridge,
+  parseGhostSetupInteractionCommand,
+  parseGhostSetupInlineSubmitRequest,
+  projectPendingInteractionsForRemote,
+  type GhostSetupInteractionResponseTarget,
+  type GhostSetupInteractionSnapshot,
+} from '../cindy-brain/ghostSetupInteractionBridge.js';
+import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
+import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
+import {
+  executeGhostSetupAction,
+  executeGhostSetupInlineAction,
+  getGhostManager,
+  getGhostSetupAssessment,
+  isGhostAvailableForActiveSession,
+} from '../cindy-brain/index.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
   initRenameSessionsConfirm,
   RenameSessionsConfirmBridge,
 } from '../session-title-rename/index.js';
@@ -60,12 +79,27 @@ import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.j
 import {
   checkComputerDriverUpdate,
   cancelComputerDriverPermissionGrant,
+  getComputerDriverAppBundlePath,
   getComputerDriverAppIcon,
   getComputerDriverStatus,
   grantComputerDriverPermissions,
   installComputerDriver,
+  pauseComputerDriverPermissionProbe,
   updateComputerDriver,
 } from '../mcp-integrations/computer.js';
+import {
+  closeComputerPermissionGuideWindow,
+  finishComputerPermissionAppDrag,
+  getComputerPermissionGuideStatus,
+  openComputerPermissionPaneForStatus,
+  isComputerPermissionGuideWebContents,
+  refreshComputerPermissionGuideWindow,
+  seedOpenedPermissionPane,
+  showComputerPermissionGuideWindow,
+  startComputerPermissionAppDrag,
+} from '../computer-permission-guide/window.js';
+import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
+import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -404,6 +438,10 @@ import {
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import {
+  assertResolveInteractionOrigin,
+  isPluginSetupInteractionDecision,
+} from './interactionResolveOrigin.js';
 import { checkRemoteWorkingDir } from '../device-link/remote-workdir-guard.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
 import { createBusinessSessionId } from '../sessionIds.js';
@@ -1094,6 +1132,109 @@ const ghostGrantConfirmBridge = initGhostGrantConfirmBridge({
   logger: log,
 });
 
+const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
+  broadcast: (channel, payload) => {
+    broadcastToAllWindows(channel, payload);
+    const value = payload as {
+      sessionId?: unknown;
+      requestId?: unknown;
+      request?: GhostSetupInteractionSnapshot;
+    };
+    if (typeof value.sessionId !== 'string') return;
+    if (channel === MAKER_PUSH.INTERACTION_REQUEST && value.request?.kind === 'plugin_setup') {
+      if (!shouldNotifyAgentIslandForSession(value.sessionId)) return;
+      if (value.request.terminal === true) {
+        // The Renderer keeps the terminal snapshot for its short visual
+        // grace, while Agent Island must stop treating it as attention now.
+        getAgentIslandService()?.handleInteractionDismissed(
+          value.sessionId,
+          value.request.requestId,
+        );
+        return;
+      }
+      const activeStep = value.request.steps.find(
+        (step) => step.phase !== 'satisfied' && step.phase !== 'cancelled',
+      );
+      getAgentIslandService()?.handlePluginSetupInteraction(
+        value.sessionId,
+        value.request.requestId,
+        activeStep?.title ?? `${value.request.ghost.name} 设置`,
+      );
+      return;
+    }
+    if (
+      channel === MAKER_PUSH.INTERACTION_DISMISSED &&
+      typeof value.requestId === 'string'
+    ) {
+      getAgentIslandService()?.handleInteractionDismissed(
+        value.sessionId,
+        value.requestId,
+      );
+    }
+  },
+  logger: log,
+});
+
+initGhostSetupCoordinator({
+  changeBus: getGhostSetupChangeBus(),
+  bridge: ghostSetupInteractionBridge,
+  assess: (ghostId) => getGhostSetupAssessment(ghostId),
+  validateTarget: (ghostId, tool, workingDir) => {
+    const ghost = getGhostManager()
+      .list()
+      .find((candidate) => candidate.manifest.id === ghostId);
+    if (!ghost || !isGhostAvailableForActiveSession(ghostId)) {
+      return {
+        ok: false,
+        errorCode: 'GHOST_NOT_FOUND',
+        message: '目标插件已卸载或当前不可用',
+      };
+    }
+    if (!ghost.enabled) {
+      return {
+        ok: false,
+        errorCode: 'GHOST_ASLEEP',
+        message: '目标插件已被停用',
+      };
+    }
+    if (isGhostDisabledForWorkdir(ghostId, workingDir)) {
+      return {
+        ok: false,
+        errorCode: 'GHOST_DISABLED_IN_WORKDIR',
+        message: '用户已在当前工作目录停用该插件;不要重试。',
+      };
+    }
+    if (tool && !(ghost.manifest.tools ?? []).some((candidate) => candidate.name === tool)) {
+      return {
+        ok: false,
+        errorCode: 'TOOL_NOT_FOUND',
+        message: `目标插件不再提供工具 ${tool}`,
+      };
+    }
+    return { ok: true };
+  },
+  getGhostIdentity: (ghostId) => {
+    const ghost = getGhostManager().list().find((candidate) => candidate.manifest.id === ghostId);
+    return ghost
+      ? {
+          id: ghostId,
+          name: ghost.manifest.name,
+          ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+        }
+      : null;
+  },
+  executeAction: ({ sessionId, ghostId, action, responseTarget }) =>
+    executeGhostSetupAction({
+      sessionId,
+      ghostId,
+      action,
+      ...(responseTarget ? { responseTarget } : {}),
+    }),
+  executeInlineAction: ({ sessionId, ghostId, action, value }) =>
+    executeGhostSetupInlineAction({ sessionId, ghostId, action, value }),
+  logger: log,
+});
+
 function clearPendingInteraction(requestId: string): PendingInteractionEntry | null {
   const entry = pendingInteractionResolvers.get(requestId);
   if (!entry) return null;
@@ -1110,12 +1251,27 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
  */
 function getPendingInteractionsForSession(
   sessionId: string,
-): Array<{ request: InteractionRequest; persistId?: string }> {
-  const out: Array<{ request: InteractionRequest; persistId?: string }> = [];
+): Array<{ request: InteractionRequest | GhostSetupInteractionSnapshot; persistId?: string }> {
+  const out: Array<{
+    request: InteractionRequest | GhostSetupInteractionSnapshot;
+    persistId?: string;
+  }> = [];
   for (const entry of pendingInteractionResolvers.values()) {
     if (entry.sessionId === sessionId) out.push({ request: entry.request, persistId: entry.persistId });
   }
+  out.push(
+    ...ghostSetupInteractionBridge
+      .pendingSnapshots(sessionId)
+      .map(({ request }) => ({ request })),
+  );
   return out;
+}
+
+function hasPendingInteractionForSession(sessionId: string): boolean {
+  return (
+    Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId) ||
+    ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
+  );
 }
 
 function dismissRendererInteraction(
@@ -1234,6 +1390,10 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
   ghostGrantConfirmBridge.cleanupForSession(
+    sessionId,
+    reason === 'session_closed' ? 'session_closed' : 'session_aborted',
+  );
+  ghostSetupInteractionBridge.cleanupForSession(
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
@@ -5915,8 +6075,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       if (sess?.isTurnRunning()) return;
       const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
         sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
-      const hadZombieInteraction = Array.from(pendingInteractionResolvers.values())
-        .some((entry) => entry.sessionId === sessionId);
+      const hadZombieInteraction = hasPendingInteractionForSession(sessionId);
       if (!trackerStale && !hadZombieInteraction) return;
       log.warn('reconcileTurnIdle: clearing stale busy state after authoritative NO_ACTIVE_TURN', {
         sessionId,
@@ -5930,8 +6089,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
         cleanupPendingInteractionsForSession(sessionId, 'turn_idle_reconcile');
       }
     },
-    hasPendingInteraction: (sessionId) =>
-      Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId),
+    hasPendingInteraction: hasPendingInteractionForSession,
     getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
@@ -6615,8 +6773,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }));
   });
 
-  ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION, (_e, requestId: unknown, decision: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.RESOLVE_INTERACTION, (event, requestId: unknown, decision: unknown) => {
     if (typeof requestId !== 'string') throwIpcError('INVALID_PARAMS', 'requestId required');
+    if (
+      isPluginSetupInteractionDecision(decision) &&
+      !parseGhostSetupInteractionCommand(decision)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid plugin setup decision');
+    }
+    // permission / ask / plan and setup cancellation remain remotely
+    // resolvable, but Host-owned setup side effects may only originate from
+    // the trusted local Desktop.
+    assertResolveInteractionOrigin(decision);
+    let pluginSetupResponseTarget: GhostSetupInteractionResponseTarget | undefined;
+    if (isPluginSetupInteractionDecision(decision) && !isDeviceLinkInvoke()) {
+      assertTrustedAppRendererEvent(event);
+      if (decision.action === 'run_action') {
+        // Electron's real sender identity stays outside the untrusted command
+        // payload and is carried only through the Host-owned action path.
+        pluginSetupResponseTarget = event.sender;
+      }
+    }
     if (!resolvePendingInteraction(requestId, decision as InteractionDecision)) {
       if (isPermissionInteractionDecision(decision)) {
         handleAgentIslandInteractionDismissedByRequestId(requestId);
@@ -6627,14 +6804,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       if (issueConfirmBridge.resolve(requestId, decision)) return;
       if (renameSessionsConfirmBridge.resolve(requestId, decision)) return;
       if (ghostGrantConfirmBridge.resolve(requestId, decision)) return;
+      if (ghostSetupInteractionBridge.resolve(requestId, decision, pluginSetupResponseTarget)) {
+        return;
+      }
       log.warn('resolve-interaction: no pending resolver (likely already dismissed/timed out)', { requestId });
+    }
+  });
+
+  ipcMain.handle(MAKER_INVOKE.PLUGIN_SETUP_SUBMIT_INLINE, (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const request = parseGhostSetupInlineSubmitRequest(raw);
+    if (!request) throwIpcError('INVALID_PARAMS', 'invalid plugin setup submission');
+    const { requestId, ...submit } = request;
+    if (!ghostSetupInteractionBridge.submitInline(requestId, submit)) {
+      throwIpcError('INVALID_PARAMS', 'plugin setup interaction is not pending');
     }
   });
 
   // 快照:打开/重连/刷新会话时,renderer 拉当前挂起交互重建面板(本机 + device-link 远程共用)。
   ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return [];
-    return getPendingInteractionsForSession(sessionId);
+    const pending = getPendingInteractionsForSession(sessionId);
+    return projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke());
   });
 
   // ── 运行时切换 (Stage 2 B) ───────────────────────────────────────────────
@@ -7038,15 +7229,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   });
 
   // ── Local desktop computer-use (Settings →「电脑使用」) ─────────────────
-  // Probe external driver availability. Read-only and side-effect-free.
+  // Probe the installed CuaDriver used by the phase-one Computer Use runtime.
   ipcMain.handle(MAKER_INVOKE.COMPUTER_STATUS, async (_event, options?: {
     includeDoctor?: boolean;
     forcePermissionProbe?: boolean;
+    skipPermissionProbe?: boolean;
     freshPermissionProbe?: boolean;
     bypassPermissionProbeCache?: boolean;
+    passivePermissionProbeOnly?: boolean;
   }) => {
     try {
-      return await getComputerDriverStatus(options);
+      const status = await getComputerDriverStatus(options);
+      if (
+        options?.forcePermissionProbe === true
+        || options?.freshPermissionProbe === true
+      ) {
+        refreshComputerPermissionGuideWindow(status);
+      }
+      return status;
     } catch (err) {
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
@@ -7060,23 +7260,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     }
   });
 
-  ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS, async () => {
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS, async (_event, payload?: unknown) => {
+    assertTrustedAppRendererEvent(_event);
+    const options = parseComputerPermissionGrantRequest(payload);
+    if (!options) {
+      throwIpcError('INVALID_PARAMS', 'Invalid Computer Use permission request');
+    }
+    const shouldShowGuide = shouldUseComputerPermissionGuide({
+      platform: process.platform,
+      showGuide: options.showGuide,
+      appBundlePath: getComputerDriverAppBundlePath(),
+    });
     try {
-      return await grantComputerDriverPermissions();
+      // Permission snapshots are mutable TCC state and cannot be accepted from
+      // Renderer. Re-establish the state in Main immediately before guide side
+      // effects, bypassing both daemon and probe caches.
+      const initialStatus = shouldShowGuide
+        ? await getComputerDriverStatus({
+            forcePermissionProbe: true,
+            freshPermissionProbe: true,
+            bypassPermissionProbeCache: true,
+          })
+        : undefined;
+      if (shouldShowGuide) {
+        if (!initialStatus) throw new Error('Computer Use permission guide status unavailable');
+        if (options.openedPaneUrl) {
+          seedOpenedPermissionPane(options.openedPaneUrl);
+        }
+        await openComputerPermissionPaneForStatus(initialStatus);
+        // Phase one keeps CuaDriver as the real permission/runtime identity.
+        // The new guide wraps its existing grant flow without introducing a
+        // second Computer Use.app entry in macOS privacy settings.
+        await pauseComputerDriverPermissionProbe();
+        await showComputerPermissionGuideWindow(
+          BrowserWindow.fromWebContents(_event.sender),
+          initialStatus,
+        );
+      }
+      return await grantComputerDriverPermissions(
+        initialStatus,
+      );
     } catch (err) {
+      if (shouldShowGuide) closeComputerPermissionGuideWindow();
       throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
     }
   });
 
-  // 查询型:授权引导弹窗的 CuaDriver 图标。取不到(未装 app bundle / 非 macOS /
-  // 读图失败)返回 null,renderer 降级用通用图标继续渲染,不抛错。
+  // 查询型:授权引导弹窗的 CuaDriver 图标。取不到时 renderer 降级用通用图标。
   ipcMain.handle(MAKER_INVOKE.COMPUTER_DRIVER_ICON, async () => {
     return { iconDataUrl: await getComputerDriverAppIcon() };
   });
 
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_PERMISSION_GUIDE_STATUS, async (_event) => {
+    const status = getComputerPermissionGuideStatus(_event.sender);
+    if (!status) {
+      throwIpcError('PRECONDITION_FAILED', 'Computer Use permission guide is not active');
+    }
+    return status;
+  });
+
+  ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_START, (_event, payload?: {
+    iconDataUrl?: unknown;
+  }) => {
+    startComputerPermissionAppDrag(_event.sender, payload?.iconDataUrl);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_PERMISSION_APP_DRAG_END, async (_event, payload?: {
+    didCopy?: unknown;
+  }) => {
+    return finishComputerPermissionAppDrag(_event.sender, payload?.didCopy);
+  });
+
   // 命令型:取消在途授权流程。幂等,无在途 grant 时 no-op。
-  ipcMain.handle(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT, async () => {
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT, async (_event) => {
+    const cancelledFromGuide = isComputerPermissionGuideWebContents(_event.sender);
+    if (!cancelledFromGuide) {
+      assertTrustedAppRendererEvent(_event);
+    }
     cancelComputerDriverPermissionGrant();
+    closeComputerPermissionGuideWindow();
+    if (cancelledFromGuide) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(MAKER_PUSH.COMPUTER_PERMISSION_GUIDE_CANCELLED);
+        }
+      }
+    }
     return { cancelled: true };
   });
 

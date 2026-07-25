@@ -661,6 +661,21 @@ function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<stri
   return changed ? { ...body, input } : null;
 }
 
+/** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
+function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<string, unknown> | null {
+  if (!isByteDanceSeedModel(body.model) || !isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
+    return null;
+  }
+
+  const reasoning = { ...body.reasoning };
+  delete reasoning.summary;
+
+  const next: Record<string, unknown> = { ...body };
+  if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
+  else delete next.reasoning;
+  return next;
+}
+
 function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   return (body) => {
     if (!isPlainObject(body)) return null;
@@ -674,6 +689,11 @@ function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
     const withNormalizedInput = normalizeByteDanceSeedInput(current);
     if (withNormalizedInput) {
       current = withNormalizedInput;
+      changed = true;
+    }
+    const withSanitizedReasoning = sanitizeByteDanceSeedReasoning(current);
+    if (withSanitizedReasoning) {
+      current = withSanitizedReasoning;
       changed = true;
     }
     return changed ? current : null;

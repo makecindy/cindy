@@ -1885,6 +1885,30 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
     expect(display.sessions[0]).toMatchObject({ sessionId: 'err', phase: 'error', attention: true });
   });
 
+  it('ignores a delayed repeated setup dismissal after completion attention is recorded', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandInteractionRequest(
+      state,
+      { sessionId: 'done', title: 'Done' },
+      { kind: 'plugin_setup', requestId: 'setup-1', detail: '连接账号' },
+      1_000,
+    );
+    // Terminal setup snapshot retires the interaction before the resumed turn
+    // emits done; the visual card itself is dismissed later after its grace.
+    applyAgentIslandInteractionDismissed(state, 'done', 'setup-1', 1_500);
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Done' }, doneEvent(), 2_000);
+    expect(buildAgentIslandDisplayState(state, 2_100).sessions[0]).toMatchObject({
+      phase: 'completed',
+      attention: true,
+    });
+
+    applyAgentIslandInteractionDismissed(state, 'done', 'setup-1', 2_200);
+    expect(buildAgentIslandDisplayState(state, 2_300).sessions[0]).toMatchObject({
+      phase: 'completed',
+      attention: true,
+    });
+  });
+
   it('keeps a failed turn in error through its accounting status Done and done events', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'err', title: 'Err' }, statusEvent(true, 'Running'), 1_900);

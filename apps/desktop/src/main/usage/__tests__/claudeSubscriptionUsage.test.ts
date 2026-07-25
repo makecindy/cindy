@@ -6,6 +6,7 @@
  *   - parseClaudeUnifiedRateLimitHeaders: headers 0.0-1.0 分数 ×100 归一化
  *   - mergeClaudeSubscriptionUsageSnapshot: headers 增量 / endpoint 全量的双源语义
  *   - claudeModelFamily / matchScopedWindowForModel: 方案 B 的模型 → scoped 窗口匹配
+ *   - isClaudeSubscriptionAlerting: chip 变红口径(只看影响当前会话的窗口 + rejected)
  *   - fetchClaudeSubscriptionUsageSnapshot: UA / beta 头、401→Unauthorized、429→RateLimited
  */
 
@@ -13,6 +14,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   claudeModelFamily,
+  hasAlertingClaudeSessionWindow,
+  isClaudeSubscriptionAlerting,
+  isClaudeUsageWindowAlerting,
   matchScopedWindowForModel,
   mergeClaudeSubscriptionUsageSnapshot,
   parseClaudeOAuthUsageResponse,
@@ -243,6 +247,115 @@ describe('claudeModelFamily / matchScopedWindowForModel', () => {
     expect(matchScopedWindowForModel(scoped, 'claude-opus-4-8')?.utilization).toBe(5);
     expect(matchScopedWindowForModel(scoped, 'claude-sonnet-4-6')).toBeNull();
     expect(matchScopedWindowForModel(undefined, 'claude-fable-5')).toBeNull();
+  });
+});
+
+describe('isClaudeSubscriptionAlerting', () => {
+  /**
+   * 2026-07-25 实测快照:5h / 总周限都很宽裕,只有 Fable 的分模型周限 87% 且服务端
+   * 给了 severity=warning。chip 上只显示 5h + 周限两段,所以这份数据只该让 Fable
+   * 会话变红。
+   */
+  const SNAPSHOT: ClaudeSubscriptionUsageSnapshot = {
+    fiveHour: { utilization: 10 },
+    sevenDay: { utilization: 44 },
+    scoped: [{ utilization: 87, severity: 'warning', modelDisplayName: 'Fable' }],
+    rateLimitStatus: 'allowed',
+    subscriptionType: 'max',
+  };
+
+  it('only alerts the model whose scoped weekly window is warning', () => {
+    expect(isClaudeSubscriptionAlerting(SNAPSHOT, 'claude-fable-5[1m]')).toBe(true);
+    // 跑 Opus / Sonnet 的会话不受 Fable 周限影响 —— chip 上也没有那一段, 不能染红
+    expect(isClaudeSubscriptionAlerting(SNAPSHOT, 'claude-opus-5[1m]')).toBe(false);
+    expect(isClaudeSubscriptionAlerting(SNAPSHOT, 'claude-sonnet-5')).toBe(false);
+    // 家族识别不出来时回退总周限(44%,不告警)
+    expect(isClaudeSubscriptionAlerting(SNAPSHOT, null)).toBe(false);
+    expect(isClaudeSubscriptionAlerting(null, 'claude-fable-5')).toBe(false);
+  });
+
+  it('ignores allowed_warning but honors rejected', () => {
+    // allowed_warning 是服务端综合全部窗口(含其它模型周限)的模糊信号:chip 只显示
+    // 5h + 周限, 拿它染红会出现「剩余 91% / 56% 却是红的」
+    expect(isClaudeSubscriptionAlerting(
+      { ...SNAPSHOT, rateLimitStatus: 'allowed_warning' },
+      'claude-opus-5[1m]',
+    )).toBe(false);
+    // 真限流(请求已被拒)与当前模型无关, 一律告警
+    expect(isClaudeSubscriptionAlerting(
+      { ...SNAPSHOT, rateLimitStatus: 'rejected' },
+      'claude-opus-5[1m]',
+    )).toBe(true);
+    expect(isClaudeSubscriptionAlerting(
+      { ...SNAPSHOT, rateLimitStatus: 'REJECTED ' },
+      'claude-opus-5[1m]',
+    )).toBe(true);
+  });
+
+  it('alerts on exhausted or non-normal session-scope windows', () => {
+    // 打满(headers 源不带 severity, 只能靠 utilization)
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: 100 } },
+      'claude-opus-5',
+    )).toBe(true);
+    // 总周限 severity 非 normal —— 所有模型共用, 与当前模型无关
+    expect(isClaudeSubscriptionAlerting(
+      { sevenDay: { utilization: 80, severity: 'warning' } },
+      'claude-opus-5',
+    )).toBe(true);
+    // 水位远未见底且 severity=normal → 不告警
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: 60, severity: 'normal' }, sevenDay: { utilization: 44 } },
+      'claude-opus-5',
+    )).toBe(false);
+  });
+
+  it('alerts when a displayed window runs down to the last 10%', () => {
+    // unified-headers 源不带 per-window severity, 只有 utilization: 光靠「打满」会让
+    // chip 一直到 99.95% 才变红。剩余 ≤10% 即告警, 判据是 chip 上正在显示的那个数字。
+    expect(isClaudeSubscriptionAlerting({ fiveHour: { utilization: 90 } }, 'claude-opus-5'))
+      .toBe(true);
+    expect(isClaudeSubscriptionAlerting({ sevenDay: { utilization: 92 } }, 'claude-opus-5'))
+      .toBe(true);
+    // 水位判定优先于服务端 severity: 只剩 5% 时说 normal 也照样提醒
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: 95, severity: 'normal' } },
+      'claude-opus-5',
+    )).toBe(true);
+    // 阈值下方不告警(89% 已用 = 剩余 11%)
+    expect(isClaudeSubscriptionAlerting({ fiveHour: { utilization: 89 } }, 'claude-opus-5'))
+      .toBe(false);
+    // 其它模型的 scoped 窗口即使见底也不染红当前会话 —— 与阈值无关
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: 10 }, scoped: [{ utilization: 99, modelDisplayName: 'Fable' }] },
+      'claude-opus-5',
+    )).toBe(false);
+  });
+
+  it('hasAlertingClaudeSessionWindow excludes the overall status signal', () => {
+    // tooltip 用它 + status 分流, chip 用 isClaudeSubscriptionAlerting; 窗口维度本身
+    // 不看 status(rejected 也不例外)
+    expect(hasAlertingClaudeSessionWindow(
+      { ...SNAPSHOT, rateLimitStatus: 'rejected' },
+      'claude-opus-5[1m]',
+    )).toBe(false);
+    expect(hasAlertingClaudeSessionWindow(SNAPSHOT, 'claude-fable-5[1m]')).toBe(true);
+    expect(isClaudeUsageWindowAlerting(undefined)).toBe(false);
+    expect(isClaudeUsageWindowAlerting({ utilization: 87, severity: 'warning' })).toBe(true);
+  });
+
+  it('ignores non-finite utilization instead of treating it as exhausted', () => {
+    // 持久化快照是 JSON.parse 后直接断言的, 不重新校验字段: 脏值不能被 clampPercent
+    // 夹成 100 而误判额度耗尽。severity 缺失时一律不告警。
+    expect(isClaudeUsageWindowAlerting({ utilization: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(isClaudeUsageWindowAlerting({ utilization: Number.NaN })).toBe(false);
+    expect(isClaudeSubscriptionAlerting(
+      { fiveHour: { utilization: Number.POSITIVE_INFINITY } },
+      'claude-opus-5',
+    )).toBe(false);
+    // 脏 utilization 不影响 severity 这条独立判据
+    expect(isClaudeUsageWindowAlerting({ utilization: Number.NaN, severity: 'warning' }))
+      .toBe(true);
   });
 });
 

@@ -24,6 +24,10 @@ import {
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
+import {
+  ANALYTICS_SETTINGS_CHANGE_CHANNEL,
+  type AnalyticsSettingsPayload,
+} from '../shared/analyticsSettings';
 import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
@@ -259,10 +263,18 @@ const fanOutGhostPanelWindowStateChanged = createIpcFanOut('maker:ghost-panel-wi
 const fanOutBinaryDownloadProgress = createIpcFanOut('binary-download-progress');
 // Settings →「电脑使用」cua-driver 更新的下载进度(main 侧采样后广播)
 const fanOutComputerDriverUpdateProgress = createIpcFanOut('computer-driver-update-progress');
+const fanOutComputerPermissionGuideCancelled = createIpcFanOut(
+  'maker:computer:permission-guide-cancelled',
+);
+const fanOutComputerPermissionGuideStatusChanged = createIpcFanOut(
+  'maker:computer:permission-guide-status-changed',
+);
 const fanOutAppUpdateProgress = createIpcFanOut('app-update-progress');
 const fanOutAuthStateChange = createIpcFanOut('auth:state-change');
 const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
 const fanOutTapdbDailyActive = createIpcFanOut('tapdb:daily-active');
+// 使用统计(TapDB)的同意状态 / 开关变化;renderer 据此即时 init 或 opt-out
+const fanOutAnalyticsSettingsChange = createIpcFanOut(ANALYTICS_SETTINGS_CHANGE_CHANNEL);
 const fanOutFullscreenChange = createIpcFanOut('fullscreen-change');
 const fanOutApplicationMenuCommand = createIpcFanOut('app-menu:command');
 // 首登轻量数据迁移(mToc)弹窗阶段推送(confirm / running / done / failed)
@@ -347,6 +359,7 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 意识仓库变化广播 (install/uninstall 后 main 推全量已装清单,多窗口热更新;
 // 见 main/cindy-brain/index.ts)。
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
+const fanOutGhostSetupNavigate = createIpcFanOut('maker:plugin-setup:navigate');
 // Plugin 顶部已安装快捷行的最近使用顺序，多窗口同步。
 const fanOutGhostRecentUsageChanged = createIpcFanOut('ghosts:recent-usage-changed');
 // 双击 .cindy 转交信号(main 缓存路径,renderer 收信号后来取,统一走应用内确认流程)。
@@ -569,8 +582,10 @@ interface ComputerDriverStatus {
 interface ComputerDriverStatusOptions {
   includeDoctor?: boolean;
   forcePermissionProbe?: boolean;
+  skipPermissionProbe?: boolean;
   freshPermissionProbe?: boolean;
   bypassPermissionProbeCache?: boolean;
+  passivePermissionProbeOnly?: boolean;
 }
 
 type ComputerDriverPermissionPlatform = 'macos' | 'windows' | 'linux' | 'unsupported';
@@ -813,6 +828,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
     takePendingInstall: (): Promise<{ filePath: string | null }> =>
       ipcRenderer.invoke('ghosts:take-pending-install'),
     onChanged: fanOutGhostsChanged,
+    onSetupNavigate: (
+      callback: (
+        payload:
+          | { sessionId: string; target: 'plugin_settings'; ghostId: string }
+          | { sessionId: string; target: 'client_settings' },
+      ) => void,
+    ): (() => void) =>
+      fanOutGhostSetupNavigate((raw: unknown) => {
+        if (!raw || typeof raw !== 'object') return;
+        const value = raw as Record<string, unknown>;
+        if (typeof value.sessionId !== 'string' || value.sessionId.length === 0) return;
+        if (
+          value.target === 'plugin_settings' &&
+          typeof value.ghostId === 'string' &&
+          value.ghostId.length > 0
+        ) {
+          callback({
+            sessionId: value.sessionId,
+            target: 'plugin_settings',
+            ghostId: value.ghostId,
+          });
+          return;
+        }
+        if (value.target === 'client_settings') {
+          callback({ sessionId: value.sessionId, target: 'client_settings' });
+        }
+      }),
     onRecentUsageChanged: fanOutGhostRecentUsageChanged,
     onInstallRequested: fanOutGhostInstallRequested,
     onRuntimeChanged: fanOutGhostRuntimeChanged,
@@ -1253,6 +1295,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ) {
         callback(payload as { date: string });
       }
+    }),
+
+  // ── 使用统计(TapDB)同意闸 ──
+  // 真相在 main(<userData>/analytics-settings.json);renderer 只读结论、只提交
+  // 用户动作,不自己落盘。allowed = 已同意隐私政策 && 统计开关开启。
+  getAnalyticsSettings: (): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:settings-get'),
+  setAnalyticsEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:settings-set-enabled', enabled === true),
+  /** 恢复默认:删掉开关 override,同意事实保留。 */
+  resetAnalyticsEnabled: (): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:settings-reset-enabled'),
+  /** 登录页协议门放行时调用一次(含游客);幂等。 */
+  acceptPrivacyConsent: (): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:consent-accept'),
+  onAnalyticsSettingsChange: (
+    callback: (payload: AnalyticsSettingsPayload) => void,
+  ): (() => void) =>
+    fanOutAnalyticsSettingsChange((payload) => {
+      // 三个字段全部逐个校验后才放行:preload 是边界,不能只认 allowed 就把整个
+      // 对象 cast 过去 —— 形状漂移或收到意外消息时,renderer 会拿到隐式 falsy 值。
+      if (!payload || typeof payload !== 'object') return;
+      const raw = payload as Record<string, unknown>;
+      if (
+        typeof raw.allowed !== 'boolean' ||
+        typeof raw.privacyConsentAccepted !== 'boolean' ||
+        typeof raw.analyticsEnabled !== 'boolean' ||
+        typeof raw.analyticsEnabledCustomized !== 'boolean'
+      ) {
+        return;
+      }
+      callback({
+        privacyConsentAccepted: raw.privacyConsentAccepted,
+        analyticsEnabled: raw.analyticsEnabled,
+        analyticsEnabledCustomized: raw.analyticsEnabledCustomized,
+        allowed: raw.allowed,
+      });
     }),
 
   // Slack 官方 MCP(slackOfficial)已于 2026-07-15 退役(能力迁入内置意识 cindy-slack);
@@ -3882,6 +3961,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       decision: Record<string, unknown>,
     ): Promise<void> => ipcRenderer.invoke('maker:resolve-interaction', requestId, decision),
 
+    /** Local-only Secret handoff; Main verifies this is Cindy's trusted top-level frame. */
+    submitPluginSetupInline: (request: {
+      requestId: string;
+      actionId: string;
+      expectedRevision: number;
+      value: string;
+    }): Promise<void> => ipcRenderer.invoke('maker:plugin-setup:submit-inline', request),
+
     // 快照:某会话当前挂起的交互(permission/ask/plan)。打开/重连/刷新会话时拉一次重建面板
     // —— pending 状态原本只由实时 INTERACTION_REQUEST push 设置,后加入的窗口靠它补回。
     getPendingInteractions: (
@@ -4555,12 +4642,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:status', options),
       installDriver: (): Promise<ComputerDriverInstallResult> =>
         ipcRenderer.invoke('maker:computer:install-driver'),
-      grantPermissions: (): Promise<ComputerDriverPermissionGrantResult> =>
-        ipcRenderer.invoke('maker:computer:grant-permissions'),
+      grantPermissions: (options?: {
+        showGuide?: boolean;
+        openedPaneUrl?: string;
+      }): Promise<ComputerDriverPermissionGrantResult> =>
+        ipcRenderer.invoke('maker:computer:grant-permissions', options),
       driverIcon: (): Promise<{ iconDataUrl: string | null }> =>
         ipcRenderer.invoke('maker:computer:driver-icon'),
+      permissionGuideStatus: (): Promise<ComputerDriverStatus> =>
+        ipcRenderer.invoke('maker:computer:permission-guide-status'),
+      startPermissionAppDrag: (iconDataUrl: string): void =>
+        ipcRenderer.send('maker:computer:permission-app-drag-start', { iconDataUrl }),
+      finishPermissionAppDrag: (didCopy: boolean): Promise<boolean> =>
+        ipcRenderer.invoke('maker:computer:permission-app-drag-end', { didCopy }),
       cancelPermissionGrant: (): Promise<{ cancelled: boolean }> =>
         ipcRenderer.invoke('maker:computer:cancel-permission-grant'),
+      onPermissionGuideCancelled: (callback: () => void): (() => void) =>
+        fanOutComputerPermissionGuideCancelled(callback),
+      onPermissionGuideStatusChanged: (
+        callback: (status: ComputerDriverStatus) => void,
+      ): (() => void) => fanOutComputerPermissionGuideStatusChanged(
+        (data: unknown) => callback(data as ComputerDriverStatus),
+      ),
       checkUpdate: (): Promise<ComputerDriverUpdateCheck> =>
         ipcRenderer.invoke('maker:computer:check-update'),
       updateDriver: (opts?: { joinOnly?: boolean }): Promise<ComputerDriverInstallResult> =>

@@ -216,6 +216,15 @@ describe('ghost · 清单校验', () => {
     expect(
       bothOff.ok && (bothOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
     ).toEqual({ maximize: false, detach: false });
+    const minimizeOff = withPanel({ systemButtons: { minimize: false } });
+    expect(
+      minimizeOff.ok &&
+        (minimizeOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ minimize: false });
+    const allOff = withPanel({ systemButtons: { maximize: false, detach: false, minimize: false } });
+    expect(
+      allOff.ok && (allOff as { ok: true; manifest: GhostManifest }).manifest.panel?.systemButtons,
+    ).toEqual({ maximize: false, detach: false, minimize: false });
     expect(withPanel({ systemButtons: {} }).ok).toBe(true);
     expect(withPanel({ systemButtons: { maximize: true, detach: true } }).ok).toBe(true);
     // 非对象 / 未知键 / 非布尔值:收词明确拒绝(规则 9)
@@ -223,6 +232,8 @@ describe('ghost · 清单校验', () => {
     expect(withPanel({ systemButtons: { refresh: false } }).ok).toBe(false);
     expect(withPanel({ systemButtons: { maximize: 'no' } }).ok).toBe(false);
     expect(withPanel({ systemButtons: { detach: 0 } }).ok).toBe(false);
+    expect(withPanel({ systemButtons: { minimize: 0 } }).ok).toBe(false);
+    expect(withPanel({ position: 'tab', systemButtons: { minimize: false } }).ok).toBe(false);
     // 页签形态没有标准头:声明即拒(与 minWidth/defaultFraction 同款语义)
     expect(withPanel({ position: 'tab', systemButtons: { maximize: false } }).ok).toBe(false);
     // 缺省(不声明)不产出字段
@@ -2080,7 +2091,7 @@ describe('ghost · settingsHtml 自绘设置区 + settingsHeight', () => {
   });
 });
 
-describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染退役)', () => {
+describe('ghost · user 凭证由 Host Setup 收单并保留 settingsHtml 管理入口', () => {
   function withSecret(secret: Record<string, unknown>, extra: Record<string, unknown> = {}) {
     return validateGhostManifest({
       ...goodManifest(),
@@ -2110,7 +2121,7 @@ describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染�
     expect(legacy.ok && 'input' in (legacy.manifest.network?.secrets?.[0] ?? {})).toBe(false);
   });
 
-  it('user 凭证没声明 settingsHtml → 拒(宿主渲染输入行已退役,没有界面就没人收单)', () => {
+  it('user 凭证没声明 settingsHtml → 拒(仍缺少长期管理/替换/清除入口)', () => {
     for (const secret of [{}, { input: 'ghost' }]) {
       const r = withSecret(secret);
       expect(r.ok, JSON.stringify(secret)).toBe(false);
@@ -2118,7 +2129,7 @@ describe('ghost · 凭证收单一律意识自绘(2026-07-13 宿主凭证渲染�
     }
   });
 
-  it("input:'host' → 拒(宿主收单已退役);其它非法值同拒", () => {
+  it("input:'host' → 拒(旧 input 字段已退役);其它非法值同拒", () => {
     const host = withSecret({ input: 'host' }, { settingsHtml: 'settings.html' });
     expect(host.ok).toBe(false);
     expect(!host.ok && host.reason).toContain('退役');
@@ -2385,5 +2396,149 @@ describe('ghost · 宿主代启子进程(node.childSpawn,2026-07-23)', () => {
         b64: 'a'.repeat(1024 * 1024 + 1),
       }),
     ).toBeNull();
+  });
+});
+
+describe('ghost · skill 槽(捆绑 Agent Skills,2026-07-25)', () => {
+  const withSkill = (skill: unknown, slots: string[] = ['panel', 'skill']) =>
+    validateGhostManifest({ ...goodChipManifest(), slots, skill });
+  const goodItems = [
+    { dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' },
+  ];
+
+  it('槽与详单严格成对;合法声明原样收录', () => {
+    // 有槽必有详单
+    expect(validateGhostManifest({ ...goodChipManifest(), slots: ['panel', 'skill'] }).ok).toBe(false);
+    // 有详单必有槽
+    expect(
+      validateGhostManifest({ ...goodChipManifest(), skill: { items: goodItems } }).ok,
+    ).toBe(false);
+    const good = withSkill({ items: goodItems });
+    expect(good.ok).toBe(true);
+    if (good.ok) expect(good.manifest.skill?.items).toEqual(goodItems);
+  });
+
+  it('items 形状:空/超限/非对象/自造字段一律拒', () => {
+    expect(withSkill({ items: [] }).ok).toBe(false);
+    expect(withSkill({}).ok).toBe(false);
+    expect(withSkill({ items: goodItems, extra: 1 }).ok).toBe(false);
+    expect(withSkill({ items: ['skills/foo'] }).ok).toBe(false);
+    expect(
+      withSkill({ items: [{ ...goodItems[0], scope: 'global' }] }).ok,
+    ).toBe(false);
+    const five = Array.from({ length: 5 }, (_, i) => ({
+      dir: `skills/s${i}`,
+      name: `s${i}`,
+      description: 'x',
+    }));
+    expect(withSkill({ items: five }).ok).toBe(false);
+    // 恰好 4 条放行
+    expect(withSkill({ items: five.slice(0, 4) }).ok).toBe(true);
+  });
+
+  it('dir:必须是包内安全相对路径', () => {
+    const item = (dir: string) => withSkill({ items: [{ dir, name: 'foo', description: 'x' }] });
+    expect(item('../evil').ok).toBe(false);
+    expect(item('/abs/path').ok).toBe(false);
+    expect(item('skills\\foo').ok).toBe(false);
+    expect(item('skills/./foo').ok).toBe(false);
+    expect(item('').ok).toBe(false);
+    expect(item('skills/foo').ok).toBe(true);
+  });
+
+  it('name:小写字母数字单连字符分段;禁首尾/连续连字符(链接名 <id>--<name> 的无歧义前提)', () => {
+    const named = (name: string) => withSkill({ items: [{ dir: 'skills/foo', name, description: 'x' }] });
+    expect(named('foo-bar').ok).toBe(true);
+    expect(named('foo2').ok).toBe(true);
+    expect(named('Foo').ok).toBe(false);
+    expect(named('-foo').ok).toBe(false);
+    expect(named('foo-').ok).toBe(false);
+    expect(named('foo--bar').ok).toBe(false);
+    expect(named('').ok).toBe(false);
+    expect(named('a'.repeat(65)).ok).toBe(false);
+    expect(named('a'.repeat(64)).ok).toBe(true);
+  });
+
+  it('description:1–1024 非空;name/dir 大小写折叠去重', () => {
+    const desc = (description: unknown) =>
+      withSkill({ items: [{ dir: 'skills/foo', name: 'foo', description }] });
+    expect(desc('').ok).toBe(false);
+    expect(desc('   ').ok).toBe(false);
+    expect(desc('x'.repeat(1025)).ok).toBe(false);
+    expect(desc('x'.repeat(1024)).ok).toBe(true);
+    expect(desc(42).ok).toBe(false);
+    // 重复 name(等值)拒
+    expect(
+      withSkill({
+        items: [
+          { dir: 'skills/a', name: 'foo', description: 'x' },
+          { dir: 'skills/b', name: 'foo', description: 'y' },
+        ],
+      }).ok,
+    ).toBe(false);
+    // 重复 dir 大小写折叠拒(win32 文件系统折叠大小写)
+    expect(
+      withSkill({
+        items: [
+          { dir: 'skills/A', name: 'foo', description: 'x' },
+          { dir: 'skills/a', name: 'bar', description: 'y' },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('权限清单:逐技能置顶展示,key 稳定,detail = 声明的 description;详情页内容含 slotSkill', () => {
+    const r = withSkill({
+      items: [
+        { dir: 'skills/alpha', name: 'alpha', description: '技能 A' },
+        { dir: 'skills/beta', name: 'beta', description: '技能 B' },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const items = ghostPermissionItems(r.manifest);
+    // 置顶簇:两条 skill 项按声明顺序排在清单最前
+    expect(items[0]).toMatchObject({
+      key: 'skill:alpha',
+      kind: 'skill',
+      labelKey: 'skill',
+      labelArgs: { name: 'alpha' },
+      detailKey: 'skillDetail',
+      detail: '技能 A',
+    });
+    expect(items[1]).toMatchObject({ key: 'skill:beta', detail: '技能 B' });
+    expect(ghostContentKeys(r.manifest)).toContain('slotSkill');
+  });
+
+  it('更新 diff：技能增删可见,不变项不进 diff', () => {
+    const v1 = withSkill({
+      items: [{ dir: 'skills/alpha', name: 'alpha', description: '技能 A' }],
+    });
+    const v2 = withSkill({
+      items: [
+        { dir: 'skills/alpha', name: 'alpha', description: '技能 A' },
+        { dir: 'skills/beta', name: 'beta', description: '技能 B' },
+      ],
+    });
+    expect(v1.ok && v2.ok).toBe(true);
+    if (!v1.ok || !v2.ok) return;
+    const diff = diffGhostPermissionItems(v1.manifest, v2.manifest);
+    expect(diff.added.map((i) => i.key)).toContain('skill:beta');
+    expect(diff.removed.map((i) => i.key)).not.toContain('skill:alpha');
+  });
+
+  it('更新 diff：同名技能改 description 视为权限变更(added+removed)', () => {
+    const v1 = withSkill({
+      items: [{ dir: 'skills/alpha', name: 'alpha', description: '旧描述' }],
+    });
+    const v2 = withSkill({
+      items: [{ dir: 'skills/alpha', name: 'alpha', description: '新描述' }],
+    });
+    expect(v1.ok && v2.ok).toBe(true);
+    if (!v1.ok || !v2.ok) return;
+    const diff = diffGhostPermissionItems(v1.manifest, v2.manifest);
+    expect(diff.added.map((i) => i.key)).toContain('skill:alpha');
+    expect(diff.removed.map((i) => i.key)).toContain('skill:alpha');
+    expect(diff.unchanged.map((i) => i.key)).not.toContain('skill:alpha');
   });
 });

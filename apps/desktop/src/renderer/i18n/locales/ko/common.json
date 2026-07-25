@@ -646,6 +646,11 @@
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
+      "analyticsLabel": "사용 통계",
+      "analyticsDescription": "Cindy의 실행 및 지속 사용 현황을 파악하는 데 사용합니다. 기기 모델, OS 버전, 앱 버전, 기기 식별자 등 기기 및 사용 환경 정보를 전송하며 로그인 후에는 계정 ID도 포함됩니다. 대화 내용, 파일, 프롬프트는 전혀 포함하지 않습니다. 끄면 전송이 즉시 중단됩니다.",
+      "analyticsEnabledToast": "사용 통계를 켰습니다",
+      "analyticsDisabledToast": "사용 통계를 껐습니다",
+      "analyticsSaveFailed": "사용 통계 설정을 저장하지 못했습니다",
       "debugLogLabel": "디버그 로그",
       "debugLogDescription": "활성화하면 전체 디버그 로그를 출력합니다: main/maker logger가 debug 레벨로 올라가며, 새 Claude Code 세션은 API 요청 URL/상태/지연 시간, Node 레벨 DNS/TCP/TLS 핸드셰이크 타이밍 및 SDK 내부 정보도 출력합니다. 로그 양이 많으므로 문제 해결 후에는 꺼주세요. dev 모드에서는 항상 켜져 있습니다.",
       "social": {
@@ -1729,6 +1734,15 @@
       "directControl": {
         "title": "자동 조작 컴퓨터",
         "description": "에이전트가 창을 검사하고 UI를 읽고 클릭하거나 입력할 수 있습니다",
+        "status": {
+          "ready": "사용할 수 있음",
+          "needsPermission": "시스템 권한 필요",
+          "notInstalled": "드라이버가 설치되지 않음",
+          "disabled": "꺼짐",
+          "checking": "권한 확인 중…",
+          "setup": "권한 설정",
+          "version": "CUA Driver {{version}}"
+        },
         "toggleAria": "컴퓨터 직접 제어 전환",
         "driverInfo": "컴퓨터 자동 조작은 오픈 소스 CUA Driver로 제공됩니다. 로컬에서 실행되어 화면을 읽고 클릭, 입력 등의 작업을 수행합니다.",
         "openSourceProject": "오픈 소스 프로젝트 보기",
@@ -1746,14 +1760,25 @@
           "cancel": "나중에"
         },
         "permissionGuide": {
-          "title": "시스템 권한 허용 대기 중",
-          "description": "시스템 설정에서 CuaDriver에 아래 권한을 허용해 주세요(권한 목록에서 왼쪽 아이콘과 같은 앱을 찾으세요). 모두 허용되면 자동으로 계속됩니다.",
-          "waiting": "허용 대기"
+          "waiting": "켜기 대기",
+          "step": "컴퓨터 자동화 켜기",
+          "completeEyebrow": "권한 설정 완료",
+          "dragTitle": "CuaDriver를 {{permission}}으로 드래그",
+          "turnOnAppTitle": "{{permission}}에서 CuaDriver 켜기",
+          "dragHint": "드래그",
+          "draggingTitle": "CuaDriver 드래그 중",
+          "draggingHint": "{{permission}} 목록에 놓으세요",
+          "appName": "CuaDriver",
+          "turnOnTitle": "{{permission}} 켜기",
+          "turnOnDescription": "시스템 설정에서 이 권한을 켜세요. Cindy가 자동으로 계속합니다.",
+          "readyTitle": "Computer Use 준비 완료",
+          "readyDescription": "이제 요청할 때 Cindy가 이 컴퓨터를 조작할 수 있습니다."
         },
         "permissions": {
-          "macosHint": "macOS에서는 Cua Driver에 손쉬운 사용 및 화면 기록 기본 권한이 필요합니다. 실제 사용 중에는 대상 앱이나 특정 동작에 대해 추가 확인이 표시될 수 있습니다.",
-          "accessibilityLabel": "CuaDriver 손쉬운 사용",
-          "screenRecordingLabel": "CuaDriver 화면 기록",
+          "title": "시스템 권한",
+          "macosHint": "컴퓨터 사용에는 손쉬운 사용 및 화면 기록 권한이 필요합니다. 실제 사용 중에는 대상 앱이나 동작에 대한 추가 확인이 표시될 수 있습니다.",
+          "accessibilityLabel": "손쉬운 사용",
+          "screenRecordingLabel": "화면 기록",
           "grant": "허용",
           "accessibility": "손쉬운 사용: {{status}}",
           "screenRecording": "화면 기록: {{status}}",
@@ -1765,6 +1790,8 @@
           "openAccessibility": "손쉬운 사용 설정 열기",
           "openScreenRecording": "화면 기록 설정 열기",
           "recheck": "다시 확인",
+          "moreDetails": "자세한 설명",
+          "hideDetails": "설명 접기",
           "windowsHint": "Windows에서는 추가 시스템 권한이 필요하지 않습니다. 에이전트가 작업하는 동안 대상 앱을 현재 활성 데스크톱에 보이도록 유지하세요.",
           "linuxHint": "Linux에서는 macOS TCC 권한을 사용하지 않습니다. 현재 데스크톱 세션에서 창 검사와 입력 자동화가 허용되는지 확인하세요."
         },
@@ -1787,9 +1814,10 @@
           "disabled": "컴퓨터 직접 제어 비활성화됨",
           "toggleFailed": "컴퓨터 직접 제어 전환 실패",
           "installFailed": "cua-driver 설치 실패",
-          "permissionFailed": "cua-driver 권한 부여가 완료되지 않았습니다",
-          "permissionPending": "Cua Driver 시스템 권한을 완료하면 여기에서 자동으로 활성화됩니다",
+          "permissionFailed": "컴퓨터 사용 권한이 완료되지 않았습니다",
+          "permissionPending": "두 시스템 권한을 허용한 후 여기로 돌아와 다시 확인을 누르세요",
           "permissionSettingsOpened": "시스템 권한 설정을 열었습니다. 권한 부여를 마친 뒤 여기로 돌아와 \"다시 확인\"을 눌러 주세요.",
+          "permissionSettingsMonitoring": "시스템 권한 설정을 열었습니다. 권한 부여를 마치면 상태가 자동으로 업데이트됩니다.",
           "openPermissionSettingsFailed": "시스템 권한 설정을 열지 못했습니다"
         }
       }
@@ -2403,7 +2431,9 @@
         "preview": "아래 사이트의 미리보기 페이지를 사이드바 브라우저에서 열 수 있습니다",
         "previewDetail": "아래에 나열된 사이트만 열 수 있으며, 페이지를 열 때마다 어떤 플러그인이 열었는지 표시됩니다.",
         "nodeChildSpawn": "Node 프로그램이 패키지에 신고된 하위 프로세스 시작을 호스트에 요청할 수 있습니다",
-        "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다."
+        "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
+        "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
+        "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요."
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -2490,7 +2520,8 @@
         "slotCard": "메시지 카드",
         "slotNetwork": "네트워크 접근",
         "slotNotify": "시스템 알림",
-        "slotFs": "파일 쓰기"
+        "slotFs": "파일 쓰기",
+        "slotSkill": "에이전트 스킬"
       },
       "commandPaletteTag": "플러그인 명령",
       "updateConfirm": {
@@ -3086,11 +3117,15 @@
   "panelChrome": {
     "maximizeAria": "패널 최대화",
     "restoreAria": "패널 크기 복원",
-    "detachAria": "새 창에서 열기"
+    "detachAria": "새 창에서 열기",
+    "minimizeAria": "플로팅 버블로 최소화"
   },
   "ghostPanelWindow": {
     "mergeBack": "메인 창으로 되돌리기",
     "unavailable": "이 플러그인 패널은 현재 사용할 수 없습니다"
+  },
+  "ghostPanelBubble": {
+    "restoreAria": "{{name}} 패널 복원"
   },
   "rightSidebar": {
     "ariaLabel": "오른쪽 사이드바",
@@ -3633,6 +3668,59 @@
       "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}} 를 누르면 작업을 중단하지 않고 끼어듭니다",
       "stop": "생성 중지"
     },
+    "pluginSetup": {
+      "title": "{{name}} 설정",
+      "chooseOne": "설정 방법을 하나 선택하세요",
+      "restoreAria": "{{name}} 설정 펼치기",
+      "minimizeAria": "{{name}} 설정 접기",
+      "completeOnDesktop": "제어 중인 데스크톱에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
+      "cancel": "취소",
+      "cancelling": "취소 중…",
+      "retry": "다시 시도",
+      "saveConfiguration": "설정 저장",
+      "saving": "저장 중…",
+      "error": {
+        "ACTION_FAILED": "설정 작업을 완료할 수 없습니다. 다시 시도하세요.",
+        "ACTION_STALE": "설정 내용이 변경되었습니다. 설정 작업을 다시 선택하세요.",
+        "AUTH_CANCELLED": "인증이 취소되었습니다. 필요한 경우 다시 인증하세요.",
+        "AUTH_FAILED": "인증을 완료할 수 없습니다. 다시 시도하세요.",
+        "INLINE_INVALID": "설정 내용이 올바르지 않습니다. 확인한 후 다시 시도하세요.",
+        "INLINE_UNAVAILABLE": "이 Cindy 버전에서는 채팅에서 이 설정을 저장할 수 없습니다. Cindy를 업데이트한 후 다시 시도하세요.",
+        "SAVE_FAILED": "설정을 저장할 수 없습니다. 다시 시도하세요.",
+        "WINDOW_CLOSED": "설정을 시작한 창이 닫혔습니다. 세션으로 돌아가 다시 시도하세요.",
+        "TARGET_UNAVAILABLE": "플러그인이 비활성화되었거나 제거되었거나 사용할 수 없습니다. 플러그인 상태를 확인한 후 다시 시도하세요.",
+        "ASSESSMENT_FAILED": "설정 상태를 새로 고칠 수 없습니다. 다시 시도하세요.",
+        "TIMEOUT": "설정 대기 시간이 초과되었습니다. 다시 시도하세요."
+      },
+      "hostRequirements": {
+        "modelProvider": {
+          "label": "AI 모델 서비스",
+          "description": "플러그인에서 선언한 이미지 또는 동영상 기능을 사용하기 전에 사용 가능한 모델 서비스에 연결하세요."
+        }
+      },
+      "form": {
+        "placeholder": "{{label}} 입력",
+        "required": "{{label}}을(를) 입력하세요",
+        "tooLong": "{{maxLength}}자 이하로 입력하세요",
+        "openLink": "{{label}} 받기",
+        "openLinkFailed": "페이지를 열 수 없습니다. 다시 시도하세요."
+      },
+      "action": {
+        "oauth_connect": "인증",
+        "open_plugin_settings": "설정 열기",
+        "manage_connection": "연결 관리",
+        "open_client_settings": "모델 설정 열기"
+      },
+      "phase": {
+        "pending": "설정 대기",
+        "action_running": "진행 중…",
+        "waiting_external": "인증 대기 중…",
+        "verifying": "검증 중…",
+        "satisfied": "완료",
+        "failed": "실패",
+        "cancelled": "취소됨"
+      }
+    },
     "createAgent": {
       "quickStart": "빠른 시작",
       "quickStarts": {
@@ -3698,6 +3786,8 @@
         "output": "출력",
         "cacheRead": "캐시 읽기",
         "cacheCreate": "캐시 쓰기",
+        "free": "기간 한정 무료",
+        "discount": "{{percent}}% 절약",
         "perMillion": "모델 표준 가격",
         "fixedFx": "고정 환율 1 USD = 6.7 CNY 기준 추정",
         "subscriptionEstimate": "가치 추정치이며 실제 청구 금액이 아닙니다"
@@ -4841,7 +4931,8 @@
       "card": {
         "awaitingPermission": "승인 대기 중",
         "awaitingQuestion": "답장 대기 중",
-        "awaitingPlan": "계획 검토 대기 중"
+        "awaitingPlan": "계획 검토 대기 중",
+        "awaitingPluginSetup": "플러그인 설정 대기 중"
       },
       "showAllSessions": "모두 표시 {{count}}개",
       "dialogues": "대화",
@@ -7157,7 +7248,6 @@
     "checkout": {
       "creatingTitle": "결제 생성 중",
       "awaitingTitle": "결제 대기",
-      "fulfillingTitle": "크레딧 반영 중",
       "completedTitle": "결제 완료",
       "failedTitle": "완료할 수 없음",
       "expiredTitle": "결제 만료",
@@ -7172,7 +7262,6 @@
       "redirectHint": "결제 페이지에서 완료한 뒤 Cindy로 돌아오세요.",
       "openPayment": "결제 페이지 열기",
       "refreshingAction": "결제 정보를 불러오는 중…",
-      "creditingBody": "결제가 완료되었습니다. 크레딧이 반영되기를 기다리는 중입니다…",
       "paymentCompleted": "결제가 완료되었습니다.",
       "requestFailed": "요청에 실패했습니다. 결과가 불확실한 생성 요청은 같은 멱등성 키로 안전하게 재시도합니다.",
       "expiredBody": "결제 링크가 만료되었습니다. 새 결제를 생성하세요.",

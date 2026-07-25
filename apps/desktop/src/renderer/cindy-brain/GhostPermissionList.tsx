@@ -17,6 +17,7 @@ import {
   FilePen,
   FolderOpen,
   Globe,
+  GraduationCap,
   KeyRound,
   LayoutTemplate,
   MapPin,
@@ -56,6 +57,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
+  skill: GraduationCap,
 };
 
 function itemIcon(item: GhostPermissionItem): LucideIcon {
