@@ -1,0 +1,230 @@
+/**
+ * invocation —— 「无人值守派发的调用请求合成」标准(纯逻辑,跨端共享)。
+ *
+ * 背景(2026-07 全仓盘点): 「按 (显式偏好, 场景默认, 目录可用性) 合成新会话的
+ * agent/model/effort/providerId/permissionMode/fastMode」这件事在 desktop main 里被独立实现
+ * 了 6+ 份(IM defaultSessionSettings / hook-control defaults / scheduler runner / orca
+ * workerCreation / IM cardActionHandler / newMakerDraft),每份回落链略有差异、硬编码默认
+ * 互不一致,并且已经产生过真实事故(hook 权限档回落方向写反 → 显示最严实际最宽)。
+ *
+ * 本模块收口回落链本体;**场景默认全部由调用方传入**(ScenarioDefaults),共享包内零模型 id
+ * 字面量 —— scheduler 想默认 Sonnet、IM 想默认 Opus,那是场景决策,不是标准的一部分。
+ *
+ * 安全语义(适用于一切无人值守入口):
+ *   - permissionMode: 显式档不被该 agent 支持时回落该 agent 的**最严**档(permissionModes
+ *     按从严到宽声明,取 [0]),绝不回落场景默认(场景默认往往是 bypass)。用户填过显式档
+ *     = 表达过「不要默认的完全访问」,不支持时只能更严不能更宽。
+ *     注意这对 upstream/main 的 hook 现行实现(defaults.ts: 非法档回落 bypass)是**刻意
+ *     收紧**,与 PR #403(32b8edf)的修正同语义;P3 把 hook 迁到本函数时,若 #403 未先合并,
+ *     迁移 PR 必须把该收紧作为行为变更显式声明,不许当"无行为变化"混过。
+ *   - providerId: 必须收敛到「已连接且真实提供最终模型」的来源,否则回 null(默认路由),
+ *     不落一个路由层解析不了、或与 model 错配的 id。
+ */
+
+import type { AgentKind, CatalogModel } from './types.js';
+import {
+  connectedProvidersForAgent,
+  providerOffersModel,
+  type ProviderView,
+} from './registry.js';
+import { reconcileInvocationEffort } from './effortResolution.js';
+
+/** 显式偏好(用户设置 / 协议 override),全可空;null/undefined = 该字段无显式意图。 */
+export interface InvocationPreferences {
+  agentKind?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  providerId?: string | null;
+  permissionMode?: string | null;
+  fastMode?: boolean | null;
+}
+
+/** 场景默认 —— 每个派发面自己的产品决策,作为参数传入,不散落硬编码。 */
+export interface ScenarioDefaults {
+  agentKind: AgentKind;
+  /** 场景默认模型(scheduler=Sonnet、IM=渠道草稿…)。返回值仍要过可用性校验。 */
+  modelFor: (agent: AgentKind) => string;
+  /** 场景默认 effort(如 IM 渠道草稿档);缺省 = 直接走模型默认档。 */
+  effortFor?: (agent: AgentKind, modelId: string) => string | null;
+  /** per-model effort 运营 override(如 IM_DEFAULT_EFFORT_OVERRIDES)。 */
+  effortOverrides?: Readonly<Partial<Record<string, string>>>;
+  /** 模型无 effort 档时的返回值 —— 各面 wire 契约的一部分(IM='high'、hook=undefined)。 */
+  noEffortFallback: string | null | undefined;
+  /** 模型未知/无档时对 requested/override 的取舍(三种历史语义,见 reconcileInvocationEffort)。 */
+  noEffortsBehavior?: 'fallback-only' | 'requested-first' | 'override-first';
+  /** 场景默认权限档(hook='bypassPermissions'、card='acceptEdits'…),仅在无显式档时使用。 */
+  permissionMode: string;
+  /** 场景默认来源(如 IM 草稿的 providerId);与显式值同样要过收敛校验。 */
+  providerIdFor?: (agent: AgentKind, modelId: string) => string | null;
+  fastMode?: boolean;
+}
+
+/** 目录上下文。providers=null = 目录不可用 → capabilities 兜底 + providerId 透传降级。 */
+export interface InvocationCatalogContext {
+  providers: readonly ProviderView[] | null;
+  /** 目录不可用时的模型清单兜底(agent capabilities 冻结快照)。 */
+  getCapabilityModels?: (
+    agent: AgentKind,
+  ) => readonly { id: string; efforts: readonly string[]; defaultEffort: string | null }[];
+  /** 该 agent 支持的权限档(**从严到宽**声明;permissionMode 校验与最严档回落依赖此序)。 */
+  getPermissionModes?: (agent: AgentKind) => readonly string[];
+  /** 可见性过滤(决定「可用模型」是否剔除用户隐藏项);缺省 = 不过滤。 */
+  isVisible?: (providerId: string, model: CatalogModel) => boolean;
+}
+
+export interface ResolvedInvocation {
+  agentKind: AgentKind;
+  model: string;
+  effort: string | null | undefined;
+  providerId: string | null;
+  permissionMode: string;
+  fastMode: boolean;
+  /**
+   * 诊断轨迹: 各字段命中了哪级回落(如 'model:scenario-default'、
+   * 'permission:strictest-fallback')。调用方打日志用,不参与任何逻辑。
+   */
+  fallbacksApplied: readonly string[];
+}
+
+interface AvailableModel {
+  id: string;
+  efforts: readonly string[];
+  defaultEffort: string | null;
+}
+
+function availableModelsFor(
+  agent: AgentKind,
+  ctx: InvocationCatalogContext,
+): AvailableModel[] | null {
+  if (ctx.providers !== null) {
+    const seen = new Set<string>();
+    const out: AvailableModel[] = [];
+    for (const provider of connectedProvidersForAgent([...ctx.providers], agent)) {
+      for (const m of provider.models[agent] ?? []) {
+        if (seen.has(m.id)) continue;
+        if (ctx.isVisible && !ctx.isVisible(provider.id, m)) continue;
+        seen.add(m.id);
+        out.push({ id: m.id, efforts: m.efforts, defaultEffort: m.defaultEffort });
+      }
+    }
+    return out;
+  }
+  const caps = ctx.getCapabilityModels?.(agent);
+  return caps ? [...caps] : null;
+}
+
+function isKnownAgent(v: string | null | undefined): v is AgentKind {
+  return v === 'claude-code' || v === 'codex';
+}
+
+/**
+ * 标准调用合成。回落链每一级都要求候选值可用;`fallbacksApplied` 记录实际命中级。
+ *
+ * model 链: 显式∈可用 > 场景默认∈可用 > 该 agent 首个可用 > 场景默认裸值(目录/caps 全
+ * 不可用时的兼容兜底 —— 与 IM/hook 历史行为一致,宁可发一个可能非法的 id 也不发空串)。
+ */
+export function resolveModelInvocation(
+  prefs: InvocationPreferences,
+  scenario: ScenarioDefaults,
+  ctx: InvocationCatalogContext,
+): ResolvedInvocation {
+  const fallbacks: string[] = [];
+
+  // 1. agentKind: 显式合法 > 场景默认。
+  let agentKind: AgentKind;
+  if (isKnownAgent(prefs.agentKind)) {
+    agentKind = prefs.agentKind;
+  } else {
+    agentKind = scenario.agentKind;
+    if (prefs.agentKind != null) fallbacks.push('agent:scenario-default');
+  }
+
+  // 2. model。
+  const available = availableModelsFor(agentKind, ctx);
+  const has = (id: string | null | undefined): id is string =>
+    !!id && (available === null || available.some((m) => m.id === id));
+  const scenarioModel = scenario.modelFor(agentKind);
+  let model: string;
+  if (has(prefs.model)) {
+    model = prefs.model;
+    // 目录与 caps 全不可用时 has() 放行一切 —— 值被采纳但未经校验,记入诊断轨迹。
+    if (available === null) fallbacks.push('model:explicit-unverified');
+  } else if (has(scenarioModel)) {
+    model = scenarioModel;
+    if (prefs.model != null) fallbacks.push('model:scenario-default');
+    if (available === null) fallbacks.push('model:scenario-default-unverified');
+  } else if (available !== null && available.length > 0) {
+    model = available[0].id;
+    fallbacks.push('model:first-available');
+  } else {
+    model = scenarioModel;
+    fallbacks.push('model:scenario-default-unverified');
+  }
+
+  // 3. effort。requested 槽位是**两级候选**: 显式档非法时先试场景默认档(hook 的
+  //    「显式 > 草稿 > 模型默认」历史链;初版 `prefs.effort ?? scenarioEffort` 会在显式档
+  //    非法时直接跳过草稿档,2026-07 对抗审查修正),再交给统一回落链。
+  const descriptor = available?.find((m) => m.id === model);
+  const scenarioEffort = scenario.effortFor?.(agentKind, model) ?? null;
+  let requestedEffort: string | null | undefined;
+  if (descriptor && descriptor.efforts.length > 0) {
+    requestedEffort =
+      [prefs.effort, scenarioEffort].find((c) => !!c && descriptor.efforts.includes(c)) ??
+      prefs.effort;
+  } else {
+    requestedEffort = prefs.effort ?? scenarioEffort;
+  }
+  const effort = reconcileInvocationEffort({
+    requested: requestedEffort,
+    model: descriptor,
+    overrides: scenario.effortOverrides,
+    modelId: model,
+    noEffortFallback: scenario.noEffortFallback,
+    ...(scenario.noEffortsBehavior !== undefined
+      ? { noEffortsBehavior: scenario.noEffortsBehavior }
+      : {}),
+  });
+  if (prefs.effort != null && effort !== prefs.effort) fallbacks.push('effort:reconciled');
+
+  // 4. providerId: 显式 / 场景值收敛到「已连接且真实提供最终模型」的来源,失败回 null。
+  //    目录不可用时透传原值(路由层仍有兜底)—— 与 IM/hook 历史降级一致。
+  const requestedProvider = prefs.providerId ?? scenario.providerIdFor?.(agentKind, model) ?? null;
+  let providerId: string | null = null;
+  if (requestedProvider) {
+    if (ctx.providers === null) {
+      providerId = requestedProvider;
+      fallbacks.push('provider:unverified-passthrough');
+    } else {
+      const usable = connectedProvidersForAgent([...ctx.providers], agentKind).some(
+        (p) => p.id === requestedProvider && providerOffersModel(p, model, agentKind),
+      );
+      if (usable) {
+        providerId = requestedProvider;
+      } else {
+        providerId = null;
+        fallbacks.push('provider:default-route');
+      }
+    }
+  }
+
+  // 5. permissionMode: 显式且支持 > 显式但不支持时回落该 agent **最严**档 > 场景默认。
+  //    (安全方向硬要求,见文件头;permissionModes 未注入时无从校验,显式值原样放行。)
+  const supportedModes = ctx.getPermissionModes?.(agentKind);
+  let permissionMode: string;
+  if (prefs.permissionMode != null) {
+    if (!supportedModes || supportedModes.includes(prefs.permissionMode)) {
+      permissionMode = prefs.permissionMode;
+    } else {
+      permissionMode = supportedModes[0] ?? scenario.permissionMode;
+      fallbacks.push('permission:strictest-fallback');
+    }
+  } else {
+    permissionMode = scenario.permissionMode;
+  }
+
+  // 6. fastMode: 请求值直传(per-provider 的 supportsFastMode 门控需要来源上下文,
+  //    由派发端在确定最终 (providerId, model) 后另行叠加 —— 本函数不越权猜)。
+  const fastMode = prefs.fastMode ?? scenario.fastMode ?? false;
+
+  return { agentKind, model, effort, providerId, permissionMode, fastMode, fallbacksApplied: fallbacks };
+}

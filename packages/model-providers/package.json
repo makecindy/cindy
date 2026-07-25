@@ -13,7 +13,10 @@
     "./branding": "./src/providerBranding.ts",
     "./registry": "./src/registry.ts",
     "./types": "./src/types.ts",
-    "./effort-resolution": "./src/effortResolution.ts"
+    "./effort-resolution": "./src/effortResolution.ts",
+    "./model-list": "./src/modelList.ts",
+    "./classification": "./src/classification.ts",
+    "./invocation": "./src/invocation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

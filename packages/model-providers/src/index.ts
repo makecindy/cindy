@@ -61,4 +61,48 @@ export type { ConnectionState, ProviderView, ResolvedRoute } from './registry.js
 export { isModelVisible, buildProviderSections, visibleModelUnion, resolveModelIconKind } from './sections.js';
 export type { SectionModel, ProviderSection, ModelIconKind } from './sections.js';
 
-export { resolveEffort, resolveProviderSwitchEffort, clampEffortToSupported } from './effortResolution.js';
+export {
+  resolveEffort,
+  resolveProviderSwitchEffort,
+  clampEffortToSupported,
+  EFFORT_VALUES,
+  effortRank,
+  lowestEffort,
+  nearestSupportedEffort,
+  reconcileInvocationEffort,
+} from './effortResolution.js';
+
+// ── 模型调用标准(2026-07 统一层)─────────────────────────────────────────────
+// 清单派生 / 分类徽章 / 调用合成的单点语义,desktop renderer+main 与 mobile 的全部
+// 模型消费面分期收口到这里(见 modelList.ts / classification.ts / invocation.ts 头注)。
+export { deriveModelList, deriveModelSections } from './modelList.js';
+export type {
+  ModelSourceMeta,
+  ModelListEntry,
+  ModelListSection,
+  DeriveModelListOptions,
+  ProviderScope,
+} from './modelList.js';
+
+export {
+  CHATGPT_MODEL_PREFIX,
+  XAI_MODEL_PREFIX,
+  SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
+  isSubscriptionDirectModel,
+  CATEGORY_ORDER,
+  categorize,
+  groupOf,
+  groupModelsForDisplay,
+  isBudgetModel,
+  modelBadges,
+  formatContextWindow,
+} from './classification.js';
+export type { ModelCategory, DisplayModel, ModelBadges } from './classification.js';
+
+export { resolveModelInvocation } from './invocation.js';
+export type {
+  InvocationPreferences,
+  ScenarioDefaults,
+  InvocationCatalogContext,
+  ResolvedInvocation,
+} from './invocation.js';
