@@ -805,7 +805,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       overrides: Record<string, string>;
       /**
        * 每类目一份下拉数据(能力键按类目取对应清单)。
-       * options 空 + defaultModel null = 目录没给该类目模型,能力暂不可用。
+       * options 为空或 defaultModel 为 null = 目录没给该类目模型,能力暂不可用。
        */
       image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
       video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
