@@ -20,6 +20,17 @@
 
 import type { HookPrefsPatch, HookWorkspacePrefs } from '../../../shared/hookControlIpc';
 
+/**
+ * renderer 侧合法 agentKind 的单一来源(编辑器 UI 与本文件的归一化共用;与 main 侧
+ * 派发 defaults.ts 的 AGENT_KINDS 同口径 —— 进程边界两侧各持一份,新增 agent 时同步)。
+ */
+export const AGENT_KINDS = ['claude-code', 'codex'] as const;
+export type KnownAgent = (typeof AGENT_KINDS)[number];
+
+export function isKnownAgent(value: string | null): value is KnownAgent {
+  return value !== null && (AGENT_KINDS as readonly string[]).includes(value);
+}
+
 /** 编辑器需要的能力面(useAgentCapabilities 的最小消费形状)。 */
 export interface PrefsAgentCaps {
   models: Array<{ id: string; efforts: readonly string[]; defaultEffort: string | null }>;
@@ -129,8 +140,7 @@ export function resolveEffectiveRow(
   // agent —— 与派发侧 defaults.ts 的 AGENT_KINDS 合法性校验同口径。不做这一步的后果
   // (2026-07 review): 未知值被裸透传,UI 显示成 Claude 且 caps 恒 null 把整行禁死,
   // 用户永远无法纠正那个过期值。
-  const explicitAgent =
-    prefs.agentKind === 'claude-code' || prefs.agentKind === 'codex' ? prefs.agentKind : null;
+  const explicitAgent = isKnownAgent(prefs.agentKind) ? prefs.agentKind : null;
   const effAgent = explicitAgent ?? defaultAgent;
   const caps = capsFor(effAgent);
   const draft = imDefaults?.agents[effAgent];

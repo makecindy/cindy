@@ -57,16 +57,15 @@ import type {
 } from '../../../shared/hookControlIpc';
 import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import {
+  AGENT_KINDS,
   HOOK_DEFAULT_PERMISSION_MODE,
   patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
   type ImDefaultsLike,
+  type KnownAgent,
   type PrefsAgentCaps,
 } from './hookWorkspacePrefsLogic';
-
-const AGENT_KINDS = ['claude-code', 'codex'] as const;
-type KnownAgent = (typeof AGENT_KINDS)[number];
 
 /** 全 null 的缺省偏好行(该目录从未设置过)。 */
 function emptyPrefs(workspace: string): HookWorkspacePrefs {
