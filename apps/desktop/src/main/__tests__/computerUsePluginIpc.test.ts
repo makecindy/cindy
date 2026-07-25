@@ -139,6 +139,31 @@ describe('computer use plugin IPC invariants', () => {
       handlerBody.indexOf('openComputerPermissionPaneForStatus(initialStatus)'),
     );
   });
+
+  it('guards Computer Use guide cancellation before mutating Main state', () => {
+    const registerSource = fs.readFileSync(
+      path.resolve(__dirname, '../maker-ipc/register.ts'),
+      'utf-8',
+    );
+    const handlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT',
+    );
+    const handlerEnd = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.COMPUTER_CHECK_UPDATE',
+      handlerStart,
+    );
+    const handlerBody = registerSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(handlerBody).toContain(
+      'isComputerPermissionGuideWebContents(_event.sender)',
+    );
+    expect(handlerBody).toContain('assertTrustedAppRendererEvent(_event)');
+    expect(handlerBody.indexOf('assertTrustedAppRendererEvent(_event)')).toBeLessThan(
+      handlerBody.indexOf('cancelComputerDriverPermissionGrant()'),
+    );
+  });
 });
 
 describe('computer use UI feedback invariants', () => {

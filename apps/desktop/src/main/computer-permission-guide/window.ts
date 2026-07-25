@@ -651,9 +651,12 @@ function restoreGuideAfterDrag(): void {
   }
 }
 
-function completeElectronPermissionAppDrag(permission: PermissionKind | null): void {
+async function completeElectronPermissionAppDrag(
+  permission: PermissionKind | null,
+): Promise<boolean> {
   cancelPendingObserverTrailingProbe();
-  void serializePermissionGuideUpdate(
+  let accepted = false;
+  await serializePermissionGuideUpdate(
     'Electron permission guide drag completion refresh',
     async (generation) => {
       cancelPendingObserverTrailingProbe();
@@ -662,12 +665,28 @@ function completeElectronPermissionAppDrag(permission: PermissionKind | null): v
         state[permission] = true;
         writePermissionDragState(state);
       }
-      await refreshElectronPermissionGuideStateSerialized({
-        freshPermissionProbe: true,
-        bypassPermissionProbeCache: true,
-      }, generation);
+      try {
+        await refreshElectronPermissionGuideStateSerialized({
+          freshPermissionProbe: true,
+          bypassPermissionProbeCache: true,
+        }, generation);
+        accepted = Boolean(
+          permission
+          && isGuideLifecycleActive(generation)
+          && readPermissionDragState()[permission],
+        );
+      } finally {
+        if (
+          permission
+          && isGuideLifecycleActive(generation)
+          && !accepted
+        ) {
+          clearPermissionDragState(permission);
+        }
+      }
     },
   );
+  return accepted;
 }
 
 function armDragRestore(): void {
@@ -823,11 +842,14 @@ export function startComputerPermissionAppDrag(
 export function finishComputerPermissionAppDrag(
   sender: WebContents,
   didCopy: unknown,
-): void {
-  if (!isComputerPermissionGuideWebContents(sender) || !dragInProgress) return;
+): Promise<boolean> {
+  if (!isComputerPermissionGuideWebContents(sender) || !dragInProgress) {
+    return Promise.resolve(false);
+  }
   const permission = draggedPermission;
   restoreGuideAfterDrag();
-  if (didCopy === true) completeElectronPermissionAppDrag(permission);
+  if (didCopy !== true) return Promise.resolve(false);
+  return completeElectronPermissionAppDrag(permission);
 }
 
 /** Show (or bring back) the independent Electron permission coach. */
@@ -1005,7 +1027,10 @@ export async function showComputerPermissionGuideWindow(
       return;
     }
     if (!nativeHost) {
+      const completed = missingPermission(guideStatus) === null;
+      if (!completed) cancelComputerDriverPermissionGrant();
       closeComputerPermissionGuideWindow();
+      if (!completed) broadcastPermissionGuideCancelled();
       return;
     }
     guideWindow = null;

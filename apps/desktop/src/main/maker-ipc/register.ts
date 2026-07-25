@@ -7034,15 +7034,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     startComputerPermissionAppDrag(_event.sender, payload?.iconDataUrl);
   });
 
-  ipcMain.on(MAKER_SEND.COMPUTER_PERMISSION_APP_DRAG_END, (_event, payload?: {
+  ipcMain.handle(MAKER_INVOKE.COMPUTER_PERMISSION_APP_DRAG_END, async (_event, payload?: {
     didCopy?: unknown;
   }) => {
-    finishComputerPermissionAppDrag(_event.sender, payload?.didCopy);
+    return finishComputerPermissionAppDrag(_event.sender, payload?.didCopy);
   });
 
   // 命令型:取消在途授权流程。幂等,无在途 grant 时 no-op。
   ipcMain.handle(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT, async (_event) => {
     const cancelledFromGuide = isComputerPermissionGuideWebContents(_event.sender);
+    if (!cancelledFromGuide) {
+      assertTrustedAppRendererEvent(_event);
+    }
     cancelComputerDriverPermissionGrant();
     closeComputerPermissionGuideWindow();
     if (cancelledFromGuide) {

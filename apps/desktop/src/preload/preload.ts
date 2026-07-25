@@ -4488,8 +4488,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:computer:permission-guide-status'),
       startPermissionAppDrag: (iconDataUrl: string): void =>
         ipcRenderer.send('maker:computer:permission-app-drag-start', { iconDataUrl }),
-      finishPermissionAppDrag: (didCopy: boolean): void =>
-        ipcRenderer.send('maker:computer:permission-app-drag-end', { didCopy }),
+      finishPermissionAppDrag: (didCopy: boolean): Promise<boolean> =>
+        ipcRenderer.invoke('maker:computer:permission-app-drag-end', { didCopy }),
       cancelPermissionGrant: (): Promise<{ cancelled: boolean }> =>
         ipcRenderer.invoke('maker:computer:cancel-permission-grant'),
       onPermissionGuideCancelled: (callback: () => void): (() => void) =>

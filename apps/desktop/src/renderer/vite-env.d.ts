@@ -4340,7 +4340,7 @@ interface ElectronAPI {
       driverIcon: () => Promise<{ iconDataUrl: string | null }>;
       permissionGuideStatus: () => Promise<ComputerDriverStatus>;
       startPermissionAppDrag: (iconDataUrl: string) => void;
-      finishPermissionAppDrag: (didCopy: boolean) => void;
+      finishPermissionAppDrag: (didCopy: boolean) => Promise<boolean>;
       cancelPermissionGrant: () => Promise<{ cancelled: boolean }>;
       onPermissionGuideCancelled: (callback: () => void) => () => void;
       onPermissionGuideStatusChanged: (

@@ -114,6 +114,7 @@ export function ComputerPermissionGuideWindow() {
   const [dragging, setDragging] = useState(false);
   const iconRef = useRef<HTMLImageElement>(null);
   const dragUiFallbackTimerRef = useRef<number | null>(null);
+  const dragAttemptRef = useRef(0);
   const previousStepRef = useRef<ComputerPermissionGuideStep>(resolveComputerPermissionGuideStep(null));
   const step = resolveComputerPermissionGuideStep(permissionState);
   const interaction = resolveComputerPermissionGuideInteraction(dragging, awaitingUser);
@@ -151,6 +152,7 @@ export function ComputerPermissionGuideWindow() {
       dragUiFallbackTimerRef.current = null;
     }
     if (previousStepRef.current !== step) {
+      dragAttemptRef.current += 1;
       setAwaitingUser(false);
       setDragging(false);
       try {
@@ -169,10 +171,11 @@ export function ComputerPermissionGuideWindow() {
   }, [step]);
 
   useEffect(() => () => {
+    dragAttemptRef.current += 1;
     if (dragUiFallbackTimerRef.current !== null) {
       window.clearTimeout(dragUiFallbackTimerRef.current);
     }
-    window.electronAPI.maker.computer.finishPermissionAppDrag(false);
+    void window.electronAPI.maker.computer.finishPermissionAppDrag(false);
   }, []);
 
   const cancel = async () => {
@@ -200,6 +203,7 @@ export function ComputerPermissionGuideWindow() {
     if (dragUiFallbackTimerRef.current !== null) {
       window.clearTimeout(dragUiFallbackTimerRef.current);
     }
+    dragAttemptRef.current += 1;
     setAwaitingUser(false);
     setDragging(true);
     window.electronAPI.maker.computer.startPermissionAppDrag(iconDataUrl);
@@ -210,17 +214,24 @@ export function ComputerPermissionGuideWindow() {
     }, PERMISSION_APP_DRAG_UI_FALLBACK_MS);
   };
 
-  const handleDragEnd = (event: React.DragEvent<HTMLButtonElement>) => {
+  const handleDragEnd = async (event: React.DragEvent<HTMLButtonElement>) => {
     if (dragUiFallbackTimerRef.current !== null) {
       window.clearTimeout(dragUiFallbackTimerRef.current);
       dragUiFallbackTimerRef.current = null;
     }
     const didCopy = event.dataTransfer.dropEffect === 'copy';
-    window.electronAPI.maker.computer.finishPermissionAppDrag(didCopy);
+    const attempt = dragAttemptRef.current;
     setDragging(false);
-    setAwaitingUser(didCopy);
+    let accepted = false;
     try {
-      if (didCopy) {
+      accepted = await window.electronAPI.maker.computer.finishPermissionAppDrag(didCopy);
+    } catch (error) {
+      log.debug('permission guide drag confirmation failed', error);
+    }
+    if (dragAttemptRef.current !== attempt) return;
+    setAwaitingUser(accepted);
+    try {
+      if (accepted) {
         window.sessionStorage.setItem(PERMISSION_APP_DRAGGED_STORAGE_KEY, '1');
       } else {
         window.sessionStorage.removeItem(PERMISSION_APP_DRAGGED_STORAGE_KEY);

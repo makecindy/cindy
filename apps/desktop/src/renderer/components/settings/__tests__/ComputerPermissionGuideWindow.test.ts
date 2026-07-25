@@ -136,10 +136,13 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
     expect(status).not.toHaveBeenCalled();
   });
 
-  it('requires an explicit copy drop before entering the turn-on state', () => {
+  it('requires Main to confirm a copied app row before entering the turn-on state', async () => {
     vi.useFakeTimers();
     const startPermissionAppDrag = vi.fn();
-    const finishPermissionAppDrag = vi.fn();
+    const copiedDragResults = [false, true];
+    const finishPermissionAppDrag = vi.fn(async (didCopy: boolean) => (
+      didCopy ? copiedDragResults.shift() ?? false : false
+    ));
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -201,6 +204,16 @@ describe('ComputerPermissionGuideWindow native drag fallback', () => {
       dataTransfer: { dropEffect: 'copy' },
     });
     expect(finishPermissionAppDrag).toHaveBeenLastCalledWith(true);
+    await act(async () => Promise.resolve());
+    expect(screen.getByText('Drag Computer Use into Accessibility')).toBeTruthy();
+
+    fireEvent.dragStart(retryButton, {
+      dataTransfer: { effectAllowed: 'none' },
+    });
+    fireEvent.dragEnd(retryButton, {
+      dataTransfer: { dropEffect: 'copy' },
+    });
+    await act(async () => Promise.resolve());
     expect(screen.getByText('Turn on Computer Use in Accessibility')).toBeTruthy();
   });
 });

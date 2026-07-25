@@ -599,9 +599,39 @@ describe('Electron Computer Use permission guide window', () => {
     expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalledOnce();
     expect(harness.windows[0].close).toHaveBeenCalledOnce();
     expect(harness.nativeDismiss).not.toHaveBeenCalled();
+    expect(harness.cancelComputerDriverPermissionGrant).toHaveBeenCalledOnce();
+    expect(harness.broadcastSend).toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
 
     await guide.openComputerPermissionPaneForStatus(initialStatus);
     expect(harness.openExternal).toHaveBeenCalledOnce();
+  });
+
+  it('does not report cancellation when the completed Electron fallback closes', async () => {
+    harness.nativeShow.mockResolvedValueOnce(false);
+    const guide = await import('../window');
+    const completeStatus = harness.computerStatus({
+      status: 'granted',
+      accessibility: 'granted',
+      screenRecording: 'granted',
+      screenRecordingCapturable: 'granted',
+    });
+
+    await guide.showComputerPermissionGuideWindow(null, completeStatus);
+    await vi.waitFor(() => {
+      expect(harness.windows[1].showInactive).toHaveBeenCalledOnce();
+    });
+    harness.cancelComputerDriverPermissionGrant.mockClear();
+    harness.broadcastSend.mockClear();
+
+    harness.windows[1].close();
+
+    expect(harness.cancelComputerDriverPermissionGrant).not.toHaveBeenCalled();
+    expect(harness.broadcastSend).not.toHaveBeenCalledWith(
+      'maker:computer:permission-guide-cancelled',
+    );
+    expect(harness.closeComputerUseSwitchLocator).toHaveBeenCalled();
   });
 
   it('shows the Electron fallback when the native guide exits before attaching', async () => {
@@ -1277,7 +1307,7 @@ describe('Electron Computer Use permission guide window', () => {
     harness.locateComputerUseSwitchTarget.mockResolvedValue({ status: 'not-found' });
     const sender = harness.windows[1].webContents as unknown as WebContents;
     guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
-    guide.finishComputerPermissionAppDrag(sender, true);
+    await expect(guide.finishComputerPermissionAppDrag(sender, true)).resolves.toBe(false);
 
     await vi.waitFor(() => {
       expect(harness.nativeUpdate).toHaveBeenCalledWith(expect.objectContaining({
@@ -1285,6 +1315,21 @@ describe('Electron Computer Use permission guide window', () => {
         draggedAccessibility: false,
       }));
     });
+  });
+
+  it('accepts a copied drag only after the live System Settings row appears', async () => {
+    const guide = await import('../window');
+    await guide.showComputerPermissionGuideWindow(null);
+    await vi.waitFor(() => {
+      expect(harness.nativeShow).toHaveBeenCalled();
+    });
+
+    harness.isComputerDriverPermissionProbePaused.mockReturnValue(true);
+    harness.locateComputerUseSwitchTarget.mockResolvedValue(foundSwitchLocation(false));
+    const sender = harness.windows[1].webContents as unknown as WebContents;
+    guide.startComputerPermissionAppDrag(sender, VALID_PNG_DATA_URL);
+
+    await expect(guide.finishComputerPermissionAppDrag(sender, true)).resolves.toBe(true);
   });
 
   it('starts the real app drag only for the guide renderer and restores it on drag end', async () => {

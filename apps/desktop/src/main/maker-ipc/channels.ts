@@ -499,6 +499,8 @@ export const MAKER_INVOKE = {
   COMPUTER_DRIVER_ICON: 'maker:computer:driver-icon',
   // macOS: 当前授权引导生命周期持有的预检快照（不触发新的权限探测）。
   COMPUTER_PERMISSION_GUIDE_STATUS: 'maker:computer:permission-guide-status',
+  // macOS:结束原生 app 拖拽，并等待 Main 通过实时 System Settings 行确认结果。
+  COMPUTER_PERMISSION_APP_DRAG_END: 'maker:computer:permission-app-drag-end',
   // macOS: 取消在途的 CuaDriver 授权流程(引导弹窗「取消」时收割 grant 子进程)。
   COMPUTER_CANCEL_PERMISSION_GRANT: 'maker:computer:cancel-permission-grant',
   /**
@@ -548,12 +550,12 @@ export const MAKER_INVOKE = {
  */
 export const MAKER_SEND = {
   /**
-   * macOS permission coach: begin/end a native drag of the real Computer Use
-   * app bundle into System Settings. Main validates that the sender is the
-   * dedicated guide window before acting.
+   * macOS permission coach: begin a native drag of the real Computer Use app
+   * bundle into System Settings. Main validates that the sender is the
+   * dedicated guide window before acting. Drag completion is an invoke above
+   * because the renderer must wait for Main's live-row confirmation.
    */
   COMPUTER_PERMISSION_APP_DRAG_START: 'maker:computer:permission-app-drag-start',
-  COMPUTER_PERMISSION_APP_DRAG_END: 'maker:computer:permission-app-drag-end',
   /**
    * 把 renderer `newMakerDraft` 的关键子集 (lastByVendor / fastModeByModel /
    * effortByModel) 同步给 main 缓存 (newMakerDefaultsCache)。collab mode spawn
