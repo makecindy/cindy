@@ -2890,6 +2890,17 @@ interface ElectronAPI {
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
+    getWorkspaceProviderSources: () => Promise<{
+      entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
+    }>;
+    setWorkspaceProviderSource: (payload: {
+      channel: 'slack' | 'telegram';
+      teamId: string | null;
+      workspace: string;
+      providerId: string | null;
+    }) => Promise<{
+      entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
+    }>;
     onPrefsChanged: (
       cb: (view: import('../shared/hookControlIpc').HookPrefsView) => void,
     ) => () => void;

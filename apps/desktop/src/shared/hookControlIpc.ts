@@ -61,6 +61,10 @@ export const HOOK_CONTROL_INVOKE = {
   PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
   /** 更新 Telegram provider 独立的 workspace 偏好。 */
   PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
+  /** 读取工作目录模型来源偏好(纯本地, 不经 WS; 见 workspaceProviderSourceStore)。 */
+  WORKSPACE_PROVIDER_SOURCE_GET: 'maker:hook-control:workspace-provider-source-get',
+  /** 写/清一条工作目录模型来源偏好(纯本地)。 */
+  WORKSPACE_PROVIDER_SOURCE_SET: 'maker:hook-control:workspace-provider-source-set',
 } as const;
 
 export const HOOK_CONTROL_EVENT = {
@@ -274,6 +278,20 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
  * 引协议包)。null = 未设置, 跟随桌面端草稿默认(权限默认完全访问)。
  * 数据正本在 slack-hook-server 的 user_prefs 表, 与 Slack /model 卡同源。
  */
+/**
+ * 工作目录的模型来源偏好条目(纯客户端, 不进 server prefs 表)。
+ * server prefs 继续只存 model/effort/agentKind/permissionMode 服务 /model 卡展示;
+ * 来源是纯客户端维度(凭证/连接态/目录/派发全在客户端), 按本表与 server 显式
+ * model 组合后经 effectiveSourceIdForModel 收窄派发。
+ */
+export interface HookWorkspaceProviderSourceEntry {
+  channel: 'slack' | 'telegram';
+  /** Slack multi-team 归属; Telegram / 单绑定为 null。 */
+  teamId: string | null;
+  workspace: string;
+  providerId: string;
+}
+
 export interface HookWorkspacePrefs {
   workspace: string;
   model: string | null;

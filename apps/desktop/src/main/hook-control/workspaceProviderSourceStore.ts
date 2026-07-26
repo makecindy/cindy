@@ -1,0 +1,115 @@
+/**
+ * hook-control/workspaceProviderSourceStore.ts
+ * ---------------------------------------------------------------------------
+ * IM hook 工作目录(含内置「对话」)的**模型来源(providerId)偏好** —— 纯客户端数据。
+ *
+ * 为什么单独存本地而不进 server prefs 表:来源是纯客户端维度(供应商凭证、
+ * 连接态、目录、派发全在客户端,server 对它零感知,Slack /model 卡也不需要
+ * 编辑它)。server prefs 继续只存 model/effort/agentKind/permissionMode 四字段
+ * 服务卡片展示;本表按 (channel, teamId, workspace) 记来源,派发合成时与
+ * server 显式 model 组合,再经 effectiveSourceIdForModel 收窄到真实已连接来源
+ * (来源断开/不提供该模型时自动回落,不会拼出不可能路由)。
+ *
+ * 持久化 <userData>/hook-workspace-provider-source.json —— 属配置而非业务数据,
+ * 与 slack-hook.json 同级同模式(原子写防半截文件);不含任何凭证。
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { app } from 'electron';
+
+export type HookProviderChannel = 'slack' | 'telegram';
+
+export interface WorkspaceProviderSourceEntry {
+  channel: HookProviderChannel;
+  /** Slack multi-team 的归属 team;Telegram / 单绑定为 null。 */
+  teamId: string | null;
+  /** 目录别名(内置「对话」= chat)。 */
+  workspace: string;
+  providerId: string;
+}
+
+interface StoreFile {
+  entries: WorkspaceProviderSourceEntry[];
+}
+
+const FILE_NAME = 'hook-workspace-provider-source.json';
+
+function filePath(): string {
+  return path.join(app.getPath('userData'), FILE_NAME);
+}
+
+function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  return (
+    (r.channel === 'slack' || r.channel === 'telegram') &&
+    (r.teamId === null || typeof r.teamId === 'string') &&
+    typeof r.workspace === 'string' &&
+    r.workspace.length > 0 &&
+    typeof r.providerId === 'string' &&
+    r.providerId.length > 0
+  );
+}
+
+function readFileEntries(fp: string): WorkspaceProviderSourceEntry[] {
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+    const entries = (raw as StoreFile | null)?.entries;
+    if (!Array.isArray(entries)) return [];
+    return entries.filter(isEntry);
+  } catch {
+    // 文件不存在 / 损坏 → 空表(损坏文件在下次写入时被完整覆盖)
+    return [];
+  }
+}
+
+function writeFileEntries(fp: string, entries: WorkspaceProviderSourceEntry[]): void {
+  const tmp = `${fp}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ entries } satisfies StoreFile, null, 2), 'utf-8');
+  fs.renameSync(tmp, fp);
+}
+
+const sameKey = (
+  e: WorkspaceProviderSourceEntry,
+  channel: HookProviderChannel,
+  teamId: string | null,
+  workspace: string,
+): boolean => e.channel === channel && e.teamId === teamId && e.workspace === workspace;
+
+/** 全量条目(设置页一次拉取)。 */
+export function listWorkspaceProviderSources(): WorkspaceProviderSourceEntry[] {
+  return readFileEntries(filePath());
+}
+
+/**
+ * 某 (channel, teamId, workspace) 的来源偏好。
+ * teamId 精确匹配优先,null 行兜底 —— 与 prefsFor 的 multi-team 宽松语义一致。
+ */
+export function getWorkspaceProviderSource(
+  channel: HookProviderChannel,
+  teamId: string | null,
+  workspace: string,
+): string | null {
+  const entries = readFileEntries(filePath());
+  return (
+    entries.find((e) => sameKey(e, channel, teamId, workspace))?.providerId ??
+    entries.find((e) => sameKey(e, channel, null, workspace))?.providerId ??
+    null
+  );
+}
+
+/** 写/清一条来源偏好(providerId = null 删除条目);返回更新后的全量条目。 */
+export function setWorkspaceProviderSource(
+  channel: HookProviderChannel,
+  teamId: string | null,
+  workspace: string,
+  providerId: string | null,
+): WorkspaceProviderSourceEntry[] {
+  const fp = filePath();
+  const rest = readFileEntries(fp).filter((e) => !sameKey(e, channel, teamId, workspace));
+  const next =
+    providerId === null ? rest : [...rest, { channel, teamId, workspace, providerId }];
+  writeFileEntries(fp, next);
+  return next;
+}

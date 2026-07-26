@@ -28,6 +28,10 @@ import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirro
 import { WorktreeManager } from '../worktree/index.js';
 import { prepareHandoffWorktree } from '../maker-ipc/handoffWorktree.js';
 import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import {
+  listWorkspaceProviderSources,
+  setWorkspaceProviderSource,
+} from './workspaceProviderSourceStore.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
@@ -693,6 +697,33 @@ export function registerHookControlIpc(): void {
       throwHookPrefsError(err);
     }
   });
+
+  // 工作目录模型来源偏好: 纯本地文件, 不经 WS(来源是纯客户端维度, server 零感知)。
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.WORKSPACE_PROVIDER_SOURCE_GET,
+    async () => ({ entries: listWorkspaceProviderSources() }),
+  );
+
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.WORKSPACE_PROVIDER_SOURCE_SET,
+    async (_e, payload) => {
+      const p = requireObject(payload);
+      const channel = requireString(p.channel, 'channel');
+      if (channel !== 'slack' && channel !== 'telegram') {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack or telegram');
+      }
+      const workspace = requireString(p.workspace, 'workspace');
+      const teamId =
+        p.teamId === undefined || p.teamId === null ? null : requireString(p.teamId, 'teamId');
+      const providerId =
+        p.providerId === undefined || p.providerId === null
+          ? null
+          : requireString(p.providerId, 'providerId');
+      return {
+        entries: setWorkspaceProviderSource(channel, teamId, workspace, providerId),
+      };
+    },
+  );
 
   // Account teardown is orchestrated before its DB closes. This listener is a
   // fail-closed backstop for signed-out/local sessions; activation waits for
