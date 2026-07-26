@@ -13,21 +13,21 @@ export type VoiceInputConnectionTestOptions = {
   onError?: (error: unknown) => void;
 };
 
-let serializedConnectionTestChain: Promise<void> = Promise.resolve();
+let activeConnectionTest: Promise<VoiceInputConnectionTestResult> | null = null;
 
 /**
- * Serialize connection probes in Main so a compromised renderer cannot create
- * an unbounded number of simultaneous outbound WebSocket handshakes.
+ * Coalesce connection probes in Main so a compromised renderer cannot create
+ * an unbounded queue or simultaneous outbound WebSocket handshakes.
  */
 export function runSerializedVoiceInputConnectionTest(
   options: VoiceInputConnectionTestOptions,
 ): Promise<VoiceInputConnectionTestResult> {
-  const next = serializedConnectionTestChain.then(() => runVoiceInputConnectionTest(options));
-  serializedConnectionTestChain = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  return next;
+  if (activeConnectionTest) return activeConnectionTest;
+  const current = runVoiceInputConnectionTest(options).finally(() => {
+    if (activeConnectionTest === current) activeConnectionTest = null;
+  });
+  activeConnectionTest = current;
+  return current;
 }
 
 export function classifyVoiceInputConnectionTestError(

@@ -9,6 +9,20 @@ export type VoiceInputCustomAsrConfig = {
 export const MAX_CUSTOM_ASR_WEBSOCKET_URL_CHARS = 2_048;
 export const MAX_CUSTOM_ASR_MODEL_CHARS = 200;
 export const MAX_CUSTOM_ASR_API_KEY_CHARS = 8_192;
+const ALLOWED_CUSTOM_ASR_QUERY_KEYS = new Set([
+  'model',
+  'model_id',
+  'api-version',
+  'api_version',
+  'deployment',
+  'intent',
+  'tenant',
+  'language',
+  'language_code',
+  'audio_format',
+  'commit_strategy',
+  'vad_silence_threshold_secs',
+]);
 
 /**
  * Credential scope for a custom ASR endpoint. Paths may change without
@@ -69,11 +83,10 @@ export function validateVoiceInputCustomAsrWebsocketUrl(value: string): string |
   if (parsedUrl.username || parsedUrl.password) {
     return 'customAsr.websocketUrl must not contain credentials';
   }
-  const containsCredentialQuery = [...parsedUrl.searchParams.keys()].some((key) => (
-    /^(?:api[-_]?key|x[-_]?api[-_]?key|access[-_]?token|token|authorization|auth|bearer|credential|secret|key|password|passcode|sig|signature)$/i.test(key)
-    || /^x-amz-/i.test(key)
+  const containsDisallowedQuery = [...parsedUrl.searchParams.keys()].some((key) => (
+    !ALLOWED_CUSTOM_ASR_QUERY_KEYS.has(key.toLowerCase())
   ));
-  if (containsCredentialQuery) {
+  if (containsDisallowedQuery) {
     return 'customAsr.websocketUrl must not contain credentials in query parameters';
   }
   if (parsedUrl.hash) {

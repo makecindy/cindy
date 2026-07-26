@@ -77,7 +77,7 @@ describe('voice input connection test', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it('serializes concurrent connection probes in Main', async () => {
+  it('coalesces concurrent connection probes in Main', async () => {
     let releaseFirst!: () => void;
     const firstStarted = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -104,8 +104,16 @@ describe('voice input connection test', () => {
     await Promise.resolve();
     expect(secondCreate).not.toHaveBeenCalled();
     releaseFirst();
-    await first;
-    await second;
-    expect(secondCreate).toHaveBeenCalledOnce();
+    await expect(first).resolves.toEqual({
+      ok: true,
+      provider: 'litellm-gpt-realtime-whisper',
+      providerModel: 'gpt-realtime-whisper',
+    });
+    await expect(second).resolves.toEqual({
+      ok: true,
+      provider: 'litellm-gpt-realtime-whisper',
+      providerModel: 'gpt-realtime-whisper',
+    });
+    expect(secondCreate).not.toHaveBeenCalled();
   });
 });

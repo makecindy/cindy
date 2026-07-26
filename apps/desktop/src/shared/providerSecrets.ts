@@ -51,7 +51,7 @@ export function providerSecretStorageKey(id: ProviderSecretId): string {
 }
 
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
-  STORAGE_KEYS['voice-asr'],
+  STORAGE_KEYS['voice-asr'].toLowerCase(),
 ]);
 
 /**
@@ -59,7 +59,7 @@ const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
  * key. Main-only credentials use dedicated IPC that never returns plaintext.
  */
 export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean {
-  return !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(storageKey);
+  return !MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS.has(storageKey.toLowerCase());
 }
 
 /**

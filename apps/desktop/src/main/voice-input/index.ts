@@ -1812,7 +1812,7 @@ export function registerVoiceInputIpc(): void {
         onError: (error) => {
           log.warn('voice input connection test failed', {
             provider,
-            error: error instanceof Error ? error.message : String(error),
+            errorType: error instanceof Error ? error.name : typeof error,
           });
         },
       });

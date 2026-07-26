@@ -11,10 +11,19 @@ describe('custom ASR WebSocket URL validation', () => {
     },
   );
 
-  it('allows protocol-owned model routing query parameters', () => {
+  it('allows known non-secret protocol and tenant routing query parameters', () => {
     expect(validateVoiceInputCustomAsrWebsocketUrl(
-      'wss://asr.example.test/stream?model=qwen3-asr-flash-realtime',
+      'wss://asr.example.test/stream?model=qwen3-asr-flash-realtime&intent=transcription&tenant=one',
     )).toBeNull();
+  });
+
+  it('rejects unknown and signed URL query parameters', () => {
+    expect(validateVoiceInputCustomAsrWebsocketUrl(
+      'wss://asr.example.test/stream?X-Goog-Signature=secret',
+    )).toContain('must not contain credentials');
+    expect(validateVoiceInputCustomAsrWebsocketUrl(
+      'wss://asr.example.test/stream?custom-routing=value',
+    )).toContain('must not contain credentials');
   });
 
   it('allows loopback ws IPv6 literals', () => {
