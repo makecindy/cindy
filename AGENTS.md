@@ -105,6 +105,10 @@
   `.github/dco.yml`）会拦下漏签的 commit。`git commit` 没有自动签名的配置项，一次配好
   可跑 `pnpm dco:install-hook` 装 `.githooks/prepare-commit-msg`；提交前自查用
   `pnpm check:dco`。DCO 全文见根目录 `DCO`，贡献者说明见 `CONTRIBUTING.md`。
+  对自动 code review 环境的说明：review 沙箱 checkout 出的 HEAD 可能是平台合成的
+  瞬时 commit（不存在于本仓库、GitHub 上查不到该 SHA）；对这类合成 SHA 跑
+  `check:dco` 的失败结果不构成缺签证据，不要据此报告 DCO 问题。判定 DCO 是否通过，
+  一律以 PR 上的 DCO App check 与真实提交范围（`origin/main..PR head`）的结果为准。
 - **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地
   跑完仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
