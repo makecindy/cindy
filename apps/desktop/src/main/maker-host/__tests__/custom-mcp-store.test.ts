@@ -102,6 +102,27 @@ describe('validateCustomMcpConfig', () => {
   it('rejects non-string headers', () => {
     expect(validateCustomMcpConfig({ ...valid, headers: { X: 1 } }).ok).toBe(false);
   });
+
+  // 撞名的自定义 MCP 会在装配层顶替同名内置 server，并继承 MCP 审批策略里对该
+  // server 名的信任（策略只看 serverName），所以 id 必须在 CRUD 阶段就拒收。
+  it('rejects ids reserved by builtin MCP servers', () => {
+    const result = validateCustomMcpConfig({ ...valid, id: 'cindy_browser' }, [
+      'cindy_browser',
+      'cindy_helper',
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('reserved');
+  });
+
+  it('keeps accepting ids that only resemble a builtin name', () => {
+    expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser_x' }, ['cindy_browser'])).toEqual({
+      ok: true,
+    });
+  });
+
+  it('skips the reserved-id check when no reserved list is supplied', () => {
+    expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser' })).toEqual({ ok: true });
+  });
 });
 
 describe('custom-mcp-store CRUD', () => {

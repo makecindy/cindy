@@ -39,14 +39,26 @@ function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
-/** 纯函数：校验一份自定义 MCP 配置的结构合法性。 */
-export function validateCustomMcpConfig(config: unknown): ValidationResult {
+/**
+ * 纯函数：校验一份自定义 MCP 配置的结构合法性。
+ *
+ * `reservedIds` 传内置 MCP server 名（生产由 getBuiltinMcpServerNames() 派生）。撞名的
+ * 自定义 MCP 会在装配层按 key 顶替内置 server，还顺带继承审批策略里对该 server 名的
+ * 信任，所以这里直接拒收；装配层另有一道纵深防御会跳过它。
+ */
+export function validateCustomMcpConfig(
+  config: unknown,
+  reservedIds: readonly string[] = [],
+): ValidationResult {
   if (!config || typeof config !== 'object') return invalid('config must be an object');
   const c = config as Record<string, unknown>;
 
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
   if (!CUSTOM_MCP_ID_RE.test(c.id)) return invalid('id must match /^[a-z0-9_-]+$/');
+  if (reservedIds.includes(c.id)) {
+    return invalid(`id '${c.id}' is reserved by a builtin MCP server; pick another id`);
+  }
 
   if (typeof c.name !== 'string' || c.name.trim().length === 0) return invalid('name required');
   if (c.name.length > MAX_NAME_LEN) return invalid(`name too long (max ${MAX_NAME_LEN})`);

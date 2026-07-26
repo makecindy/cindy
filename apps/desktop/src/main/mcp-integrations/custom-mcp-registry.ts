@@ -40,6 +40,23 @@ export function resetCustomMcpRegistry(): void {
   registeredArrays.length = 0;
 }
 
+/**
+ * 当前内置（非用户自定义）MCP server 名 —— 自定义 MCP 的保留名清单。
+ *
+ * 从已注册数组里实际存在的 provider 派生，而不是硬编码一份名单：内置 provider 增删
+ * 时这里自动跟上，不会漏掉新 server 而让保留名校验形同虚设。
+ */
+export function getBuiltinMcpServerNames(): string[] {
+  const names = new Set<string>();
+  for (const arr of registeredArrays) {
+    for (const provider of arr) {
+      if (provider instanceof CustomMcpProvider) continue;
+      names.add(provider.name);
+    }
+  }
+  return [...names];
+}
+
 /** @deprecated 测试别名，直接用 resetCustomMcpRegistry。 */
 export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
 
@@ -58,15 +75,34 @@ export async function refreshCustomMcpProviders(): Promise<void> {
     });
     return;
   }
+  // 按名字去重统计：同一个撞名配置会在每个已注册数组各命中一次，累加会虚报。
+  const skippedNames = new Set<string>();
   for (const arr of registeredArrays) {
     // 原地移除旧的 custom provider,再追加新的一批(不换数组引用)。
     for (let i = arr.length - 1; i >= 0; i--) {
       if (arr[i] instanceof CustomMcpProvider) arr.splice(i, 1);
     }
-    arr.push(...providers);
+    // 此刻数组里只剩内置 provider —— 用它们的名字当保留名。自定义 MCP 一旦与内置
+    // 撞名，装配层(claude buildMcpServers / codex codexEnvironment)会按 key 覆盖，
+    // 于是一个第三方远程端点顶替内置 server，还顺带继承审批策略里对该 server 名的
+    // 信任(策略只看 serverName)。这里直接不装它，撞名的自定义 MCP 视为无效配置。
+    const builtinNames = new Set(arr.map((p) => p.name));
+    for (const provider of providers) {
+      if (builtinNames.has(provider.name)) {
+        if (!skippedNames.has(provider.name)) {
+          log.warn('skipping custom MCP that collides with a builtin server name', {
+            serverName: provider.name,
+          });
+        }
+        skippedNames.add(provider.name);
+        continue;
+      }
+      arr.push(provider);
+    }
   }
   log.info('custom mcp providers refreshed', {
     count: providers.length,
+    skipped: skippedNames.size,
     arrays: registeredArrays.length,
   });
 }

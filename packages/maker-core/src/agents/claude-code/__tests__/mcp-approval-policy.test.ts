@@ -112,11 +112,17 @@ function createFakeQuery() {
   };
 }
 
+/** 与真实 canUseTool 契约对齐 —— 含 allow 分支可能带回的 updatedPermissions。 */
 type CanUseToolFn = (
   toolName: string,
   input: Record<string, unknown>,
   options: { toolUseID: string; suggestions?: unknown[] },
-) => Promise<{ behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown>; message?: string }>;
+) => Promise<{
+  behavior: 'allow' | 'deny';
+  updatedInput?: Record<string, unknown>;
+  updatedPermissions?: unknown[];
+  message?: string;
+}>;
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'maker-core-claude-mcp-policy-'));
@@ -417,6 +423,44 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     await handle.setPermissionMode('bypassPermissions');
 
     expect((await pending).behavior).toBe('allow');
+    await handle.close();
+  });
+});
+
+describe('a custom server cannot take over a builtin name', () => {
+  it('keeps the first registration when two providers share a name', async () => {
+    const configs: Array<{ name: string; marker: string }> = [];
+    const contexts: McpToolApprovalContext[] = [];
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+
+    const deps = createDeps((context) => {
+      contexts.push(context);
+      return 'auto-approve';
+    });
+    // host 把用户自定义 MCP 追加在内置之后；同名时后写覆盖会让第三方端点顶替内置
+    // server 并继承它的信任。这里两个 provider 同名，断言内置（先注册的）胜出。
+    deps.mcpProviders = [
+      { name: 'cindy_browser', toClaudeSdkConfig: () => ({ type: 'sdk', marker: 'builtin' }) },
+      { name: 'cindy_browser', toClaudeSdkConfig: () => ({ type: 'http', marker: 'custom' }) },
+    ] as McpProvider[];
+
+    const agent = new ClaudeCodeAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'session-dup-mcp',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, { marker?: string }>
+      | undefined;
+    configs.push({ name: 'cindy_browser', marker: mcpServers?.cindy_browser?.marker ?? 'missing' });
+
+    expect(configs).toEqual([{ name: 'cindy_browser', marker: 'builtin' }]);
     await handle.close();
   });
 });

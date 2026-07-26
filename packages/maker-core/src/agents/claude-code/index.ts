@@ -887,6 +887,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       for (const provider of providers) {
         if (provider.name === 'cindy_memory' && (!makerMemoryEnabled || opts.remoteHostId)) continue;
         if (provider.isEnabled && !provider.isEnabled(context)) continue;
+        // 同名 provider 先注册者胜 —— host 把用户自定义 MCP **追加**在内置之后, 后写
+        // 覆盖会让一个 id 取名 `cindy_browser` 的自定义远程端点顶替内置 server:
+        // 既悄悄换掉了内置能力, 又让审批策略(只看 serverName)把第三方端点的所有工具
+        // 当第一方静默放行。host 侧也拦了这类保留名, 这里是纵深防御。
+        if (Object.prototype.hasOwnProperty.call(out, provider.name)) {
+          log.warn('duplicate MCP server name; keeping the first registration', {
+            serverName: provider.name,
+          });
+          continue;
+        }
         const config = provider.toClaudeSdkConfig?.(context);
         if (!config) continue;
         out[provider.name] = config as McpServerConfig;
@@ -1017,6 +1027,56 @@ export class ClaudeCodeAgent extends BaseAgent {
       eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs }, source: 'claude-code' });
     }
 
+    /**
+     * MCP 工具的 host 审批档位 —— 与 Codex 的 mcpServerElicitation 同一个
+     * deps.getMcpToolApprovalPolicy 真源。两端共用后, 同一个第一方 MCP 不会出现
+     * "Codex 静默执行 / Claude 每次调用都弹窗"的分叉(浏览器自动化这类高频 server
+     * 一次调研能攒出上百个权限请求)。
+     *   auto-approve      → 静默放行, 不打扰用户
+     *   prompt-each-time  → 照常弹窗, 且全程禁止持久化授权(suggestion 不下发、
+     *                       decision 带回来的 permissionUpdates 也丢弃、切到宽松
+     *                       模式时 pending 请求 fail-closed)
+     *   prompt / 未注入   → 完全维持原有权限链
+     * 策略抛错或返回非法值时按最保守的 prompt-each-time 处理(与 Codex 侧一致)。
+     *
+     * 本地 canUseTool 与远端 onApprovalRequest 都走这里 —— 否则同一套 MCP 配置在
+     * SSH 会话里又会退回"逐次弹窗 + 没有 forced prompt 保护"的老行为。
+     */
+    const classifyMcpApprovalPolicy = (
+      toolName: string,
+      input: unknown,
+    ): 'auto-approve' | 'prompt' | 'prompt-each-time' => {
+      const target = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const classifier = this.deps.getMcpToolApprovalPolicy;
+      if (!target || !classifier) return 'prompt';
+      try {
+        const policy = classifier({
+          serverName: target.serverName,
+          toolName: target.toolName,
+          toolParams: input,
+        });
+        if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+          if (policy === 'auto-approve') {
+            log.debug('mcp tool auto-approved by host policy', {
+              serverName: target.serverName,
+              toolName: target.toolName,
+            });
+          }
+          return policy;
+        }
+        log.error('invalid MCP approval policy -> prompt each time', {
+          serverName: target.serverName,
+          policy,
+        });
+      } catch (error) {
+        log.error('MCP approval policy threw -> prompt each time', {
+          serverName: target.serverName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return 'prompt-each-time';
+    };
+
     // canUseTool dispatcher —— 三路分支(参考 agentManager.ts:1054-1162):
     //  1. AskUserQuestion: 模型问问题, 转 ask_user_question kind, decision.answers 拼回 updatedInput
     //  2. ExitPlanMode:   plan 模式提交计划, 转 plan_review kind, decision.editedPlan 覆盖 plan
@@ -1117,48 +1177,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         return { behavior: 'deny', message: 'no interaction resolver attached; denying non-read-only tool (fail-closed)' };
       }
 
-      // 3a. MCP 工具过 host 审批策略 —— 与 Codex 的 mcpServerElicitation 同一个
-      // deps.getMcpToolApprovalPolicy 真源。两端共用后, 同一个第一方 MCP 不会出现
-      // "Codex 静默执行 / Claude 每次调用都弹窗"的分叉(浏览器自动化这类高频 server
-      // 一次调研能攒出上百个权限请求)。
-      //   auto-approve      → 静默放行, 不打扰用户
-      //   prompt-each-time  → 照常弹窗, 且全程禁止持久化授权(suggestion 不下发、
-      //                       decision 带回来的 permissionUpdates 也丢弃、切到宽松
-      //                       模式时 pending 请求 fail-closed)
-      //   prompt / 未注入   → 完全维持原有权限链
-      // 策略抛错或返回非法值时按最保守的 prompt-each-time 处理(与 Codex 侧一致)。
-      const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
-      let mcpApprovalPolicy: 'auto-approve' | 'prompt' | 'prompt-each-time' = 'prompt';
-      if (mcpTarget && this.deps.getMcpToolApprovalPolicy) {
-        try {
-          const policy = this.deps.getMcpToolApprovalPolicy({
-            serverName: mcpTarget.serverName,
-            toolName: mcpTarget.toolName,
-            toolParams: input,
-          });
-          if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
-            mcpApprovalPolicy = policy;
-          } else {
-            log.error('invalid MCP approval policy -> prompt each time', {
-              serverName: mcpTarget.serverName,
-              policy,
-            });
-            mcpApprovalPolicy = 'prompt-each-time';
-          }
-        } catch (error) {
-          log.error('MCP approval policy threw -> prompt each time', {
-            serverName: mcpTarget.serverName,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          mcpApprovalPolicy = 'prompt-each-time';
-        }
-        if (mcpApprovalPolicy === 'auto-approve') {
-          log.debug('mcp tool auto-approved by host policy', {
-            serverName: mcpTarget.serverName,
-            toolName: mcpTarget.toolName,
-          });
-          return { behavior: 'allow', updatedInput: input };
-        }
+      // 3a. MCP 工具过 host 审批策略(本地与远端会话共用 classifyMcpApprovalPolicy)。
+      const mcpApprovalPolicy = classifyMcpApprovalPolicy(toolName, input);
+      if (mcpApprovalPolicy === 'auto-approve') {
+        return { behavior: 'allow', updatedInput: input };
       }
       const forcePrompt = mcpApprovalPolicy === 'prompt-each-time';
       const decision = await dispatchInteraction({
@@ -1683,6 +1705,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           const dropped = Object.keys(mcpServers).filter((k) => !(k in remoteMcpServers));
           log.warn('cc remote: dropping in-process MCP servers (MVP not supported)', { dropped });
         }
+        // 远端会话实际只装到 remoteMcpServers 这一批, 被 filter 掉的 in-process server
+        // 在远端不存在 —— 审批归属必须按远端真实清单判, 否则策略会对远端根本不可能
+        // 出现的 server 名做判定。
+        registeredMcpServerNames = new Set(Object.keys(remoteMcpServers ?? {}));
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
         const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
         sdkInPlanMode = remotePermissionMode === 'plan';
@@ -1758,7 +1784,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             // On timeout, dismiss the pending interaction (clears UI) and reject to
             // let cc-manager-client return deny to daemon.
             const REMOTE_APPROVAL_TIMEOUT_MS = 110_000;
-            async function dispatchWithTimeout(req: InteractionRequest): Promise<InteractionDecision> {
+            async function dispatchWithTimeout(
+              req: InteractionRequest,
+              dispatchOpts?: { forcePrompt?: boolean },
+            ): Promise<InteractionDecision> {
               let timer: NodeJS.Timeout | undefined;
               try {
                 return await new Promise<InteractionDecision>((resolve, reject) => {
@@ -1766,7 +1795,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                     dismissSinglePending(req.requestId, 'approval_timeout');
                     reject(new Error('approval timed out'));
                   }, REMOTE_APPROVAL_TIMEOUT_MS);
-                  dispatchInteraction(req).then(resolve, reject);
+                  dispatchInteraction(req, dispatchOpts).then(resolve, reject);
                 });
               } finally {
                 if (timer) clearTimeout(timer);
@@ -1821,6 +1850,16 @@ export class ClaudeCodeAgent extends BaseAgent {
             if (!interactionResolver) {
               return { kind: 'permission', behavior: 'allow' };
             }
+            // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
+            // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
+            const remoteMcpPolicy = classifyMcpApprovalPolicy(
+              params.toolName ?? '',
+              params.input ?? {},
+            );
+            if (remoteMcpPolicy === 'auto-approve') {
+              return { kind: 'permission', behavior: 'allow' };
+            }
+            const remoteForcePrompt = remoteMcpPolicy === 'prompt-each-time';
             const decision = await dispatchWithTimeout({
               kind: 'permission',
               requestId: params.requestId,
@@ -1829,17 +1868,24 @@ export class ClaudeCodeAgent extends BaseAgent {
               title: params.title,
               displayName: params.displayName,
               description: params.description,
-              suggestions: this.normalizeSessionPermissionSuggestions(params.suggestions),
+              suggestions: remoteForcePrompt
+                ? undefined
+                : this.normalizeSessionPermissionSuggestions(params.suggestions),
               metadata: params.metadata ?? {},
-            });
+            }, { forcePrompt: remoteForcePrompt });
             if (decision.kind !== 'permission') {
               return { kind: 'permission', behavior: 'deny', reason: 'resolver kind mismatch' };
+            }
+            if (remoteForcePrompt && decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+              log.warn('dropping session permission grant for prompt-each-time MCP tool (remote)', {
+                tool: params.toolName,
+              });
             }
             return {
               kind: 'permission',
               behavior: decision.behavior,
               updatedInput: decision.updatedInput,
-              permissionUpdates: decision.permissionUpdates,
+              permissionUpdates: remoteForcePrompt ? undefined : decision.permissionUpdates,
               reason: decision.reason,
             };
           },
