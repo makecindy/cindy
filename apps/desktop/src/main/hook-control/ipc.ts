@@ -746,7 +746,18 @@ export function registerHookControlIpc(): void {
       ) {
         throwIpcError('INVALID_PARAMS', 'too many workspace provider source entries');
       }
-      const entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId);
+      // fs 异常在 IPC 边界翻译(codex review): 只读盘/满盘/rename 失败的原始
+      // 异常含 owner-scoped 绝对路径, 不得未脱敏穿透给 renderer;统一走
+      // throwIpcError 协议给稳定错误码, 细节留 main 日志。
+      let entries: ReturnType<typeof setWorkspaceProviderSource>;
+      try {
+        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId);
+      } catch (err) {
+        log.warn(
+          `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throwIpcError('INTERNAL', 'failed to persist workspace provider source');
+      }
       // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
       for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && isAppContentWindow(w)) {

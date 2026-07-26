@@ -389,6 +389,13 @@ export function useHookWorkspacePrefs(
             );
       void request
         .then((res) => {
+          // 来源落地在快照守卫**之前**(codex review): invoke 成功 = 远端已确认
+          // 本次 (model, effort) 写入 —— 这一事实不因「更新的快照先到」而失效;
+          // 守卫只管下方 UI 快照是否回填,若来源也被守卫跳过(prefs 回执经广播
+          // 先到的正常时序), 会留下「新模型 + 旧来源」的持久分裂。
+          if (alsoProviderSource !== undefined) {
+            applyProviderSource(workspace, alsoProviderSource);
+          }
           if (revision !== fetchRevisionRef.current) return;
           const nextPrefs: HookPrefsView | ProviderPrefsView = res.prefs;
           if (
@@ -403,9 +410,6 @@ export function useHookWorkspacePrefs(
           fetchRevisionRef.current += 1;
           setPrefsView(nextPrefs);
           setLoadError(null);
-          if (alsoProviderSource !== undefined) {
-            applyProviderSource(workspace, alsoProviderSource);
-          }
         })
         .catch((err: unknown) => {
           if (revision !== fetchRevisionRef.current) return;
