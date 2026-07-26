@@ -238,6 +238,15 @@ export async function ensureAndroidPlatformTools({
   }
 
   const version = readPinnedVersion(platformKey, binRoot);
+  const spec = PINNED[platformKey];
+  // Fail-fast: 如果 source.properties 声明的版本与 PINNED 中哈希对应的版本不一致,
+  // 下载回来的 zip 里文件哈希必然不匹配,不如立即报错省时间和带宽。
+  if (version !== spec.version) {
+    throw new Error(
+      `版本不一致:source.properties 声明 ${version},但 PINNED 哈希对应 ${spec.version}。` +
+        `升级时需同步更新 source.properties 与脚本中的 sha256(先手工放新版文件,再用 --print-hashes 现算)。`,
+    );
+  }
   const destDir = path.join(binRoot, platformKey);
 
   if (!force) {
@@ -273,7 +282,9 @@ export async function ensureAndroidPlatformTools({
   const tmpZip = path.join(tmpDir, 'platform-tools.zip');
   const attempts = [];
   try {
-    for (const source of order) {
+    for (let i = 0; i < order.length; i++) {
+      const source = order[i];
+      const isLastSource = i === order.length - 1;
       let url;
       try {
         url =
@@ -289,13 +300,14 @@ export async function ensureAndroidPlatformTools({
         log(`${platformKey}: downloading from ${source} — ${url}`);
         const progress = createDownloadProgressLogger(`platform-tools ${platformKey} ${source}`);
         try {
-          // OSS 是最后一道兜底:给宽松超时并禁用吞吐下限(同
-          // agent-binary-cdn-fallback 的理由 —— 嫌它慢也没有更快的去处)。
+          // 最后一个来源(无论名字是 oss 还是 upstream)没有退路:给宽松超时并
+          // 禁用吞吐下限,避免把"慢但能成"变成失败。非末位来源用默认值快速失败
+          // 以便尽快尝试下一个。
           await downloadToFileWithTimeout(
             url,
             tmpZip,
             {},
-            source === 'oss'
+            isLastSource
               ? {
                   connectTimeoutMs: 15_000,
                   stallTimeoutMs: 20_000,
