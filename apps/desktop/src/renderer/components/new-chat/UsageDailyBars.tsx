@@ -76,9 +76,24 @@ export function UsageDailyBars({
   todayKey: string;
 }): React.JSX.Element {
   const { t } = useTranslation();
+  // chart currency 取窗口内**最近一个有金额的日子**的币种:取首行会在币种切换
+  // 过渡期选中旧币种(或 token-only 日合成的零额 USD),把当前币种的柱子全部
+  // 归零;金额为 0 的行不参与选取。
+  const latestPositiveCurrency = (
+    rows: ReadonlyArray<{ day: string; money: RegionalMoney }>,
+  ): MoneyCurrency | undefined => {
+    let best: { day: string; currency: MoneyCurrency } | undefined;
+    for (const row of rows) {
+      if (row.money.amount <= 0) continue;
+      if (!best || row.day > best.day) {
+        best = { day: row.day, currency: row.money.currency };
+      }
+    }
+    return best?.currency;
+  };
   const currency: MoneyCurrency =
-    days[0]?.money.currency ??
-    modelDaily[0]?.money.currency ??
+    latestPositiveCurrency(days) ??
+    latestPositiveCurrency(modelDaily) ??
     DEFAULT_USAGE_CURRENCY;
   const money = (
     amount: number,

@@ -81,7 +81,10 @@ const REFRESH_DEBOUNCE_MS = 2000;
 const PRICING_RETRY_DELAY_MS = 6000;
 /** main 返回 stale 磁盘快照时的补拉延迟: 让后台聚合先完成, 同时保持更新感知。 */
 const STALE_RETRY_DELAY_MS = 800;
-const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload';
+// v2 后缀:币种语义改为跟随来源(默认 USD)后,旧构建快照里的金额可能带错标
+// CNY——直接换 key 让旧快照失效,首帧宁可空态也不闪现错单位;旧 key 顺手清理。
+const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload.v2';
+const LEGACY_SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload';
 const DEFAULT_SCOPE_KEY = 'anonymous';
 
 function storageKeyForScope(scopeKey: string): string {
@@ -144,6 +147,9 @@ function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
 
 function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
   try {
+    localStorage.removeItem(
+      `${LEGACY_SNAPSHOT_STORAGE_KEY}.${encodeURIComponent(scopeKey)}`,
+    );
     const raw = localStorage.getItem(storageKeyForScope(scopeKey));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredUsageHistoryPayload;

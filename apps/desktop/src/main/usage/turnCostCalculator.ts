@@ -12,6 +12,7 @@ import {
   usdMoney,
   type ModelPriceQuote,
   type ModelPricingCatalog,
+  type MoneyCurrency,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -201,17 +202,15 @@ export function resolveClaudeTurnCostSinks(
     });
     if (resolved.money && resolved.money.amount > 0) money.push(resolved.money);
   }
+  if (money.length === 0) return { turnMoney: null, perModel };
   // 非 USD 目录下若某模型缺报价,其 SDK fallback 段是 USD——同轮混币种时按
   // gateway 报价段的币种聚合、弃掉冲突段(单币种账本约束),绝不能 throw
   // 打断 turn 收尾管道。
-  const preferredCurrency =
+  const preferredCurrency: MoneyCurrency =
     perModel.find((item) => item.source === 'gateway' && item.money)?.money
-      ?.currency ?? money[0]?.currency;
+      ?.currency ?? money[0].currency;
   return {
-    turnMoney:
-      money.length > 0
-        ? addCompatibleRegionalMoney(money, preferredCurrency)
-        : null,
+    turnMoney: addCompatibleRegionalMoney(money, preferredCurrency),
     perModel,
   };
 }

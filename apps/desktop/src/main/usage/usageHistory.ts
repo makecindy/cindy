@@ -500,11 +500,13 @@ export async function readUsageHistoryWith(
   );
   const zeroActual = () => zeroUsageMoney();
   const zeroEstimate = () => zeroUsageMoney('value-estimate');
+  // 聚合偏好账本币种(今天/最新行的币种):默认 USD 偏好会在币种切换过渡期
+  // 把当前币种的日金额整段挤掉(窗口里残留任意旧 USD 行即触发)。
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
   ): RegionalMoney =>
-    addCompatibleRegionalMoney(values) ??
+    addCompatibleRegionalMoney(values, ledgerCurrency) ??
     (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
 
   const heatmapCutoff = shiftDayKey(todayKey, -(windowDays - 1));
@@ -586,7 +588,7 @@ export async function readUsageHistoryWith(
     if (row.money.amount > 0) {
       agg.money =
         agg.money.amount > 0
-          ? (addCompatibleRegionalMoney([agg.money, row.money]) ?? row.money)
+          ? (addCompatibleRegionalMoney([agg.money, row.money], ledgerCurrency) ?? row.money)
           : row.money;
     }
     agg.inputTokens += row.inputTokens;
@@ -678,7 +680,7 @@ export async function readUsageHistoryWith(
   );
   const last30WithEstimatedValue =
     last30EstimatedValue.amount > 0
-      ? (addCompatibleRegionalMoney([last30, last30EstimatedValue]) ?? last30)
+      ? (addCompatibleRegionalMoney([last30, last30EstimatedValue], ledgerCurrency) ?? last30)
       : last30;
   const anomalyRaw = computeAnomaly(spendByDay, todayKey, {
     activeDayMin,

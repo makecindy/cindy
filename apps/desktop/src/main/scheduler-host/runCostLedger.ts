@@ -9,7 +9,10 @@ import { eq, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { scheduleRuns } from '../localDb/schema';
+import { createLogger } from '../logger';
 import { legacyUsdMoney, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
+
+const log = createLogger('runCostLedger');
 
 interface RunCostEntry {
   runId: string;
@@ -104,6 +107,10 @@ export async function applyScheduleRunCostMetaChange(
   if (changes.length === 0) return;
   const db = getDbClient().drizzle;
   for (const change of changes) {
+    // 单币种快照:币种守卫在同一条 UPDATE 里用 CASE 表达(先查再写有 TOCTOU
+    // 窗口)。币种冲突的 delta 原子地弃掉——金额、币种、约值标记全部保持原样,
+    // 绝不能只保金额却改写 costCurrency(那会把旧币种数值错标成新币种)。
+    const sameCurrency = sql`(${scheduleRuns.costCurrency} IS NULL OR ${scheduleRuns.costCurrency} = ${change.currency})`;
     await db
       .update(scheduleRuns)
       .set({
@@ -112,22 +119,29 @@ export async function applyScheduleRunCostMetaChange(
         // otherwise a successful message update would make a later read
         // unable to tell whether the snapshot already contains that segment.
         costAmount: sql<number>`CASE
+          WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costAmount}
           WHEN ${scheduleRuns.costAttribution} = 'direct'
             THEN ${scheduleRuns.costAmount}
           ELSE MAX(0, ${scheduleRuns.costAmount} + ${change.costAmountDelta})
         END`,
         estimatedValueAmount: sql<number>`CASE
+          WHEN NOT ${sameCurrency} THEN ${scheduleRuns.estimatedValueAmount}
           WHEN ${scheduleRuns.costAttribution} = 'direct'
             THEN ${scheduleRuns.estimatedValueAmount}
           ELSE MAX(0, ${scheduleRuns.estimatedValueAmount} + ${change.estimatedValueAmountDelta})
         END`,
-        costCurrency: change.currency,
+        costCurrency: sql`CASE
+          WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costCurrency}
+          ELSE ${change.currency}
+        END`,
         costIsApproximate: sql`CASE
+          WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costIsApproximate}
           WHEN ${scheduleRuns.costAttribution} IN ('direct', 'mixed')
             THEN ${scheduleRuns.costIsApproximate} OR ${change.approximate ? 1 : 0}
           ELSE ${change.approximate ? 1 : 0}
         END`,
         costAttribution: sql<string>`CASE
+          WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costAttribution}
           WHEN ${scheduleRuns.costAttribution} IN ('direct', 'mixed')
             THEN ${scheduleRuns.costAttribution}
           ELSE 'exact'
@@ -168,24 +182,30 @@ export async function recordScheduleRunCostDirect(args: {
     .limit(1);
   if (!run) return null;
   if (run.costCurrency && run.costCurrency !== money.currency) {
-    throw new Error('schedule run cost currency mismatch');
+    // 观察到冲突只 warn 留痕;强制语义靠下方 UPDATE 内的 CASE 守卫(先查
+    // 再写有 TOCTOU 窗口),冲突段原子地弃掉,不 throw 打断调度记账管道。
+    log.warn(
+      `schedule run ${runId} currency conflict: keeping ${run.costCurrency}, dropping ${money.currency} segment`,
+    );
   }
+  const sameCurrency = sql`(${scheduleRuns.costCurrency} IS NULL OR ${scheduleRuns.costCurrency} = ${money.currency})`;
 
   const result = await db
     .update(scheduleRuns)
     .set({
-      costAmount: sql<number>`MAX(0, ${scheduleRuns.costAmount} + ${isEstimate ? 0 : amount})`,
-      estimatedValueAmount: sql<number>`MAX(0, ${scheduleRuns.estimatedValueAmount} + ${isEstimate ? amount : 0})`,
-      costCurrency: money.currency,
-      costIsApproximate: sql`${scheduleRuns.costIsApproximate} OR ${
+      costAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.costAmount} + ${isEstimate ? 0 : amount}) ELSE ${scheduleRuns.costAmount} END`,
+      estimatedValueAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.estimatedValueAmount} + ${isEstimate ? amount : 0}) ELSE ${scheduleRuns.estimatedValueAmount} END`,
+      costCurrency: sql`CASE WHEN ${sameCurrency} THEN ${money.currency} ELSE ${scheduleRuns.costCurrency} END`,
+      costIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${scheduleRuns.costIsApproximate} OR ${
         !isEstimate && money.approximate ? 1 : 0
-      }`,
+      }) ELSE ${scheduleRuns.costIsApproximate} END`,
       // A confirmed zero-cost segment must not downgrade a run that already
       // contains an exact segment; otherwise later summary reads lose the
       // accumulated direct cost.
       costAttribution:
         isEstimate || amount > 0
           ? sql<string>`CASE
+              WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costAttribution}
               WHEN ${scheduleRuns.costAttribution} = 'mixed' THEN 'mixed'
               WHEN ${scheduleRuns.costAttribution} = 'exact' THEN 'mixed'
               ELSE 'direct'
