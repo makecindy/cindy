@@ -34,7 +34,7 @@ import {
 import { patchDraft } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
-import { GhostPermissionDiffView } from '@/cindy-brain/GhostPermissionList';
+import { GhostPermissionDiffView, GhostPermissionList } from '@/cindy-brain/GhostPermissionList';
 import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
@@ -42,6 +42,7 @@ import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import {
   diffGhostPermissionItems,
   ghostPanelKind,
+  ghostPermissionItems,
   type GhostSetupStatus,
 } from '../../../shared/ghost';
 import type {
@@ -696,6 +697,16 @@ export function GhostPluginPage() {
     // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
     // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
     const isUpdate = marketDetail.installState === 'update-available';
+    // 装完即开意味着"确认安装"就是运行授权,确认框里必须如实展示权限清单
+    // (与本地装入确认框同一信息量,review P1):首装展示完整清单,更新展示
+    // 与已装版本的权限 diff,并据此决定 allowPermissionExpansion(否则扩权
+    // 更新从本入口必被 main 的 PRECONDITION_FAILED 拦下)。
+    const installedGhost =
+      ghosts.find((ghost) => ghost.manifest.id === marketDetail.ghostId) ?? null;
+    const diff = diffGhostPermissionItems(
+      installedGhost?.manifest ?? marketDetail.manifest,
+      marketDetail.manifest,
+    );
     try {
       const confirmed = await confirm({
         title: isUpdate
@@ -706,6 +717,12 @@ export function GhostPluginPage() {
         description: isUpdate
           ? t('settings.ghosts.market.updateConfirmDescription')
           : t('settings.ghosts.market.installConfirmDescription'),
+        content: isUpdate ? (
+          <GhostPermissionDiffView diff={diff} />
+        ) : (
+          <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+        ),
+        maxWidth: 520,
         confirmText: isUpdate
           ? t('settings.ghosts.updateConfirm.confirm')
           : t('settings.ghosts.market.install'),
@@ -713,7 +730,10 @@ export function GhostPluginPage() {
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-      const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
+      const result = await window.electronAPI.pluginMarket.install(
+        marketDetail.pluginId,
+        isUpdate && diff.added.length > 0 ? { allowPermissionExpansion: true } : undefined,
+      );
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
       // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
       // 用"已更新"(生效状态未被改变)。
@@ -740,6 +760,7 @@ export function GhostPluginPage() {
   }, [
     acquireMarketBusy,
     confirm,
+    ghosts,
     isMarketBusyLeaseActive,
     marketDetail,
     refreshMarket,

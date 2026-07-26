@@ -2352,6 +2352,10 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
+    /** 调用方(market service)在下载前观察到的"已装入"状态。下载窗口期插件
+     *  可能被其它窗口经本地路径卸载 —— 若不校验,一次"更新"会在这里滑进
+     *  首装分支,把用户刚卸载的插件复活并启用(review P1)。 */
+    expectedInstalled?: boolean;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -2373,6 +2377,11 @@ export async function installOrUpdateMarketGhostPackage(
     rejectUnauthorizedTokenBroker(inspected.manifest);
 
     const installed = manager.list().find((ghost) => ghost.manifest.id === expected.ghostId);
+    if (expected.expectedInstalled === true && !installed) {
+      // 更新目标在下载窗口期被卸载:拒绝而不是滑进首装分支复活它。
+      // PRECONDITION_FAILED → renderer 映射为"操作期间状态已变化,请重试"。
+      throwIpcError('PRECONDITION_FAILED', '操作期间插件已被卸载,请刷新市场后重试');
+    }
     // Node 高风险条目由 renderer 装入确认卡权限清单如实展示;
     // 2026-07-24 Lizi 定案:不再有 Main 侧原生二次确认弹窗(PR #333,本处为其
     // 漏删的市场安装路径调用点,一并对齐)。
@@ -2382,8 +2391,9 @@ export async function installOrUpdateMarketGhostPackage(
     if (!installed) {
       // 2026-07-26 定案:市场首装一律装完即开(defaultInstall 与手动安装归一),
       // 用户不必再手动点一次开关。市场包走官方分发链路(服务端校验 + sha256
-      // 校验下载),装完即开风险可控;本地 .cindy 文件装入仍保持"装入 ≠ 授权
-      // 运行"的默认沉睡(installAndDock 缺省 false + 确认框勾选)。
+      // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
+      // 文件装入的初始启用态仍由确认框勾选决定(勾选默认开启,main 侧
+      // installAndDock 缺省不启用,授权判断始终来自 UI 显式值)。
       return installAndDock(manager, cindyFilePath, { enable: true });
     }
 

@@ -379,10 +379,13 @@ export class PluginMarketService {
       await downloadVerifiedPlugin(download.url, download, tempPath);
       requireSameMarketOwner(owner);
       // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
-      // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
+      // 已装过则走原位更新,唤醒/沉睡状态延续当前值。expectedInstalled 带上
+      // 下载前观察到的安装状态:下载窗口期被其它窗口卸载时按状态变化拒绝,
+      // 不让"更新"复活刚被卸载的插件。
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
+        expectedInstalled: existing !== undefined,
       });
       // Once the package directory is committed, finish provenance against the
       // owner captured at operation start even if the active session changes.

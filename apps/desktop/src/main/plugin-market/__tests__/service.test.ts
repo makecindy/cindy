@@ -329,6 +329,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: 'cindy-test',
         version: '1.0.0',
+        expectedInstalled: false,
       },
     );
     expect(snapshot.items[0]).toMatchObject({
@@ -352,13 +353,47 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     const h = harness([item]);
 
-    await h.service.install(item.id);
+    const { ghost } = await h.service.install(item.id);
 
     expect(runtime.install).toHaveBeenCalledWith(
       expect.stringMatching(/\.cindy$/),
       {
         ghostId: 'cindy-test',
         version: '1.0.0',
+        expectedInstalled: false,
+      },
+    );
+    // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
+    expect(ghost.enabled).toBe(true);
+  });
+
+  it('passes expectedInstalled=true when updating an already-installed plugin', async () => {
+    // 已装旧版(账本经 snapshot 收养)→ 再 install 即更新:装入入口必须收到
+    // expectedInstalled=true,下载窗口期被其它窗口卸载时按状态变化拒绝,
+    // 不让"更新"复活刚被卸载的插件。
+    runtime.ghosts = [
+      {
+        manifest: manifest('cindy-test', '0.9.0'),
+        dir: '/userData/cindy-brain/cindy-test',
+        enabled: false,
+      },
+    ];
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: false,
+    });
+    const h = harness([summary()]);
+    await h.service.snapshot(); // 收养出 ledger 记录,进入 update-available
+
+    await h.service.install(PLUGIN_ID, { allowPermissionExpansion: true });
+
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      {
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        expectedInstalled: true,
       },
     );
   });
@@ -388,6 +423,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: item.ghostId,
         version: item.currentRelease.version,
+        expectedInstalled: false,
       },
     );
     expect(snapshot.items[0]).toMatchObject({
