@@ -1053,9 +1053,18 @@ export class ClaudeCodeAgent extends BaseAgent {
      * (allowDangerouslySkipPermissions, 见 SDK PermissionMode 文档), canUseTool 根本
      * 不会被调用, 所以这里的 prompt-each-time 拦不住 Full access 会话 —— 那是该档位
      * 本身的语义("Accepts all permissions"), 不是本函数的兜底范围。Codex 侧的
-     * forcePrompt 因为走自己的 approval 通道, 在 Full access 下仍会弹, 两端在这一档
-     * 上不等价。要抹平得把 Full access 改成"SDK 停在可回调档 + canUseTool 里模拟放行",
-     * 那会动到所有 Full access 会话的执行路径, 需要实机验证后单独做。
+     * forcePrompt 走自己的 approval 通道, 在 Full access 下仍会弹, 两端在这一档不等价。
+     *
+     * 抹平它的两条路都不便宜(结论来自 cc 2.1.219 的 cli.js 权限判定 `zd8`):
+     *  - PreToolUse hook: hook 无条件执行(先于权限判定), 且 hook 返回 deny 会在 `zd8`
+     *    首个分支直接阻断、不看 permissionMode —— 所以 hook 能在 Full access 下**拒绝**;
+     *    但 hook 返回 ask 会落到正常权限管线, 而该管线在 bypass 下就是放行, 所以做不到
+     *    Codex 那样的"仍然弹窗询问"。只能把高风险 action 变成硬拒绝, 用户在自己选了
+     *    Full access 之后反而做不了这些操作, 体验上不可接受。
+     *  - 让 Full access 停在可回调档(default) + canUseTool 里模拟放行普通工具: 能拿到
+     *    真 parity, 但 Full access 的判定语义会整体改变(settings 的 deny 规则、沙箱网络
+     *    等不经 canUseTool 的检查都会重新生效), 必须实机验证后才能上。
+     * 因此本轮如实保留差异, 不做半吊子拦截。
      */
     const classifyMcpApprovalPolicy = (
       toolName: string,
