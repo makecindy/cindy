@@ -311,6 +311,7 @@ const _secretScrubRe = (() => {
       pats.push(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     }
   }
+  pats.sort((a, b) => b.length - a.length);
   return pats.length > 0 ? new RegExp(pats.join('|'), 'g') : null;
 })();
 

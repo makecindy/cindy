@@ -176,7 +176,7 @@ function stripHtmlTags(text: string): string {
       continue;
     }
     if (afterName === 0x3e || afterName === 0x20 || afterName === 0x09 ||
-        afterName === 0x0a || afterName === 0x0d) {
+        afterName === 0x0a || afterName === 0x0c || afterName === 0x0d) {
       // Valid HTML tag — scan for '>', also stop at '<' to stay O(n)
       while (j < len && text.charCodeAt(j) !== 0x3e && text.charCodeAt(j) !== 0x3c) j += 1;
       if (j < len && text.charCodeAt(j) === 0x3e) {
