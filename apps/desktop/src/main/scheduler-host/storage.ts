@@ -103,11 +103,22 @@ function emptyScheduleTurnCostState(): ScheduleTurnCostState {
   };
 }
 
+/**
+ * 与 shared addCompatibleRegionalMoney 同语义的本地版(带显式 preferred 参数
+ * 的调用点较多故保留):preferred 币种没有任何值时回退第一个 actual-cost 值
+ * 的币种——全 CNY(来源真声明)账本绝不能被 USD 偏好清零。
+ */
 function addCompatibleRegionalMoney(
   values: readonly RegionalMoney[],
   currency: RegionalMoney['currency'] = DEFAULT_USAGE_CURRENCY,
 ): RegionalMoney | null {
-  const compatible = values.filter((value) => value.currency === currency);
+  if (values.length === 0) return null;
+  const actualValues = values.filter((value) => value.kind === 'actual-cost');
+  const candidates = actualValues.length > 0 ? actualValues : values;
+  const effective =
+    candidates.find((value) => value.currency === currency)?.currency ??
+    candidates[0].currency;
+  const compatible = values.filter((value) => value.currency === effective);
   return compatible.length > 0 ? addRegionalMoney(compatible) : null;
 }
 

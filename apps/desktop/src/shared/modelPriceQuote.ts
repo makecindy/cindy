@@ -49,21 +49,31 @@ function applyCodexBudgetDiscount(quote: ModelPriceQuote): ModelPriceQuote {
   };
 }
 
+function declaredCurrency(
+  model: ModelAccessGatewayModel,
+): MoneyCurrency | undefined {
+  return model.currency === 'USD' || model.currency === 'CNY'
+    ? model.currency
+    : undefined;
+}
+
 /**
- * 全目录唯一声明币种:本地记账账本(daily / session / schedule)都是单币种,
- * 逐条目声明会造成同端多币种金额被聚合层静默丢弃。因此只有当所有带声明的
- * 条目一致时声明才生效;混合声明或无声明一律按 Gateway 原生 USD。
+ * 目录级币种:本地记账账本(daily / session / schedule)都是单币种,逐条目
+ * 混用币种会造成同端多币种金额被聚合层丢弃。规则:
+ *   - 未声明条目恒为 Gateway 原生 USD(契约缺省),绝不被其它条目的声明改标;
+ *   - 只有当**每个**条目都显式声明同一非 USD 币种时,目录才整体切换;
+ *   - 与目录币种冲突的声明条目由 gatewayPricingCatalog 丢弃报价(退回 SDK
+ *     实报 USD 兜底),而不是改标币种——错标单位正是本模块要杜绝的事。
  */
 export function resolveGatewayCatalogCurrency(
   models: readonly ModelAccessGatewayModel[],
 ): MoneyCurrency {
-  const declared = new Set<MoneyCurrency>();
-  for (const model of models) {
-    if (model.currency === 'USD' || model.currency === 'CNY') {
-      declared.add(model.currency);
-    }
-  }
-  return declared.size === 1 ? [...declared][0] : GATEWAY_NATIVE_CURRENCY;
+  if (models.length === 0) return GATEWAY_NATIVE_CURRENCY;
+  const first = declaredCurrency(models[0]);
+  if (!first || first === GATEWAY_NATIVE_CURRENCY) return GATEWAY_NATIVE_CURRENCY;
+  return models.every((model) => declaredCurrency(model) === first)
+    ? first
+    : GATEWAY_NATIVE_CURRENCY;
 }
 
 export function gatewayModelPriceQuote(
@@ -108,6 +118,10 @@ export function gatewayPricingCatalog(
   const currency = resolveGatewayCatalogCurrency(models);
   const xd: Record<string, ModelPriceQuote> = {};
   for (const model of models) {
+    // 声明与目录币种冲突的条目不出报价:宁可让该模型的单轮费用退回 SDK
+    // 实报 USD 兜底,也不给它标一个和价格数值不匹配的单位。
+    const declared = declaredCurrency(model);
+    if (declared && declared !== currency) continue;
     const quote = gatewayModelPriceQuote(model, currency);
     if (quote) xd[quote.modelId] = quote;
   }

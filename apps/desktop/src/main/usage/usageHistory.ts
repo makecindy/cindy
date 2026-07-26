@@ -36,8 +36,11 @@ import {
 } from '../../shared/modelPriceQuote.js';
 import {
   addCompatibleRegionalMoney,
+  DEFAULT_USAGE_CURRENCY,
   normalizeRegionalMoney,
+  USD_TO_CNY_FIXED_RATE,
   type ModelPriceQuote,
+  type MoneyCurrency,
   type RegionalMoney,
   zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
@@ -55,7 +58,8 @@ const ANOMALY_MIN_ACTIVE_DAYS = 3;
 const MODEL_WINDOW_DAYS = 30;
 /** 等价格表的最长预算 (ms) — 缓存命中时是同步快返, 只有冷启动网络 fetch 会触及。 */
 const PRICING_WAIT_BUDGET_MS = 200;
-const DISK_CACHE_VERSION = 2;
+// v3: 币种语义改为跟随来源(默认 USD),旧缓存里 CN 构建的金额带错标 CNY,整体作废。
+const DISK_CACHE_VERSION = 3;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -629,10 +633,25 @@ export async function readUsageHistoryWith(
     return tokens(b) - tokens(a);
   });
 
-  const activeDayMin = ACTIVE_DAY_MIN_USD;
-  const anomalyMinToday = ANOMALY_MIN_TODAY_USD;
+  // 活跃日/异常阈值常量是 USD 口径;历史 CNY 行(或来源真声明 CNY 的账本)按
+  // 固定汇率把阈值折到该行币种再比较。仅阈值启发式用,不产生任何展示金额。
+  const heuristicThreshold = (base: number, currency: MoneyCurrency): number =>
+    currency === 'CNY' ? base * USD_TO_CNY_FIXED_RATE : base;
+  const ledgerCurrency =
+    allDays.find((row) => row.day === todayKey)?.money.currency ??
+    allDays[allDays.length - 1]?.money.currency ??
+    DEFAULT_USAGE_CURRENCY;
+  const activeDayMin = heuristicThreshold(ACTIVE_DAY_MIN_USD, ledgerCurrency);
+  const anomalyMinToday = heuristicThreshold(
+    ANOMALY_MIN_TODAY_USD,
+    ledgerCurrency,
+  );
   const activeDays = allDays
-    .filter((row) => row.money.amount >= activeDayMin)
+    .filter(
+      (row) =>
+        row.money.amount >=
+        heuristicThreshold(ACTIVE_DAY_MIN_USD, row.money.currency),
+    )
     .map((row) => row.day);
   const last30Cutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
   const last30ActualByDay = new Map<string, RegionalMoney>();

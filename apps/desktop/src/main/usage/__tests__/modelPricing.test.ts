@@ -238,7 +238,7 @@ describe('pricing cache lifecycle', () => {
     await vi.waitFor(async () => {
       const raw = JSON.parse(await readFile(userDataPath('cache', 'model-pricing.json'), 'utf8'));
       expect(raw).toMatchObject({
-        version: 3,
+        version: 4,
         scope: expectedScope(),
         pricing,
       });
@@ -255,7 +255,7 @@ describe('pricing cache lifecycle', () => {
     await writeFile(
       userDataPath('cache', 'model-pricing.json'),
       JSON.stringify({
-        version: 3,
+        version: 4,
         scope: expectedScope(),
         fetchedAt: Date.now(),
         pricing: {
@@ -310,7 +310,7 @@ describe('pricing cache lifecycle', () => {
     await writeFile(
       userDataPath('cache', 'model-pricing.json'),
       JSON.stringify({
-        version: 3,
+        version: 4,
         scope: expectedScope(),
         fetchedAt: Date.now(),
         pricing: {

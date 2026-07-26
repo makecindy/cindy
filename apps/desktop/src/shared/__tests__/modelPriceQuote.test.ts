@@ -24,17 +24,25 @@ describe('resolveGatewayCatalogCurrency', () => {
     expect(resolveGatewayCatalogCurrency([])).toBe('USD');
   });
 
-  it('applies a uniform declared currency to the whole catalog', () => {
+  it('switches only when every entry explicitly declares the same non-USD currency', () => {
     expect(
       resolveGatewayCatalogCurrency([
         model('a', { currency: 'CNY' }),
         model('b', { currency: 'CNY' }),
-        model('c'),
       ]),
     ).toBe('CNY');
   });
 
-  it('treats mixed declarations as undeclared — local ledgers are single-currency', () => {
+  it('keeps undeclared entries USD — a partial CNY declaration never flips the catalog', () => {
+    expect(
+      resolveGatewayCatalogCurrency([
+        model('a', { currency: 'CNY' }),
+        model('b'),
+      ]),
+    ).toBe('USD');
+  });
+
+  it('treats mixed declarations as USD — local ledgers are single-currency', () => {
     expect(
       resolveGatewayCatalogCurrency([
         model('a', { currency: 'CNY' }),
@@ -53,27 +61,36 @@ describe('resolveGatewayCatalogCurrency', () => {
 });
 
 describe('gatewayPricingCatalog currency', () => {
-  it('never emits mixed-currency quotes even when entries declare per-model', () => {
+  it('drops conflicting declared entries instead of relabeling their prices', () => {
     const catalog = gatewayPricingCatalog([
       model('a', { currency: 'CNY' }),
       model('b', { currency: 'USD' }),
       model('c'),
     ]);
+    expect(Object.keys(catalog.xd)).toEqual(['b', 'c']);
     expect(Object.values(catalog.xd).map((quote) => quote.currency)).toEqual([
-      'USD',
       'USD',
       'USD',
     ]);
   });
 
-  it('labels every quote with the uniform declared currency', () => {
+  it('labels every quote with the catalog currency when all entries declare it', () => {
     const catalog = gatewayPricingCatalog([
       model('a', { currency: 'CNY' }),
-      model('b'),
+      model('b', { currency: 'CNY' }),
     ]);
     expect(Object.values(catalog.xd).map((quote) => quote.currency)).toEqual([
       'CNY',
       'CNY',
     ]);
+  });
+
+  it('never relabels undeclared entries when a sibling declares CNY', () => {
+    const catalog = gatewayPricingCatalog([
+      model('a', { currency: 'CNY' }),
+      model('b'),
+    ]);
+    expect(Object.keys(catalog.xd)).toEqual(['b']);
+    expect(catalog.xd.b.currency).toBe('USD');
   });
 });

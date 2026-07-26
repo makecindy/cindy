@@ -396,7 +396,7 @@ describe('production cache and empty payload', () => {
         ),
       );
       expect(raw).toMatchObject({
-        version: 2,
+        version: 3,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {
