@@ -713,7 +713,7 @@ function forward(
         const decodedText = decodedErrBody.toString('utf8');
         // 取第一条 match 命中且 strip 出东西的规则;命中错误文案但没东西可删 → 试下一条。
         for (const [matchedIndex, rule] of activeRules.entries()) {
-          if (!rule.match(decodedText)) continue;
+          if (!rule.matches(decodedText)) continue;
           const stripped = rule.strip(body);
           if (!stripped) continue;
           let retryBody = stripped;

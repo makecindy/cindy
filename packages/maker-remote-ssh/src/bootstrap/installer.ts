@@ -198,8 +198,11 @@ export async function uninstallRemoteAgent(
   host: RemoteHost,
   agentKind: RemoteAgentKind,
 ): Promise<void> {
+  // 拼远端命令前把 agentKind 收窄回字面量白名单;"$HOME/..." 需远端展开,
+  // 不能整体单引号(CodeQL js/shell-command-constructed-from-input)。
+  const kind: RemoteAgentKind = agentKind === 'codex' ? 'codex' : 'claude-code';
   await host.exec(
-    `rm -f "$HOME/.xdt-server/${REMOTE_SERVER_SCHEMA_VERSION}/.installed-${agentKind}"`,
+    `rm -f "$HOME/.xdt-server/${REMOTE_SERVER_SCHEMA_VERSION}/.installed-${kind}"`,
     { timeoutMs: 10_000, label: 'uninstall' },
   );
 }

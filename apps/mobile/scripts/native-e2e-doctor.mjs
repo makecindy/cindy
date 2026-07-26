@@ -33,9 +33,9 @@ if (options.dryRun) {
     `- profile: ${profile?.name ?? '<none>'}`,
     `- platform: ${platform}`,
     `- app id: ${appId}`,
-    `- expo url: ${expoUrl ?? '<none>'}`,
-    `- api base: ${apiBase ?? '<none>'}`,
-    `- java: ${javaRuntimeDetail(toolEnv)}`,
+    `- expo url: ${expoUrl ? safeUrlForLog(expoUrl) : '<none>'}`,
+    `- api base: ${apiBase ? safeUrlForLog(apiBase) : '<none>'}`,
+    `- java: ${scrubSecretsFromText(javaRuntimeDetail(toolEnv))}`,
     `- require maestro: ${options.requireMaestro ? 'yes' : 'no'}`,
   ].join('\n'));
   process.exit(0);
@@ -199,11 +199,34 @@ function addCheck({ label, ok, detail, fix, required }) {
   checks.push({ label, ok, detail, fix, required });
 }
 
+// 日志脱敏(CodeQL js/clear-text-logging):URL 只留 protocol+host+path,去掉
+// userinfo / query 可能携带的凭证;诊断文本若意外携带秘密类 env 值,输出前抹掉。
+function safeUrlForLog(value) {
+  try {
+    const u = new URL(String(value));
+    return `${u.protocol}//${u.host}${u.pathname === '/' ? '' : u.pathname}`;
+  } catch {
+    return '<invalid-url>';
+  }
+}
+
+function scrubSecretsFromText(text) {
+  if (text == null) return text;
+  let out = String(text);
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!value || value.length < 6) continue;
+    if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
+      out = out.split(value).join('***');
+    }
+  }
+  return out;
+}
+
 function printChecks(items) {
   console.log('native-e2e-doctor');
   for (const item of items) {
     const status = item.ok ? 'pass' : item.required ? 'fail' : 'warn';
-    console.log(`[${status}] ${item.label}: ${item.detail}`);
+    console.log(`[${status}] ${item.label}: ${scrubSecretsFromText(item.detail)}`);
     if (!item.ok && item.fix) console.log(`       ${item.fix}`);
   }
 }

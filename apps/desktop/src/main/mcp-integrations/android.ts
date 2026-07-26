@@ -43,7 +43,9 @@ const MAX_STDERR_BYTES = 512 * 1024;
 const MAX_UI_NODES = 200;
 const ARTIFACT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const ANDROID_PACKAGE_RE = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/;
-const ANDROID_ACTIVITY_RE = /^(?:\.[A-Za-z0-9_.]+|[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_.]+)+)$/;
+// 与旧写法 (?:\.[A-Za-z0-9_.]+)+ 语言等价:内层字符类本就含 '.',外层 '+' 只带来
+// 指数回溯(CodeQL js/redos),去掉后接受的字符串集合不变。
+const ANDROID_ACTIVITY_RE = /^(?:\.[A-Za-z0-9_.]+|[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+)$/;
 const SAFE_ADB_INPUT_TEXT_RE = /^[A-Za-z0-9 .,:@/_+=%+-]+$/;
 
 const PLATFORM_TOOLS_DOWNLOADS: Record<string, { url: string }> = {

@@ -473,11 +473,11 @@ describe('recovery rule factories', () => {
   it('encrypted rule matches only its error text and strips encrypted_content', () => {
     const rule = createEncryptedContentRecoveryRule({ enabled: () => true });
     expect(rule.id).toBe('encrypted_content');
-    expect(rule.match('... code invalid_encrypted_content ...')).toBe(true);
-    expect(rule.match('Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.')).toBe(true);
-    expect(rule.match(JSON.stringify({ code: 'invalid-argument', error: 'Could not decrypt the provided encrypted_content.' }))).toBe(true);
-    expect(rule.match(JSON.stringify({ code: 'invalid-argument', field: 'encrypted_content' }, null, 2))).toBe(true);
-    expect(rule.match('each thinking block must contain thinking')).toBe(false);
+    expect(rule.matches('... code invalid_encrypted_content ...')).toBe(true);
+    expect(rule.matches('Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.')).toBe(true);
+    expect(rule.matches(JSON.stringify({ code: 'invalid-argument', error: 'Could not decrypt the provided encrypted_content.' }))).toBe(true);
+    expect(rule.matches(JSON.stringify({ code: 'invalid-argument', field: 'encrypted_content' }, null, 2))).toBe(true);
+    expect(rule.matches('each thinking block must contain thinking')).toBe(false);
     expect(rule.strip(buf({ input: [{ encrypted_content: 'x' }] }))).not.toBeNull();
   });
 
@@ -485,8 +485,8 @@ describe('recovery rule factories', () => {
     const rule = createEmptyThinkingRecoveryRule();
     expect(rule.id).toBe('empty_thinking');
     expect(rule.enabled()).toBe(true);
-    expect(rule.match('messages.7.content.0.thinking: each thinking block must contain thinking')).toBe(true);
-    expect(rule.match('invalid_encrypted_content')).toBe(false);
+    expect(rule.matches('messages.7.content.0.thinking: each thinking block must contain thinking')).toBe(true);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
     expect(
       rule.strip(buf({ messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '' }] }] })),
     ).not.toBeNull();
@@ -497,9 +497,9 @@ describe('recovery rule factories', () => {
     expect(rule.id).toBe('empty_text');
     expect(rule.enabled()).toBe(true);
     // 实测 Anthropic 400(2026-07-23,GPT 订阅会话切 Fable 5):
-    expect(rule.match('messages: text content blocks must be non-empty')).toBe(true);
-    expect(rule.match('messages.5.content.0: text content blocks must contain non-whitespace text')).toBe(true);
-    expect(rule.match('each thinking block must contain thinking')).toBe(false);
+    expect(rule.matches('messages: text content blocks must be non-empty')).toBe(true);
+    expect(rule.matches('messages.5.content.0: text content blocks must contain non-whitespace text')).toBe(true);
+    expect(rule.matches('each thinking block must contain thinking')).toBe(false);
     expect(
       rule.strip(buf({ messages: [{ role: 'assistant', content: [{ type: 'text', text: '' }] }] })),
     ).not.toBeNull();
@@ -509,8 +509,8 @@ describe('recovery rule factories', () => {
     const rule = createImageGenerationIdRecoveryRule();
     expect(rule.id).toBe('image_generation_id');
     expect(rule.enabled()).toBe(true);
-    expect(rule.match('Image generation items without `id` are not supported for this request.')).toBe(true);
-    expect(rule.match('invalid_encrypted_content')).toBe(false);
+    expect(rule.matches('Image generation items without `id` are not supported for this request.')).toBe(true);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
     expect(
       rule.strip(buf({ input: [{ type: 'image_generation_end', call_id: 'ig_1' }] })),
     ).not.toBeNull();
@@ -520,9 +520,9 @@ describe('recovery rule factories', () => {
     const rule = createToolUseProviderSpecificFieldsRecoveryRule();
     expect(rule.id).toBe('tool_use_provider_specific_fields');
     expect(rule.enabled()).toBe(true);
-    expect(rule.match('messages.2.content.0.tool_use.provider_specific_fields: Extra inputs are not permitted')).toBe(true);
-    expect(rule.match('messages.2.content.0.tool_use.name: Extra inputs are not permitted')).toBe(false);
-    expect(rule.match(JSON.stringify([
+    expect(rule.matches('messages.2.content.0.tool_use.provider_specific_fields: Extra inputs are not permitted')).toBe(true);
+    expect(rule.matches('messages.2.content.0.tool_use.name: Extra inputs are not permitted')).toBe(false);
+    expect(rule.matches(JSON.stringify([
       { message: 'messages.2.content.0.tool_use.provider_specific_fields: unexpected value' },
       { message: 'messages.2.content.1.name: Extra inputs are not permitted' },
     ]))).toBe(false);

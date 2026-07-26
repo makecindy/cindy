@@ -35,9 +35,16 @@ function writeSse(res: ServerResponse, event: unknown, sequenceNumber: number): 
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
+// 去尾部斜杠。不用 /\/*$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
+}
+
 function joinUrl(base: string, path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${base.replace(/\/*$/, '')}${normalizedPath}`;
+  return `${trimTrailingSlashes(base)}${normalizedPath}`;
 }
 
 function responsesError(status: number, code: string, message: string): Record<string, unknown> {

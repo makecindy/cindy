@@ -301,4 +301,16 @@ async function main() {
   console.log('==========================================================');
 }
 
-main().catch((err) => { console.error(err.message); process.exit(1); });
+// 兜底脱敏:错误文案若意外携带签名口令等秘密类 env 值,输出前抹掉(CodeQL js/clear-text-logging)。
+function scrubSecretsFromText(text) {
+  let out = String(text ?? '');
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!value || value.length < 6) continue;
+    if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
+      out = out.split(value).join('***');
+    }
+  }
+  return out;
+}
+
+main().catch((err) => { console.error(scrubSecretsFromText(err?.message)); process.exit(1); });

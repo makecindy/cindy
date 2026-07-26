@@ -543,7 +543,7 @@ export function createEncryptedContentRecoveryRule(opts: {
   return {
     id: 'encrypted_content',
     enabled: opts.enabled,
-    match: (text) => INVALID_ENCRYPTED_CONTENT_RE.test(text),
+    matches: (text) => INVALID_ENCRYPTED_CONTENT_RE.test(text),
     strip: stripEncryptedContentFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
@@ -562,7 +562,7 @@ export function createImageGenerationIdRecoveryRule(opts: {
   return {
     id: 'image_generation_id',
     enabled: opts.enabled ?? (() => true),
-    match: (text) => IMAGE_GENERATION_WITHOUT_ID_RE.test(text),
+    matches: (text) => IMAGE_GENERATION_WITHOUT_ID_RE.test(text),
     strip: stripImageGenerationItemsWithoutIdFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
@@ -582,7 +582,7 @@ export function createToolUseProviderSpecificFieldsRecoveryRule(opts: {
   return {
     id: 'tool_use_provider_specific_fields',
     enabled: opts.enabled ?? (() => true),
-    match: (text) => TOOL_USE_PROVIDER_SPECIFIC_FIELDS_RE.test(text),
+    matches: (text) => TOOL_USE_PROVIDER_SPECIFIC_FIELDS_RE.test(text),
     strip: stripToolUseProviderSpecificFieldsFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
@@ -601,7 +601,7 @@ export function createEmptyThinkingRecoveryRule(opts: {
   return {
     id: 'empty_thinking',
     enabled: opts.enabled ?? (() => true),
-    match: (text) => EMPTY_THINKING_RE.test(text),
+    matches: (text) => EMPTY_THINKING_RE.test(text),
     strip: stripEmptyThinkingFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
@@ -620,7 +620,7 @@ export function createEmptyTextRecoveryRule(opts: {
   return {
     id: 'empty_text',
     enabled: opts.enabled ?? (() => true),
-    match: (text) => EMPTY_TEXT_RE.test(text),
+    matches: (text) => EMPTY_TEXT_RE.test(text),
     strip: stripEmptyTextFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,

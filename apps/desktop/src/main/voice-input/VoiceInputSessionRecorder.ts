@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
@@ -186,7 +187,8 @@ export function isVoiceInputRecordingEnabled(): boolean {
 
 export function makeRecorderSessionId(): string {
   const stamp = new Date().toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, 'Z');
-  const suffix = Math.random().toString(36).slice(2, 8);
+  // 目录名后缀:用 CSPRNG,长度与旧 Math.random 版本一致(CodeQL js/insecure-randomness)
+  const suffix = randomBytes(4).toString('hex').slice(0, 6);
   return `${stamp}-${suffix}`;
 }
 

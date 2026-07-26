@@ -50,11 +50,18 @@ export interface CatalogIO {
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
 
+// 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
+}
+
 /** 解析主 catalog URL：显式 url 优先，否则 `${baseUrl}${CATALOG_API_PATH}`。 */
 export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
   if (cfg.url && cfg.url.trim()) return cfg.url.trim();
   if (cfg.baseUrl && cfg.baseUrl.trim()) {
-    return cfg.baseUrl.trim().replace(/\/+$/, '') + CATALOG_API_PATH;
+    return trimTrailingSlashes(cfg.baseUrl.trim()) + CATALOG_API_PATH;
   }
   return null;
 }
@@ -62,7 +69,7 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
 /** 解析迁移期旧 OSS 回退 URL。 */
 export function resolveFallbackCatalogUrl(cfg: CatalogSourceConfig): string | null {
   if (!cfg.fallbackBaseUrl?.trim()) return null;
-  return cfg.fallbackBaseUrl.trim().replace(/\/+$/, '') + CATALOG_CFG_PATH;
+  return trimTrailingSlashes(cfg.fallbackBaseUrl.trim()) + CATALOG_CFG_PATH;
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */

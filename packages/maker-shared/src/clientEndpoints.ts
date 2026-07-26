@@ -155,6 +155,13 @@ export interface ParseClientEndpointManifestOptions {
   allowHttp?: boolean;
 }
 
+// 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return s.slice(0, end);
+}
+
 function allowedProtocols(key: ClientEndpointKey, allowHttp: boolean): readonly string[] {
   const base = FIELD_PROTOCOLS[key];
   if (!allowHttp) return base;
@@ -211,7 +218,7 @@ export function parseClientEndpointManifest(
     if (typeof raw !== 'string') {
       return { ok: false, reason: `invalid-field:${key}` };
     }
-    const normalized = raw.trim().replace(/\/+$/, '');
+    const normalized = trimTrailingSlashes(raw.trim());
     let url: URL;
     try {
       url = new URL(normalized);

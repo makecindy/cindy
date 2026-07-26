@@ -30,10 +30,41 @@ function stripInlineCode(text: string): string {
       parts.push(segments[i]);
     } else {
       // 非代码块区域：去掉 inline code 反引号（支持 `` `code` `` 和 ``` ``code`` ```）
-      parts.push(segments[i].replace(/`+([^`]+)`+/g, '$1'));
+      parts.push(stripSegmentInlineCode(segments[i]));
     }
   }
   return parts.join('');
+}
+
+/**
+ * `seg.replace(/`+([^`]+)`+/g, '$1')` 的线性扫描等价实现：
+ * 「反引号串 + 非反引号内容 + 反引号串」只留内容。原正则在长反引号串上
+ * 会 O(n²) 回溯（CodeQL js/polynomial-redos）。
+ */
+function stripSegmentInlineCode(seg: string): string {
+  let out = '';
+  let i = 0;
+  while (i < seg.length) {
+    const open = seg.indexOf('`', i);
+    if (open === -1) {
+      out += seg.slice(i);
+      break;
+    }
+    out += seg.slice(i, open);
+    let openEnd = open + 1;
+    while (openEnd < seg.length && seg.charCodeAt(openEnd) === 0x60) openEnd += 1;
+    const close = seg.indexOf('`', openEnd);
+    if (close === -1) {
+      // 后面再无反引号，闭合不了，剩余部分原样保留
+      out += seg.slice(open);
+      break;
+    }
+    out += seg.slice(openEnd, close);
+    let closeEnd = close + 1;
+    while (closeEnd < seg.length && seg.charCodeAt(closeEnd) === 0x60) closeEnd += 1;
+    i = closeEnd;
+  }
+  return out;
 }
 
 // ── interactive (with buttons) — schema v1 ─────────────────────────────────────

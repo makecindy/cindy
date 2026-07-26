@@ -22,7 +22,7 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import type { AuthAdapter, AuthAdapterOptions, AuthState } from '@cindy/maker-core';
-import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
@@ -1002,6 +1002,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (cleanupFailure) return cleanupFailure;
 
     const binaryPath = cached.binaryPath;
+    // 执行前复核路径确为受管二进制(CodeQL js/command-line-injection 防御纵深)
+    if (!isVettedAgentBinaryPath('codex', binaryPath)) {
+      return { authenticated: false, errorReason: 'codex_binary_missing' };
+    }
 
     // spawn codex login。POSIX 建独立进程组，取消/超时时连同回调 server 一起收割。
     return new Promise<AuthState>((resolve) => {

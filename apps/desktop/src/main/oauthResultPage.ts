@@ -84,9 +84,14 @@ export function buildOAuthReturnAction(
   source: string,
   brandName: string,
 ): { href: string; label: string } {
+  // lang 运行时可能来自外部输入:白名单校验后再取,防止原型链上的意外分发
+  // (CodeQL js/unvalidated-dynamic-method-call)
+  const labelFor = Object.prototype.hasOwnProperty.call(RETURN_LABEL, lang)
+    ? RETURN_LABEL[lang]
+    : RETURN_LABEL.en;
   return {
     href: `${DEEP_LINK_URL_PREFIX}focus/${encodeURIComponent(source)}`,
-    label: RETURN_LABEL[lang](brandName),
+    label: labelFor(brandName),
   };
 }
 

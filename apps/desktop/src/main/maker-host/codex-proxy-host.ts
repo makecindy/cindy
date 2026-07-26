@@ -1076,9 +1076,20 @@ function numericHeader(headers: Readonly<Record<string, string>>, name: string):
   return Number.isFinite(value) ? value : undefined;
 }
 
+// 精确解析 host 判定,不用 startsWith 子串判断——'https://api.x.aievil.com' 也能
+// 通过前缀检查(CodeQL js/incomplete-url-substring-sanitization)。
+function isXaiUpstream(upstreamBase: string): boolean {
+  try {
+    const url = new URL(upstreamBase);
+    return url.protocol === 'https:' && url.host === 'api.x.ai';
+  } catch {
+    return false;
+  }
+}
+
 function maybeRecordXaiRateLimit(ctx: ResponseObserverCtx): void {
   if (ctx.status < 200 || ctx.status >= 300) return;
-  if (!ctx.upstreamBase.startsWith('https://api.x.ai')) return;
+  if (!isXaiUpstream(ctx.upstreamBase)) return;
   const info = {
     limitRequests: numericHeader(ctx.responseHeaders, 'x-ratelimit-limit-requests'),
     remainingRequests: numericHeader(ctx.responseHeaders, 'x-ratelimit-remaining-requests'),

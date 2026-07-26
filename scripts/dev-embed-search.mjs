@@ -102,7 +102,10 @@ Options:
 }
 
 function fail(msg) {
-  console.error(`[dev-embed-search] ERROR: ${msg}`);
+  // 兜底脱敏:错误文案若意外携带 bearer token 值,输出前抹掉(CodeQL js/clear-text-logging)
+  const key = process.env.ANTHROPIC_API_KEY;
+  const safe = key && key.length >= 6 ? String(msg).split(key).join('***') : msg;
+  console.error(`[dev-embed-search] ERROR: ${safe}`);
   process.exit(1);
 }
 

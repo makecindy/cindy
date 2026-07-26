@@ -145,6 +145,8 @@ export async function startCodexHttpBridge(
       });
       if (!res.headersSent) {
         res.statusCode = 500;
+        // 显式 text/plain:错误文本不给浏览器 sniff 成 HTML 的机会(CodeQL js/xss-through-exception)
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.end(err instanceof Error ? err.message : 'Internal server error');
       }
     }

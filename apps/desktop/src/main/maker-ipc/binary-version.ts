@@ -17,6 +17,7 @@ import { createLogger } from '../logger.js';
 import {
   getReadyBinaryPath,
   getCachedBinaryStatus,
+  isVettedAgentBinaryPath,
   type AgentBinaryKind,
 } from '../agent-binaries/index.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -79,7 +80,8 @@ export function registerMakerBinaryVersionIpc(): void {
       }
 
       const binaryPath = resolveBinaryPath(agentKind);
-      if (!binaryPath) {
+      // 执行前复核路径确为受管二进制(CodeQL js/command-line-injection 防御纵深)
+      if (!binaryPath || !isVettedAgentBinaryPath(agentKind, binaryPath)) {
         return { kind: agentKind, binaryPath: null, version: null, error: 'binary_not_ready' };
       }
 
