@@ -146,7 +146,7 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        if (!value.ok) log.warn('fetch failed (%s) for %s', value.detail, url);
+        if (!value.ok) log.debug('fetch failed (%s) for %s', value.detail, url);
         resolve(value);
       };
       const timeout = setTimeout(() => {
