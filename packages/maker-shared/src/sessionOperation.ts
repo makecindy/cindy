@@ -263,7 +263,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
   if (input.hasActivePendingInteraction && blocksComposer) {
     return {
       canUseComposer: false,
-      composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
+      composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
       pendingInteractionPlacement: 'composer',

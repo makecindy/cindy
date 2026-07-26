@@ -40,7 +40,7 @@ describe('shared session operation model', () => {
       readOnlyReason: '协作模式手机版第一版为只读安全降级。',
     })).toEqual({
       canUseComposer: false,
-      composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
+      composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
       pendingInteractionPlacement: 'composer',

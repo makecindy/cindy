@@ -403,8 +403,14 @@ const REMOTE_RESOLVABLE_KINDS = new Set(['permission', 'ask_user_question', 'pla
 export function remoteInteractionHandling(item: PendingInteractionLike): RemoteInteractionHandling {
   const kind = interactionKind(item);
   if (REMOTE_RESOLVABLE_KINDS.has(kind)) return 'resolvable';
-  // terminal 快照只是被控端收尾展示用的最后一帧,已经不 actionable,取消无意义。
-  if (kind === 'plugin_setup' && item.request.terminal !== true) return 'cancel-only';
+  // `cancel-only` 必须与 buildPluginSetupCancelDecision 判定一致,否则调用方只看
+  // handling 就以为「能取消」,而实际拿不到 decision(#530 review):
+  // - terminal 快照是被控端收尾展示用的最后一帧,已经不 actionable;
+  // - revision 缺失 / 非法时被控端无法裁决这条命令,也就没有取消入口。
+  if (kind === 'plugin_setup' && item.request.terminal !== true
+    && pluginSetupCancelRevision(item.request) !== null) {
+    return 'cancel-only';
+  }
   return 'desktop-only';
 }
 
@@ -443,10 +449,20 @@ export function pendingInteractionsBlockRemoteComposer(
 export function buildPluginSetupCancelDecision(
   request: InteractionRequestLike,
 ): { kind: 'plugin_setup'; action: 'cancel'; expectedRevision: number } | null {
+  const revision = pluginSetupCancelRevision(request);
+  if (revision === null) return null;
+  return { kind: 'plugin_setup', action: 'cancel', expectedRevision: revision };
+}
+
+/**
+ * 可用于取消命令的 revision;不是 plugin_setup、或 revision 缺失 / 非法时为 null。
+ * 被控端要求 `expectedRevision` 是非负整数(见 parseGhostSetupInteractionCommand)。
+ */
+function pluginSetupCancelRevision(request: InteractionRequestLike): number | null {
   if (request.kind !== 'plugin_setup') return null;
   const revision = request.revision;
   if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0) return null;
-  return { kind: 'plugin_setup', action: 'cancel', expectedRevision: revision };
+  return revision;
 }
 
 /**

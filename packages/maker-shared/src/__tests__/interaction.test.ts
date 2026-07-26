@@ -533,6 +533,12 @@ describe('interaction shared model', () => {
     expect(remoteInteractionHandling({
       request: { kind: 'plugin_setup', requestId: 's1', revision: 2, terminal: true },
     })).toBe('desktop-only');
+    // cancel-only 与 buildPluginSetupCancelDecision 对齐:拿不到合法 revision 就不是
+    // 「能取消」,否则调用方只看 handling 会误判。
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1' } })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1.5 } })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: -1 } })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: 0 } })).toBe('cancel-only');
     expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1' } })).toBe('desktop-only');
     // 被控端将来新增的类型默认落进「不阻塞」,不会再把手机会话锁死。
     expect(remoteInteractionHandling({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe('desktop-only');
