@@ -18,7 +18,15 @@
 // 非 Windows 平台不在本脚本职责内:forge 的 stageAndroidPlatformTools 对非 win32
 // 缺失即跳过,运行时由 src/main/mcp-integrations/android.ts 按需下载到 userData。
 //
-// 无法访问 dl.google.com(例如国内打包机没有代理)时有两条出路:
+// 下载来源(按顺序尝试,任一成功即止):
+//   1) 上游 dl.google.com 的版本化 zip;
+//   2) 公司 OSS 兜底 —— 与 agent 二进制那条链路同一份 cdnBaseUrl 与 region 切换
+//      (cn → hotfix.cindy.com.cn / global → hotfix.cindy.app),见 ossZipUrlFor 的
+//      路径约定。国内打包机可设 CINDY_ANDROID_PLATFORM_TOOLS_PREFER_OSS=1 让 OSS
+//      先行,免得每次先吃一轮 Google 的连接超时。
+// 无论来自哪个来源,校验都是本文件里硬 pin 的 sha256,不因来源放宽。
+//
+// 两个来源都不通时还有两条出路:
 //   1) CINDY_ANDROID_PLATFORM_TOOLS_ZIP=<本地 platform-tools-*.zip 路径> 走本地解压;
 //   2) 手工把三个文件放进 apps/android-platform-tools-bin/<platformKey>/,
 //      sha256 匹配即视为就位(本脚本与 forge 都只校验哈希,不关心来源)。
@@ -42,6 +50,9 @@ import {
 // 复用 agent 二进制 de-LFS 那条链路的 sha256 工具:同一套 fail-closed 语义与错误
 // 文案,不在这里重复实现哈希校验。
 import { sha256File, sha256Hex, assertSha256 } from '../../../tools/shared/verify-sha256.mjs';
+// OSS 兜底的基址与 agent 二进制那条链路同源:同一份 config/endpoint*.json 的
+// cdnBaseUrl,同一套 region 切换(cn → hotfix.cindy.com.cn,global → hotfix.cindy.app)。
+import { loadEndpointManifestBaseUrl } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -113,6 +124,36 @@ export function downloadUrlFor(platformKey, version) {
   if (!spec) throw new Error(`unsupported platform key: ${platformKey}`);
   // 版本化 URL(非 -latest-):锁得住版本,才能用固定 sha256 校验。
   return `https://dl.google.com/android/repository/platform-tools_r${version}-${spec.zipOs}.zip`;
+}
+
+/**
+ * OSS 兜底基址。每次调用都读 env,便于 region 切换与测试注入(语义对齐
+ * agent-binary-cdn-fallback 的 getCdnBase)。
+ */
+export function resolveOssBaseUrl() {
+  return (
+    process.env.XDT_CDN_BASE_URL?.trim().replace(/\/+$/, '') ||
+    loadEndpointManifestBaseUrl({ authRegion: process.env.CINDY_AUTH_REGION })
+  );
+}
+
+/**
+ * OSS 上的兜底 zip 地址。约定:上游 zip 原封不动上传,文件名保持上游那个 ——
+ * 上传方 curl 下来直接传即可,不用 gzip、不用改 manifest。
+ *
+ *   <cdnBaseUrl>/android-platform-tools/<version>/platform-tools_r<version>-<os>.zip
+ *
+ * 例(cn):  https://hotfix.cindy.com.cn/cindy/android-platform-tools/32.0.0/platform-tools_r32.0.0-windows.zip
+ * 例(global): https://hotfix.cindy.app/cindy/android-platform-tools/32.0.0/platform-tools_r32.0.0-windows.zip
+ *
+ * 不需要 manifest:期望 sha256 硬 pin 在本文件里,比 agent 二进制那套"manifest
+ * 版本对得上才校验"的 best-effort 更严 —— OSS 上的文件被换掉一样会被拦下。
+ */
+export function ossZipUrlFor(platformKey, version, baseUrl) {
+  const spec = PINNED[platformKey];
+  if (!spec) throw new Error(`unsupported platform key: ${platformKey}`);
+  if (!baseUrl) throw new Error('OSS base url unavailable');
+  return `${baseUrl}/android-platform-tools/${version}/platform-tools_r${version}-${spec.zipOs}.zip`;
 }
 
 /** 三个文件都在且 sha256 都对 → 视为就位。任一不符都当作缺失重新获取。 */
@@ -202,21 +243,66 @@ export async function ensureAndroidPlatformTools({
     return { status: 'installed', version, files };
   }
 
-  const url = downloadUrlFor(platformKey, version);
+  // 依次尝试各来源。默认 upstream 先、OSS 兜底(与 agent 二进制那条链路同序);
+  // 国内打包机可设 CINDY_ANDROID_PLATFORM_TOOLS_PREFER_OSS=1 直接走 OSS,免得每次
+  // 先吃一轮 dl.google.com 的连接超时。
+  const preferOss = /^(1|true|yes)$/i.test(
+    process.env.CINDY_ANDROID_PLATFORM_TOOLS_PREFER_OSS?.trim() ?? '',
+  );
+  const order = preferOss ? ['oss', 'upstream'] : ['upstream', 'oss'];
+
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-platform-tools-'));
   const tmpZip = path.join(tmpDir, 'platform-tools.zip');
+  const attempts = [];
   try {
-    log(`${platformKey}: downloading ${url}`);
-    await downloadToFileWithTimeout(url, tmpZip, {}, {
-      onProgress: createDownloadProgressLogger(`platform-tools ${platformKey}`),
-    });
-    const files = await extractVerifiedFiles(fs.readFileSync(tmpZip), platformKey, destDir);
-    log(`${platformKey}: installed @ ${version} (${files.join(', ')})`);
-    return { status: 'installed', version, files };
-  } catch (err) {
+    for (const source of order) {
+      let url;
+      try {
+        url =
+          source === 'upstream'
+            ? downloadUrlFor(platformKey, version)
+            : ossZipUrlFor(platformKey, version, resolveOssBaseUrl());
+      } catch (err) {
+        // OSS 基址解析不出来(端点清单缺失/region 非法)时只跳过这一路,不掩盖上游的错。
+        attempts.push(`${source}: ${err.message}`);
+        continue;
+      }
+      try {
+        log(`${platformKey}: downloading from ${source} — ${url}`);
+        const progress = createDownloadProgressLogger(`platform-tools ${platformKey} ${source}`);
+        try {
+          // OSS 是最后一道兜底:给宽松超时并禁用吞吐下限(同
+          // agent-binary-cdn-fallback 的理由 —— 嫌它慢也没有更快的去处)。
+          await downloadToFileWithTimeout(
+            url,
+            tmpZip,
+            {},
+            source === 'oss'
+              ? {
+                  connectTimeoutMs: 15_000,
+                  stallTimeoutMs: 20_000,
+                  totalTimeoutMs: 1_800_000,
+                  minThroughputBytesPerSec: 0,
+                  onProgress: progress.onProgress,
+                }
+              : { onProgress: progress.onProgress },
+          );
+        } finally {
+          progress.finish();
+        }
+        // 校验对所有来源同一套硬 pin sha256:OSS 上的文件被换掉同样会被拦下,
+        // 所以多一个来源不等于多一份信任。
+        const files = await extractVerifiedFiles(fs.readFileSync(tmpZip), platformKey, destDir);
+        log(`${platformKey}: installed @ ${version} from ${source} (${files.join(', ')})`);
+        return { status: 'installed', version, files, source };
+      } catch (err) {
+        attempts.push(`${source} (${url}): ${err.message}`);
+        try { fs.rmSync(tmpZip, { force: true }); } catch { /* ignore */ }
+      }
+    }
     throw new Error(
-      `无法就位 Android platform-tools ${platformKey}@${version}:${err.message}\n` +
-        `  下载地址: ${url}\n` +
+      `无法就位 Android platform-tools ${platformKey}@${version}:所有来源均失败\n` +
+        attempts.map((a) => `  - ${a}`).join('\n') + '\n' +
         `  出路 1: 设 CINDY_ANDROID_PLATFORM_TOOLS_ZIP=<本地 zip 路径> 后重试;\n` +
         `  出路 2: 手工把 ${Object.keys(PINNED[platformKey].files).join(' / ')} 放进 ` +
         `apps/android-platform-tools-bin/${platformKey}/(sha256 需匹配)。`,

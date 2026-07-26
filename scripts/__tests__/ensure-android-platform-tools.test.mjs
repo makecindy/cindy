@@ -15,7 +15,9 @@ import {
   downloadUrlFor,
   expectedHashesFor,
   isSupportedPlatformKey,
+  ossZipUrlFor,
   readPinnedVersion,
+  resolveOssBaseUrl,
   verifyInstalled,
 } from '../../apps/desktop/scripts/ensure-android-platform-tools.mjs';
 // 哈希工具本身由 verify-sha256.test.mjs 覆盖，这里只借它做一致性比对。
@@ -86,6 +88,37 @@ test('downloadUrlFor: 用版本化 URL 而不是 -latest-（否则 sha256 pin �
     'https://dl.google.com/android/repository/platform-tools_r32.0.0-windows.zip',
   );
   assert.throws(() => downloadUrlFor('darwin-arm64', '32.0.0'), /unsupported platform key/);
+});
+
+test('ossZipUrlFor: 上传约定为「原始 zip 原名放在 <base>/android-platform-tools/<version>/」', () => {
+  assert.equal(
+    ossZipUrlFor('win32-x64', '32.0.0', 'https://hotfix.cindy.com.cn/cindy'),
+    'https://hotfix.cindy.com.cn/cindy/android-platform-tools/32.0.0/platform-tools_r32.0.0-windows.zip',
+  );
+  // 海外 region 只换 base，路径结构不变。
+  assert.equal(
+    ossZipUrlFor('win32-x64', '32.0.0', 'https://hotfix.cindy.app/cindy'),
+    'https://hotfix.cindy.app/cindy/android-platform-tools/32.0.0/platform-tools_r32.0.0-windows.zip',
+  );
+  assert.throws(() => ossZipUrlFor('darwin-arm64', '32.0.0', 'https://x.test'), /unsupported platform key/);
+  assert.throws(() => ossZipUrlFor('win32-x64', '32.0.0', ''), /OSS base url unavailable/);
+});
+
+test('resolveOssBaseUrl: 优先 XDT_CDN_BASE_URL，否则回落端点清单的 cdnBaseUrl', (t) => {
+  const original = process.env.XDT_CDN_BASE_URL;
+  t.after(() => {
+    if (original === undefined) delete process.env.XDT_CDN_BASE_URL;
+    else process.env.XDT_CDN_BASE_URL = original;
+  });
+
+  process.env.XDT_CDN_BASE_URL = 'https://override.test/base/';
+  // 尾部斜杠要被去掉，否则拼出来会是双斜杠。
+  assert.equal(resolveOssBaseUrl(), 'https://override.test/base');
+
+  delete process.env.XDT_CDN_BASE_URL;
+  const fromManifest = resolveOssBaseUrl();
+  assert.match(fromManifest, /^https:\/\//);
+  assert.doesNotMatch(fromManifest, /\/$/);
 });
 
 test('verifyInstalled: 文件缺失时不算就位', () => {
