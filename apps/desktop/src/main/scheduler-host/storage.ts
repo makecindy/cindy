@@ -79,6 +79,25 @@ export interface ScheduleSessionCostSummary {
 interface ScheduleMoneyValues {
   costValues: RegionalMoney[];
   estimatedValueValues: RegionalMoney[];
+  /** 最新一笔金额的币种(按时间戳取最大)——汇总聚合的偏好币种。 */
+  latestCurrency?: RegionalMoney['currency'];
+  latestCurrencyAt?: number;
+}
+
+/**
+ * 记录「当前账本币种」:跨币种切换的 schedule 汇总必须偏好最新片段的币种,
+ * 静态 USD 偏好会让任意历史 USD 片段把切换后的新币种 run 整段挤出汇总。
+ */
+function noteLatestCurrency(
+  values: ScheduleMoneyValues,
+  money: RegionalMoney | null | undefined,
+  at: number,
+): void {
+  if (!money || money.amount <= 0) return;
+  if (values.latestCurrencyAt === undefined || at >= values.latestCurrencyAt) {
+    values.latestCurrencyAt = at;
+    values.latestCurrency = money.currency;
+  }
 }
 
 interface ScheduleTurnCostState extends ScheduleMoneyValues {
@@ -788,6 +807,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (turnCost.estimatedValueMoney) {
         entry.estimatedValueValues.push(turnCost.estimatedValueMoney);
       }
+      noteLatestCurrency(entry, turnCost.costMoney, row.createdAt);
+      noteLatestCurrency(entry, turnCost.estimatedValueMoney, row.createdAt);
       const sessionCost = entry.sessionCosts.get(row.sessionId) ?? emptyScheduleMoneyValues();
       if (turnCost.costMoney) {
         sessionCost.costValues.push(turnCost.costMoney);
@@ -795,6 +816,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (turnCost.estimatedValueMoney) {
         sessionCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
       }
+      noteLatestCurrency(sessionCost, turnCost.costMoney, row.createdAt);
+      noteLatestCurrency(sessionCost, turnCost.estimatedValueMoney, row.createdAt);
       entry.sessionCosts.set(row.sessionId, sessionCost);
       bySchedule.set(attributedScheduleId, entry);
     }
@@ -807,11 +830,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       sessionId: string | undefined,
       costMoney: RegionalMoney | null,
       estimatedValueMoney: RegionalMoney | null,
+      at: number,
     ): void => {
       if (costMoney && costMoney.amount > 0) entry.costValues.push(costMoney);
       if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
         entry.estimatedValueValues.push(estimatedValueMoney);
       }
+      noteLatestCurrency(entry, costMoney, at);
+      noteLatestCurrency(entry, estimatedValueMoney, at);
       if (!sessionId) return;
       entry.sessionIds.add(sessionId);
       const sessionCost = entry.sessionCosts.get(sessionId) ?? emptyScheduleMoneyValues();
@@ -819,6 +845,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
         sessionCost.estimatedValueValues.push(estimatedValueMoney);
       }
+      noteLatestCurrency(sessionCost, costMoney, at);
+      noteLatestCurrency(sessionCost, estimatedValueMoney, at);
       entry.sessionCosts.set(sessionId, sessionCost);
     };
     const remainingMoney = (
@@ -842,7 +870,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         if (messageCostRunIds.has(run.id)) continue;
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
         entry.hasUnavailableCost = true;
-        appendRunMoney(entry, run.sessionId, null, null);
+        appendRunMoney(entry, run.sessionId, null, null, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -852,7 +880,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         !messageCostRunIds.has(run.id)
       ) {
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, null, null);
+        appendRunMoney(entry, run.sessionId, null, null, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -870,7 +898,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
                 messageCost?.estimatedValueValues ?? [],
               );
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney);
+        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -883,6 +911,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         run.sessionId,
         run.costMoney ?? null,
         run.estimatedValueMoney ?? null,
+        run.firedAt,
       );
       bySchedule.set(run.scheduleId, entry);
     }
@@ -904,10 +933,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         };
         if (legacyCost > 0) {
           entry.costValues.push(legacyMoney);
+          noteLatestCurrency(entry, legacyMoney, 0);
         }
         const sessionCost = entry.sessionCosts.get(session.id) ?? emptyScheduleMoneyValues();
         if (legacyCost > 0) {
           sessionCost.costValues.push(legacyMoney);
+          noteLatestCurrency(sessionCost, legacyMoney, 0);
         }
         entry.sessionCosts.set(session.id, sessionCost);
       }
@@ -916,11 +947,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
     return [...bySchedule.entries()].map(([scheduleId, summary]) => {
       const totalMoney =
-        addCompatibleRegionalMoney(summary.costValues) ??
+        addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency) ??
         zeroUsageMoney();
       const totalEstimatedValueMoney =
-        addCompatibleRegionalMoney(summary.estimatedValueValues) ??
-        zeroUsageMoney('value-estimate');
+        addCompatibleRegionalMoney(
+          summary.estimatedValueValues,
+          summary.latestCurrency,
+        ) ?? zeroUsageMoney('value-estimate');
       return {
         scheduleId,
         totalMoney,
@@ -935,11 +968,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         sessionCount: summary.sessionIds.size,
         sessions: [...summary.sessionCosts.entries()].map(([sessionId, costs]) => {
           const money =
-            addCompatibleRegionalMoney(costs.costValues) ??
+            addCompatibleRegionalMoney(costs.costValues, costs.latestCurrency) ??
             zeroUsageMoney();
           const estimatedMoney =
-            addCompatibleRegionalMoney(costs.estimatedValueValues) ??
-            zeroUsageMoney('value-estimate');
+            addCompatibleRegionalMoney(
+              costs.estimatedValueValues,
+              costs.latestCurrency,
+            ) ?? zeroUsageMoney('value-estimate');
           return {
             sessionId,
             totalMoney: money,

@@ -934,7 +934,9 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain('SQLITE_IN_CHUNK_SIZE');
     expect(storageSource).toContain("when 'user' then 0 else 1 end");
     expect(storageSource).toContain('entry.costValues.push(turnCost.costMoney)');
-    expect(storageSource).toContain('addCompatibleRegionalMoney(summary.costValues)');
+    expect(storageSource).toContain(
+      'addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency)',
+    );
     expect(storageSource).toContain('totalMoney');
     expect(storageSource).toContain('listLegacySessionRuns');
     expect(storageSource).toContain("LEGACY_SCHEDULE_TITLE_PREFIX = '[Schedule] '");
