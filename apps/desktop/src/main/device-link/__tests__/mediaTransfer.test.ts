@@ -133,6 +133,15 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
     });
   });
 
+  it('PUT 成功后取消响应体,及时归还底层连接', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    undiciFetchMock.mockResolvedValue({ ok: true, status: 200, body: { cancel }, text: async () => '' });
+
+    await uploadLocalFile('/tmp/a.png');
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('contentType 可显式覆盖', async () => {
     await uploadLocalFile('/tmp/a.bin', { contentType: 'application/x-custom' });
     expect(apiFetch).toHaveBeenCalledWith(

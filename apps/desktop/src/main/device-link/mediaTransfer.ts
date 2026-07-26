@@ -301,6 +301,13 @@ async function putBytesToOss(
       log.warn(`OSS PUT rejected status=${resp.status} host=${host} body=${txt.slice(0, 200)}`);
       throw new NonRetriableOssPutError(new Error(`OSS PUT 失败 (${resp.status})`), resp.status);
     }
+    // PUT 的成功响应体用不上,但不消费/取消的话底层连接不会及时归还
+    // (与 provider-diagnostics 的非流式探测同一处理)。
+    try {
+      await resp.body?.cancel();
+    } catch {
+      /* no-op */
+    }
   };
 
   const order = transportOrderFor(host);
