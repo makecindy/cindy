@@ -170,6 +170,23 @@ describe('optimistic interaction dismiss', () => {
     expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([7]);
   });
 
+  it('连 revision 都没有的快照不能覆盖已进入 revision 语义的那份', () => {
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 5));
+    // 旧被控端 / 非法快照(缺 revision):不得把内容换回去,否则取消又会发过期的
+    // expectedRevision。
+    const withoutRevision: PendingInteraction = { request: { kind: 'plugin_setup', requestId: 'setup-1' } };
+    remoteSessionStore.applyInteractionRequest('s1', withoutRevision);
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([5]);
+    remoteSessionStore.setPendingInteractions('s1', [withoutRevision]);
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([5]);
+
+    // 反向:手上那份本来就没有 revision 时,沿用既有后写覆盖语义(非 revision 化
+    // 交互不受影响)。
+    remoteSessionStore.setPendingInteractions('s2', [interaction('r1')]);
+    remoteSessionStore.applyInteractionRequest('s2', { request: { kind: 'permission', requestId: 'r1', title: 'updated' } });
+    expect(remoteSessionStore.getPendingInteractions('s2').map((i) => i.request.title)).toEqual(['updated']);
+  });
+
   it('抑制按 (sessionId, requestId) 隔离:不影响其它会话的同名 request', () => {
     remoteSessionStore.setPendingInteractions('s1', [interaction('r1')]);
     remoteSessionStore.beginOptimisticInteractionDismiss('s1', 'r1');

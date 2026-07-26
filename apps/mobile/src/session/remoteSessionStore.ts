@@ -142,7 +142,12 @@ function pickFresherInteraction(
   if (!existing) return incoming;
   const incomingRevision = interactionRevision(incoming);
   const existingRevision = interactionRevision(existing);
-  if (incomingRevision === null || existingRevision === null) return incoming;
+  // 手上那份不带 revision(非 revision 化交互)→ 沿用既有的后写覆盖语义。
+  if (existingRevision === null) return incoming;
+  // 手上那份已进入 revision 语义,而来的一份连 revision 都没有(旧被控端 / 非法
+  // 快照)→ 它没有资格覆盖:否则同样会把内容换回旧版本,并让取消发出过期的
+  // expectedRevision(#530 review)。
+  if (incomingRevision === null) return existing;
   return incomingRevision < existingRevision ? existing : incoming;
 }
 
