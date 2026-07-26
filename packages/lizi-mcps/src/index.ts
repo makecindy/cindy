@@ -23,6 +23,12 @@ export * from './cindy_schedulerMcpServer.js';
 export * from './cindy_schedulerToolRegistry.js';
 export * from './scheduler/index.js';
 
+// Maker Memory is useful to non-Electron hosts as well.  Keep the factory on
+// the public surface so the Linux daemon can use the same tool contract.
+export * from './cindy_memoryMcpServer.js';
+export * from './cindy_memoryToolRegistry.js';
+export * from './memory/index.js';
+
 export * from './cindy_sshMcpServer.js';
 export * from './ssh/registry.js';
 export * from './ssh/index.js';

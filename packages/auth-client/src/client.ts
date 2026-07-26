@@ -5,6 +5,8 @@ import {
   accountDeletionChallengeSchema,
   accountDeletionStatusSchema,
   accountMembershipSchema,
+  deviceAuthorizationSchema,
+  deviceAuthorizationTokenSchema,
   authRegionSchema,
   loginMethodSchema,
   loginOutcomeSchema,
@@ -17,6 +19,8 @@ import {
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
   type AccountMembership,
+  type DeviceAuthorization,
+  type DeviceAuthorizationToken,
   type AuthMe,
   type AuthTokenPair,
   type AuthRegion,
@@ -72,6 +76,7 @@ const errorResponseSchema = z.object({
     .optional(),
   code: z.string().optional(),
   message: z.string().optional(),
+  error_description: z.string().optional(),
 });
 
 /** Platform-neutral REST client. It never persists or logs credentials. */
@@ -130,6 +135,40 @@ export class CindyAuthClient {
       );
     }
     return discovery;
+  }
+
+  /**
+   * Starts a browser-independent enterprise SSO flow for an unattended host.
+   * The server returns a short user code and a QR-ready verification URL; the
+   * opaque device_code remains in the local CLI process and is never logged.
+   */
+  startSsoDeviceAuthorization(
+    connectionId: string,
+    deviceName: string,
+  ): Promise<DeviceAuthorization> {
+    return this.request(
+      '/api/auth/device/authorize',
+      deviceAuthorizationSchema,
+      {
+        client_id: 'cindy-headless',
+        device_id: this.options.deviceId,
+        device_name: deviceName,
+        connection_id: connectionId,
+      },
+    );
+  }
+
+  /** Polls a single-use device code after the user has completed browser SSO. */
+  pollSsoDeviceAuthorization(deviceCode: string): Promise<DeviceAuthorizationToken> {
+    return this.request(
+      '/api/auth/device/token',
+      deviceAuthorizationTokenSchema,
+      {
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        device_code: deviceCode,
+        client_id: 'cindy-headless',
+      },
+    );
   }
 
   async requestCode(kind: VerificationKind, identifier: string): Promise<void> {
@@ -437,6 +476,7 @@ export class CindyAuthClient {
       const message = parsed.success
         ? (parsed.data.error?.message ??
           parsed.data.message ??
+          parsed.data.error_description ??
           "Authentication request failed")
         : "Authentication request failed";
       throw new AuthApiError(code, response.status, message);

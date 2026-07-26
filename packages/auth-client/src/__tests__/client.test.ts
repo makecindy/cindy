@@ -303,6 +303,34 @@ describe("CindyAuthClient", () => {
     ).rejects.toMatchObject({ code: "ORG_SSO_NOT_FOUND" });
   });
 
+  it('starts and polls a Linux device-code SSO login without a loopback callback', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(response(200, {
+        device_code: 'd'.repeat(43),
+        user_code: 'ABCD-EFGH',
+        verification_uri: 'https://auth.example.com/api/auth/device/verify',
+        verification_uri_complete: 'https://auth.example.com/api/auth/device/verify?user_code=ABCD-EFGH&challenge=x',
+        expires_in: 600,
+        interval: 5,
+      }))
+      .mockResolvedValueOnce(response(200, {
+        access_token: 'device-access', refresh_token: 'device-refresh', token_type: 'Bearer',
+      }));
+    const auth = client(fetch);
+    const started = await auth.startSsoDeviceAuthorization('conn-1', 'TownsLinux');
+    await expect(auth.pollSsoDeviceAuthorization(started.device_code)).resolves.toMatchObject({
+      access_token: 'device-access', refresh_token: 'device-refresh',
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://auth.example.com/api/auth/device/authorize');
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({
+      client_id: 'cindy-headless', device_id: 'device-1', device_name: 'TownsLinux', connection_id: 'conn-1',
+    });
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toMatchObject({
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: 'd'.repeat(43),
+    });
+  });
+
   it("builds PKCE authorize URLs for social and SSO", () => {
     const auth = client();
     const url = new URL(

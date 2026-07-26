@@ -1,0 +1,17 @@
+[Unit]
+Description=Cindy Linux headless Agent host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@PREFIX@/bin/cindy-headless
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.config/cindy-headless %h/.local/state/cindy-headless
+
+[Install]
+WantedBy=default.target
