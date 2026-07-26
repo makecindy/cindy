@@ -68,19 +68,10 @@ export async function incrementDailySpend(
     return { day, money: await getSpendForDay(day) };
   }
   const db = getDbClient().drizzle;
-  const existing = await db
-    .select({ costCurrency: dailySpend.costCurrency })
-    .from(dailySpend)
-    .where(sql`${dailySpend.day} = ${day}`)
-    .get();
-  if (existing?.costCurrency && existing.costCurrency !== normalized.currency) {
-    // 单币种日账本:跨币种(币种切换过渡日 / 旧数据)只能弃掉后到的币种,
-    // 但绝不 throw —— 抛异常会打断 turn 收尾管道,损失比少记一段更大。
-    log.warn(
-      `daily spend currency conflict on ${day}: keeping ${existing.costCurrency}, dropping ${normalized.currency} amount`,
-    );
-    return { day, money: await getSpendForDay(day) };
-  }
+  // 单币种日账本:币种守卫必须在同一条 upsert 里用 CASE 表达 —— 先查再写有
+  // TOCTOU 窗口,并发首写会把不同币种的裸数字加进同一行。冲突段原子地弃掉
+  // (行保持原币种),绝不 throw:抛异常会打断 turn 收尾管道,损失更大。
+  const sameCurrency = sql`(${dailySpend.costCurrency} IS NULL OR ${dailySpend.costCurrency} = ${normalized.currency})`;
   await db
     .insert(dailySpend)
     .values({
@@ -93,14 +84,20 @@ export async function incrementDailySpend(
     .onConflictDoUpdate({
       target: dailySpend.day,
       set: {
-        costAmount: sql`${dailySpend.costAmount} + ${normalized.amount}`,
-        costCurrency: normalized.currency,
-        costIsApproximate: sql`${dailySpend.costIsApproximate} OR ${normalized.approximate ? 1 : 0}`,
+        costAmount: sql`CASE WHEN ${sameCurrency} THEN ${dailySpend.costAmount} + ${normalized.amount} ELSE ${dailySpend.costAmount} END`,
+        costCurrency: sql`CASE WHEN ${sameCurrency} THEN ${normalized.currency} ELSE ${dailySpend.costCurrency} END`,
+        costIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${dailySpend.costIsApproximate} OR ${normalized.approximate ? 1 : 0}) ELSE ${dailySpend.costIsApproximate} END`,
         updatedAt: ts,
       },
     })
     .run();
-  return { day, money: await getSpendForDay(day) };
+  const persisted = await getSpendForDay(day);
+  if (persisted.currency !== normalized.currency && persisted.amount > 0) {
+    log.warn(
+      `daily spend currency conflict on ${day}: keeping ${persisted.currency}, dropped ${normalized.currency} amount`,
+    );
+  }
+  return { day, money: persisted };
 }
 
 export function getTodaySpend(): Promise<RegionalMoney> {
