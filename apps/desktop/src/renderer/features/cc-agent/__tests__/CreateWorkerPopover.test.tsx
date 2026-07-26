@@ -52,6 +52,15 @@ const mocks = vi.hoisted(() => ({
       }>
     >;
   }>,
+  // 被控端 provider 快照(device-link 创建;providerFastSupported 的远程口径消费)。
+  remoteProviders: [] as Array<{
+    id: string;
+    name: string;
+    connected: boolean;
+    agents: string[];
+    models: Record<string, Array<{ id: string; supportsFastMode?: boolean }>>;
+  }>,
+  sidebarWindow: false,
 }));
 
 function model(id: string, efforts = ['high'], defaultEffort = 'high') {
@@ -75,7 +84,15 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: [], loading: mocks.providersLoading, error: null }),
+  useDeviceProviders: () => ({
+    providers: mocks.remoteProviders,
+    loading: mocks.providersLoading,
+    error: null,
+  }),
+}));
+
+vi.mock('@/lib/sidebarWindow', () => ({
+  isSidebarWindow: () => mocks.sidebarWindow,
 }));
 
 // 只覆写 useNavigate,保留真实导出:全量 mock 会连带打断任何间接依赖(copilot review)。
@@ -93,6 +110,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     reselectEmitsChange?: boolean;
     fastMode?: boolean;
     onFastModeChange?: (enabled: boolean) => void;
+    onNavigateToProviders?: () => void;
     modelMemory?: unknown;
   }) => (
     <div
@@ -104,6 +122,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-reselect-emits={String(props.reselectEmitsChange === true)}
       data-fast-wired={String(props.onFastModeChange !== undefined)}
       data-memory-wired={String(props.modelMemory !== undefined)}
+      data-navigate-wired={String(props.onNavigateToProviders !== undefined)}
     >
       {props.modelId}
       <button
@@ -155,7 +174,9 @@ describe('CreateWorkerPopover', () => {
     mocks.capabilitiesLoading = false;
     mocks.providersLoading = false;
     mocks.localProviders = [];
+    mocks.remoteProviders = [];
     mocks.hiddenModels = [];
+    mocks.sidebarWindow = false;
   });
 
   afterEach(() => {
@@ -402,6 +423,7 @@ describe('CreateWorkerPopover', () => {
     expect(selector.dataset.fastWired).toBe('true');
     expect(selector.dataset.memoryWired).toBe('true');
     expect(selector.dataset.reselectEmits).toBe('true');
+    expect(selector.dataset.navigateWired).toBe('true');
   });
 
   it('keeps the degraded flat panel for device-link remote creation', async () => {
@@ -948,5 +970,176 @@ describe('CreateWorkerPopover', () => {
     fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
 
     expect(getProviderModelChoice('codex', 'xd')).toEqual({ model: 'gpt-5.5', effort: 'high' });
+  });
+
+  it('reconciles a restored stale effort against the saved provider entry on submit', async () => {
+    // 恢复路径:prefs 存的 effort=high 来自旧目录,而显式来源 xd 的条目只有 low 档;
+    // 收敛 effect 按拍平条目(三档)不会清 high,直接 explicit 下发会被 main 侧路由
+    // 来源校验拒掉阻断创建(codex review)。提交前按来源条目对账,落其 defaultEffort。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'xd' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [{ id: 'gpt-5.5', efforts: ['low'], defaultEffort: 'low' }],
+          'claude-code': [],
+        },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('xd'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd', effort: 'low' }),
+      ),
+    );
+  });
+
+  it('omits effort when the route provider entry has no effort switching', async () => {
+    // 来源条目无档(efforts:[])而拍平条目有档:带 effort 下发会被 main 按该来源
+    // 档位表 explicit 拒绝 —— 该来源本可创建(effort 省略),不能让 UI 主动触发
+    // INVALID_PARAMS 阻断(copilot review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'xd' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [{ id: 'gpt-5.5', efforts: [], defaultEffort: null }],
+          'claude-code': [],
+        },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('xd'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd', effort: undefined }),
+      ),
+    );
+  });
+
+  it('records the model choice when re-pinning the current effective source row', async () => {
+    // 钉/重选当前生效来源的早退分支保留 live 值,但 (来源, 模型) 仍是一次真实选定:
+    // 该来源槽 lastModel 指着别的模型时必须更新,否则其它标准选择器切到该来源会
+    // 恢复 stale 模型(codex review)。
+    setProviderModelChoice('codex', 'openai', 'gpt-other', 'low');
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByTestId('pick-openai-row-bare'));
+
+    expect(getProviderModelChoice('codex', 'openai')).toEqual({ model: 'gpt-5.5', effort: 'high' });
+  });
+
+  it('resolves remote Fast against the effective device provider, not the flattened union', async () => {
+    // 被控端快照可用时,Fast 按其生效默认来源自己的条目判定(与被控端 main 的
+    // fastModels re-gate 同口径);拍平条目说支持而默认来源 xd 不支持 → 不提供
+    // Fast,提交 fast=undefined(codex review)。快照缺失(旧 peer)仍回落拍平。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: true },
+      }),
+    );
+    mocks.remoteProviders = [
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5', supportsFastMode: false }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'gpt-5.5' }],
+      hasFastMode: true,
+    } as never;
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').textContent).toContain('gpt-5.5'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', fast: undefined }),
+      ),
+    );
+  });
+
+  it('does not wire provider navigation inside the detached sidebar window', async () => {
+    // 分离侧栏窗口固定 /sidebar-window 壳路由:本地 navigate 会把辅助窗口整壳替换
+    // 成主设置路由,与 OrcaWorkerPanel 的 settingsEnabled={!isSidebarWindow()} 同
+    // 禁用口径(codex review)。
+    mocks.sidebarWindow = true;
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.navigateWired).toBe('false');
+    // 供应商分段本身不受影响,只禁跳转。
+    expect(selector.dataset.sourcesEnabled).toBe('true');
   });
 });

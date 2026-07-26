@@ -16,6 +16,7 @@ import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSw
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
+import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import {
@@ -187,14 +188,18 @@ export function CreateWorkerPopover({
   // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
   // CatalogModel)。显式选了来源按该来源条目查;未显式(null)也要先解析**生效默认
   // 来源**再查它自己的条目(codex review:拍平并集是首来源 wins,默认来源不支持时
-  // 会把 stale true 一路带到提交)。device-link 无本地目录,回落并集值(既有行为)。
+  // 会把 stale true 一路带到提交)。device-link 同规则按被控端 provider 快照的生效
+  // 默认来源判定(与被控端 main 的 fastModels re-gate 同口径);仅快照不可用(旧
+  // peer 无 provider 镜像,解析不出来源)才回落拍平并集(codex review)。
   const providerFastSupported = useCallback(
     (candidate: string | null, modelId: string): boolean => {
-      if (deviceId) {
-        return !!activeModels.find((m) => m.id === modelId)?.supportsFastMode;
-      }
+      // device-link 面板无来源维度,candidate 恒 null,走默认来源解析。
       const sourceId = candidate ?? effectiveSourceIdForModel(providers, null, modelId, agent);
-      if (!sourceId) return false;
+      if (!sourceId) {
+        return deviceId
+          ? !!activeModels.find((m) => m.id === modelId)?.supportsFastMode
+          : false;
+      }
       const provider = connectedProvidersForAgent(providers, agent).find(
         (p) => p.id === sourceId,
       );
@@ -339,7 +344,16 @@ export function CreateWorkerPopover({
         : providerSource ?? effectiveSourceIdForModel(providers, null, model, agent);
       setProviderSource(narrowed);
       if (!modelId) return;
-      if (modelId === model && narrowed !== null && narrowed === effectiveBefore) return;
+      if (modelId === model && narrowed !== null && narrowed === effectiveBefore) {
+        // 钉当前生效来源也是一次真实选定:live effort/Fast 保留,但 (来源, 模型)
+        // 要记入全局 choice —— 该来源槽的 lastModel 可能还指着别的模型,不记会让
+        // 其它标准选择器切到该来源时恢复 stale 模型(codex review)。无档模型跳过,
+        // 与下方真实切换路径同规则。
+        if (currentModel && currentModel.efforts.length > 0) {
+          setProviderModelChoice(agent, narrowed, modelId, effort);
+        }
+        return;
+      }
       setModel(modelId);
       const available = activeModels.find((m) => m.id === modelId);
       if (!available) return;
@@ -397,7 +411,9 @@ export function CreateWorkerPopover({
     [
       activeModels,
       agent,
+      currentModel,
       deviceId,
+      effort,
       model,
       narrowProviderSource,
       providerFastSupported,
@@ -486,12 +502,34 @@ export function CreateWorkerPopover({
     };
     setPrefs(nextPrefs);
     writeWorkerPrefs(nextPrefs);
+    // 提交 effort 按**实际路由来源条目**对账(codex/copilot review):恢复路径的
+    // stale effort、以及路由来源条目无档而拍平条目有档的组合,直接把 live 值
+    // explicit 下发会被 main 侧路由来源校验拒掉(INVALID_PARAMS 阻断创建)。条目
+    // 无档 → 省略(main 按该来源 defaultEffort=null 落);live 值不在其档位表 →
+    // 落其 defaultEffort(与面板行显示口径一致);拿不到来源条目(旧 peer 无
+    // provider 快照)回落拍平条目,main 侧重归一兜底。
+    const submitSourceId = deviceId
+      ? effectiveSourceIdForModel(providers, null, model, agent)
+      : submitProviderId ?? effectiveSourceIdForModel(providers, null, model, agent);
+    const submitSourceProvider = submitSourceId
+      ? connectedProvidersForAgent(providers, agent).find((p) => p.id === submitSourceId)
+      : undefined;
+    const submitEntry = submitSourceProvider
+      ? getModel(submitSourceProvider, model, agent)
+      : undefined;
+    const submitEffortMeta = submitEntry?.efforts ? submitEntry : currentModel;
+    const submitEfforts: readonly string[] = submitEffortMeta?.efforts ?? [];
+    const submitEffort = submitEfforts.length === 0
+      ? undefined
+      : submitEfforts.includes(effort)
+        ? effort
+        : (submitEffortMeta?.defaultEffort ?? undefined);
     try {
       await onCreate({
         role: activeRole,
         agent,
         model,
-        effort: currentModel && currentModel.efforts.length > 0 ? effort : undefined,
+        effort: submitEffort,
         fast: currentModelSupportsFast ? fast : undefined,
         providerId: submitProviderId,
         initialTask,
@@ -515,6 +553,7 @@ export function CreateWorkerPopover({
     currentModelSupportsFast,
     initialTask,
     onCreate,
+    providers,
   ]);
 
   if (!open) return null;
@@ -620,8 +659,11 @@ export function CreateWorkerPopover({
               // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
               // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
               reselectEmitsChange
+              // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
+              // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
+              // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
               onNavigateToProviders={
-                deviceId
+                deviceId || isSidebarWindow()
                   ? undefined
                   : () => {
                       onClose();
