@@ -91,7 +91,7 @@ export function SubagentModelSection() {
         setPending(false);
       }
     },
-    [pending, resolveProviderId, settings, t],
+    [pending, settings, t],
   );
 
   const reset = useCallback(async () => {
