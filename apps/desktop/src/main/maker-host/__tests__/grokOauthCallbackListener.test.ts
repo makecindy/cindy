@@ -279,6 +279,48 @@ describe('CallbackListener(xAI loopback 回调)', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
+  it('挂起连接被客户端中止后 succeed() 不抛错,状态机不受影响', async () => {
+    const codePromise = listener.waitForCode('state-7');
+
+    // 发起回调后立刻掐断客户端连接(用户在 exchange 期间关掉授权页)。
+    const aborted = await new Promise<void>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1',
+          port: PORT,
+          method: 'GET',
+          path: '/callback?code=abort-me&state=state-7',
+          headers: { origin: XAI_ORIGIN },
+          agent: false,
+        },
+        () => resolve(),
+      );
+      req.on('error', reject);
+      req.end();
+      // code 被消费(连接进入 pending hold)后销毁 socket。
+      void codePromise.then(() => {
+        setTimeout(() => {
+          req.destroy();
+          resolve();
+        }, 30);
+      });
+    }).then(
+      () => true,
+      () => true,
+    );
+    expect(aborted).toBe(true);
+    await expect(codePromise).resolves.toBe('abort-me');
+
+    // 凭证已落盘场景:succeed() 面对已中止的连接不得抛错。
+    expect(() => listener.succeed()).not.toThrow();
+
+    // 状态机仍是成功终态:迟到回调拿到成功重放。
+    const late = await send('GET', '/callback?code=abort-me&state=state-7', {
+      origin: XAI_ORIGIN,
+    });
+    expect(late.status).toBe(200);
+  });
+
   it('回调端口被占用时 start() 报可读错误', async () => {
     const blocker = new CallbackListener();
     // beforeEach 已占 56121,新实例 start 应失败。

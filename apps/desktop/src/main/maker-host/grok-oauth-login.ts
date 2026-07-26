@@ -396,18 +396,24 @@ export class CallbackListener {
     this.pending = [];
     const copy = getProviderOAuthResultCopy(this.callbackLang, 'xAI', BRAND_NAME);
     for (const { res, cors } of held) {
-      // 回执必须带上对应请求的 CORS 头:没有它,consent 页的 fetch 读不到响应,
-      // 页面停在「等待检测」;302 导航场景 cors 为空对象,无影响。
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...cors });
-      res.end(
-        renderOAuthResultPage({
-          htmlLang: OAUTH_RESULT_HTML_LANG[this.callbackLang],
-          variant: 'success',
-          title: copy.successTitle,
-          body: copy.successBody,
-          action: buildOAuthReturnAction(this.callbackLang, 'xai-oauth', BRAND_NAME),
-        }),
-      );
+      try {
+        // 回执必须带上对应请求的 CORS 头:没有它,consent 页的 fetch 读不到响应,
+        // 页面停在「等待检测」;302 导航场景 cors 为空对象,无影响。
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...cors });
+        res.end(
+          renderOAuthResultPage({
+            htmlLang: OAUTH_RESULT_HTML_LANG[this.callbackLang],
+            variant: 'success',
+            title: copy.successTitle,
+            body: copy.successBody,
+            action: buildOAuthReturnAction(this.callbackLang, 'xai-oauth', BRAND_NAME),
+          }),
+        );
+      } catch {
+        // 连接可能已被客户端中止(如用户在 exchange 期间关掉授权页)——凭证此刻
+        // 已成功落盘,单个回执通道抛错不得把成功登录翻转成失败(调用方在 catch
+        // 里会返回 ok:false),也不得影响其余挂起连接的回执。
+      }
     }
   }
 
