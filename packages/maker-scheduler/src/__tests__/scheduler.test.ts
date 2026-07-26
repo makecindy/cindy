@@ -1900,6 +1900,22 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     await b.scheduler.stop();
   });
 
+  it('start() does not re-arm a schedule while another instance has a live claim', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const a = makeHarness({ storage, clock });
+    const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+
+    await storage.update(sch.id, { nextFireAt: undefined });
+    insertRunningRun(storage, 'run-live-claim', sch.id, clock.now(), clock.now());
+
+    const b = makeHarness({ storage, clock });
+    await b.scheduler.start();
+
+    expect((await storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    await b.scheduler.stop();
+  });
+
   it('运行期清扫:暖场窗口后把心跳过期的行改写 interrupted 并广播 changed', async () => {
     const h = makeHarness();
     const sch = await h.scheduler.create({ ...baseInput, manual: true });

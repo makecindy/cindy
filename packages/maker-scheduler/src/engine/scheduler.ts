@@ -309,6 +309,14 @@ export class Scheduler extends EventEmitter {
       // 节奏（cron 后续怎么改都不生效）。迁移已于 2026-05 上线并跑了一个月，存量
       // 老任务均已转换完，该逻辑只剩误伤，故移除。
       let current = sch;
+      // An empty nextFireAt is also used while another instance owns a live
+      // claimed run. Do not turn that in-flight claim back into a due schedule
+      // during startup; only a stale run cleanup or the owning instance may
+      // re-arm it.
+      if (current.nextFireAt === undefined && await this.storage.hasRunningRuns(current.id)) {
+        this.activeSchedules.set(current.id, current);
+        continue;
+      }
       const next = computeNextFireAt(current, now);
       if (next !== current.nextFireAt) {
         const updated = await this.storage.update(current.id, { nextFireAt: next });
