@@ -26,6 +26,7 @@ vi.mock('../../appSessionState.js', () => ({
 import {
   __testing,
   readSubagentModelSettings,
+  readSubagentModelSettingsState,
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
 } from '../subagent-model-settings-store';
@@ -120,6 +121,20 @@ describe('subagent model settings store', () => {
       codex: null,
       codexProviderId: null,
     });
+  });
+
+  it('self-heals an orphan on-disk providerId key on the settings-state read path', () => {
+    // raw override key 直接决定 isCustomized/customizedKeys(override store 语义):
+    // 手改文件留下的孤儿 providerId 必须在 State 读入口被清掉,不能报「已自定义」
+    // 却显示「不指定」(codex review)。
+    fs.writeFileSync(settingsFile, JSON.stringify({ claudeCodeProviderId: 'anthropic' }), 'utf-8');
+
+    const state = readSubagentModelSettingsState();
+    expect(state.value.claudeCodeProviderId).toBeNull();
+    expect(state.customizedKeys).toEqual([]);
+    expect(state.isCustomized).toBe(false);
+    // 孤儿是唯一 override:清掉后整个文件按「全默认」删除。
+    expect(fs.existsSync(settingsFile)).toBe(false);
   });
 
   it('normalizes malformed disk values to no override', () => {

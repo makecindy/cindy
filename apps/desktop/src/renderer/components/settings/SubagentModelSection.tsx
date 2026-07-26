@@ -66,11 +66,17 @@ export function SubagentModelSection() {
   const setClaudeModel = useCallback(
     async (model: string | null, providerId: string | null) => {
       if (!settings || pending) return;
+      // 去重放在收窄之后:reselectEmitsChange 的重选、以及收窄后与存储等值的组合,
+      // 都不产生空写覆盘(copilot review)。
+      const nextProviderId = model === null ? null : resolveProviderId(model, providerId);
+      if (model === settings.claudeCode && nextProviderId === settings.claudeCodeProviderId) {
+        return;
+      }
       setPending(true);
       try {
         const next = await window.electronAPI.maker.subagentModelSettingsSet({
           claudeCode: model,
-          claudeCodeProviderId: model === null ? null : resolveProviderId(model, providerId),
+          claudeCodeProviderId: nextProviderId,
         });
         setSettings(next);
       } catch (err) {
@@ -162,16 +168,9 @@ export function SubagentModelSection() {
                 onProviderChange={(providerId, modelId) => {
                   // 分段行原子选择 (来源, 模型);面板未回传模型时沿用已存模型,
                   // 尚未指定过模型则忽略(来源必须依附于某个模型才有语义)。
+                  // 同值去重(含收窄后等值)统一在 setClaudeModel 内处理。
                   const nextModel = modelId ?? settings.claudeCode;
-                  if (!nextModel) return;
-                  // 显式同值(reselectEmitsChange 带来的重选自己)不产生空写。
-                  if (
-                    nextModel === settings.claudeCode &&
-                    providerId === settings.claudeCodeProviderId
-                  ) {
-                    return;
-                  }
-                  void setClaudeModel(nextModel, providerId);
+                  if (nextModel) void setClaudeModel(nextModel, providerId);
                 }}
                 switching={pending}
                 // 目录未就绪时禁用整行:此窗口内无法判定「来源是否提供该模型」,放行
