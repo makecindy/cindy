@@ -43,12 +43,12 @@ export function SubagentModelSection() {
 
   // 显式来源只有在「已连接且确实提供该模型」时才落库,否则收窄为 null(跟随默认路由)。
   // 与 ImDefaultSettingsSection.resolveProviderId 同规则,防止存下「选 A 落 B」的不可能组合。
+  // 目录未就绪的写入窗口由选择器 disabled(providersLoading)整体关死 —— 收窄逻辑本身
+  // 不留 loading 例外,否则该窗口内换模型会把「新模型 + 旧来源」的无效组合放行落库
+  // 且事后无自动纠正(greptile review)。
   const resolveProviderId = useCallback(
     (modelId: string, providerId: string | null): string | null => {
       if (!providerId) return null;
-      // 目录未就绪时不做收窄判断:此刻「找不到来源」是数据没到,不是来源真断了,
-      // 收窄会把已存来源静默清掉。落库值仍会在下次目录就绪后的写入被校验。
-      if (providersLoading) return providerId;
       const provider = connectedProvidersForAgent(providers, 'claude-code').find(
         (p) => p.id === providerId,
       );
@@ -56,7 +56,7 @@ export function SubagentModelSection() {
         ? providerId
         : null;
     },
-    [providers, providersLoading],
+    [providers],
   );
 
   // (model, providerId) 原子落库:模型与来源是同一次选择的两个维度,分两次写会在
@@ -144,6 +144,9 @@ export function SubagentModelSection() {
                   if (nextModel) void setClaudeModel(nextModel, providerId);
                 }}
                 switching={pending}
+                // 目录未就绪时禁用整行:此窗口内无法判定「来源是否提供该模型」,放行
+                // 写入会绕过来源收窄(greptile review);IM 目录偏好行对 caps 未就绪同规则。
+                disabled={providersLoading}
                 triggerVariant="field"
                 popoverSide="bottom"
                 configurationEnabled={false}

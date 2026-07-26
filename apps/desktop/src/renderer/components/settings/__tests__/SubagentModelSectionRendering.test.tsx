@@ -27,6 +27,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 // 已连接 anthropic(提供 claude-opus-5 / claude-haiku-4-5);ghost-provider 不存在。
+const providersMock = vi.hoisted(() => ({ loading: false }));
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
     providers: [
@@ -41,7 +42,7 @@ vi.mock('@/hooks/useProviders', () => ({
         },
       },
     ],
-    loading: false,
+    loading: providersMock.loading,
   }),
 }));
 
@@ -53,6 +54,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onProviderChange?: (providerId: string | null, modelId?: string) => void;
     onModelChange: (modelId: string) => void;
     configurationEnabled?: boolean;
+    disabled?: boolean;
     unknownModelLabel?: (modelId: string) => string;
     fallbackOption?: { active: boolean; label: string; onSelect: () => void };
   }) => (
@@ -64,6 +66,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       // sourcesEnabled = !!onProviderChange),这里暴露出来供断言。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
       data-configuration-enabled={String(props.configurationEnabled !== false)}
+      data-disabled={String(props.disabled === true)}
       data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
     >
       <button
@@ -130,6 +133,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  providersMock.loading = false;
   vi.clearAllMocks();
 });
 
@@ -185,5 +189,14 @@ describe('SubagentModelSection standard panel contract', () => {
       claudeCode: null,
       claudeCodeProviderId: null,
     });
+  });
+
+  it('disables the selector while the provider catalog is loading', async () => {
+    // 目录未就绪时无法判定「来源是否提供该模型」,必须整行禁用而不是放行写入
+    // 绕过收窄(greptile review 的加载窗口用例)。
+    providersMock.loading = true;
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.disabled).toBe('true');
   });
 });

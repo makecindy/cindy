@@ -29,6 +29,7 @@ import {
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
 } from '../subagent-model-settings-store';
+import { reconcileSubagentModelSettingsPatch } from '../../../shared/subagentModelSettings';
 
 const settingsDir = '/tmp/cindy-subagent-model-test';
 const settingsFile = path.join(settingsDir, 'subagent-model-settings.json');
@@ -122,6 +123,23 @@ describe('subagent model settings store', () => {
       claudeCodeProviderId: null,
       codex: null,
       codexProviderId: 'xd',
+    });
+  });
+
+  it('reconciles a model-clearing patch to also clear its providerId (IPC boundary contract)', () => {
+    // 来源依附模型:显式清模型的 patch 未带 providerId 时,不得留下孤儿来源落盘。
+    expect(reconcileSubagentModelSettingsPatch({ claudeCode: null })).toEqual({
+      claudeCode: null,
+      claudeCodeProviderId: null,
+    });
+    expect(reconcileSubagentModelSettingsPatch({ codex: null, claudeCode: 'claude-opus-5' })).toEqual({
+      codex: null,
+      codexProviderId: null,
+      claudeCode: 'claude-opus-5',
+    });
+    // 只动 providerId、不动模型的 patch 原样通过。
+    expect(reconcileSubagentModelSettingsPatch({ claudeCodeProviderId: 'anthropic' })).toEqual({
+      claudeCodeProviderId: 'anthropic',
     });
   });
 });

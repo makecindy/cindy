@@ -51,6 +51,21 @@ export function normalizeSubagentModelId(value: unknown): string | null {
   return trimmed;
 }
 
+/**
+ * patch 配对一致性:显式清除某个模型时,同 patch 强制清除对应来源。
+ * 来源依附于模型才有语义;不归一会允许写入「claudeCode=null 但 providerId 非空」的
+ * 孤儿状态并被 override store 持久化到磁盘(copilot review)。UI 已原子清除,
+ * 这里是 IPC 契约边界的兜底。
+ */
+export function reconcileSubagentModelSettingsPatch(
+  patch: SubagentModelSettingsPatch,
+): SubagentModelSettingsPatch {
+  const next = { ...patch };
+  if (next.claudeCode === null) next.claudeCodeProviderId = null;
+  if (next.codex === null) next.codexProviderId = null;
+  return next;
+}
+
 /** IPC 边界的严格校验；空字符串与 null 都表示“不指定”。providerId 字段共用本校验。 */
 export function isValidSubagentModelIdInput(value: unknown): value is string | null {
   if (value === null) return true;

@@ -522,6 +522,7 @@ import {
 import {
   isValidSubagentModelIdInput,
   normalizeSubagentModelId,
+  reconcileSubagentModelSettingsPatch,
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
@@ -5762,7 +5763,8 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     }
     patch[key] = normalizeSubagentModelId(value);
   }
-  return patch;
+  // 配对一致性:显式清除模型时同 patch 清除对应来源,防孤儿 providerId 落盘。
+  return reconcileSubagentModelSettingsPatch(patch);
 }
 
 function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
