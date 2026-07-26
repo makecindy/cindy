@@ -1470,6 +1470,30 @@ describe('CodexAgent send', () => {
     await handle.close();
   });
 
+  it.each(['bytedance-seed/seed-2.1-pro', 'z-ai/glm-5.2'])(
+    'passes minimal effort through to turn/start for %s',
+    async (model) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-minimal-effort-supported-model',
+        model,
+        effort: 'minimal',
+        workingDir: '/repo',
+      });
+
+      await handle.send({ type: 'user', content: 'hello' });
+
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnStart,
+        expect.objectContaining({
+          effort: 'minimal',
+        }),
+      );
+      await handle.close();
+    },
+  );
+
   it('keeps medium effort before turn/start', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -1555,6 +1579,36 @@ describe('CodexAgent send', () => {
     );
     await handle.close();
   });
+
+  it.each(['bytedance-seed/seed-2.1-pro', 'z-ai/glm-5.2'])(
+    'passes minimal effort through runtime settings and turn/start for %s',
+    async (model) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-set-minimal-effort-supported-model',
+        model,
+        effort: 'medium',
+        workingDir: '/repo',
+      });
+
+      if (!handle.setEffort) throw new Error('Codex handle should support setEffort');
+      await handle.setEffort('minimal');
+      await handle.send({ type: 'user', content: 'hello' });
+
+      expect(host.request).toHaveBeenCalledWith(Method.ThreadSettingsUpdate, {
+        threadId: 'start-thread-id',
+        effort: 'minimal',
+      });
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnStart,
+        expect.objectContaining({
+          effort: 'minimal',
+        }),
+      );
+      await handle.close();
+    },
+  );
 
   it('rejects turn/start failures when the caller needs accepted-or-rejected semantics', async () => {
     const agent = new CodexAgent(createDeps());
