@@ -24,6 +24,7 @@ import {
   interactionBlocksRemoteComposer,
   interactionKind,
   normalizeAskQuestions,
+  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   selectActivePendingInteraction,
@@ -214,8 +215,11 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain('buildPluginSetupCancelDecision(item.request)');
     expect(interactionPanelSource).toContain("t('interaction.panel.pluginSetupDesktopOnly')");
     expect(interactionPanelSource).toContain('interaction.unsupported.cancelButton');
-    // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消)。
+    // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消);
+    // 但仍要按该 revision 封顶抑制,否则取消前发出的慢快照会把卡写回来。
     expect(interactionPanelSource).toContain('optimisticDismiss: false');
+    expect(interactionPanelSource).toContain('suppressRevisionOnSuccess: cancelDecision.expectedRevision');
+    expect(interactionPanelSource).toContain('suppressResolvedInteractionRevision');
 
     expect(interactionBlocksRemoteComposer({
       request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
@@ -223,6 +227,23 @@ describe('interactionModel', () => {
     expect(interactionBlocksRemoteComposer({
       request: { kind: 'permission', requestId: 'perm-1' },
     })).toBe(true);
+  });
+
+  it('keys mobile composer blocking off the whole pending set', () => {
+    const sessionScreenSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+
+    // 阻塞判定必须喂整个 pending 集合;喂 activePendingInteraction 会让用户切到
+    // 一张手机处理不了的卡就绕过仍待处理的权限 / 提问 / 计划卡。
+    expect(sessionScreenSource).toContain('pendingInteractionsBlockRemoteComposer(pending)');
+    expect(sessionScreenSource).not.toContain('interactionBlocksRemoteComposer(activePendingInteraction)');
+
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
+      { request: { kind: 'permission', requestId: 'perm-1' } },
+    ])).toBe(true);
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 } },
+    ])).toBe(false);
   });
 
   it('keeps read-only pending interactions as a short desktop-style blocker', () => {

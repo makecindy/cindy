@@ -23,6 +23,7 @@ import {
   interactionBlocksRemoteComposer,
   normalizeAskQuestions,
   normalizeIssueConfirm,
+  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   remoteInteractionHandling,
@@ -540,6 +541,24 @@ describe('interaction shared model', () => {
     expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
     expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
     expect(interactionBlocksRemoteComposer(null)).toBe(false);
+  });
+
+  it('keys composer blocking off the whole pending set, not the card being viewed', () => {
+    // 混合队列:切到 plugin_setup 只是换了查看对象,那张权限卡仍在等回答 —— 输入框
+    // 不能因此放开,否则用户绕过了仍待处理的阻塞交互。
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } },
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ])).toBe(true);
+
+    // 整批都是本端终结不了的卡:输入框回来。
+    expect(pendingInteractionsBlockRemoteComposer([
+      { request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } },
+      { request: { kind: 'issue_confirm', requestId: 'i1' } },
+      { request: { kind: 'future_kind', requestId: 'f1' } },
+    ])).toBe(false);
+
+    expect(pendingInteractionsBlockRemoteComposer([])).toBe(false);
   });
 
   it('builds a revision-pinned plugin setup cancel decision and a readable remote summary', () => {

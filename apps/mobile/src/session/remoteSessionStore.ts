@@ -101,11 +101,35 @@ function interactionResolveKey(sessionId: string, requestId: string): string {
   return `${sessionId}\u0000${requestId}`;
 }
 
+/**
+ * 按 revision 封顶的抑制表(revision 化交互专用,当前只有 plugin_setup)。
+ *
+ * 这类卡的决定不是终局:被控端按 `expectedRevision` 裁决,命令被接受 ≠ 决定生效
+ * (revision 对不上时它改为重新体检,并推一个更高 revision 的新快照)。所以既不能
+ * 乐观撤卡(取消没生效就留下幽灵卡),也不能像 confirmed 那样无条件抑制该
+ * requestId(那样卡再也回不来)。折中是记住「我的决定作用在哪个 revision 上」:
+ * - revision ≤ 记录值 → 提交决定之前的旧快照,过滤(挡「早发晚到」闪回);
+ * - revision > 记录值 → 被控端确实推进过,放行(卡确实还需要用户处理)。
+ * key = `${sessionId}\u0000${requestId}` → 被抑制的最高 revision。
+ */
+const resolvedInteractionRevisionCeilings = new Map<string, number>();
+
+function interactionRevision(item: PendingInteraction): number | null {
+  const revision = item.request.revision;
+  return typeof revision === 'number' && Number.isFinite(revision) ? revision : null;
+}
+
 function isInteractionResolveSuppressed(sessionId: string, item: PendingInteraction): boolean {
   const requestId = item.request.requestId;
   if (typeof requestId !== 'string' || requestId.length === 0) return false;
   const key = interactionResolveKey(sessionId, requestId);
-  return inFlightInteractionResolves.has(key) || confirmedInteractionDismissals.has(key);
+  if (inFlightInteractionResolves.has(key) || confirmedInteractionDismissals.has(key)) return true;
+  const ceiling = resolvedInteractionRevisionCeilings.get(key);
+  if (ceiling === undefined) return false;
+  const revision = interactionRevision(item);
+  // revision 缺失(旧被控端 / 非法快照)时按「不比记录更新」保守处理:宁可多滤一帧
+  // 旧快照,也不让已决定的卡闪回。
+  return revision === null || revision <= ceiling;
 }
 const inputProjections = new Map<string, InputProjection>();
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
@@ -1327,6 +1351,30 @@ export const remoteSessionStore = {
       if (!key.startsWith(sessionPrefix)) continue;
       if (!presentIds.has(key.slice(sessionPrefix.length))) confirmedInteractionDismissals.delete(key);
     }
+    // revision 封顶抑制同样按「缺席即过期」回收;此外只要本轮出现更高 revision,
+    // 说明被控端已经推进到我的决定之后,封顶失去意义,一并清掉免得无界累积。
+    // 表为空是绝对常态(只有刚取消过 plugin_setup 才有条目),此时不扫快照。
+    if (resolvedInteractionRevisionCeilings.size > 0) {
+      const highestRevisions = new Map<string, number>();
+      for (const item of list) {
+        const requestId = item.request.requestId;
+        if (typeof requestId !== 'string' || requestId.length === 0) continue;
+        const revision = interactionRevision(item);
+        if (revision === null) continue;
+        const current = highestRevisions.get(requestId);
+        if (current === undefined || revision > current) highestRevisions.set(requestId, revision);
+      }
+      for (const [key, ceiling] of [...resolvedInteractionRevisionCeilings]) {
+        if (!key.startsWith(sessionPrefix)) continue;
+        const requestId = key.slice(sessionPrefix.length);
+        if (!presentIds.has(requestId)) {
+          resolvedInteractionRevisionCeilings.delete(key);
+          continue;
+        }
+        const highest = highestRevisions.get(requestId);
+        if (highest !== undefined && highest > ceiling) resolvedInteractionRevisionCeilings.delete(key);
+      }
+    }
     // 全量快照也要过在途抑制:决定已乐观提交、被控端还没确认时,快照仍会带着
     // 这张卡,不过滤就闪回。
     const next = dedupeInteractions(list.filter((item) => !isInteractionResolveSuppressed(sessionId, item)));
@@ -1460,6 +1508,23 @@ export const remoteSessionStore = {
     } else {
       confirmedInteractionDismissals.add(key);
     }
+  },
+
+  /**
+   * 非乐观提交(revision 化交互,当前只有 plugin_setup)的收口:不撤卡,只把
+   * 「决定已作用于 revision R」记下来,让 R 及更旧的快照失去覆盖权。
+   *
+   * 为什么不能复用 settleOptimisticInteractionDismiss 的 confirmed:那是无条件
+   * 抑制该 requestId,而这里的决定可能没生效(被控端按 expectedRevision 裁决,
+   * 对不上就改为重新体检并推更高 revision),无条件抑制会让卡永久隐身。判据与
+   * 回收见 resolvedInteractionRevisionCeilings。
+   */
+  suppressResolvedInteractionRevision(sessionId: string, requestId: string, revision: number): void {
+    if (!requestId || !Number.isFinite(revision)) return;
+    const key = interactionResolveKey(sessionId, requestId);
+    const current = resolvedInteractionRevisionCeilings.get(key);
+    if (current !== undefined && current >= revision) return;
+    resolvedInteractionRevisionCeilings.set(key, revision);
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
@@ -1930,6 +1995,7 @@ export const remoteSessionStore = {
     pendingInteractions.clear();
     inFlightInteractionResolves.clear();
     confirmedInteractionDismissals.clear();
+    resolvedInteractionRevisionCeilings.clear();
     inputProjections.clear();
     sessionLiveActivity.clear();
     sessionRunning.clear();

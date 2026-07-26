@@ -91,8 +91,8 @@ import {
 } from '@/session/SessionMenuSheet';
 import type { SessionMenuView } from '@/session/sessionMenu';
 import {
-  interactionBlocksRemoteComposer,
   interactionKind,
+  pendingInteractionsBlockRemoteComposer,
   readRequestId,
   selectPendingInteractionByRequestId,
   shouldUseFullHeightPendingInteractionSurface,
@@ -1273,7 +1273,10 @@ export default function SessionScreen() {
   // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
   // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
   // 锁死(线上已复现);它们改为贴在输入框上方,聊天不受影响。
-  const pendingInteractionBlocksComposer = interactionBlocksRemoteComposer(activePendingInteraction);
+  // 判据是整个 pending 集合而非当前查看的卡:队列里还有权限 / 提问 / 计划卡在等
+  // 回答时,切到 plugin_setup 只是换了查看对象,不能就此放开 composer 让用户绕过
+  // 那张仍待处理的阻塞交互(#530 review P1)。
+  const pendingInteractionBlocksComposer = pendingInteractionsBlockRemoteComposer(pending);
   const remoteUnavailableReason = useMemo(
     () => describeRemoteError(connectionError),
     [connectionError],

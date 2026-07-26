@@ -305,7 +305,7 @@ function InteractionItem({
 
   const submitDecision = async (
     decision: Record<string, unknown>,
-    options: { optimisticDismiss?: boolean } = {},
+    options: { optimisticDismiss?: boolean; suppressRevisionOnSuccess?: number } = {},
   ) => {
     if (!canStartInteractionResolve({ requestId, submittingRequestId: submittingRequestIdRef.current })) return;
     const currentRequestId = requestId;
@@ -329,6 +329,15 @@ function InteractionItem({
       if (kind === 'plan_review') clearPlanReviewDraft(currentRequestId);
       if (optimisticDismiss) {
         remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
+      } else if (options.suppressRevisionOnSuccess !== undefined) {
+        // 非乐观路径也必须挡「早发晚到」:提交前发出的慢快照仍带着这张卡,dismiss
+        // push 先到时它会把已取消的卡写回来(#530 review P1)。这里只封顶到本次决定
+        // 作用的 revision —— 决定没生效时被控端会推更高 revision,卡照样回来。
+        remoteSessionStore.suppressResolvedInteractionRevision(
+          sessionId,
+          currentRequestId,
+          options.suppressRevisionOnSuccess,
+        );
       }
     } catch (err) {
       // resolveInteractionResilient 已带弱网重试 + pending 列表权威分辨,走到
@@ -413,7 +422,10 @@ function InteractionItem({
           ? {
             accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'),
             label: t('interaction.panel.cancelRequest'),
-            onPress: () => void submitDecision(cancelDecision, { optimisticDismiss: false }),
+            onPress: () => void submitDecision(cancelDecision, {
+              optimisticDismiss: false,
+              suppressRevisionOnSuccess: cancelDecision.expectedRevision,
+            }),
           }
           : null}
         kind={kind}

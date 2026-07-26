@@ -420,6 +420,20 @@ export function interactionBlocksRemoteComposer(item: PendingInteractionLike | n
 }
 
 /**
+ * 输入框是否该被这一批待处理卡接管。
+ *
+ * 判据必须是**整个 pending 集合**,不能是「当前正在看的那张卡」:队列里同时有
+ * 权限卡和 plugin_setup 时,用户切到 plugin_setup 只是换了查看对象,那张权限卡
+ * 仍在等回答 —— 若按当前卡放开 composer,用户就绕过了仍待处理的阻塞交互
+ * (#530 review P1)。只有整批都是本端终结不了的卡时,输入框才回来。
+ */
+export function pendingInteractionsBlockRemoteComposer(
+  interactions: readonly PendingInteractionLike[],
+): boolean {
+  return interactions.some((item) => interactionBlocksRemoteComposer(item));
+}
+
+/**
  * plugin_setup 的远端取消决定。
  *
  * 被控端只接受 `expectedRevision` 与当前快照一致的命令(不一致 = 控制端看到的是

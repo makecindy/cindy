@@ -28,6 +28,7 @@ export {
   interactionBlocksRemoteComposer,
   interactionKind,
   normalizeAskQuestions,
+  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   planReviewFilePath,
