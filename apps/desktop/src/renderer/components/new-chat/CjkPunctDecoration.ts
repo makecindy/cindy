@@ -21,10 +21,11 @@
  *
  * 边界处理
  * --------
- * - IME 组合期 (用户打 pinyin 还没选字): view.composing === true,跳过 decoration
- *   重算,避免 DOM 抖动打断输入法候选框
- * - 性能: 用 DecorationSet.map(tr.mapping, tr.doc) 增量映射 —— 只对变化范围内的
- *   节点重扫,不全文扫
+ * - IME 组合期 (用户打 pinyin 还没选字): view.update() 跳过布局测量,
+ *   避免同步 layout 读写干扰输入法候选框; decoration state 仍由 transaction
+ *   驱动,在 doc/meta 变化时按正常路径重算。
+ * - 性能: chat input 文本量很小,doc 变化、slash roster 或 voice replacement
+ *   range 变化时采用全量重扫;不使用 DecorationSet.map 增量映射,以保持边界逻辑简单。
  * - 不污染源数据: decoration 只是渲染层,doc JSON 里没有 span,copy/paste/save
  *   拿到的都是纯文本
  *
@@ -241,11 +242,12 @@ export const CjkPunctDecoration = Extension.create({
           apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
-            // doc 没变且命令 roster 没变 → decoration 位置不变, 直接复用
+            // doc、命令 roster 和 voice replacement 都没变 → decoration 位置不变,
+            // 直接复用;任一输入变化都需要重新扫描。
             if (!tr.docChanged && rosterUpdate === undefined && !voiceReplacement.changed) {
               return old;
             }
-            // doc 变了 → 全量重算。
+            // doc、命令 roster 或 voice replacement 变化 → 全量重算。
             // 之前考虑过用 old.map(tr.mapping, tr.doc) 做增量, 但 chat input
             // 文本量很小 (< 1KB 常见), 全量重扫成本可忽略, 而增量映射要额外
             // 处理"变化范围内新增/删除的 CJK 标点", 代码复杂度上升不划算。
