@@ -521,7 +521,7 @@
       "borderWidth": {
         "provenance": {
           "hash": "sha256:c4c710fbfa60a8c920a3e4b02cb7022ba70688a1249291f39546aef5aaeff8a3",
-          "locator": "LoginPage.tsx section className border=1(物理 1px 细线,不随缩放)",
+          "locator": "LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)",
           "source": "../../../apps/desktop/src/renderer/components/login/loginDesignTokens.ts"
         },
         "value": 1
@@ -1152,7 +1152,7 @@
     "desktop": {
       "bubbleClass": {
         "provenance": {
-          "hash": "sha256:ad2d52e82d79be6050d0415123a8c52b113e404e86f11147e2158d484497f240",
+          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
           "locator": "AccountDeletionStatusPanel section className 全串",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1160,7 +1160,7 @@
       },
       "dismissGate": {
         "provenance": {
-          "hash": "sha256:ad2d52e82d79be6050d0415123a8c52b113e404e86f11147e2158d484497f240",
+          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
           "locator": "LoginPage.tsx accountDeletionStatus.status === 'completed' ? onDismiss : undefined",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1168,7 +1168,7 @@
       },
       "dismissHitArea": {
         "provenance": {
-          "hash": "sha256:ad2d52e82d79be6050d0415123a8c52b113e404e86f11147e2158d484497f240",
+          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
           "locator": "dismiss inline style marginTop/marginBottom/paddingTop/paddingBottom",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1176,7 +1176,7 @@
       },
       "renderPosition": {
         "provenance": {
-          "hash": "sha256:ad2d52e82d79be6050d0415123a8c52b113e404e86f11147e2158d484497f240",
+          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
           "locator": "LoginPage.tsx </LoginStage> 之后的 AccountDeletionStatusPanel 渲染点",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1184,7 +1184,7 @@
       },
       "scaleContract": {
         "provenance": {
-          "hash": "sha256:ad2d52e82d79be6050d0415123a8c52b113e404e86f11147e2158d484497f240",
+          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
           "locator": "wrapper style: top/width/transform/transformOrigin",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },
@@ -1192,7 +1192,7 @@
       },
       "wrapperClass": {
         "provenance": {
-          "hash": "sha256:ad2d52e82d79be6050d0415123a8c52b113e404e86f11147e2158d484497f240",
+          "hash": "sha256:4c6db8798d2511dea5643132d3ec70ed8dac6217bd0a1da1df771c5604958927",
           "locator": "wrapper(定位+缩放层)className,几何走 inline style",
           "source": "../../../apps/desktop/src/renderer/components/login/LoginPage.tsx"
         },

@@ -329,7 +329,7 @@ const truth = {
       'LOGIN_DELETION_BUBBLE(设计单位)',
       {
         scale: `loginScale.ts PANEL_FIXED_SCALE=${panelFixedScale}(面板恒定缩放,气泡同乘)`,
-        borderWidth: 'LoginPage.tsx section className border=1(物理 1px 细线,不随缩放)',
+        borderWidth: 'LoginPage.tsx section style borderWidth=1/PANEL_FIXED_SCALE 设计单位(缩放补偿,渲染恰 1 物理 px;DESIGN.md §16.4)',
         fontWeight: 'LoginPage.tsx font-normal=400',
         zIndex: 'LoginPage.tsx wrapper z-30',
       },

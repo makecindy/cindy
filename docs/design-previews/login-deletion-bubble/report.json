@@ -4,8 +4,8 @@
   "demo": "login-deletion-bubble",
   "inputHashes": {
     "spec.json": "e4bb08a4d264f5d155af19db89b54eef88b0fc38b76fbbd48ef4358c048938b6",
-    "truth.json": "1dbe1d7b248ed74049c4b54d46c11ef15bba827b66d6e01922a66c73511f1ee9",
-    "index.html": "659c7c38aa41108ce6a618884f1fe7a71e16fb36e35bed6302968996d84035b7",
+    "truth.json": "dcaa13953f7feb1becc87079866735714de23498eaa17058cc667bde3e0d33a1",
+    "index.html": "8184698e641fc1180db570f60560151c3dfccb1828c34af2bdc4d5084fd11013",
     "baselines": {
       "declared": [],
       "files": []
@@ -555,5 +555,5 @@
     "failures": [],
     "cases": []
   },
-  "generatedAt": "2026-07-26T04:57:29.266Z"
+  "generatedAt": "2026-07-26T05:26:59.646Z"
 }

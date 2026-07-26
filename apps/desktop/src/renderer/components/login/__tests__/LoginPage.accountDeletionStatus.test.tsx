@@ -95,6 +95,8 @@ describe('LoginPage account deletion status', () => {
     // 内层按设计单位书写(不再是 CSS px 字面量),缩放后即设计稿比例
     expect(bubble.style.borderRadius).toBe('22px');
     expect(bubble.style.padding).toBe('20px');
+    // 描边按 1/PANEL_FIXED_SCALE 设计单位补偿,缩放后 = 1 物理 px(DESIGN.md §16.4)
+    expect(bubble.style.borderWidth).toBe('2px');
     // 不再渲染进 LoginStage 文档流(修复前被 absolute 面板 100% 覆盖的 bug 根因)
     const stage = screen.getByTestId('login-stage');
     expect(stage.contains(bubble)).toBe(false);

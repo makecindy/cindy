@@ -1112,7 +1112,13 @@ function AccountDeletionStatusPanel({
       <section
         aria-label={t(titleKey)}
         className="w-full break-words border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] text-center"
-        style={{ borderRadius: B.radius, padding: B.padding }}
+        style={{
+          borderRadius: B.radius,
+          padding: B.padding,
+          // 描边保持 1 物理 px(DESIGN.md §16.4):wrapper 的 scale 会把 1px 缩成
+          // 0.5px(DPR=1 下变虚/消失),按 1/k 设计单位补偿,缩放后恰为 1 CSS px
+          borderWidth: 1 / PANEL_FIXED_SCALE,
+        }}
       >
         <h2
           className="font-normal text-[var(--login-control-text)]"
