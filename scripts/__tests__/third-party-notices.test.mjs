@@ -116,6 +116,13 @@ test("collectClosure() refuses to run without an explicit target", () => {
     "target 不得有默认值：默认值会让缺 target 的调用静默恢复成机器相关行为",
   );
   assert.match(source, /requires an explicit target/);
+  // linux 目标必须连 libc 一起强制：只有 linux 分 glibc / musl，缺了这一轴
+  // matchesPackageConstraint() 会把两种变体同时放行，产物又随本机装了哪个变体漂移。
+  assert.match(
+    source,
+    /os === "linux"\s*\?\s*\["os", "cpu", "libc"\]/,
+    "linux 目标未强制 libc：glibc 与 musl 变体会同时进闭包",
+  );
   // matchesTarget() 不得再有「target 为空则一律放行」的分支，那是漂移的根源。
   const matchesTarget = source.match(
     /function matchesTarget\([^)]*\)\s*\{[\s\S]*?\n\}/,

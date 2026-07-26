@@ -260,7 +260,12 @@ function matchesTarget(pkgJson, target) {
  * 行为的路径。
  */
 function collectClosure(entryDirs, target) {
-  for (const axis of ["os", "cpu"]) {
+  // 只有 linux 分 glibc / musl，所以 libc 只在 linux 目标上必填：缺了它
+  // matchesPackageConstraint() 会因为「未声明约束一律放行」把 glibc 与 musl 变体同时收进
+  // 闭包，产物重新随本机装了哪个变体漂移——正是本函数要挡掉的那种机器相关行为。
+  const requiredAxes =
+    target?.os === "linux" ? ["os", "cpu", "libc"] : ["os", "cpu"];
+  for (const axis of requiredAxes) {
     if (typeof target?.[axis] !== "string" || target[axis].length === 0) {
       throw new Error(
         `collectClosure() requires an explicit target.${axis}: license notices would otherwise depend on the generating machine`,
