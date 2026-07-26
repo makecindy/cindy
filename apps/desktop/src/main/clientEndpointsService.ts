@@ -142,6 +142,7 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
       const request = net.request(url);
       let body = '';
       let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       const finish = (value: ManifestFetchResult) => {
         if (settled) return;
         settled = true;
@@ -149,7 +150,7 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
         if (!value.ok) log.debug('fetch failed (%s) for %s', value.detail, url);
         resolve(value);
       };
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         request.abort();
         finish({ ok: false, detail: `timeout-${timeoutMs}ms` });
       }, timeoutMs);
