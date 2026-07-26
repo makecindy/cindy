@@ -69,25 +69,26 @@ export function computeScheduleRunCostDeltas(
   previous: Record<string, unknown>,
   next: Record<string, unknown>,
 ): ScheduleRunCostDelta[] {
+  // 按 (runId, 币种) 分桶:同一 run 的消息在补丁前后换币种(device-link 旧对端 /
+  // 历史数据重写)时,旧币种减、新币种加各成一条 delta,由 SQL 侧的 CASE 币种
+  // 守卫逐条裁决——绝不 throw,抛异常会让整个差值应用被跳过。
   const changes = new Map<string, ScheduleRunCostDelta>();
   const apply = (entry: RunCostEntry | null, direction: 1 | -1) => {
     if (!entry) return;
-    const current = changes.get(entry.runId) ?? {
+    const key = `${entry.runId}\u0000${entry.currency}`;
+    const current = changes.get(key) ?? {
       runId: entry.runId,
       costAmountDelta: 0,
       estimatedValueAmountDelta: 0,
       currency: entry.currency,
       approximate: false,
     };
-    if (current.currency !== entry.currency) {
-      throw new Error('schedule run cost currency mismatch');
-    }
     current.costAmountDelta += direction * entry.costAmount;
     current.estimatedValueAmountDelta += direction * entry.estimatedValueAmount;
     // 这里是消息快照替换，不是新费用累加。只让 next 决定新的近似状态，
     // 避免 approximate 消息被精确金额替换后永久保持 true。
     if (direction === 1) current.approximate = entry.approximate;
-    changes.set(entry.runId, current);
+    changes.set(key, current);
   };
   apply(runCostEntry(previous), -1);
   apply(runCostEntry(next), 1);

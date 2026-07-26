@@ -498,8 +498,20 @@ export async function readUsageHistoryWith(
       .filter((row) => row.money.currency === ledgerCurrency)
       .map((row) => [row.day, row.money.amount]),
   );
-  const zeroActual = () => zeroUsageMoney();
-  const zeroEstimate = () => zeroUsageMoney('value-estimate');
+  // 零值也用账本币种:无消费日的 today/空聚合不能把展示单位翻回默认币种。
+  const zeroActual = (): RegionalMoney => ({
+    amount: 0,
+    currency: ledgerCurrency,
+    approximate: false,
+    kind: 'actual-cost',
+  });
+  const zeroEstimate = (): RegionalMoney => ({
+    amount: 0,
+    currency: ledgerCurrency,
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['subscription-value'],
+  });
   // 聚合偏好账本币种(今天/最新行的币种):默认 USD 偏好会在币种切换过渡期
   // 把当前币种的日金额整段挤掉(窗口里残留任意旧 USD 行即触发)。
   const addOrZero = (
