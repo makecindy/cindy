@@ -44,7 +44,8 @@ export interface OrcaWorkerProviderSnapshot {
   models: readonly string[];
   /**
    * 该来源下 supportsFastMode 的模型 id 集合。Fast 能力是 per-(provider, model) 的,
-   * 同 id 模型在不同来源可分叉;缺省 = 该快照来源无 Fast 元数据,按不支持处理。
+   * 同 id 模型在不同来源可分叉;缺省 = 该快照来源未提供 Fast 元数据,Fast 判定
+   * 回落拍平清单解析(兼容旧组装方,不整体压灭 Fast)。
    */
   fastModels?: readonly string[];
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
@@ -520,15 +521,19 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
               ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
               : resolvedConfig.providerId,
     };
-    // 显式来源下 Fast 按该来源自己的模型条目判定 —— getAvailableModels 是跨来源拍平
-    // 清单(首来源 wins),同 id 模型的 supportsFastMode 在不同来源可分叉:首来源不支持
-    // 会误杀显式来源真正支持的 Fast,反向则可能把 Fast 放到不支持的来源上(codex review)。
-    if (explicitSourceId !== null) {
-      const explicitRouteProvider = agentProviders.find(
-        (provider) => provider.id === explicitSourceId,
-      );
-      const providerSupportsFast =
-        explicitRouteProvider?.fastModels?.includes(resolved.model) === true;
+    // Fast 按**实际路由来源**自己的模型条目判定(显式来源、defaults 缓存来源、
+    // spawn 默认来源统一)—— getAvailableModels 是跨来源拍平清单(首来源 wins,且不含
+    // 连接态),同 id 模型的 supportsFastMode 在不同来源可分叉:首来源不支持会误杀
+    // 真实路由来源的 Fast,反向则把 Fast 放到不支持的来源上(codex review 两轮)。
+    const fastRouteProviderId = explicitSourceId
+      ?? resolved.providerId
+      ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolved.model);
+    const fastRouteProvider = fastRouteProviderId === null
+      ? undefined
+      : agentProviders.find((provider) => provider.id === fastRouteProviderId);
+    // 只有该来源确实带了 Fast 元数据才覆盖;无元数据(旧组装方)保留拍平解析。
+    if (fastRouteProvider?.fastModels) {
+      const providerSupportsFast = fastRouteProvider.fastModels.includes(resolved.model);
       const requestedFast = params.agent === 'codex' && params.fast !== undefined
         ? params.fast
         : (defaults.fastMode ?? !!lead.fastMode);

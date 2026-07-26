@@ -62,8 +62,9 @@ function readWorkerPrefs(): WorkerPrefs {
         ...DEFAULT_PREFS[agent],
         ...(p ?? {}),
         fast: p?.fast === true,
-        // 老版本 prefs 无此字段 → null(未显式);非法类型同样回落。
-        providerId: typeof p?.providerId === 'string' && p.providerId ? p.providerId : null,
+        // 老版本 prefs 无此字段 → null(未显式);非法类型/空白串同样回落(与 IPC 同口径 trim)。
+        providerId:
+          typeof p?.providerId === 'string' && p.providerId.trim() ? p.providerId.trim() : null,
       };
     };
     return {
@@ -307,7 +308,11 @@ export function CreateWorkerPopover({
       const nextModel = modelId ?? model;
       const narrowed = narrowProviderSource(providerId, nextModel);
       setProviderSource(narrowed);
-      if (!modelId) return;
+      // 钉来源(reselect 当前模型行 / 未回传模型)不是换模型:保留表单当前
+      // effort/Fast,不按全局预设重载 —— 否则仅仅钉个来源就静默改配置
+      // (codex review)。来源导致的 Fast 能力收窄由 currentModelSupportsFast
+      // 联动 effect 兜底。
+      if (!modelId || modelId === model) return;
       setModel(modelId);
       const available = activeModels.find((m) => m.id === modelId);
       if (!available) return;
