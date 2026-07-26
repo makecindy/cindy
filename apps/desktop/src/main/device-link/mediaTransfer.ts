@@ -354,7 +354,9 @@ async function putBytesToOss(
     return;
   }
   // 用户可见串只留 errno;host 与完整 cause 链已进日志(见上面的 warn)。
-  throw new Error(`OSS 上传失败:${[...new Set(hints)].join(' / ')}`);
+  // 括号而非冒号:控制端模板本身是「取回 PDF 失败：{{detail}}」,再来一个冒号
+  // 会串成两级冒号。中文标点按 i18n/GLOSSARY.md 的 zh-CN 规则用全角。
+  throw new Error(`OSS 上传失败（${[...new Set(hints)].join(' / ')}）`);
 }
 
 /**
@@ -458,10 +460,10 @@ export async function uploadLocalFile(
       if (!uploadedAttempt || uploadedAttempt.sent !== size) {
         // Cleanup is centralized below so transport and source-stream errors use the same path.
         throw new Error(
-          `文件在上传期间发生变化:预期 ${size} 字节,实际 ${uploadedAttempt?.sent ?? 0} 字节`,
+          `文件在上传期间发生变化：预期 ${size} 字节，实际 ${uploadedAttempt?.sent ?? 0} 字节`,
         );
       }
-      if (!uploadedAttempt.sha256) throw new Error('上传流未读完,无法确认字节摘要');
+      if (!uploadedAttempt.sha256) throw new Error('上传流未读完，无法确认字节摘要');
       sha256 = uploadedAttempt.sha256;
     }
   } catch (error) {
