@@ -56,6 +56,34 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   assert.doesNotMatch(windows, /@codesandbox\/nodebox@0\.1\.8 —/);
 });
 
+test("multi-arch desktop notices describe every architecture they ship with", () => {
+  const macos = read("docs/legal/notices/desktop-macos.txt");
+  const linux = read("docs/legal/notices/desktop-linux.txt");
+
+  // 一个平台声明覆盖两个架构时,内嵌原生库的 README 和 versions.json 都是 per-arch 的:
+  // 只读其中一份,另一个架构的分发物就会带着错误的架构描述发出去。
+  assert.match(
+    macos,
+    /@img\/sharp-libvips-darwin-x64 embedded native libraries/,
+  );
+  assert.match(
+    macos,
+    /@img\/sharp-libvips-darwin-arm64 embedded native libraries/,
+  );
+  assert.match(macos, /for use with sharp on macOS x64\./);
+  assert.match(macos, /for use with sharp on macOS 64-bit ARM\./);
+  assert.match(
+    linux,
+    /@img\/sharp-libvips-linux-x64 embedded native libraries/,
+  );
+  assert.match(
+    linux,
+    /@img\/sharp-libvips-linux-arm64 embedded native libraries/,
+  );
+  assert.match(linux, /for use with sharp on Linux \(glibc\) x64\./);
+  assert.match(linux, /for use with sharp on Linux \(glibc\) 64-bit ARM\./);
+});
+
 test("commercial distributions do not resolve forbidden Sustainable Use dependencies", () => {
   const lockfile = read("pnpm-lock.yaml");
   assert.doesNotMatch(lockfile, /@codesandbox\/nodebox/);

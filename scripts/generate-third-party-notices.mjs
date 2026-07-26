@@ -1279,7 +1279,10 @@ const artifactDefinitions = {
   "desktop-macos": {
     closure: desktopMacNpm,
     manual: [
-      ...buildDesktopCommonEntries(apacheText, "@img/sharp-libvips-darwin-arm64"),
+      ...buildDesktopCommonEntries(apacheText, [
+        "@img/sharp-libvips-darwin-x64",
+        "@img/sharp-libvips-darwin-arm64",
+      ]),
       ...buildMacEntries(),
     ],
     productName: "Cindy desktop application — macOS x64/arm64",
