@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
     name: string;
     connected: boolean;
     agents: string[];
-    models: Record<string, Array<{ id: string }>>;
+    models: Record<string, Array<{ id: string; supportsFastMode?: boolean }>>;
   }>,
 }));
 
