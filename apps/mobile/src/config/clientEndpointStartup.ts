@@ -126,6 +126,9 @@ async function fetchManifestWithRetry(args: {
     if (fetched.ok) return fetched;
     // 构建/打包配置事故(基址为空)重试不会改变结果,立即退出。
     if (fetched.detail === 'missing-manifest-base-url') return fetched;
+    // HTTP 3xx/4xx 是永久性错误,重试同一 URL 不会自愈;仅 5xx 可能是瞬时故障。
+    const httpStatus = /^http-(\d+)$/.exec(fetched.detail)?.[1];
+    if (httpStatus && Number(httpStatus) < 500) return fetched;
     const delay = args.retryDelays[attempt];
     if (delay === undefined) return fetched; // 预算用尽 → 交调用方阻断
     await args.sleep(delay);

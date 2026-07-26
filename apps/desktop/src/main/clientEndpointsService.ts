@@ -157,7 +157,7 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
-          response.resume();
+          response.on('data', () => {});
           finish({ ok: false, detail: `http-${response.statusCode}` });
           return;
         }
@@ -259,6 +259,9 @@ export async function resolveClientEndpointsBlocking(
       reason = fetchFailedReason(fetched.detail);
       // 构建/打包配置事故(基址为空)重试不会改变结果,立即跳出。
       if (fetched.detail === 'missing-manifest-base-url') break;
+      // HTTP 3xx/4xx 是永久性错误(路径/权限/配置),重试同一 URL 不会自愈;仅 5xx 可能是瞬时故障。
+      const httpStatus = /^http-(\d+)$/.exec(fetched.detail)?.[1];
+      if (httpStatus && Number(httpStatus) < 500) break;
       const delay = retryDelays[attempt];
       if (delay === undefined) break; // 预算用尽 → 阻断弹框
       log.warn(

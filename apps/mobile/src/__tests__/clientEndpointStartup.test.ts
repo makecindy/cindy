@@ -305,6 +305,40 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       expect(fetchManifest).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
     });
+
+    it.each([403, 404, 301])('HTTP %d(永久性错误)不消耗重试预算', async (status) => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: false, detail: `http-${status}` });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: `fetch-failed:http-${status}` });
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it('HTTP 502(瞬时服务端错误)仍消耗重试预算', async () => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: false, detail: 'http-502' });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:http-502' });
+      expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+      expect(sleep).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('自建变体(IS_OTA_SELFHOST=1):mobileUpdateBaseUrl 只能在 CDN 清单校验通过后生效', async () => {

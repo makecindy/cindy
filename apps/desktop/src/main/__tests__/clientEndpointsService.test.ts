@@ -353,6 +353,50 @@ describe('弹框前的自动重试(mac 首装瞬时失败自愈)', () => {
     expect(promptRetry).toHaveBeenCalledTimes(1);
     expect(result).toBeNull();
   });
+
+  it.each([403, 404, 301])('HTTP %d(永久性错误)不消耗重试预算,立刻弹框', async (status) => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: false,
+      detail: `http-${status}`,
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it('HTTP 502(瞬时服务端错误)仍消耗重试预算', async () => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: false,
+      detail: 'http-502',
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(3); // 首发 + 2 次自动重试
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
 });
 
 describe('getter / IPC', () => {
