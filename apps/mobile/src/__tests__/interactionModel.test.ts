@@ -216,6 +216,9 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain('buildPluginSetupCancelDecision(item.request)');
     expect(interactionPanelSource).toContain("t('interaction.panel.pluginSetupDesktopOnly')");
     expect(interactionPanelSource).toContain('interaction.unsupported.cancelButton');
+    // 摘要合并成一段再限行:每行各自 numberOfLines 会把总高度放大成 6 × 行数。
+    expect(interactionPanelSource).toContain("const summaryText = (summaryLines ?? [contentToPreview(request)])");
+    expect(interactionPanelSource).not.toContain('lines.map((line, index)');
     // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消);
     // 但仍要按该 revision 封顶抑制,否则取消前发出的慢快照会把卡写回来。
     expect(interactionPanelSource).toContain('optimisticDismiss: false');

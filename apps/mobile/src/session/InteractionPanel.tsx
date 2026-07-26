@@ -1356,14 +1356,16 @@ function UnsupportedCard({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const lines = summaryLines ?? [contentToPreview(request)];
+  // 合并成一段带换行的文本再限行:每行各自 numberOfLines={6} 会把总可见行数放大成
+  // 6 × 行数,步骤多时把卡撑得很高(#530 review)。
+  const summaryText = (summaryLines ?? [contentToPreview(request)])
+    .filter((line) => line.length > 0)
+    .join('\n');
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.unsupported.card">
       <Text style={styles.kind}>{kindLabel ?? t('interaction.panel.unsupportedKind')}</Text>
       <Text style={styles.cardTitle}>{message}</Text>
-      {lines.map((line, index) => (
-        <Text key={`${kind}-line-${index}`} style={styles.body} numberOfLines={6}>{line}</Text>
-      ))}
+      {summaryText ? <Text style={styles.body} numberOfLines={6}>{summaryText}</Text> : null}
       {cancel ? (
         <View style={actionsStyle(styles, touchLayout)}>
           <ResolveButton
