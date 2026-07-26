@@ -17,6 +17,10 @@ import {
   setSlashCommandRoster,
   SlashCommandDecoration,
 } from '@/components/new-chat/SlashCommandDecoration';
+import {
+  setVoiceInputDraftDecoration,
+  VoiceInputDraftDecoration,
+} from '@/components/new-chat/VoiceInputDraftDecoration';
 
 /**
  * composer 列表行缩进 decoration:
@@ -198,6 +202,34 @@ describe('buildListIndentDecorations', () => {
         ?.classList.contains('composer-list-line-indent'),
     ).toBe(false);
   });
+
+  it('chooses the widest complete fallback prefix instead of combining their units', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, HardBreak, TestAtom, ComposerListIndentDecoration],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '10. before ' },
+              { type: 'testAtom' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '1、next' },
+            ],
+          },
+        ],
+      },
+    });
+    const container = editor.view.dom.querySelector<HTMLElement>(
+      'p.composer-list-fallback-container',
+    );
+    expect(container?.style.getPropertyValue('--composer-list-fallback-indent')).toBe(
+      'max(2.8ch, calc(1ch + 1em))',
+    );
+    expect(container?.getAttribute('style')).not.toContain('calc(2.8ch + 1em)');
+  });
 });
 
 describe('ComposerListIndentDecoration in a real editor', () => {
@@ -234,7 +266,9 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     });
     expect(editor.view.dom.querySelectorAll('p.composer-list-block-indent')).toHaveLength(1);
     expect(editor.view.dom.querySelectorAll('span.composer-list-line-indent')).toHaveLength(0);
-    expect(editor.view.dom.querySelectorAll('.composer-list-cjk-font')).toHaveLength(1);
+    const wrapper = editor.view.dom.querySelector('p.composer-list-block-indent');
+    expect(wrapper?.classList.contains('composer-list-cjk-font')).toBe(false);
+    expect(wrapper?.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThan(0);
   });
 
   it('keeps Tab-prefixed CJK rows inside the measured list wrapper', () => {
@@ -255,20 +289,76 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     });
     const wrapper = editor.view.dom.querySelector('p.composer-list-block-indent');
     expect(wrapper?.classList.contains('composer-list-tab-indent')).toBe(true);
-    expect(wrapper?.classList.contains('composer-list-cjk-font')).toBe(true);
-    expect(wrapper?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+    expect(wrapper?.classList.contains('composer-list-cjk-font')).toBe(false);
+    expect(wrapper?.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThan(0);
   });
 
-  it('keeps the full hanging wrapper for CJK punctuation in hardBreak-separated list lines', () => {
-    const ed = makeEditor(['- 中文，内容', '2. plain']);
-    expect(indentSpans(ed)).toEqual(['- 中文，内容', '2. plain']);
-    expect(ed.view.dom.querySelector('.composer-list-cjk-font')).not.toBeNull();
+  it('keeps multiline CJK punctuation inside the paragraph fallback flow', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '- 中文《内容》' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. plain' },
+            ],
+          },
+        ],
+      },
+    });
+    const container = editor.view.dom.querySelector('p.composer-list-fallback-container');
+    expect(container).not.toBeNull();
+    expect(container?.querySelectorAll('.composer-list-line-indent')).toHaveLength(0);
+    expect(container?.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThan(0);
   });
 
-  it('keeps hanging indent when CJK punctuation belongs only to the list marker', () => {
-    const ed = makeEditor(['intro', '1、中文正文会在输入框边界自然换行']);
-    expect(ed.view.dom.querySelectorAll('span.composer-list-prefix-indent')).toHaveLength(0);
-    expect(indentSpans(ed)).toEqual(['1、中文正文会在输入框边界自然换行']);
+  it('keeps the CJK marker in one fixed fallback prefix slot', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'intro' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '1、中文正文《内容》' },
+            ],
+          },
+        ],
+      },
+    });
+    const prefix = editor.view.dom.querySelector(
+      '.composer-list-fallback-prefix.composer-list-cjk-font',
+    );
+    expect(prefix?.textContent).toBe('1、');
+    expect(prefix?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+    expect(
+      editor.view.dom.querySelectorAll(
+        'p.composer-list-fallback-container span[style*="font-family"]',
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it('keeps slash-command pills inline inside the paragraph fallback flow', () => {
@@ -306,6 +396,87 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.view.dom.querySelector('p.composer-list-fallback-container')?.textContent).toBe(
       '- /foo details2. plain',
     );
+  });
+
+  it('preserves consecutive hard breaks inside the paragraph fallback flow', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        SlashCommandDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '- /foo' },
+              { type: 'hardBreak' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. next' },
+            ],
+          },
+        ],
+      },
+    });
+    setSlashCommandRoster(editor, [{ name: 'foo', description: 'test command' }]);
+    expect(
+      editor.view.dom.querySelectorAll(
+        'p.composer-list-fallback-container br.composer-list-fallback-break',
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('uses the paragraph fallback while voice replacement overlaps a multiline list row', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+        VoiceInputDraftDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '- first' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. second row' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(editor.view.dom.querySelectorAll('.composer-list-line-indent')).toHaveLength(2);
+
+    setVoiceInputDraftDecoration(
+      editor,
+      'replacement',
+      'refinement',
+      { from: 9, to: 21 },
+      'processing',
+    );
+    expect(editor.view.dom.querySelector('p.composer-list-fallback-container')).not.toBeNull();
+    expect(editor.view.dom.querySelector('.composer-list-line-indent')).toBeNull();
+    expect(editor.view.dom.querySelector('[data-voice-draft-inline]')?.textContent).toBe(
+      'replacement',
+    );
+    expect(editor.view.dom.querySelector('.voice-input-draft-replaced')).not.toBeNull();
+
+    setVoiceInputDraftDecoration(editor, '', null);
+    expect(editor.view.dom.querySelector('p.composer-list-fallback-container')).toBeNull();
+    expect(editor.view.dom.querySelectorAll('.composer-list-line-indent')).toHaveLength(2);
   });
 
   it('keeps an inline atom and body punctuation inside the multiline fallback flow', () => {
@@ -462,8 +633,13 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-long-run-body');
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
     expect(css).toContain('tab-size: 8;');
-    expect(css).toContain('.ProseMirror .composer-list-line-indent.voice-input-draft-replaced');
     expect(css).toContain('white-space: nowrap;');
+    const fallbackBreakRule = css.match(
+      /\.ProseMirror \.composer-list-fallback-break \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(fallbackBreakRule).toContain('display: inline;');
+    expect(fallbackBreakRule).not.toContain('height: 0');
+    expect(fallbackBreakRule).not.toContain('line-height: 0');
     const longRunBodyRule = css.match(
       /\.ProseMirror \.composer-list-long-run-body \{([\s\S]*?)\n\}/,
     )?.[1];

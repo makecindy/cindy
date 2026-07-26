@@ -29,6 +29,16 @@ type VoiceInputDraftDecorationState = VoiceInputDraftMeta & {
 const PLUGIN_KEY = new PluginKey<VoiceInputDraftDecorationState>('voiceInputDraftDecoration');
 const META_KEY = 'voiceInputDraftDecoration';
 
+export type VoiceInputReplacementRange = {
+  from: number;
+  to: number;
+};
+
+export type VoiceInputReplacementRangeUpdate = {
+  changed: boolean;
+  range: VoiceInputReplacementRange | null;
+};
+
 function clampPosition(doc: PMNode, position: number): number {
   return Math.max(0, Math.min(position, doc.content.size));
 }
@@ -37,6 +47,38 @@ function clampRange(doc: PMNode, from: number, to: number): { from: number; to: 
   const safeFrom = clampPosition(doc, Math.min(from, to));
   const safeTo = clampPosition(doc, Math.max(from, to));
   return { from: safeFrom, to: safeTo };
+}
+
+/**
+ * Resolve the replacement range that sibling decoration plugins should use
+ * for this transaction. The voice plugin is registered after the list/CJK
+ * plugins, so they cannot read its next state during their own `apply`; this
+ * helper deliberately reads the shared transaction meta and maps the previous
+ * range when only the document changed.
+ */
+export function resolveVoiceInputReplacementRange(
+  tr: Transaction,
+  oldState: EditorState,
+): VoiceInputReplacementRangeUpdate {
+  const meta = tr.getMeta(META_KEY) as VoiceInputDraftMeta | undefined;
+  if (meta) {
+    const range = clampRange(tr.doc, meta.from, meta.to);
+    return {
+      changed: true,
+      range: meta.text && range.to > range.from ? range : null,
+    };
+  }
+  const old = PLUGIN_KEY.getState(oldState);
+  if (!old?.text || old.to <= old.from) {
+    return { changed: false, range: null };
+  }
+  const range = tr.docChanged
+    ? clampRange(tr.doc, tr.mapping.map(old.from, -1), tr.mapping.map(old.to, 1))
+    : clampRange(tr.doc, old.from, old.to);
+  return {
+    changed: false,
+    range: range.to > range.from ? range : null,
+  };
 }
 
 // Lucide `Loader2` arc. The arc rotates around the viewBox centre via CSS

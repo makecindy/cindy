@@ -33,6 +33,10 @@ import {
   getSlashCommandRosterUpdate,
   type SlashCommandMatch,
 } from './SlashCommandDecoration';
+import {
+  resolveVoiceInputReplacementRange,
+  type VoiceInputReplacementRange,
+} from './VoiceInputDraftDecoration';
 
 const PLUGIN_KEY = new PluginKey<DecorationSet>('composerListIndentDecoration');
 const TAB_SIZE = 8;
@@ -74,23 +78,30 @@ function listIndentValue({ ch, em }: ListIndentValues): string {
   return em > 0 ? `calc(${ch}ch + ${em}em)` : `${ch}ch`;
 }
 
+function widestListIndentValue(values: ListIndentValues[]): string {
+  const candidates = [...new Set(values.map(listIndentValue))];
+  if (candidates.length === 0) return '0ch';
+  if (candidates.length === 1) return candidates[0]!;
+  return `max(${candidates.join(', ')})`;
+}
+
 function addLongRunDecoration(
   decorations: Decoration[],
   from: number,
   to: number,
   prefixLength: number,
   prefix: string,
-  extraClass = '',
+  markerClass = '',
 ): void {
   const prefixTo = from + prefixLength;
-  const classSuffix = extraClass ? ` ${extraClass}` : '';
+  const markerClassSuffix = markerClass ? ` ${markerClass}` : '';
   decorations.push(
     Decoration.inline(from, prefixTo, {
-      class: `composer-list-long-run-marker${classSuffix}`,
+      class: `composer-list-long-run-marker${markerClassSuffix}`,
       style: listPrefixIndentStyle(prefix),
     }),
     Decoration.inline(prefixTo, to, {
-      class: `composer-list-long-run-body${classSuffix}`,
+      class: 'composer-list-long-run-body',
       style: listPrefixIndentStyle(prefix),
     }),
   );
@@ -120,6 +131,7 @@ export function listPrefixIndentStyle(prefix: string): string {
 export function buildListIndentDecorations(
   doc: PMNode,
   slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
+  voiceReplacementRange: VoiceInputReplacementRange | null = null,
 ): DecorationSet {
   const decorations: Decoration[] = [];
 
@@ -181,19 +193,21 @@ export function buildListIndentDecorations(
         (slashMatch) =>
           slashMatch.from < contentBase + line.end && slashMatch.to > contentBase + line.start,
       );
-      return line.hasInlineAtom || overlapsSlashCommandPill;
+      const overlapsVoiceReplacement =
+        voiceReplacementRange !== null &&
+        voiceReplacementRange.from < contentBase + line.end &&
+        voiceReplacementRange.to > contentBase + line.start;
+      const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
+      return (
+        line.hasInlineAtom ||
+        overlapsSlashCommandPill ||
+        (lines.length > 1 && (overlapsVoiceReplacement || hasCjkPunctuation))
+      );
     });
     const fallbackPrefixes = lineMatches
       .filter(({ match }) => Boolean(match))
       .map(({ line, match }) => listPrefixIndentValues(line.text.slice(0, match!.prefixLength)));
-    const fallbackIndent = fallbackPrefixes.reduce(
-      (max, value) => ({
-        ch: Math.max(max.ch, value.ch),
-        em: Math.max(max.em, value.em),
-      }),
-      { ch: 0, em: 0 },
-    );
-    const fallbackStyle = listIndentValue(fallbackIndent);
+    const fallbackStyle = widestListIndentValue(fallbackPrefixes);
 
     if (hasFallbackLine) {
       decorations.push(
@@ -227,17 +241,9 @@ export function buildListIndentDecorations(
       const to = contentBase + line.end;
       const prefix = line.text.slice(0, match.prefixLength);
       const body = line.text.slice(match.prefixLength);
-      const overlapsSlashCommandPill = slashCommandMatches.some(
-        (slashMatch) => slashMatch.from < to && slashMatch.to > from,
-      );
       const hasTabPrefix = prefix.includes('\t');
-      const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix) || CJK_PUNCTUATION_RE.test(body);
-      const lineClass = [
-        hasTabPrefix ? 'composer-list-tab-indent' : '',
-        hasCjkPunctuation ? 'composer-list-cjk-font' : '',
-      ]
-        .filter(Boolean)
-        .join(' ');
+      const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
+      const lineClass = hasTabPrefix ? 'composer-list-tab-indent' : '';
       if (hasFallbackLine) {
         // The paragraph-level fallback supplies the available line width. The
         // prefix gets a fixed slot (the widest marker in the paragraph), while
@@ -248,11 +254,12 @@ export function buildListIndentDecorations(
             class: [
               'composer-list-fallback-prefix',
               hasTabPrefix ? 'composer-list-tab-indent' : '',
-              hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+              prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
             ]
               .filter(Boolean)
               .join(' '),
             'data-composer-list-prefix-length': String(match.prefixLength),
+            style: listPrefixIndentStyle(prefix),
           }),
         );
         return;
@@ -264,7 +271,7 @@ export function buildListIndentDecorations(
           to,
           match.prefixLength,
           prefix,
-          hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+          prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
         );
         return;
       }
@@ -285,7 +292,7 @@ export function buildListIndentDecorations(
       const from = line ? contentBase + line.start : contentBase;
       const to = line ? contentBase + line.end : contentBase;
       const hasLongAlphanumericBody = LONG_ALPHANUMERIC_BODY_RE.test(body);
-      const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix) || CJK_PUNCTUATION_RE.test(body);
+      const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
       const hasTabPrefix = prefix.includes('\t');
       // A node decoration stays on the paragraph even when CjkPunctDecoration
       // adds nested inline spans, so punctuation cannot split the list wrapper.
@@ -295,11 +302,12 @@ export function buildListIndentDecorations(
             class: [
               'composer-list-fallback-prefix',
               hasTabPrefix ? 'composer-list-tab-indent' : '',
-              hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+              prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
             ]
               .filter(Boolean)
               .join(' '),
             'data-composer-list-prefix-length': String(match.prefixLength),
+            style: listPrefixIndentStyle(prefix),
           }),
         );
       } else if (
@@ -310,11 +318,7 @@ export function buildListIndentDecorations(
       ) {
         decorations.push(
           Decoration.node(blockPos, blockPos + block.nodeSize, {
-            class: [
-              'composer-list-block-indent',
-              hasTabPrefix ? 'composer-list-tab-indent' : '',
-              hasCjkPunctuation ? 'composer-list-cjk-font' : '',
-            ]
+            class: ['composer-list-block-indent', hasTabPrefix ? 'composer-list-tab-indent' : '']
               .filter(Boolean)
               .join(' '),
             'data-composer-list-prefix-length': String(match.prefixLength),
@@ -334,7 +338,7 @@ export function buildListIndentDecorations(
           contentBase + line.end,
           match.prefixLength,
           prefix,
-          hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+          prefixHasCjkPunctuation ? 'composer-list-cjk-font' : '',
         );
       } else if (line && match) {
         decorations.push(
@@ -344,12 +348,13 @@ export function buildListIndentDecorations(
             {
               class: prefix.includes('\t')
                 ? `composer-list-prefix-indent composer-list-tab-indent${
-                    hasCjkPunctuation ? ' composer-list-cjk-font' : ''
+                    prefixHasCjkPunctuation ? ' composer-list-cjk-font' : ''
                   }`
                 : `composer-list-prefix-indent${
-                    hasCjkPunctuation ? ' composer-list-cjk-font' : ''
+                    prefixHasCjkPunctuation ? ' composer-list-cjk-font' : ''
                   }`,
               'data-composer-list-prefix-length': String(match.prefixLength),
+              style: listPrefixIndentStyle(prefix),
             },
           ),
         );
@@ -381,9 +386,16 @@ export const ComposerListIndentDecoration = Extension.create({
           },
           apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
-            if (!tr.docChanged && rosterUpdate === undefined) return old;
+            const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
+            if (!tr.docChanged && rosterUpdate === undefined && !voiceReplacement.changed) {
+              return old;
+            }
             const roster = rosterUpdate ?? getSlashCommandRoster(oldState);
-            return buildListIndentDecorations(tr.doc, findSlashCommandMatches(tr.doc, roster));
+            return buildListIndentDecorations(
+              tr.doc,
+              findSlashCommandMatches(tr.doc, roster),
+              voiceReplacement.range,
+            );
           },
         },
         props: {
@@ -394,58 +406,66 @@ export const ComposerListIndentDecoration = Extension.create({
         view() {
           return {
             update(view) {
-              const tabSpans = view.dom.querySelectorAll<HTMLElement>('.composer-list-tab-indent');
-              tabSpans.forEach((span) => {
+              const measurablePrefixes = view.dom.querySelectorAll<HTMLElement>(
+                '.composer-list-tab-indent, .composer-list-fallback-prefix',
+              );
+              const fallbackWidths = new Map<HTMLElement, number>();
+              measurablePrefixes.forEach((span) => {
                 const prefixLength = Number(span.dataset.composerListPrefixLength ?? Number.NaN);
                 if (!Number.isFinite(prefixLength) || prefixLength <= 0) return;
                 // Once Chromium measurement has replaced the deterministic
                 // fallback with pixels, the same span no longer needs a
                 // synchronous Range/layout read on every editor update.
-                if (span.style.getPropertyValue('--composer-list-hang').trim().endsWith('px')) {
-                  return;
-                }
-                const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
-                let remaining = prefixLength;
-                let startNode: Text | null = null;
-                let endNode: Text | null = null;
-                let endOffset = 0;
-                while (remaining > 0) {
-                  const node = walker.nextNode() as Text | null;
-                  if (!node) break;
-                  const length = node.data.length;
-                  if (!startNode) startNode = node;
-                  endNode = node;
-                  if (length >= remaining) {
-                    endOffset = remaining;
-                    remaining = 0;
-                    break;
+                const existingWidth = span.style.getPropertyValue('--composer-list-hang').trim();
+                let width = existingWidth.endsWith('px')
+                  ? Number.parseFloat(existingWidth.slice(0, -2))
+                  : Number.NaN;
+                if (!Number.isFinite(width)) {
+                  const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+                  let remaining = prefixLength;
+                  let startNode: Text | null = null;
+                  let endNode: Text | null = null;
+                  let endOffset = 0;
+                  while (remaining > 0) {
+                    const node = walker.nextNode() as Text | null;
+                    if (!node) break;
+                    const length = node.data.length;
+                    if (!startNode) startNode = node;
+                    endNode = node;
+                    if (length >= remaining) {
+                      endOffset = remaining;
+                      remaining = 0;
+                      break;
+                    }
+                    remaining -= length;
                   }
-                  remaining -= length;
+                  if (!startNode || !endNode || remaining > 0) return;
+                  const range = document.createRange();
+                  range.setStart(startNode, 0);
+                  range.setEnd(endNode, endOffset);
+                  if (typeof range.getBoundingClientRect !== 'function') return;
+                  width = range.getBoundingClientRect().width;
+                  if (!Number.isFinite(width) || width <= 0) return;
+                  span.style.setProperty('--composer-list-hang', `${width}px`);
+                  span.style.setProperty('--composer-list-hang-negative', `-${width}px`);
                 }
-                if (!startNode || !endNode || remaining > 0) return;
-                const range = document.createRange();
-                range.setStart(startNode, 0);
-                range.setEnd(endNode, endOffset);
-                const width = range.getBoundingClientRect().width;
-                if (!Number.isFinite(width) || width <= 0) return;
-                span.style.setProperty('--composer-list-hang', `${width}px`);
-                span.style.setProperty('--composer-list-hang-negative', `-${width}px`);
                 const fallbackContainer = span.closest<HTMLElement>(
                   '.composer-list-fallback-container',
                 );
                 if (fallbackContainer) {
-                  const currentIndent = Number.parseFloat(
-                    fallbackContainer.style
-                      .getPropertyValue('--composer-list-fallback-indent')
-                      .trim()
-                      .replace(/px$/, ''),
+                  fallbackWidths.set(
+                    fallbackContainer,
+                    Math.max(fallbackWidths.get(fallbackContainer) ?? 0, width),
                   );
-                  if (!Number.isFinite(currentIndent) || width > currentIndent) {
-                    fallbackContainer.style.setProperty(
-                      '--composer-list-fallback-indent',
-                      `${width}px`,
-                    );
-                  }
+                }
+              });
+              fallbackWidths.forEach((width, fallbackContainer) => {
+                const nextWidth = `${width}px`;
+                if (
+                  fallbackContainer.style.getPropertyValue('--composer-list-fallback-indent') !==
+                  nextWidth
+                ) {
+                  fallbackContainer.style.setProperty('--composer-list-fallback-indent', nextWidth);
                 }
               });
             },

@@ -385,9 +385,9 @@ html:lang(ko) {
   overflow-wrap: anywhere;
 }
 .ProseMirror .composer-list-fallback-break {
-  display: block;
-  height: 0;
-  line-height: 0;
+  /* Keep native <br> line boxes so consecutive hard breaks retain intentional
+     blank lines inside a paragraph-level list fallback. */
+  display: inline;
 }
 .ProseMirror .composer-list-line-indent {
   display: inline-block;
@@ -434,9 +434,9 @@ html:lang(ko) {
 .ProseMirror .voice-input-draft-replaced {
   display: none;
 }
-/* Composer 的列表 decoration 可能与语音替换范围重叠。提高选择器优先级，
-   确保被替换的原文继续隐藏，不被 inline-block 布局重新显示。 */
-.ProseMirror .composer-list-line-indent.voice-input-draft-replaced,
+/* Long-run body boxes can overlap a voice replacement in single-line rows.
+   The general multiline list path switches to the paragraph fallback while a
+   replacement is active, so its full-width row wrapper is never fragmented. */
 .ProseMirror .composer-list-long-run-body.voice-input-draft-replaced {
   display: none;
 }

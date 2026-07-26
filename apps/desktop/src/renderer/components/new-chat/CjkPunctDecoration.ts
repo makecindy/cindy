@@ -46,6 +46,10 @@ import {
   getSlashCommandRosterUpdate,
   type SlashCommandMatch,
 } from './SlashCommandDecoration';
+import {
+  resolveVoiceInputReplacementRange,
+  type VoiceInputReplacementRange,
+} from './VoiceInputDraftDecoration';
 
 const PLUGIN_KEY = new PluginKey<DecorationSet>('cjkPunctDecoration');
 
@@ -65,6 +69,7 @@ type ListLineRange = { from: number; to: number };
 function listLineRanges(
   doc: PMNode,
   slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
+  voiceReplacementRange: VoiceInputReplacementRange | null = null,
 ): ListLineRange[] {
   const ranges: ListLineRange[] = [];
   doc.descendants((block, blockPos) => {
@@ -123,28 +128,35 @@ function listLineRanges(
         (slashMatch) =>
           slashMatch.from < contentBase + line.end && slashMatch.to > contentBase + line.start,
       );
-      return line.hasInlineAtom || overlapsSlashCommandPill;
+      const overlapsVoiceReplacement =
+        voiceReplacementRange !== null &&
+        voiceReplacementRange.from < contentBase + line.end &&
+        voiceReplacementRange.to > contentBase + line.start;
+      const hasCjkPunctuation = CJK_PUNCT_REGEX.test(line.text);
+      CJK_PUNCT_REGEX.lastIndex = 0;
+      return (
+        line.hasInlineAtom ||
+        overlapsSlashCommandPill ||
+        (lines.length > 1 && (overlapsVoiceReplacement || hasCjkPunctuation))
+      );
     });
     lineMatches.forEach(({ line, match }) => {
-      if (!match || hasFallbackLine) return;
+      if (!match) return;
+      const prefixFrom = contentBase + line.start;
+      const prefixTo = prefixFrom + match.prefixLength;
       const body = line.text.slice(match.prefixLength);
-      const overlapsSlashCommandPill = slashCommandMatches.some(
-        (slashMatch) =>
-          slashMatch.from < contentBase + line.end && slashMatch.to > contentBase + line.start,
-      );
-      // Only suppress per-character decorations when the list extension owns a
-      // complete hanging wrapper. Atom/pill/long-run fallbacks deliberately
-      // leave punctuation to this plugin so body glyphs keep the CJK font stack;
-      // tab rows are included here because their full wrapper is also complete.
+      // Prefix-only fallback slots and long-run marker boxes cannot overlap a
+      // per-character font span: ProseMirror would split the fixed-width box
+      // into duplicate fragments. Their tiny marker range opts into the CJK
+      // stack as one box; fallback bodies and node-wrapped single-line bodies
+      // retain character-scoped font spans and the normal UI/user font stack.
       if (
-        !line.hasInlineAtom &&
-        !overlapsSlashCommandPill &&
-        !LONG_ALPHANUMERIC_BODY_RE.test(body)
+        hasFallbackLine ||
+        (lines.length === 1 &&
+          LONG_ALPHANUMERIC_BODY_RE.test(body) &&
+          !line.text.slice(0, match.prefixLength).includes('\t'))
       ) {
-        ranges.push({
-          from: contentBase + line.start,
-          to: contentBase + line.end,
-        });
+        ranges.push({ from: prefixFrom, to: prefixTo });
       }
     });
     return false;
@@ -182,9 +194,10 @@ const CJK_FONT_STACK =
 function buildDecorations(
   doc: PMNode,
   slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
+  voiceReplacementRange: VoiceInputReplacementRange | null = null,
 ): DecorationSet {
   const decorations: Decoration[] = [];
-  const listRanges = listLineRanges(doc, slashCommandMatches);
+  const listRanges = listLineRanges(doc, slashCommandMatches, voiceReplacementRange);
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
@@ -227,14 +240,21 @@ export const CjkPunctDecoration = Extension.create({
           },
           apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
+            const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
             // doc 没变且命令 roster 没变 → decoration 位置不变, 直接复用
-            if (!tr.docChanged && rosterUpdate === undefined) return old;
+            if (!tr.docChanged && rosterUpdate === undefined && !voiceReplacement.changed) {
+              return old;
+            }
             // doc 变了 → 全量重算。
             // 之前考虑过用 old.map(tr.mapping, tr.doc) 做增量, 但 chat input
             // 文本量很小 (< 1KB 常见), 全量重扫成本可忽略, 而增量映射要额外
             // 处理"变化范围内新增/删除的 CJK 标点", 代码复杂度上升不划算。
             const roster = rosterUpdate ?? getSlashCommandRoster(oldState);
-            return buildDecorations(tr.doc, findSlashCommandMatches(tr.doc, roster));
+            return buildDecorations(
+              tr.doc,
+              findSlashCommandMatches(tr.doc, roster),
+              voiceReplacement.range,
+            );
           },
         },
         props: {
