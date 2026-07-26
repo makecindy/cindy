@@ -121,20 +121,39 @@ test('resolveOssBaseUrl: 优先 XDT_CDN_BASE_URL，否则回落端点清单的 c
   assert.doesNotMatch(fromManifest, /\/$/);
 });
 
-test('verifyInstalled: 文件缺失时不算就位', () => {
+test('verifyInstalled: 缺少 source.properties 时不算就位', () => {
   const root = tmpBinRoot('win32-x64', { 'adb.exe': 'not the real adb' });
   const r = verifyInstalled('win32-x64', root);
   assert.equal(r.ok, false);
-  assert.match(r.reason, /adb\.exe sha256 mismatch/);
+  assert.match(r.reason, /source\.properties/);
+});
+
+test('verifyInstalled: source.properties 版本与 PINNED 不匹配时不算就位', () => {
+  const root = tmpBinRoot('win32-x64', {
+    'source.properties': 'Pkg.Revision=99.0.0',
+    'adb.exe': 'fake',
+  });
+  const r = verifyInstalled('win32-x64', root);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /version mismatch/);
+});
+
+test('verifyInstalled: 文件缺失时不算就位', () => {
+  const root = tmpBinRoot('win32-x64', {
+    'source.properties': 'Pkg.Revision=32.0.0',
+    'adb.exe': 'not the real adb',
+  });
+  const r = verifyInstalled('win32-x64', root);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /sha256 mismatch/);
 });
 
 test('verifyInstalled: 内容被换掉时报 sha256 不匹配', () => {
   const hashes = expectedHashesFor('win32-x64');
   // 三个文件都在，但内容是假的 —— 必须被逐个哈希拦下。
-  const root = tmpBinRoot(
-    'win32-x64',
-    Object.fromEntries(Object.keys(hashes).map((name) => [name, `fake ${name}`])),
-  );
+  const files = Object.fromEntries(Object.keys(hashes).map((name) => [name, `fake ${name}`]));
+  files['source.properties'] = 'Pkg.Revision=32.0.0';
+  const root = tmpBinRoot('win32-x64', files);
   const r = verifyInstalled('win32-x64', root);
   assert.equal(r.ok, false);
   assert.match(r.reason, /sha256 mismatch/);

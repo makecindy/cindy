@@ -69,6 +69,7 @@ const ZIP_ENTRY_PREFIX = 'platform-tools/';
  */
 const PINNED = {
   'win32-x64': {
+    version: '32.0.0',
     zipOs: 'windows',
     files: {
       'adb.exe': 'e79dc8fc3c6385192bdccd7ff7eabe3d5c1ec292475a06b04d82759f07655982',
@@ -156,10 +157,23 @@ export function ossZipUrlFor(platformKey, version, baseUrl) {
   return `${baseUrl}/android-platform-tools/${version}/platform-tools_r${version}-${spec.zipOs}.zip`;
 }
 
-/** 三个文件都在且 sha256 都对 → 视为就位。任一不符都当作缺失重新获取。 */
+/** 三个文件都在、sha256 都对、且版本匹配 → 视为就位。任一不符都当作缺失重新获取。 */
 export function verifyInstalled(platformKey, binRoot = BIN_ROOT) {
   const spec = PINNED[platformKey];
   if (!spec) return { ok: false, reason: `unsupported platform key: ${platformKey}` };
+  // 版本绑定：source.properties 声明的版本必须与 PINNED 中哈希对应的版本一致,
+  // 否则升级 source.properties 后旧二进制会被错误地视为就位。
+  try {
+    const declaredVersion = readPinnedVersion(platformKey, binRoot);
+    if (declaredVersion !== spec.version) {
+      return {
+        ok: false,
+        reason: `version mismatch: source.properties declares ${declaredVersion} but pinned hashes are for ${spec.version}`,
+      };
+    }
+  } catch {
+    return { ok: false, reason: 'cannot read source.properties for version check' };
+  }
   for (const [name, expected] of Object.entries(spec.files)) {
     const filePath = path.join(binRoot, platformKey, name);
     if (!fs.existsSync(filePath)) return { ok: false, reason: `${name} missing` };
