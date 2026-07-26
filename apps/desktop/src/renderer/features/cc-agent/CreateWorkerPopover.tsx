@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
 import {
   connectedProvidersForAgent,
+  effectiveSourceIdForModel,
+  getModel,
   modelSupportsFastMode,
   providerOffersModel,
 } from '@cindy/model-providers';
@@ -165,17 +167,20 @@ export function CreateWorkerPopover({
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
 
   // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
-  // CatalogModel),显式选了来源就按该来源自己的条目查;未显式(默认路由)/device-link
-  // 回落拍平并集值(与既有行为一致)。
+  // CatalogModel)。显式选了来源按该来源条目查;未显式(null)也要先解析**生效默认
+  // 来源**再查它自己的条目(codex review:拍平并集是首来源 wins,默认来源不支持时
+  // 会把 stale true 一路带到提交)。device-link 无本地目录,回落并集值(既有行为)。
   const providerFastSupported = useCallback(
     (candidate: string | null, modelId: string): boolean => {
-      if (!deviceId && candidate) {
-        const provider = connectedProvidersForAgent(providers, agent).find(
-          (p) => p.id === candidate,
-        );
-        return modelSupportsFastMode(provider, modelId, agent);
+      if (deviceId) {
+        return !!activeModels.find((m) => m.id === modelId)?.supportsFastMode;
       }
-      return !!activeModels.find((m) => m.id === modelId)?.supportsFastMode;
+      const sourceId = candidate ?? effectiveSourceIdForModel(providers, null, modelId, agent);
+      if (!sourceId) return false;
+      const provider = connectedProvidersForAgent(providers, agent).find(
+        (p) => p.id === sourceId,
+      );
+      return modelSupportsFastMode(provider, modelId, agent);
     },
     [activeModels, agent, deviceId, providers],
   );
@@ -189,16 +194,19 @@ export function CreateWorkerPopover({
     (activeCaps !== null || activeCapabilitiesState.error !== null) &&
     activeModels.length === 0;
 
-  // 显式来源仅在「已连接且确实提供该模型」时有效;其余(断开/下架/换了模型)收窄为
-  // null 交回默认路由解析。与 SubagentModelSection / ImDefaultSettingsSection 同规则,
-  // 防止提交「选 A 落 B」的不可能组合。device-link 无本地来源维度,恒 null。
+  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被可见性开关隐藏」时
+  // 有效;其余(断开/下架/被隐藏/换了模型)收窄为 null 交回默认路由解析。可见性判据
+  // 与 activeModels 的 isVisible 同源(codex review:同模型多来源时,用户隐藏了记忆
+  // 来源的那份条目后,面板已不显示该行,不能仍显式路由过去)。device-link 恒 null。
   const narrowProviderSource = useCallback(
     (candidate: string | null, modelId: string): string | null => {
       if (!candidate || deviceId) return null;
       const provider = connectedProvidersForAgent(providers, agent).find(
         (p) => p.id === candidate,
       );
-      return provider && providerOffersModel(provider, modelId, agent) ? candidate : null;
+      if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
+      const catalogModel = getModel(provider, modelId, agent);
+      return catalogModel && isModelEnabled(agent, candidate, catalogModel) ? candidate : null;
     },
     [agent, deviceId, providers],
   );
@@ -321,7 +329,31 @@ export function CreateWorkerPopover({
     [activeModels, agent, effort, model, narrowProviderSource, providerFastSupported],
   );
 
-  const updateEffort = setEffort;
+  // 活跃行的 effort/Fast 编辑走 onEffortChange/onFastModeChange 而非 modelMemory
+  // (ModelSelector 有意区分两条通道),必须同步写回模型级全局预设 —— 否则切走再
+  // 切回时 handleProviderChange 按旧全局值恢复,刚做的编辑被静默丢弃(codex review)。
+  // 记忆槽位取显式来源,未显式时取该模型的生效默认来源(全局预设本就是跨来源共享)。
+  const activeMemorySourceId = deviceId
+    ? null
+    : providerSource ?? effectiveSourceIdForModel(providers, null, model, agent);
+  const updateEffort = useCallback(
+    (next: Effort) => {
+      setEffort(next);
+      if (activeMemorySourceId && model) {
+        setProviderModelEffort(agent, activeMemorySourceId, model, next);
+      }
+    },
+    [activeMemorySourceId, agent, model],
+  );
+  const updateFast = useCallback(
+    (enabled: boolean) => {
+      setFast(enabled);
+      if (activeMemorySourceId && model) {
+        setProviderModelFast(agent, activeMemorySourceId, model, enabled);
+      }
+    },
+    [activeMemorySourceId, agent, model],
+  );
 
   // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
   // device-link 远程创建不传:被控端记忆需镜像通道,宁可无记忆也不掺控制端本机。
@@ -520,9 +552,7 @@ export function CreateWorkerPopover({
               // codex 消费 input.fast):cc 不接线,面板就不显示 Fast 开关,避免
               // 「开关能开、提交被丢」的名不副实(codex review)。
               fastMode={deviceId || agent !== 'codex' ? undefined : fast}
-              onFastModeChange={
-                deviceId || agent !== 'codex' ? undefined : (enabled) => setFast(enabled)
-              }
+              onFastModeChange={deviceId || agent !== 'codex' ? undefined : updateFast}
             />
           </div>
           {noAvailableLocalModels ? (

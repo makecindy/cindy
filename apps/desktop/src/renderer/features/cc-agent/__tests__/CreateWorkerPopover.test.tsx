@@ -4,7 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { setProviderModelChoice, setProviderModelFast } from '@/state/providerModelMemory';
+import {
+  getProviderModelEffort,
+  setProviderModelChoice,
+  setProviderModelFast,
+} from '@/state/providerModelMemory';
 import { CreateWorkerPopover } from '../CreateWorkerPopover';
 
 const mocks = vi.hoisted(() => ({
@@ -28,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   },
   capabilitiesLoading: false,
   providersLoading: false,
+  // 「(providerId, modelId)」被可见性开关隐藏的组合(isModelEnabled mock 消费)。
+  hiddenModels: [] as string[],
   // 本地已连接来源目录(narrowProviderSource 走真函数,消费这份最小 ProviderView 形状)。
   localProviders: [] as Array<{
     id: string;
@@ -62,7 +68,9 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
   useDeviceProviders: () => ({ providers: [], loading: mocks.providersLoading, error: null }),
 }));
 
-vi.mock('react-router-dom', () => ({
+// 只覆写 useNavigate,保留真实导出:全量 mock 会连带打断任何间接依赖(copilot review)。
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => vi.fn(),
 }));
 
@@ -71,6 +79,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     modelId: string;
     currentProviderId?: string | null;
     onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
+    onEffortChange: (effort: string) => void;
     reselectEmitsChange?: boolean;
     fastMode?: boolean;
     onFastModeChange?: (enabled: boolean) => void;
@@ -98,12 +107,18 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         data-testid="pick-openai-row-bare"
         onClick={() => props.onProviderChange?.('openai', 'gpt-5.5')}
       />
+      <button
+        type="button"
+        data-testid="edit-active-effort"
+        onClick={() => props.onEffortChange('low')}
+      />
     </div>
   ),
 }));
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: string, providerId: string, m: { id: string }) =>
+    !mocks.hiddenModels.includes(`${providerId}:${m.id}`),
   useModelVisibilityVersion: () => 0,
 }));
 
@@ -123,6 +138,7 @@ describe('CreateWorkerPopover', () => {
     mocks.capabilitiesLoading = false;
     mocks.providersLoading = false;
     mocks.localProviders = [];
+    mocks.hiddenModels = [];
   });
 
   afterEach(() => {
@@ -498,6 +514,98 @@ describe('CreateWorkerPopover', () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({ model: 'gpt-5.5', providerId: 'openai', fast: undefined }),
       ),
+    );
+  });
+
+  it('narrows a remembered provider whose model entry is hidden by visibility prefs', async () => {
+    // 同模型多来源:用户隐藏了记忆来源那份条目后,面板已不显示该行,
+    // 不能仍显式路由过去(codex review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.hiddenModels = ['openai:gpt-5.5'];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+    );
+  });
+
+  it('resolves Fast against the effective default provider when no explicit source is set', async () => {
+    // 未显式来源时 Fast 能力按生效默认来源自己的条目查,不用拍平并集的首来源值
+    // (codex review:默认来源不支持时不能把 stale true 带到提交)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: true, providerId: null },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        // 该来源的条目不带 supportsFastMode → 默认来源不支持 Fast。
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')]; // 并集条目 supportsFastMode: true
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'gpt-5.5' }],
+      hasFastMode: true,
+    } as never;
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'orca.createWorker.submit' }),
+    );
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ fast: undefined })),
+    );
+  });
+
+  it('persists active-row effort edits into the shared model memory', async () => {
+    // 活跃行编辑走 onEffortChange 而非 modelMemory,必须写回全局预设 ——
+    // 否则切走再切回按旧值恢复,编辑被静默丢弃(codex review)。
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'codex/gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('codex/gpt-5.5', ['low', 'high'], 'high')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('edit-active-effort'));
+    await waitFor(() =>
+      expect(getProviderModelEffort('codex', 'openai', 'codex/gpt-5.5')).toBe('low'),
     );
   });
 });
