@@ -319,6 +319,24 @@ describe('putBytesToOss — 传输栈回退', () => {
     expect(__testing.electronNetPreferredHosts.has('oss.example')).toBe(false);
   });
 
+  it('记忆命中跳被拒 + 默认栈网络失败 → 可见串只留 errno,不混入中间态的 HTTP 码', async () => {
+    // 那一跳的 403 是"已判定不可信、已换栈"的中间态;混进可见串会把人往权限
+    // 方向带,而真正卡住的是后面这跳的网络故障。
+    __testing.electronNetPreferredHosts.set('oss.example', Date.now());
+    netFetchMock.mockResolvedValue({ ok: false, status: 403, text: async () => '' });
+    const undiciErr = new TypeError('fetch failed');
+    undiciErr.cause = Object.assign(new Error('connect ETIMEDOUT 10.0.0.1:443'), {
+      code: 'ETIMEDOUT',
+    });
+    undiciFetchMock.mockRejectedValue(undiciErr);
+
+    const message = await uploadLocalFile('/tmp/a.png').catch((err: Error) => err.message);
+
+    expect(message).toContain('ETIMEDOUT');
+    expect(message).not.toContain('403');
+    expect(message).not.toContain('HTTP_');
+  });
+
   it('两跳都被 HTTP 拒绝 → 抛默认栈的状态码结论', async () => {
     __testing.electronNetPreferredHosts.set('oss.example', Date.now());
     netFetchMock.mockResolvedValue({ ok: false, status: 403, text: async () => '' });

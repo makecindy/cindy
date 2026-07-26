@@ -331,8 +331,10 @@ async function putBytesToOss(
         // 这条记忆已经不值得信:清掉,让本次与后续都回到 undici 优先。
         electronNetPreferredHosts.delete(host);
         bodySource.dispose?.();
+        // 只进 failures(日志),不进 hints:这一跳是"已判定不可信、已换栈"的中间
+        // 态,把它的 HTTP 码混进用户可见串会把人往权限方向带,而真正卡住的是后面
+        // 那跳。默认栈自己被拒时是 non-retriable,状态码照样会原样抛出。
         failures.push(`${transport.name}:HTTP ${err.httpStatus}`);
-        hints.push(`HTTP_${err.httpStatus}`);
         log.warn(`OSS PUT cached fallback rejected host=${host} status=${err.httpStatus}; retrying via undici`);
         continue;
       }
@@ -363,7 +365,8 @@ async function putBytesToOss(
   // 用户可见串只留 errno;host 与完整 cause 链已进日志(见上面的 warn)。
   // 括号而非冒号:控制端模板本身是「取回 PDF 失败：{{detail}}」,再来一个冒号
   // 会串成两级冒号。中文标点按 i18n/GLOSSARY.md 的 zh-CN 规则用全角。
-  throw new Error(`OSS 上传失败（${[...new Set(hints)].join(' / ')}）`);
+  const visibleHints = [...new Set(hints)].join(' / ');
+  throw new Error(visibleHints ? `OSS 上传失败（${visibleHints}）` : 'OSS 上传失败');
 }
 
 /**
