@@ -223,7 +223,7 @@ async function extractVerifiedFiles(zipBuffer, platformKey, destDir) {
 /**
  * 确保指定平台的 platform-tools 二进制就位。
  *
- * @returns {Promise<{ status: 'skipped'|'installed', version: string, files?: string[] }>}
+ * @returns {Promise<{ status: 'skipped'|'installed', version: string, files?: string[], source?: string }>}
  */
 export async function ensureAndroidPlatformTools({
   platformKey = currentPlatformKey(),
