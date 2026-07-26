@@ -244,7 +244,11 @@ describe('interactionModel', () => {
 
     // 共享层的 title / label 是中文直出;控制端必须按 locale 翻译后再渲染,否则
     // 队列头在 en / ja / ko 下仍是中文。
-    expect(interactionPanelSource).toContain('interaction.kinds.${kind}.${field}');
+    // kind 来自远端、可为任意字符串:必须先经白名单归一再拼 i18next key,
+    // 否则带 `.` / `__proto__` 的值会参与路径解析。
+    expect(interactionPanelSource).toContain('interaction.kinds.${localizedInteractionKindKey(itemKind)}.${field}');
+    expect(interactionPanelSource).toContain('const LOCALIZED_INTERACTION_KINDS = new Set([');
+    expect(interactionPanelSource).not.toContain('interaction.kinds.${kind}.');
     expect(interactionPanelSource).not.toContain('title: selectedQueueItem?.title');
     // positionLabel 会被插进队列切换的 accessibility 文案,同样必须翻译,
     // 否则读屏在非中文 locale 下念混语。

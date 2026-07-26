@@ -72,6 +72,25 @@ import { contentToPreview } from '@/utils/contentPreview';
 
 const PLAN_PREVIEW_LINE_HEIGHT = 20;
 
+/**
+ * 有本地化文案的 interaction kind 白名单(与 interaction.json 的 `kinds` 键一一对应)。
+ *
+ * kind 来自远端请求、可以是任意字符串,不能直接拼进 i18next 的 key 路径:带 `.` 的值
+ * 会改变路径解析,`__proto__` 这类还会牵扯原型链(#530 review)。白名单外一律归到
+ * `fallback`。
+ */
+const LOCALIZED_INTERACTION_KINDS = new Set([
+  'permission',
+  'ask_user_question',
+  'plan_review',
+  'issue_confirm',
+  'plugin_setup',
+]);
+
+function localizedInteractionKindKey(kind: string): string {
+  return LOCALIZED_INTERACTION_KINDS.has(kind) ? kind : 'fallback';
+}
+
 export type MobilePlanViewerState = 'half' | 'expanded' | 'minimized' | 'edit';
 type RestorablePlanViewerState = Exclude<MobilePlanViewerState, 'minimized'>;
 
@@ -137,9 +156,8 @@ export function InteractionPanel({
     ?? queuePresentation.active;
   // 共享层的 title / label 是中文直出(desktop 时代留下的),控制端要按当前 locale
   // 翻译后再渲染,否则这些队列文案在 en / ja / ko 下仍是中文(#530 review)。
-  const localizedKindText = (kind: string, field: 'title' | 'label') => t(
-    `interaction.kinds.${kind}.${field}`,
-    { defaultValue: t(`interaction.kinds.fallback.${field}`) },
+  const localizedKindText = (itemKind: string, field: 'title' | 'label') => t(
+    `interaction.kinds.${localizedInteractionKindKey(itemKind)}.${field}`,
   );
   // positionLabel 同样是中文直出,且会被插进队列切换的 accessibility 文案 —— 不翻的话
   // VoiceOver / TalkBack 在 en / ja / ko 下会念出混语(#530 review)。
