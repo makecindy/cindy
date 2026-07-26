@@ -23,8 +23,8 @@
 每个产物闭包都按显式目标平台收集，产物内容不受生成机器上装了哪些平台可选包影响。
 生成器判断可选依赖是否存在靠 `node_modules` 里有没有对应目录，而 pnpm 并不保证只
 安装 `pnpm.supportedArchitectures` 声明的架构，因此省掉目标平台参数会让声明内容随
-生成机器漂移。覆盖全部支持架构的闭包由 `SUPPORTED_TARGETS` 按该字段叉乘得出；新增
-闭包时不要省掉目标平台参数。
+生成机器漂移。覆盖全部支持架构的闭包由 `SUPPORTED_TARGETS` 按该字段叉乘得出。目标平台
+是必填的：省掉它会让生成直接失败，而不是静默产出与本机相关的声明。
 
 移动端使用 Expo managed workflow，完整 Pod/Gradle 图只在原生构建阶段产生。因此移动端
 静态声明会明确标注范围，不能替代发布构建所产生的 `Podfile.lock` 或 Gradle dependency
