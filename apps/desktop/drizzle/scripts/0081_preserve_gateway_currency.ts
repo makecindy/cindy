@@ -130,39 +130,41 @@ function relabelMessageAgentMeta(db: Database.Database): void {
 }
 
 function run(db: Database.Database): void {
-  relabelMoneyColumns(
-    db,
-    'daily_spend',
-    'cost_amount',
-    'cost_currency',
-    'cost_is_approximate',
-    [],
-  );
-  relabelMoneyColumns(
-    db,
-    'daily_model_usage',
-    'cost_amount',
-    'cost_currency',
-    'cost_is_approximate',
-    [],
-  );
-  relabelMoneyColumns(
-    db,
-    'sessions',
-    'total_cost_amount',
-    'total_cost_currency',
-    'total_cost_is_approximate',
-    [],
-  );
-  relabelMoneyColumns(
-    db,
-    'schedule_runs',
-    'cost_amount',
-    'cost_currency',
-    'cost_is_approximate',
-    ['estimated_value_amount'],
-  );
-  relabelMessageAgentMeta(db);
+  db.transaction(() => {
+    relabelMoneyColumns(
+      db,
+      'daily_spend',
+      'cost_amount',
+      'cost_currency',
+      'cost_is_approximate',
+      [],
+    );
+    relabelMoneyColumns(
+      db,
+      'daily_model_usage',
+      'cost_amount',
+      'cost_currency',
+      'cost_is_approximate',
+      [],
+    );
+    relabelMoneyColumns(
+      db,
+      'sessions',
+      'total_cost_amount',
+      'total_cost_currency',
+      'total_cost_is_approximate',
+      [],
+    );
+    relabelMoneyColumns(
+      db,
+      'schedule_runs',
+      'cost_amount',
+      'cost_currency',
+      'cost_is_approximate',
+      ['estimated_value_amount'],
+    );
+    relabelMessageAgentMeta(db);
+  })();
 }
 
 module.exports = { run };

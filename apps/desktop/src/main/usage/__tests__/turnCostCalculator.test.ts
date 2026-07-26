@@ -337,6 +337,33 @@ describe('resolveClaudeTurnCostSinks', () => {
     expect(result.perModel.map((item) => item.source)).toEqual(['gateway', 'gateway']);
   });
 
+  it('degrades to the gateway-quoted currency when a fallback segment mixes currencies', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, { currency: 'CNY' }),
+    );
+    const result = resolveClaudeTurnCostSinks(
+      [
+        delta('claude-opus-4-8', { inputTokensDelta: 1_000_000 }),
+        delta('unquoted-model', { costUsdDelta: 2 }),
+      ],
+      pricing,
+      XD_GATEWAY,
+    );
+    expect(result.turnMoney).toMatchObject({
+      amount: 5,
+      currency: 'CNY',
+      kind: 'actual-cost',
+    });
+    expect(result.perModel.map((item) => item.money?.currency)).toEqual([
+      'CNY',
+      'USD',
+    ]);
+    expect(result.perModel.map((item) => item.source)).toEqual([
+      'gateway',
+      'sdk-fallback',
+    ]);
+  });
+
   it('returns null total when the route is subscription-only', () => {
     const result = resolveClaudeTurnCostSinks(
       [delta('claude-opus-4-8', { costUsdDelta: 4 })],

@@ -487,8 +487,16 @@ export async function readUsageHistoryWith(
   const todayKey = deps.todayKey();
 
   const allDays = await deps.getAllSpendDays();
+  // 阈值启发式(异常检测)使用的日金额表必须与账本币种同单位:币种切换过渡
+  // 期的异币种历史日不进表(按 0 计),避免拿一种币种的阈值去比另一种的数值。
+  const ledgerCurrency =
+    allDays.find((row) => row.day === todayKey)?.money.currency ??
+    allDays[allDays.length - 1]?.money.currency ??
+    DEFAULT_USAGE_CURRENCY;
   const spendByDay = new Map(
-    allDays.map((row) => [row.day, row.money.amount]),
+    allDays
+      .filter((row) => row.money.currency === ledgerCurrency)
+      .map((row) => [row.day, row.money.amount]),
   );
   const zeroActual = () => zeroUsageMoney();
   const zeroEstimate = () => zeroUsageMoney('value-estimate');
@@ -637,10 +645,6 @@ export async function readUsageHistoryWith(
   // 固定汇率把阈值折到该行币种再比较。仅阈值启发式用,不产生任何展示金额。
   const heuristicThreshold = (base: number, currency: MoneyCurrency): number =>
     currency === 'CNY' ? base * USD_TO_CNY_FIXED_RATE : base;
-  const ledgerCurrency =
-    allDays.find((row) => row.day === todayKey)?.money.currency ??
-    allDays[allDays.length - 1]?.money.currency ??
-    DEFAULT_USAGE_CURRENCY;
   const activeDayMin = heuristicThreshold(ACTIVE_DAY_MIN_USD, ledgerCurrency);
   const anomalyMinToday = heuristicThreshold(
     ANOMALY_MIN_TODAY_USD,
@@ -712,7 +716,7 @@ export async function readUsageHistoryWith(
           ? null
           : {
               amount: anomalyRaw.trailing7DayAvg,
-              currency: today.currency,
+              currency: ledgerCurrency,
               approximate: trailing7Approximate,
               kind: 'actual-cost',
               ...(trailing7Approximate
