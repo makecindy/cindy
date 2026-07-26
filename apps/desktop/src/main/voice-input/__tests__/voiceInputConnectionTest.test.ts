@@ -116,4 +116,50 @@ describe('voice input connection test', () => {
     });
     expect(secondCreate).not.toHaveBeenCalled();
   });
+
+  it('rejects a concurrent probe for a different active configuration', async () => {
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstCreate = vi.fn(async () => {
+      await firstStarted;
+      return {
+        start: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined),
+      } as unknown as AsrProvider;
+    });
+    const secondCreate = vi.fn(async () => ({
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    } as unknown as AsrProvider));
+
+    const first = runSerializedVoiceInputConnectionTest({
+      provider: 'litellm-gpt-realtime-whisper',
+      providerModel: 'gpt-realtime-whisper',
+      configurationKey: 'selection-a',
+      createProvider: firstCreate,
+    });
+    await Promise.resolve();
+
+    await expect(runSerializedVoiceInputConnectionTest({
+      provider: 'elevenlabs-scribe-realtime',
+      providerModel: 'scribe_v2_realtime',
+      configurationKey: 'selection-b',
+      createProvider: secondCreate,
+    })).resolves.toEqual({
+      ok: false,
+      provider: 'elevenlabs-scribe-realtime',
+      providerModel: 'scribe_v2_realtime',
+      reason: 'service-error',
+    });
+    expect(secondCreate).not.toHaveBeenCalled();
+
+    releaseFirst();
+    await expect(first).resolves.toEqual({
+      ok: true,
+      provider: 'litellm-gpt-realtime-whisper',
+      providerModel: 'gpt-realtime-whisper',
+    });
+  });
 });

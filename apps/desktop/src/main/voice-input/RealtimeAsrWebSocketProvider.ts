@@ -389,6 +389,12 @@ function createWarmRealtimeSession(
         settled = true;
         if (warmRealtimeSession?.socket === socket) warmRealtimeSession = null;
         cleanup();
+        // A readiness failure can happen after the upgrade succeeds. Do not
+        // leave that unauthenticated/idle socket alive after its promise has
+        // rejected; it can otherwise linger until the upstream closes it.
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.terminate();
+        }
         reject(error);
       };
       const resolveOnce = (): void => {

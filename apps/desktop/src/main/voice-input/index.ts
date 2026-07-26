@@ -670,6 +670,18 @@ function resolveVoiceInputProviderModel(provider: VoiceInputProviderKind): strin
     : getVoiceInputAsrProfile(provider).model;
 }
 
+function voiceInputConnectionTestConfigurationKey(
+  selection: VoiceInputModelSelection,
+): string {
+  return JSON.stringify({
+    serviceMode: selection.serviceMode,
+    asrProvider: selection.asrProvider,
+    asrProviderChain: selection.asrProviderChain,
+    customAsr: selection.customAsr ?? null,
+    customAsrCredentialRevision,
+  });
+}
+
 // Configured ASR fallback chain (primary first), reordered so providers in
 // sticky-failover cooldown sort behind healthy ones.
 function resolveVoiceInputAsrChain(): VoiceInputProviderKind[] {
@@ -1805,6 +1817,7 @@ export function registerVoiceInputIpc(): void {
       return runSerializedVoiceInputConnectionTest({
         provider,
         providerModel,
+        configurationKey: voiceInputConnectionTestConfigurationKey(selection),
         createProvider: () => {
           invalidatePrewarmedRealtimeAsrWebSocketSession();
           return createVoiceInputProvider(provider, undefined);

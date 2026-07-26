@@ -9,11 +9,16 @@ import type { VoiceInputProviderKind } from '../../shared/voiceInputAsrProfiles.
 export type VoiceInputConnectionTestOptions = {
   provider: VoiceInputProviderKind;
   providerModel: string;
+  /** Stable, non-secret identity of the configuration being probed. */
+  configurationKey?: string;
   createProvider: () => Promise<AsrProvider>;
   onError?: (error: unknown) => void;
 };
 
-let activeConnectionTest: Promise<VoiceInputConnectionTestResult> | null = null;
+let activeConnectionTest: {
+  key: string;
+  promise: Promise<VoiceInputConnectionTestResult>;
+} | null = null;
 
 /**
  * Coalesce connection probes in Main so a compromised renderer cannot create
@@ -22,11 +27,20 @@ let activeConnectionTest: Promise<VoiceInputConnectionTestResult> | null = null;
 export function runSerializedVoiceInputConnectionTest(
   options: VoiceInputConnectionTestOptions,
 ): Promise<VoiceInputConnectionTestResult> {
-  if (activeConnectionTest) return activeConnectionTest;
+  const key = options.configurationKey ?? `${options.provider}:${options.providerModel}`;
+  if (activeConnectionTest) {
+    if (activeConnectionTest.key === key) return activeConnectionTest.promise;
+    return Promise.resolve({
+      ok: false,
+      provider: options.provider,
+      providerModel: options.providerModel,
+      reason: 'service-error',
+    });
+  }
   const current = runVoiceInputConnectionTest(options).finally(() => {
-    if (activeConnectionTest === current) activeConnectionTest = null;
+    if (activeConnectionTest?.promise === current) activeConnectionTest = null;
   });
-  activeConnectionTest = current;
+  activeConnectionTest = { key, promise: current };
   return current;
 }
 

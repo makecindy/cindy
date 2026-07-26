@@ -350,6 +350,42 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
   });
 
+  it('closes a prewarmed socket when readiness fails after upgrade', async () => {
+    const server = new WebSocketServer({ port: 0 });
+    let serverSocket: WebSocket | undefined;
+    server.on('connection', (socket) => {
+      serverSocket = socket;
+      socket.on('message', (data) => {
+        const message = JSON.parse(data.toString()) as { type?: string };
+        if (message.type === 'session.update') {
+          socket.send(JSON.stringify({
+            type: 'error',
+            error: { message: 'session rejected' },
+          }));
+        }
+      });
+    });
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      await prewarmRealtimeAsrWebSocketSession({
+        accessTokenProvider: async () => 'test-key',
+        credentialCacheKey: 'test-key-revision',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+        model: 'gpt-realtime-whisper',
+      });
+
+      await waitFor(() => serverSocket?.readyState === WebSocket.CLOSED);
+    } finally {
+      serverSocket?.terminate();
+      invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('does not install a prewarm whose credential lookup finishes after invalidation', async () => {
     const server = new WebSocketServer({ port: 0 });
     let connectionCount = 0;
