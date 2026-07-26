@@ -58,4 +58,20 @@ describe('workspaceProviderSourceStore', () => {
     setWorkspaceProviderSource('telegram', null, 'chat', 'anthropic');
     expect(getWorkspaceProviderSource('telegram', null, 'chat')).toBe('anthropic');
   });
+
+  it('读侧与 IPC 同规过滤不合规条目(外部写入异常值不透传)', () => {
+    fs.writeFileSync(
+      path.join(tmp.dir, 'hook-workspace-provider-source.json'),
+      JSON.stringify({
+        entries: [
+          { channel: 'telegram', teamId: null, workspace: 'chat', providerId: 'anthropic' },
+          { channel: 'telegram', teamId: null, workspace: 'bad alias!', providerId: 'x' },
+          { channel: 'telegram', teamId: null, workspace: 'ok', providerId: 'p'.repeat(200) },
+        ],
+      }),
+    );
+    expect(listWorkspaceProviderSources()).toEqual([
+      { channel: 'telegram', teamId: null, workspace: 'chat', providerId: 'anthropic' },
+    ]);
+  });
 });

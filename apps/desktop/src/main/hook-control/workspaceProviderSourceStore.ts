@@ -17,7 +17,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { HookWorkspaceProviderSourceEntry } from '../../shared/hookControlIpc.js';
+import {
+  HOOK_WORKSPACE_ALIAS_RE,
+  type HookWorkspaceProviderSourceEntry,
+} from '../../shared/hookControlIpc.js';
 import { ownerScopedImUserDataPath } from '../im/ownerScopedStorage.js';
 
 export type HookProviderChannel = HookWorkspaceProviderSourceEntry['channel'];
@@ -37,16 +40,19 @@ function filePath(): string {
   return ownerScopedImUserDataPath(FILE_NAME);
 }
 
+// 读侧与 IPC 写侧同规收紧(Copilot review):文件被手工改坏/外部写入异常值时,
+// 不合规条目在读取即被过滤,不透传 renderer、不参与派发查找。
 function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
   return (
     (r.channel === 'slack' || r.channel === 'telegram') &&
-    (r.teamId === null || typeof r.teamId === 'string') &&
+    (r.teamId === null || (typeof r.teamId === 'string' && r.teamId.length > 0 && r.teamId.length <= 64)) &&
     typeof r.workspace === 'string' &&
-    r.workspace.length > 0 &&
+    HOOK_WORKSPACE_ALIAS_RE.test(r.workspace) &&
     typeof r.providerId === 'string' &&
-    r.providerId.length > 0
+    r.providerId.length > 0 &&
+    r.providerId.length <= 128
   );
 }
 
