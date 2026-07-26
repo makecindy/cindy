@@ -693,24 +693,39 @@ export function GhostPluginPage() {
     // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
     const marketBusyLease = acquireMarketBusy(marketDetail.pluginId);
     if (!marketBusyLease) return;
+    // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
+    // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
+    const isUpdate = marketDetail.installState === 'update-available';
     try {
       const confirmed = await confirm({
-        title: t('settings.ghosts.market.installConfirmTitle', {
-          name: marketDetail.name,
-        }),
-        description: t('settings.ghosts.market.installConfirmDescription'),
-        confirmText: t('settings.ghosts.market.install'),
+        title: isUpdate
+          ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
+          : t('settings.ghosts.market.installConfirmTitle', {
+              name: marketDetail.name,
+            }),
+        description: isUpdate
+          ? t('settings.ghosts.market.updateConfirmDescription')
+          : t('settings.ghosts.market.installConfirmDescription'),
+        confirmText: isUpdate
+          ? t('settings.ghosts.updateConfirm.confirm')
+          : t('settings.ghosts.market.install'),
         cancelText: t('settings.ghosts.installConfirm.cancel'),
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-      // 市场首装装完即开(2026-07-26 定案),toast 用"已安装"而非沉睡文案。
+      // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
+      // 用"已更新"(生效状态未被改变)。
       toast.success(
-        t('settings.ghosts.toast.installed', {
-          name: result.ghost.manifest.name,
-        }),
+        isUpdate
+          ? t('settings.ghosts.toast.updated', {
+              name: result.ghost.manifest.name,
+              version: result.ghost.manifest.version,
+            })
+          : t('settings.ghosts.toast.installed', {
+              name: result.ghost.manifest.name,
+            }),
       );
       setMarketDetail(null);
       setSelectedId(result.ghost.manifest.id);

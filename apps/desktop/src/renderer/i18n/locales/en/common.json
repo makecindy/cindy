@@ -2300,7 +2300,8 @@
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. Plugins are enabled automatically after install and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "installConfirmTitle": "Install “{{name}}”?",
-        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime."
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
+        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its enabled state and panel position stay unchanged."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
