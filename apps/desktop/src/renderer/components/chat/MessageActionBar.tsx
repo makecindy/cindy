@@ -51,7 +51,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
-import { formatTurnCostMoney, formatTurnCostUsd } from '@/lib/usageFormat';
+import { formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -327,11 +327,10 @@ export function MessageActionBar({
   const turnCostTooltipNode =
     displayedMoney && displayedMoney.amount > 0 && turnUsageDetails ? (
       <span className="whitespace-pre-line">
-        {isUserTurnTotal && (
-          <>{t('chat.messageActionBar.userTurnCostTotalLine', {
+        {isUserTurnTotal &&
+          `${t('chat.messageActionBar.userTurnCostTotalLine', {
             cost: formatTurnCostMoney(displayedMoney),
-          })}\n</>
-        )}
+          })}\n`}
         {buildTurnUsageTooltipLines({
           details: turnUsageDetails,
           t,
