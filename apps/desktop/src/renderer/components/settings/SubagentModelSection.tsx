@@ -13,7 +13,6 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { useProviders } from '@/hooks/useProviders';
-import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import type { SubagentModelSettingsState } from '../../../shared/subagentModelSettings';
@@ -127,15 +126,15 @@ export function SubagentModelSection() {
             providerOffersModel(p, settings.claudeCode, 'claude-code')),
       ),
   );
-  // 「连接来源」CTA 只在「零可选模型」时接线,判据 = 已连接来源的可见模型并集为空
-  // (与面板列表同口径),而非只看 provider 连接标志 —— 来源连接着但动态模型发现为
-  // 空清单时,面板是零分段的 no-results,同样需要恢复入口(codex review)。反向:
-  // 仍有可选模型而已存模型 stale 时不接线,保留裸 id + 断开态的诊断显示,不被
-  // 「连接来源」标签覆盖(codex review 前轮)。
-  const hasSelectableClaudeModel =
-    visibleModelUnion(providers, 'claude-code', (pid, m) =>
-      isModelEnabled('claude-code', pid, m),
-    ).length > 0;
+  // 「连接来源」CTA 只在「目录层面零可选模型」时接线:零已连接来源,或来源连接着
+  // 但动态模型发现返回空清单 —— 两者面板都是零分段 no-results,需要恢复入口
+  // (codex review)。判据是**目录口径**(不带可见性过滤):可见性开关的「全部隐藏」
+  // 是被尊重的用户偏好,不是断连故障,按可见并集判空会在该状态下把 stale 模型的
+  // 裸 id + 断开态诊断换成误导的「连接来源」trigger(codex review);恢复入口在
+  // 可见性设置,与 composer 同口径。反向:仍有目录模型而已存模型 stale 时同样
+  // 不接线,保留诊断显示(codex review 前轮)。
+  const hasCatalogClaudeModel =
+    visibleModelUnion(providers, 'claude-code', () => true).length > 0;
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -176,13 +175,13 @@ export function SubagentModelSection() {
                 vendorKey="cc"
                 currentProviderId={settings.claudeCodeProviderId}
                 sourceDisconnected={sourceDisconnected}
-                // 零已连接来源的空态 CTA / 列表底部「连接来源」:开了供应商分段就必须
-                // 给恢复动作,否则空态是死卡(codex review);与 composer 同跳转。
-                // 仅「目录就绪且零来源」时接线:loading 中 providers 为空是数据没到,
-                // 提前接线会与「目录未就绪整行禁用」的交互冲突/闪烁(copilot review);
-                // 有来源时不接线以保留 stale 诊断,见 hasAnyClaudeSource 注。
+                // 目录层面零可选模型的空态 CTA / 列表底部「连接来源」:开了供应商分段
+                // 就必须给恢复动作,否则空态是死卡(codex review);与 composer 同跳转。
+                // 仅「目录就绪且目录并集为空」时接线:loading 中 providers 为空是数据
+                // 没到,提前接线会与「目录未就绪整行禁用」的交互冲突/闪烁(copilot
+                // review);目录有模型时不接线,见 hasCatalogClaudeModel 注。
                 onNavigateToProviders={
-                  providersLoading || hasSelectableClaudeModel
+                  providersLoading || hasCatalogClaudeModel
                     ? undefined
                     : () => navigate('/settings?tab=providers')
                 }

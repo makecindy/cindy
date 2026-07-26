@@ -32,6 +32,13 @@ vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// 恒 false = 模拟用户把全部模型用可见性开关隐藏。组件的 CTA 判据是**目录口径**,
+// 不得消费可见性(「全部隐藏」是被尊重的偏好,不是需要「连接来源」抢救的故障态,
+// codex review)——若未来改回可见并集口径,下方多数 CTA 断言会在这里翻红。
+vi.mock('@/state/modelVisibilityPrefs', () => ({
+  isModelEnabled: () => false,
+}));
+
 // 已连接 anthropic(提供 claude-opus-5 / claude-haiku-4-5);ghost-provider 不存在。
 const providersMock = vi.hoisted(() => ({
   loading: false,
@@ -301,10 +308,24 @@ describe('SubagentModelSection standard panel contract', () => {
 
   it('wires the connect CTA when connected providers expose zero selectable models', async () => {
     // 来源连接着但动态模型发现为空:面板是零分段 no-results,CTA 判据必须按
-    // 「可选模型并集」而非 provider 连接标志(codex review)。
+    // 「目录模型并集」而非 provider 连接标志(codex review)。
     providersMock.claudeModels = [];
     render(<SubagentModelSection />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.connectCta).toBe('true');
+  });
+
+  it('keeps the connect CTA off when all catalog models are hidden by visibility prefs', async () => {
+    // 文件顶部把 isModelEnabled mock 成恒 false = 用户把全部模型隐藏:这是被尊重的
+    // 显式偏好,不是断连故障。CTA 判据必须按目录口径不受可见性影响,否则该状态下
+    // stale 模型的裸 id + 断开态诊断会被误导的「连接来源」trigger 覆盖 —— 来源明明
+    // 连接着(codex review);恢复入口在可见性设置,与 composer 同口径。
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-ghost-model', claudeCodeProviderId: 'anthropic' }),
+    );
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.connectCta).toBe('false');
+    expect(selector.dataset.sourceDisconnected).toBe('true');
   });
 });
