@@ -207,16 +207,23 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * 由 draft.collab 拼出 createSession 后 enableOrca 的入参:与会话内 requestEnableCollab 同口径。
  * 有 workerConfig(用户在「开启协同」弹窗配过 role/model/…)则透传全量;否则只带 workerAgent 回退默认。
  */
-function draftEnableOrcaOptions(collab: CollabDraft, providers: ProviderView[]) {
+function draftEnableOrcaOptions(
+  collab: CollabDraft,
+  providers: ProviderView[],
+  providersReady: boolean,
+) {
   const workerAgent: 'claude-code' | 'codex' = collab.worker === 'codex' ? 'codex' : 'claude-code';
   const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
   // 草稿里持久化的来源在发送时按 live 目录重新收窄(已连接 + 提供该模型 + 未被可见性
   // 隐藏,与 CreateWorkerPopover.narrowProviderSource 同规则):草稿可跨重启存活,来源
   // 可能已断开/掉模型 —— 直接透传会撞 main 的 PROVIDER_ROUTE_UNAVAILABLE 精确 preflight,
-  // 让协同静默退化成单会话(codex review)。收窄为 undefined = 交回默认路由解析。
+  // 让协同退化成单会话(codex review)。收窄为 undefined = 交回默认路由解析。
+  // 仅在目录快照就绪时收窄:loading 中把空/滞后快照当权威会误清有效来源(静默降级,
+  // 用户无感);未就绪透传原值,真失效由 main 精确 preflight 报可操作错误(codex review)。
   const providerId = (() => {
     if (!cfg.providerId) return undefined;
+    if (!providersReady) return cfg.providerId;
     const provider = connectedProvidersForAgent(providers, workerAgent).find(
       (p) => p.id === cfg.providerId,
     );
@@ -517,7 +524,7 @@ export function NewMakerDraftRoute() {
   const { capabilities, loading: capabilitiesLoading } = useAgentCapabilities(capabilityAgentKind, effectiveDeviceLinkDeviceId);
   // device-link「以被控端为准」:远程草稿用被控端经隧道带来的 providers(per-provider,含 fast 能力);
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
-  const { providers: localProviders } = useProviders();
+  const { providers: localProviders, loading: localProvidersLoading } = useProviders();
   const { providers: deviceProviders, loading: deviceProvidersLoading } = useDeviceProviders(effectiveDeviceLinkDeviceId);
   const providers = effectiveDeviceLinkDeviceId ? deviceProviders : localProviders;
 
@@ -1576,7 +1583,7 @@ export function NewMakerDraftRoute() {
                   try {
                     const result = await window.electronAPI.maker.enableOrca(
                       newSession.id,
-                      draftEnableOrcaOptions(effectiveCollab, localProviders),
+                      draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
                     );
                     // worktree 创建在后台完成,组件可能已经切走;这里读取当前 URL,
                     // 避免用 render 时捕获的旧路由误判。
@@ -1690,7 +1697,7 @@ export function NewMakerDraftRoute() {
             try {
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
-                draftEnableOrcaOptions(effectiveCollab, localProviders),
+                draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
               );
               orcaNavTarget = `/cc-agent/${newSession.id}`;
               orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
@@ -1776,6 +1783,10 @@ export function NewMakerDraftRoute() {
       // workerConfig 也要进依赖:只改角色/模型/effort/初始任务(worker 类型不变)时,
       // 少了它 handleSend 会闭包吃旧的 effectiveCollab,起 Worker 用错配置(codex P2)。
       effectiveCollab.workerConfig,
+      // draftEnableOrcaOptions 现按 live 目录收窄草稿来源:快照与 loading 都要进
+      // 依赖,否则闭包吃旧快照,来源连/断后仍按陈旧目录收窄(codex review)。
+      localProviders,
+      localProvidersLoading,
       vendorAuthGate,
       createSession,
       navigate,
@@ -1973,7 +1984,7 @@ export function NewMakerDraftRoute() {
         try {
           const result = await window.electronAPI.maker.enableOrca(
             newSession.id,
-            draftEnableOrcaOptions(effectiveCollab, localProviders),
+            draftEnableOrcaOptions(effectiveCollab, localProviders, !localProvidersLoading),
           );
           orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
         } catch (err) {
@@ -2019,6 +2030,9 @@ export function NewMakerDraftRoute() {
       collabPolicy.refresh,
       collabPolicy.unavailable,
       collabPolicy.enabled,
+      // 同 handleSend:草稿来源收窄依赖 live 目录快照。
+      localProviders,
+      localProvidersLoading,
       patchCollab,
       navigate,
       t,
