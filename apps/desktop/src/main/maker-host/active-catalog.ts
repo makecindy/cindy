@@ -78,7 +78,7 @@ export interface XdGatewayModelInfo {
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
-  /** Fast 支持;缺省按 true(未登记模型的确定性默认:开了没效果无害)。 */
+  /** Fast 支持;缺省按 false(上游未声明时不猜测能力)。 */
   supportsFastMode?: boolean;
   /** 默认可见性;缺省按 true。 */
   defaultEnabled?: boolean;
@@ -490,7 +490,7 @@ function computeMerged(): Catalog {
   //   - perAgent 覆盖块按 tab 应用在基线字段之上;
   //   - efforts 字段缺失 = 未登记 → 合成 3 档(low/medium/high,默认 high);
   //     显式 [] = 登记为不可调 → 尊重为空;
-  //   - supportsFastMode 缺失 → true(开了没效果无害,但不能没有);
+  //   - supportsFastMode 缺失 → false(上游未声明就不能声称支持);
   //   - defaultEnabled 缺失 → 默认可见。
   // 放在所有 augment 之后:只影响 xd 供应商自己的模型列表,同 id 模型经其它供应商
   // (如 anthropic 订阅直连)仍照常可用。
@@ -532,7 +532,7 @@ function computeMerged(): Catalog {
           contextWindow: ov.contextWindow ?? gm.contextWindow ?? 200_000,
           efforts,
           defaultEffort,
-          supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? true,
+          supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? false,
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),

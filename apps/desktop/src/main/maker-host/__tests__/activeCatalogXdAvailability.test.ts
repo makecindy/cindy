@@ -4,7 +4,7 @@
  *   - 空列表 = 不展示任何 XD 模型;清除后不回退任何静态数据;
  *   - 元数据只信服务端下发 + 确定性默认值(不再回落产品目录条目):
  *       efforts 缺失 → 合成 3 档(low/medium/high,默认 high);显式 [] → 不可调;
- *       supportsFastMode 缺失 → true;defaultEnabled 缺失 → 默认可见;
+ *       supportsFastMode 缺失 → false;defaultEnabled 缺失 → 默认可见;
  *   - perAgent 覆盖块按 tab 应用(gpt 系 cc/codex 的 Fast / 窗口分叉);
  *   - tab 归属:服务端 agents > 仅 claude-code;
  *   - 其它供应商永不受影响。
@@ -45,7 +45,7 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('未登记模型的确定性默认:3 档 effort + fast=true + 仅 cc tab + 200k 窗口', () => {
+  it('未登记模型的确定性默认:3 档 effort + fast=false + 仅 cc tab + 200k 窗口', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id: 'brand-new-model' }]);
 
@@ -56,7 +56,7 @@ describe('XD 网关权威模型清单重建', () => {
       contextWindow: 200_000,
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
-      supportsFastMode: true,
+      supportsFastMode: false,
     });
     expect(xdModels('codex')).toEqual([]);
   });

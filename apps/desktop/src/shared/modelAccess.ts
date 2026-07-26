@@ -171,7 +171,7 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
-  /** Fast(加速档)支持;缺省按 true 处理(开了没效果无害,但不能没有)。 */
+  /** Fast(加速档)支持;缺省按 false 处理(上游未声明时不猜测能力)。 */
   supportsFastMode?: boolean;
   /** 是否默认出现在模型选择器;缺省按 true(默认可见)。 */
   defaultEnabled?: boolean;

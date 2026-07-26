@@ -155,7 +155,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(metadata.version).toBe(1);
     const expected = {
       'qwen/qwen3.7-max': 'Qwen 3.7 Max',
-      'moonshot/kimi-k3': 'Kimi K3',
+      'moonshotai/kimi-k3': 'Kimi K3',
       'z-ai/glm-5.2': 'GLM-5.2',
       'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
       'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
@@ -167,6 +167,53 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
         agents: ['claude-code', 'codex'],
         name,
       });
+    }
+
+    expect(metadata.models?.['bytedance-seed/seed-2.1-pro']).toMatchObject({
+      efforts: ['minimal', 'low', 'medium', 'high'],
+      defaultEffort: 'minimal',
+      supportsFastMode: false,
+      perAgent: {
+        'claude-code': {
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'low',
+        },
+      },
+    });
+    expect(metadata.models?.['moonshotai/kimi-k3']).toMatchObject({
+      efforts: ['low', 'high', 'max'],
+      defaultEffort: 'max',
+      supportsFastMode: false,
+    });
+    expect(metadata.models?.['qwen/qwen3.8-max-preview']).toMatchObject({
+      efforts: ['low', 'high', 'xhigh'],
+      defaultEffort: 'xhigh',
+      supportsFastMode: false,
+    });
+    expect(metadata.models?.['z-ai/glm-5.2']).toMatchObject({
+      efforts: ['minimal', 'high', 'max'],
+      defaultEffort: 'max',
+      supportsFastMode: false,
+      perAgent: {
+        'claude-code': {
+          efforts: ['high', 'max'],
+          defaultEffort: 'max',
+        },
+      },
+    });
+    for (const id of ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash']) {
+      expect(metadata.models?.[id], id).toMatchObject({
+        efforts: ['high', 'max'],
+        defaultEffort: 'high',
+        supportsFastMode: false,
+      });
+    }
+    for (const id of [
+      'bytedance-seed/seed-2.1-pro',
+      'moonshotai/kimi-k3',
+      'qwen/qwen3.8-max-preview',
+    ]) {
+      expect(metadata.models?.[id], id).not.toHaveProperty('description');
     }
   });
 

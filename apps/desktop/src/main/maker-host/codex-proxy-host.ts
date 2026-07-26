@@ -642,7 +642,7 @@ function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<strin
 }
 
 const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
-  'moonshot/kimi-k3',
+  'moonshotai/kimi-k3',
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
 ]);
