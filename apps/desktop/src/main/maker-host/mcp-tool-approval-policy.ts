@@ -23,11 +23,15 @@ import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
 /**
  * 精确到工具的只读放行表，键为 `<server>::<tool>`。
  *
- * 只收录工具整体都无写副作用、且不外发数据的发现 / 状态入口，禁止 wildcard / 前缀
- * 匹配：progressive `call_tool`、`ghost_call` 等聚合入口的风险取决于内层 action，不能
- * 因 server 属于第一方就粗粒度放行。`WebSearch` / `WebFetch` 虽只读但会把搜索词 / URL
- * 发往外部服务（exfiltration 面），与 maker-core `READ_ONLY_CLAUDE_TOOLS` 的既有边界
- * 保持一致，不列入免审批。新增工具默认继续走原权限链，必须 review 后显式加入。
+ * 只收录工具整体都无写副作用、且不把调用方提供的自由文本 / URL / 文件内容外发的
+ * 发现与状态入口，禁止 wildcard / 前缀匹配：progressive `call_tool`、`ghost_call` 等
+ * 聚合入口的风险取决于内层 action，不能因 server 属于第一方就粗粒度放行。
+ *
+ * 判据是「有没有携带内容出境」，不是「有没有网络往返」：`cindy_slack::slack_status`
+ * 会经 bridge 向 slack-hook-server 查一次绑定状态，参数为空、返回的是本机已有的授权
+ * 信息，因此仍算只读；`WebSearch` / `WebFetch` 则把搜索词 / URL 送到外部服务
+ * （exfiltration 面），与 maker-core `READ_ONLY_CLAUDE_TOOLS` 的既有边界一致，不列入
+ * 免审批。新增工具默认继续走原权限链，必须 review 后显式加入。
  *
  * 这张表同时是 Claude `options.allowedTools` 的真源（见
  * getDesktopClaudeReadOnlyAllowedTools）：allowedTools 在 CLI 层就免询问，比

@@ -196,18 +196,29 @@ function isReadOnlyClaudeTool(toolName: string): boolean {
 /**
  * 把 Claude SDK 的 MCP 工具名拆成 host 审批策略要的 { serverName, toolName }。
  *
- * SDK 命名格式固定为 `mcp__<server>__<tool>`: server 段自身可以含单下划线
- * (`cindy_browser`), 分隔符是双下划线, 所以按 `__` 切分后首段即 server, 其余重新
- * 拼回工具名(渐进式 server 只有 `list_tools` / `call_tool` 两个外层工具)。
- * 非 MCP 的内置工具(Bash / Read / ...)返回 null, 由原有权限链处理。
+ * SDK 命名格式为 `mcp__<server>__<tool>`, 但**不能**按 `__` 盲切首段当 server ——
+ * server 名自身可以含 `__`(自定义 MCP 的 id 正则是 `/^[a-z0-9_-]+$/`, 下划线合法)。
+ * 盲切会让 id 为 `cindy_browser__evil` 的第三方 server 被识别成第一方 `cindy_browser`,
+ * 直接继承信任表里的静默放行 —— 这是一条实打实的提权路径。
+ *
+ * 因此只在**本 session 实际注册过**的 server 名里做前缀匹配, 命中多个时取最长者
+ * (`cindy_browser__evil` 胜过 `cindy_browser`), 保证归属唯一。名字对不上任何已注册
+ * server 时返回 null, 调用方按"不查策略"处理 —— 走原有权限链, 不放行。
  */
-function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | null {
+function resolveMcpToolTarget(
+  toolName: string,
+  registeredServerNames: ReadonlySet<string>,
+): { serverName: string; toolName: string } | null {
   if (!toolName.startsWith('mcp__')) return null;
-  const [serverName, ...rest] = toolName.slice('mcp__'.length).split('__');
-  if (!serverName || rest.length === 0) return null;
-  const inner = rest.join('__');
-  if (!inner) return null;
-  return { serverName, toolName: inner };
+  let best: { serverName: string; toolName: string } | null = null;
+  for (const serverName of registeredServerNames) {
+    const prefix = `mcp__${serverName}__`;
+    if (!toolName.startsWith(prefix) || toolName.length <= prefix.length) continue;
+    if (!best || serverName.length > best.serverName.length) {
+      best = { serverName, toolName: toolName.slice(prefix.length) };
+    }
+  }
+  return best;
 }
 
 /**
@@ -851,6 +862,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     const claudeAllowedTools = this.deps.claudeAllowedTools?.length
       ? [...this.deps.claudeAllowedTools]
       : undefined;
+    /**
+     * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
+     * canUseTool 用它把 `mcp__<server>__<tool>` 归属到唯一 server; 空集合时
+     * 一律解析失败 → MCP 策略不参与判定, 维持原权限链。
+     */
+    let registeredMcpServerNames: ReadonlySet<string> = new Set();
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const providers = mcpProviders;
       if (providers.length === 0) return undefined;
@@ -874,6 +891,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (!config) continue;
         out[provider.name] = config as McpServerConfig;
       }
+      // canUseTool 只认这批真实注册过的 server 名, 不靠 `mcp__` 工具名切分猜归属
+      // (见 resolveMcpToolTarget: 自定义 server id 可以含 `__`, 盲切会被冒名顶替)。
+      registeredMcpServerNames = new Set(Object.keys(out));
       return Object.keys(out).length > 0 ? out : undefined;
     };
 
@@ -909,6 +929,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       kind: InteractionRequest['kind'];
       resolve: (d: InteractionDecision) => void;
       settled: boolean;
+      /** prompt-each-time 高风险审批: 切到宽松模式时也不接受 dismissAllPending('allow')。 */
+      forcePrompt?: boolean;
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
@@ -922,13 +944,21 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 任一时刻可由 dismissAllPending 强制提前 resolve(走 settled flag 防止 host 后续回调
      * 又 resolve 一次)。
      */
-    async function dispatchInteraction(req: InteractionRequest): Promise<InteractionDecision> {
+    async function dispatchInteraction(
+      req: InteractionRequest,
+      opts?: { forcePrompt?: boolean },
+    ): Promise<InteractionDecision> {
       if (!interactionResolver) {
         return safeDefaultDecision(req.kind, 'no_resolver_attached');
       }
       const resolver = interactionResolver;
       return new Promise<InteractionDecision>((resolve) => {
-        const entry: PendingEntry = { kind: req.kind, resolve, settled: false };
+        const entry: PendingEntry = {
+          kind: req.kind,
+          resolve,
+          settled: false,
+          ...(opts?.forcePrompt ? { forcePrompt: true } : {}),
+        };
         pendingInteractions.set(req.requestId, entry);
         const finalize = (d: InteractionDecision) => {
           if (entry.settled) return;
@@ -956,13 +986,23 @@ export class ClaudeCodeAgent extends BaseAgent {
       const entries = Array.from(pendingInteractions.entries());
       for (const [requestId, entry] of entries) {
         if (entry.settled) continue;
-        const decision = resolveAs === 'allow' && entry.kind !== 'ask_user_question'
+        // forcePrompt(prompt-each-time 高风险审批)不接受"切到宽松模式"的批量放行 ——
+        // 没拿到用户对这一次调用的明确确认就 fail-closed 拒绝, 与 Codex 侧同名逻辑
+        // 一致。否则用户在 pending 期间切到 auto / bypassPermissions, 一个破坏性的
+        // contacts 调用就被自动 allow 了。
+        const effectiveResolveAs: 'allow' | 'deny' =
+          resolveAs === 'allow' && entry.forcePrompt === true ? 'deny' : resolveAs;
+        const decision = effectiveResolveAs === 'allow' && entry.kind !== 'ask_user_question'
           ? ({ kind: entry.kind, behavior: 'allow' } as InteractionDecision)
           : safeDefaultDecision(entry.kind, reason);
         entry.settled = true;
         pendingInteractions.delete(requestId);
         entry.resolve(decision);
-        const dismissedPayload: InteractionDismissedEvent = { requestId, reason, resolvedAs: resolveAs };
+        const dismissedPayload: InteractionDismissedEvent = {
+          requestId,
+          reason,
+          resolvedAs: effectiveResolveAs,
+        };
         eventQueue.push({ type: 'interaction_dismissed', data: dismissedPayload, source: 'claude-code' });
       }
     }
@@ -1059,15 +1099,35 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
 
       // ── 3. 其他工具 → permission kind ──
-      // 3a. MCP 工具先过 host 审批策略 —— 与 Codex 的 mcpServerElicitation 同一个
+      // 没接 resolver → fail-closed(安全拦截逻辑不许 fail-open)。
+      // 正常流程里 Session 构造时**必定**注入 resolver(见 session.ts:
+      // setInteractionResolver, 且 host 没接 listener 时该 resolver 自身返回 deny),
+      // 故这里 interactionResolver 为 null 只可能是 misconfiguration / 裸 handle 直用。
+      // 此时对已知只读内省工具(Read/Glob/Grep/...)放行, 对会改文件 / 跑命令 / 发外部
+      // 消息的工具及一切未知工具一律 deny —— 不再依赖 SDK permissionMode 兜底。
+      //
+      // 这道闸必须在 MCP 审批策略**之前**: host 策略描述的是"这个工具值不值得打扰
+      // 用户", 不代表"没有用户在场也可以跑"。裸 handle 场景下没有任何人能撤销误判,
+      // 可信 MCP 同样落到 deny。
+      if (!interactionResolver) {
+        if (isReadOnlyClaudeTool(toolName)) {
+          return { behavior: 'allow', updatedInput: input };
+        }
+        log.warn('canUseTool without interactionResolver → fail-closed deny', { tool: toolName });
+        return { behavior: 'deny', message: 'no interaction resolver attached; denying non-read-only tool (fail-closed)' };
+      }
+
+      // 3a. MCP 工具过 host 审批策略 —— 与 Codex 的 mcpServerElicitation 同一个
       // deps.getMcpToolApprovalPolicy 真源。两端共用后, 同一个第一方 MCP 不会出现
       // "Codex 静默执行 / Claude 每次调用都弹窗"的分叉(浏览器自动化这类高频 server
       // 一次调研能攒出上百个权限请求)。
       //   auto-approve      → 静默放行, 不打扰用户
-      //   prompt-each-time  → 照常弹窗, 但剥掉会话级 suggestion(不给"总是允许")
+      //   prompt-each-time  → 照常弹窗, 且全程禁止持久化授权(suggestion 不下发、
+      //                       decision 带回来的 permissionUpdates 也丢弃、切到宽松
+      //                       模式时 pending 请求 fail-closed)
       //   prompt / 未注入   → 完全维持原有权限链
       // 策略抛错或返回非法值时按最保守的 prompt-each-time 处理(与 Codex 侧一致)。
-      const mcpTarget = parseMcpToolName(toolName);
+      const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
       let mcpApprovalPolicy: 'auto-approve' | 'prompt' | 'prompt-each-time' = 'prompt';
       if (mcpTarget && this.deps.getMcpToolApprovalPolicy) {
         try {
@@ -1100,20 +1160,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           return { behavior: 'allow', updatedInput: input };
         }
       }
-
-      // 没接 resolver → fail-closed(安全拦截逻辑不许 fail-open)。
-      // 正常流程里 Session 构造时**必定**注入 resolver(见 session.ts:
-      // setInteractionResolver, 且 host 没接 listener 时该 resolver 自身返回 deny),
-      // 故这里 interactionResolver 为 null 只可能是 misconfiguration / 裸 handle 直用。
-      // 此时对已知只读内省工具(Read/Glob/Grep/...)放行, 对会改文件 / 跑命令 / 发外部
-      // 消息的工具及一切未知工具一律 deny —— 不再依赖 SDK permissionMode 兜底。
-      if (!interactionResolver) {
-        if (isReadOnlyClaudeTool(toolName)) {
-          return { behavior: 'allow', updatedInput: input };
-        }
-        log.warn('canUseTool without interactionResolver → fail-closed deny', { tool: toolName });
-        return { behavior: 'deny', message: 'no interaction resolver attached; denying non-read-only tool (fail-closed)' };
-      }
+      const forcePrompt = mcpApprovalPolicy === 'prompt-each-time';
       const decision = await dispatchInteraction({
         kind: 'permission',
         requestId: options.toolUseID,
@@ -1124,7 +1171,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         description: options.description,
         // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
         // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
-        suggestions: mcpApprovalPolicy === 'prompt-each-time'
+        suggestions: forcePrompt
           ? undefined
           : this.normalizeSessionPermissionSuggestions(options.suggestions),
         metadata: {
@@ -1132,7 +1179,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
           ...(options.agentID ? { agentID: options.agentID } : {}),
         },
-      });
+      }, { forcePrompt });
       if (decision.kind !== 'permission') {
         log.warn('permission got mismatched decision', { tool: toolName, decKind: decision.kind });
         return { behavior: 'deny', message: 'resolver kind mismatch' };
@@ -1149,7 +1196,18 @@ export class ClaudeCodeAgent extends BaseAgent {
         // Pass-through vendor-specific permission rule updates. BaseAgent owns
         // the session-scope normalization; Claude SDK validates the final shape.
         // PermissionUpdate shapes; we don't validate — SDK throws on bad shape.
-        if (decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+        //
+        // forcePrompt 下必须在**消费决策**这一侧丢弃, 不能只靠不下发 suggestion:
+        // hook-control/interactions.ts 与 IM 卡片流会自己拼 permissionUpdates(不看
+        // request.suggestions), 原样转给 SDK 就等于给逐次确认的高风险 action 落了
+        // 一条会话规则, 之后的 canUseTool 全被跳过。本次调用仍按用户意愿放行。
+        if (forcePrompt) {
+          if (decision.permissionUpdates && decision.permissionUpdates.length > 0) {
+            log.warn('dropping session permission grant for prompt-each-time MCP tool', {
+              tool: toolName,
+            });
+          }
+        } else if (decision.permissionUpdates && decision.permissionUpdates.length > 0) {
           out.updatedPermissions = decision.permissionUpdates as PermissionUpdate[];
         }
         return out;

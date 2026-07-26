@@ -22,6 +22,7 @@ import type { AgentDeps, McpToolApprovalContext, McpToolApprovalPolicy } from '.
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import type { McpProvider } from '../../../interfaces/mcp-provider.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -53,8 +54,25 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
+/** 本 session 注册的 MCP server —— canUseTool 只认这批名字做归属判定。 */
+const REGISTERED_MCP_SERVERS = [
+  'cindy_browser',
+  'cindy_contacts',
+  'cindy_ssh',
+  // 自定义 MCP 的 id 正则允许下划线, 所以可以叫出这种冒充第一方前缀的名字。
+  'cindy_browser__evil',
+];
+
+function createMcpProviders(names: readonly string[]): McpProvider[] {
+  return names.map((name) => ({
+    name,
+    toClaudeSdkConfig: () => ({ type: 'stdio', command: 'true' }),
+  }));
+}
+
 function createDeps(
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
+  mcpServerNames: readonly string[] = REGISTERED_MCP_SERVERS,
 ): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
@@ -74,6 +92,7 @@ function createDeps(
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: createNoopLogger(),
+    mcpProviders: createMcpProviders(mcpServerNames),
     ...(getMcpToolApprovalPolicy ? { getMcpToolApprovalPolicy } : {}),
   };
 }
@@ -108,6 +127,13 @@ async function makeTempDir(): Promise<string> {
 /** 起一个 session 并暴露 SDK query 的 canUseTool + 收到的 interaction 请求。 */
 async function startSession(
   policy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
+  options?: {
+    mcpServerNames?: readonly string[];
+    /** 覆盖 resolver 的决策；默认简单 allow。返回 undefined 表示挂起不决策。 */
+    decide?: (req: InteractionRequest) => InteractionDecision | undefined;
+    /** true 时不注入 resolver，用于验证 fail-closed 分支。 */
+    bare?: boolean;
+  },
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -116,7 +142,7 @@ async function startSession(
   const fakeQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(fakeQuery);
 
-  const agent = new ClaudeCodeAgent(createDeps(policy));
+  const agent = new ClaudeCodeAgent(createDeps(policy, options?.mcpServerNames));
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
     model: 'claude-opus-4-6',
@@ -129,10 +155,16 @@ async function startSession(
   if (!queryOptions?.canUseTool) throw new Error('expected sdk query canUseTool');
 
   const seen: InteractionRequest[] = [];
-  handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
-    seen.push(req);
-    return { kind: 'permission', behavior: 'allow' };
-  });
+  if (!options?.bare) {
+    handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
+      seen.push(req);
+      const decided = options?.decide?.(req);
+      if (decided) return decided;
+      // undefined = 请求保持挂起，交给 dismissAllPending 结算。
+      if (options?.decide) return new Promise<InteractionDecision>(() => {});
+      return { kind: 'permission', behavior: 'allow' };
+    });
+  }
 
   return { agent, handle, canUseTool: queryOptions.canUseTool, seen };
 }
@@ -270,6 +302,133 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-nopolicy' });
 
     expect(permissionRequests(seen)).toHaveLength(1);
+    await handle.close();
+  });
+});
+
+describe('MCP server attribution cannot be spoofed by tool-name prefixes', () => {
+  it('attributes a custom server whose id embeds a trusted prefix to itself', async () => {
+    const contexts: McpToolApprovalContext[] = [];
+    const { handle, canUseTool } = await startSession((context) => {
+      contexts.push(context);
+      // 只有真正的第一方 cindy_browser 才可信。
+      return context.serverName === 'cindy_browser' ? 'auto-approve' : 'prompt';
+    });
+
+    // 自定义 MCP 的 id 允许下划线，`cindy_browser__evil` 是合法 id。按 `__` 盲切会
+    // 把它算成 cindy_browser，从而继承第一方信任——这里锁死最长匹配的正确归属。
+    const result = await canUseTool('mcp__cindy_browser__evil__call_tool', {}, {
+      toolUseID: 't-spoof',
+    });
+
+    expect(contexts).toEqual([
+      { serverName: 'cindy_browser__evil', toolName: 'call_tool', toolParams: {} },
+    ]);
+    // 走了权限链而不是静默放行。
+    expect(result.behavior).toBe('allow');
+    await handle.close();
+  });
+
+  it('does not consult the policy for servers this session never registered', async () => {
+    const contexts: McpToolApprovalContext[] = [];
+    const { handle, canUseTool, seen } = await startSession(
+      (context) => {
+        contexts.push(context);
+        return 'auto-approve';
+      },
+      { mcpServerNames: ['cindy_browser'] },
+    );
+
+    await canUseTool('mcp__cindy_slack__slack_call_tool', {}, { toolUseID: 't-unregistered' });
+
+    expect(contexts).toHaveLength(0);
+    expect(permissionRequests(seen)).toHaveLength(1);
+    await handle.close();
+  });
+});
+
+describe('prompt-each-time never turns into a persisted grant', () => {
+  it('drops permission updates that a surface attaches on its own', async () => {
+    const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
+      // 模拟 hook-control / IM 卡片流：不看 request.suggestions，自行拼 session 规则。
+      decide: () => ({
+        kind: 'permission',
+        behavior: 'allow',
+        permissionUpdates: [{ type: 'addRules', destination: 'session', behavior: 'allow' }],
+      }),
+    });
+
+    const result = await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-grant',
+    });
+
+    expect(result.behavior).toBe('allow');
+    // 本次放行，但不给 SDK 落任何会话规则——否则后续调用全部跳过 canUseTool。
+    expect(result.updatedPermissions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('still forwards permission updates for ordinary prompt policy', async () => {
+    const { handle, canUseTool } = await startSession(() => 'prompt', {
+      decide: () => ({
+        kind: 'permission',
+        behavior: 'allow',
+        permissionUpdates: [{ type: 'addRules', destination: 'session', behavior: 'allow' }],
+      }),
+    });
+
+    const result = await canUseTool('mcp__cindy_ssh__call_tool', { name: 'ssh_exec' }, {
+      toolUseID: 't-grant-ok',
+    });
+
+    expect(result.updatedPermissions).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('denies a pending forced prompt when the session switches to a laxer mode', async () => {
+    const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
+      // 决策永不返回：请求挂起，等模式切换来结算。
+      decide: () => undefined,
+    });
+
+    const pending = canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_merge' }, {
+      toolUseID: 't-pending',
+    });
+    // 让 canUseTool 跑到 dispatchInteraction 并登记 pending。
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await handle.setPermissionMode('bypassPermissions');
+
+    // 切到 Full access 也不能替用户批准这一次高风险调用。
+    expect((await pending).behavior).toBe('deny');
+    await handle.close();
+  });
+
+  it('still auto-allows ordinary pending prompts on a laxer mode switch', async () => {
+    const { handle, canUseTool } = await startSession(() => 'prompt', {
+      decide: () => undefined,
+    });
+
+    const pending = canUseTool('mcp__cindy_ssh__call_tool', { name: 'ssh_exec' }, {
+      toolUseID: 't-pending-ok',
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await handle.setPermissionMode('bypassPermissions');
+
+    expect((await pending).behavior).toBe('allow');
+    await handle.close();
+  });
+});
+
+describe('fail-closed still precedes the MCP policy', () => {
+  it('denies trusted MCP tools when no interaction resolver is attached', async () => {
+    const { handle, canUseTool } = await startSession(() => 'auto-approve', { bare: true });
+
+    const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-bare' });
+
+    // host 策略说的是"值不值得打扰用户"，不代表"没有用户在场也能跑"。
+    expect(result.behavior).toBe('deny');
     await handle.close();
   });
 });
