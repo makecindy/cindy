@@ -430,6 +430,23 @@ export const ComposerListIndentDecoration = Extension.create({
                 if (!Number.isFinite(width) || width <= 0) return;
                 span.style.setProperty('--composer-list-hang', `${width}px`);
                 span.style.setProperty('--composer-list-hang-negative', `-${width}px`);
+                const fallbackContainer = span.closest<HTMLElement>(
+                  '.composer-list-fallback-container',
+                );
+                if (fallbackContainer) {
+                  const currentIndent = Number.parseFloat(
+                    fallbackContainer.style
+                      .getPropertyValue('--composer-list-fallback-indent')
+                      .trim()
+                      .replace(/px$/, ''),
+                  );
+                  if (!Number.isFinite(currentIndent) || width > currentIndent) {
+                    fallbackContainer.style.setProperty(
+                      '--composer-list-fallback-indent',
+                      `${width}px`,
+                    );
+                  }
+                }
               });
             },
           };

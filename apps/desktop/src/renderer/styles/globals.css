@@ -377,8 +377,12 @@ html:lang(ko) {
   vertical-align: top;
 }
 .ProseMirror .composer-list-fallback-unindented {
-  position: relative;
-  left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(100% + 1em + var(--composer-list-fallback-indent, 1.25em));
+  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+  vertical-align: top;
+  overflow-wrap: anywhere;
 }
 .ProseMirror .composer-list-fallback-break {
   display: block;

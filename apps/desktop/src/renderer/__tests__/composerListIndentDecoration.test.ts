@@ -237,6 +237,28 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.view.dom.querySelectorAll('.composer-list-cjk-font')).toHaveLength(1);
   });
 
+  it('keeps Tab-prefixed CJK rows inside the measured list wrapper', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: '\t1. 中文《内容》' }] }],
+      },
+    });
+    const wrapper = editor.view.dom.querySelector('p.composer-list-block-indent');
+    expect(wrapper?.classList.contains('composer-list-tab-indent')).toBe(true);
+    expect(wrapper?.classList.contains('composer-list-cjk-font')).toBe(true);
+    expect(wrapper?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+  });
+
   it('keeps the full hanging wrapper for CJK punctuation in hardBreak-separated list lines', () => {
     const ed = makeEditor(['- 中文，内容', '2. plain']);
     expect(indentSpans(ed)).toEqual(['- 中文，内容', '2. plain']);
@@ -324,6 +346,41 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(container?.querySelectorAll('span[style*="font-family"]')).not.toHaveLength(0);
   });
 
+  it('keeps CJK styling on fallback sibling rows', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        TestAtom,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '- before ' },
+              { type: 'testAtom' },
+              { type: 'text', text: ' 《body》' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. 中文，内容' },
+            ],
+          },
+        ],
+      },
+    });
+    const container = editor.view.dom.querySelector('p.composer-list-fallback-container');
+    expect(container).not.toBeNull();
+    expect(container?.querySelectorAll('span[style*="font-family"]').length).toBeGreaterThanOrEqual(
+      3,
+    );
+  });
+
   it('keeps hanging indent for slash paths and unknown commands without pills', () => {
     editor = new Editor({
       element: document.createElement('div'),
@@ -390,6 +447,12 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-block-indent');
     expect(css).toContain('.ProseMirror .composer-list-prefix-indent');
     expect(css).toContain('.ProseMirror .composer-list-line-indent');
+    expect(css).toContain(
+      'width: calc(100% + 1em + var(--composer-list-fallback-indent, 1.25em));',
+    );
+    expect(css).toContain(
+      'margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));',
+    );
     expect(css).toContain('display: inline-block;');
     expect(css).toContain('width: 100%;');
     expect(css).toContain('padding-left: calc(1em + var(--composer-list-hang, 1.25em));');

@@ -74,29 +74,19 @@ function listLineRanges(
     let lineStart = 0;
     let lineEnd = 0;
     let lineHasInlineAtom = false;
+    const lines: Array<{
+      text: string;
+      start: number;
+      end: number;
+      hasInlineAtom: boolean;
+    }> = [];
     const flush = () => {
-      const match = matchListPrefix(lineText);
-      if (!match) return;
-      const prefix = lineText.slice(0, match.prefixLength);
-      const body = lineText.slice(match.prefixLength);
-      const overlapsSlashCommandPill = slashCommandMatches.some(
-        (slashMatch) =>
-          slashMatch.from < contentBase + lineEnd && slashMatch.to > contentBase + lineStart,
-      );
-      // Only suppress per-character decorations when the list extension owns a
-      // complete hanging wrapper. Atom/pill/tab/long-run fallbacks deliberately
-      // leave punctuation to this plugin so body glyphs keep the CJK font stack.
-      if (
-        !lineHasInlineAtom &&
-        !overlapsSlashCommandPill &&
-        !prefix.includes('\t') &&
-        !LONG_ALPHANUMERIC_BODY_RE.test(body)
-      ) {
-        ranges.push({
-          from: contentBase + lineStart,
-          to: contentBase + lineEnd,
-        });
-      }
+      lines.push({
+        text: lineText,
+        start: lineStart,
+        end: lineEnd,
+        hasInlineAtom: lineHasInlineAtom,
+      });
     };
     block.nodesBetween(0, block.content.size, (node, pos) => {
       if (node.type.name === 'hardBreak') {
@@ -118,6 +108,45 @@ function listLineRanges(
     });
     lineEnd = block.content.size;
     flush();
+    const lineMatches = lines.map((line) => ({
+      line,
+      match: matchListPrefix(line.text),
+    }));
+    // ComposerListIndentDecoration switches the entire paragraph to its
+    // prefix-only fallback when any list row contains an atom or a recognized
+    // slash pill. In that mode even otherwise-plain sibling rows do not have a
+    // complete hanging wrapper, so their punctuation must remain available to
+    // this plugin as well.
+    const hasFallbackLine = lineMatches.some(({ line, match }) => {
+      if (!match) return false;
+      const overlapsSlashCommandPill = slashCommandMatches.some(
+        (slashMatch) =>
+          slashMatch.from < contentBase + line.end && slashMatch.to > contentBase + line.start,
+      );
+      return line.hasInlineAtom || overlapsSlashCommandPill;
+    });
+    lineMatches.forEach(({ line, match }) => {
+      if (!match || hasFallbackLine) return;
+      const body = line.text.slice(match.prefixLength);
+      const overlapsSlashCommandPill = slashCommandMatches.some(
+        (slashMatch) =>
+          slashMatch.from < contentBase + line.end && slashMatch.to > contentBase + line.start,
+      );
+      // Only suppress per-character decorations when the list extension owns a
+      // complete hanging wrapper. Atom/pill/long-run fallbacks deliberately
+      // leave punctuation to this plugin so body glyphs keep the CJK font stack;
+      // tab rows are included here because their full wrapper is also complete.
+      if (
+        !line.hasInlineAtom &&
+        !overlapsSlashCommandPill &&
+        !LONG_ALPHANUMERIC_BODY_RE.test(body)
+      ) {
+        ranges.push({
+          from: contentBase + line.start,
+          to: contentBase + line.end,
+        });
+      }
+    });
     return false;
   });
   return ranges;
