@@ -216,6 +216,26 @@ export function CreateWorkerPopover({
       activeCaps?.hasFastMode &&
       providerFastSupported(narrowProviderSource(providerSource, model), model),
   );
+  // 实际路由来源的 effort 档位表:**显示收敛与提交共用同一口径**,保证面板显示的
+  // effort 就是派发的 effort —— 只在提交口改写会出现「显示 high、创建 low」的静默
+  // 不一致(codex review,device-link 与本地恢复路径同病)。显式来源(收窄后)优先,
+  // 否则生效默认来源(local/remote 快照同规则);来源条目缺失或无档位元数据回落
+  // 拍平条目(旧 peer 无快照),main 侧重归一兜底。
+  const routeEffortMetaFor = useCallback(
+    (modelId: string): { efforts: readonly string[]; defaultEffort: string | null } | undefined => {
+      const flat = activeModels.find((m) => m.id === modelId);
+      const sourceId = deviceId
+        ? effectiveSourceIdForModel(providers, null, modelId, agent)
+        : narrowProviderSource(providerSource, modelId)
+          ?? effectiveSourceIdForModel(providers, null, modelId, agent);
+      const provider = sourceId
+        ? connectedProvidersForAgent(providers, agent).find((p) => p.id === sourceId)
+        : undefined;
+      const entry = provider ? getModel(provider, modelId, agent) : undefined;
+      return entry?.efforts ? entry : flat;
+    },
+    [activeModels, agent, deviceId, narrowProviderSource, providerSource, providers],
+  );
   const noAvailableLocalModels =
     prefsRestored &&
     !deviceId &&
@@ -253,8 +273,13 @@ export function CreateWorkerPopover({
       selected = models[0];
       setModel(selected.id);
     }
-    if (selected.efforts.length > 0 && !selected.efforts.includes(effort)) {
-      setEffort(selected.defaultEffort ?? selected.efforts[selected.efforts.length - 1]);
+    // effort 收敛按**实际路由来源档位表**(routeEffortMetaFor,与提交同口径):
+    // 按拍平条目收敛会留下「显示 high、提交时被对账成 low」的静默不一致
+    // (codex review)。
+    const effortMeta = routeEffortMetaFor(selected.id) ?? selected;
+    const metaEfforts: readonly string[] = effortMeta.efforts;
+    if (metaEfforts.length > 0 && !metaEfforts.includes(effort)) {
+      setEffort(effortMeta.defaultEffort ?? metaEfforts[metaEfforts.length - 1]);
     }
     // 恢复出来的显式来源可能已断开或不提供收敛后的模型 —— 目录就绪后同步收窄。
     if (providerSource !== null) {
@@ -271,6 +296,7 @@ export function CreateWorkerPopover({
     open,
     prefsRestored,
     providerSource,
+    routeEffortMetaFor,
   ]);
 
   useEffect(() => {
@@ -312,9 +338,12 @@ export function CreateWorkerPopover({
   const updateModel = useCallback(
     (nextModel: string) => {
       setModel(nextModel);
-      const available = activeModels.find((m) => m.id === nextModel);
-      if (available && available.efforts.length > 0 && !available.efforts.includes(effort)) {
-        setEffort(available.defaultEffort ?? available.efforts[available.efforts.length - 1]);
+      // flat 面板换模型(device-link 退化路径):effort 同样按路由来源档位表收敛,
+      // 与收敛 effect / 提交同口径,不留显示与派发不一致的窗口。
+      const effortMeta = routeEffortMetaFor(nextModel);
+      const metaEfforts: readonly string[] = effortMeta?.efforts ?? [];
+      if (effortMeta && metaEfforts.length > 0 && !metaEfforts.includes(effort)) {
+        setEffort(effortMeta.defaultEffort ?? metaEfforts[metaEfforts.length - 1]);
       }
       // 仅换模型:当前显式来源不提供新模型时收窄,避免形成不可能组合;
       // Fast 与选行路径同判据(providerFastSupported,per-provider),不用拍平并集值。
@@ -324,7 +353,7 @@ export function CreateWorkerPopover({
         setFast(false);
       }
     },
-    [activeModels, effort, narrowProviderSource, providerFastSupported, providerSource],
+    [effort, narrowProviderSource, providerFastSupported, providerSource, routeEffortMetaFor],
   );
 
   // 分段行原子选择 (来源, 模型):与 composer 的 handleProviderChange 同语义。
@@ -502,22 +531,13 @@ export function CreateWorkerPopover({
     };
     setPrefs(nextPrefs);
     writeWorkerPrefs(nextPrefs);
-    // 提交 effort 按**实际路由来源条目**对账(codex/copilot review):恢复路径的
+    // 提交 effort 按**实际路由来源档位表**对账(codex/copilot review):恢复路径的
     // stale effort、以及路由来源条目无档而拍平条目有档的组合,直接把 live 值
     // explicit 下发会被 main 侧路由来源校验拒掉(INVALID_PARAMS 阻断创建)。条目
     // 无档 → 省略(main 按该来源 defaultEffort=null 落);live 值不在其档位表 →
-    // 落其 defaultEffort(与面板行显示口径一致);拿不到来源条目(旧 peer 无
-    // provider 快照)回落拍平条目,main 侧重归一兜底。
-    const submitSourceId = deviceId
-      ? effectiveSourceIdForModel(providers, null, model, agent)
-      : submitProviderId ?? effectiveSourceIdForModel(providers, null, model, agent);
-    const submitSourceProvider = submitSourceId
-      ? connectedProvidersForAgent(providers, agent).find((p) => p.id === submitSourceId)
-      : undefined;
-    const submitEntry = submitSourceProvider
-      ? getModel(submitSourceProvider, model, agent)
-      : undefined;
-    const submitEffortMeta = submitEntry?.efforts ? submitEntry : currentModel;
+    // 落其 defaultEffort。收敛 effect 与本对账共用 routeEffortMetaFor,显示与派发
+    // 同口径,这里只是提交瞬间的兜底(收敛后目录仍可能变化)。
+    const submitEffortMeta = routeEffortMetaFor(model) ?? currentModel;
     const submitEfforts: readonly string[] = submitEffortMeta?.efforts ?? [];
     const submitEffort = submitEfforts.length === 0
       ? undefined
@@ -553,7 +573,7 @@ export function CreateWorkerPopover({
     currentModelSupportsFast,
     initialTask,
     onCreate,
-    providers,
+    routeEffortMetaFor,
   ]);
 
   if (!open) return null;

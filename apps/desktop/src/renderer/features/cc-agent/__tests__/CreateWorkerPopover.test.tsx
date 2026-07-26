@@ -58,7 +58,15 @@ const mocks = vi.hoisted(() => ({
     name: string;
     connected: boolean;
     agents: string[];
-    models: Record<string, Array<{ id: string; supportsFastMode?: boolean }>>;
+    models: Record<
+      string,
+      Array<{
+        id: string;
+        supportsFastMode?: boolean;
+        efforts?: string[];
+        defaultEffort?: string | null;
+      }>
+    >;
   }>,
   sidebarWindow: false,
 }));
@@ -104,6 +112,7 @@ vi.mock('react-router-dom', async (importOriginal) => ({
 vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: {
     modelId: string;
+    effort?: string;
     currentProviderId?: string | null;
     onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
     onEffortChange: (effort: string) => void;
@@ -123,6 +132,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-fast-wired={String(props.onFastModeChange !== undefined)}
       data-memory-wired={String(props.modelMemory !== undefined)}
       data-navigate-wired={String(props.onNavigateToProviders !== undefined)}
+      data-effort={props.effort ?? ''}
     >
       {props.modelId}
       <button
@@ -1141,5 +1151,47 @@ describe('CreateWorkerPopover', () => {
     expect(selector.dataset.navigateWired).toBe('false');
     // 供应商分段本身不受影响,只禁跳转。
     expect(selector.dataset.sourcesEnabled).toBe('true');
+  });
+
+  it('reconciles remote effort against the effective device provider before showing it', async () => {
+    // device-link 退化面板的显示收敛与提交共用路由来源档位表:被控端生效默认来源
+    // xd 只有 low 档而拍平条目默认 high 时,面板显示的 effort 必须先收敛到 low,
+    // 不能显示 high、提交时才被静默改写成 low(codex review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false },
+      }),
+    );
+    mocks.remoteProviders = [
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [{ id: 'gpt-5.5', efforts: ['low'], defaultEffort: 'low' }],
+          'claude-code': [],
+        },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={onCreate} />);
+    // 显示先收敛:面板拿到的 effort 已是路由来源支持的档位。
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.effort).toBe('low'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', effort: 'low' }),
+      ),
+    );
   });
 });
