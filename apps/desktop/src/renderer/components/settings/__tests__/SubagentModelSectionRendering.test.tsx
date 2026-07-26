@@ -22,6 +22,12 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+// 只覆写 useNavigate,保留真实导出(与 CreateWorkerPopover 测试同规则)。
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => vi.fn(),
+}));
+
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
@@ -207,6 +213,16 @@ describe('SubagentModelSection standard panel contract', () => {
     render(<SubagentModelSection />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.disabled).toBe('true');
+  });
+
+  it('flags a connected provider that dropped the stored model as disconnected', async () => {
+    // 来源还连着但目录已不含已存模型:只查 id 会静默换显示;必须同样标断开态。
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-ghost-model', claudeCodeProviderId: 'anthropic' }),
+    );
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourceDisconnected).toBe('true');
   });
 
   it('flags the stored provider as disconnected instead of silently falling back', async () => {

@@ -28,11 +28,16 @@ function normalize(raw: unknown): SubagentModelSettings {
     return { ...SUBAGENT_MODEL_SETTINGS_DEFAULTS };
   }
   const input = raw as Record<string, unknown>;
+  const claudeCode = normalizeSubagentModelId(input.claudeCode);
+  const codex = normalizeSubagentModelId(input.codex);
   return {
-    claudeCode: normalizeSubagentModelId(input.claudeCode),
-    claudeCodeProviderId: normalizeSubagentModelId(input.claudeCodeProviderId),
-    codex: normalizeSubagentModelId(input.codex),
-    codexProviderId: normalizeSubagentModelId(input.codexProviderId),
+    claudeCode,
+    // 磁盘直读同样执行配对不变量:模型未指定时来源无所依附,外部手改文件留下的
+    // 孤儿 providerId 会让 isCustomized 误报「已自定义」却显示「不指定」(codex review)。
+    claudeCodeProviderId:
+      claudeCode === null ? null : normalizeSubagentModelId(input.claudeCodeProviderId),
+    codex,
+    codexProviderId: codex === null ? null : normalizeSubagentModelId(input.codexProviderId),
   };
 }
 

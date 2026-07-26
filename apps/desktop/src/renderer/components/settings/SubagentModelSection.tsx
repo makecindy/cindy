@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
@@ -22,6 +23,7 @@ const log = createLogger('SubagentModelSection');
 /** 展示各 Agent 运行时的子代理模型覆盖能力；模型供应商由运行时模型目录决定。 */
 export function SubagentModelSection() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [settings, setSettings] = useState<SubagentModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const { providers, loading: providersLoading } = useProviders();
@@ -102,14 +104,17 @@ export function SubagentModelSection() {
   if (!settings) return null;
 
   const unspecifiedLabel = t('settings.subagentModels.unspecified');
-  // 已存显式来源当前断开(目录就绪后判定):trigger 显示**真实存储来源** + 断开错误态,
-  // 不静默回落默认来源图标 —— 否则界面显示的来源与存储值分叉,重连后旧来源会静默
-  // 复活,用户无从自查(codex review)。
+  // 已存显式来源当前不可用(目录就绪后判定):断开、或仍连接但目录已不再提供已存
+  // 模型,都算——只查 id 会让「掉了该模型的来源」静默换显示,存储值分叉且可静默复活
+  // (codex review)。trigger 显示**真实存储来源** + 断开错误态,不回落默认图标。
   const sourceDisconnected = Boolean(
     !providersLoading &&
       settings.claudeCodeProviderId &&
       !connectedProvidersForAgent(providers, 'claude-code').some(
-        (p) => p.id === settings.claudeCodeProviderId,
+        (p) =>
+          p.id === settings.claudeCodeProviderId &&
+          (settings.claudeCode === null ||
+            providerOffersModel(p, settings.claudeCode, 'claude-code')),
       ),
   );
 
@@ -148,6 +153,9 @@ export function SubagentModelSection() {
                 vendorKey="cc"
                 currentProviderId={settings.claudeCodeProviderId}
                 sourceDisconnected={sourceDisconnected}
+                // 零已连接来源的空态 CTA / 列表底部「连接来源」:开了供应商分段就必须
+                // 给恢复动作,否则空态是死卡(codex review);与 composer 同跳转。
+                onNavigateToProviders={() => navigate('/settings?tab=providers')}
                 // 存储来源断开时面板高亮的是**解析出的回退来源**,点它必须照常回调,
                 // 才能把显示与存储重新对齐(codex review);纯同值重选在下方去重跳过。
                 reselectEmitsChange

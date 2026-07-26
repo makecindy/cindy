@@ -110,6 +110,18 @@ describe('subagent model settings store', () => {
     });
   });
 
+  it('drops an orphan on-disk providerId whose model is unspecified', () => {
+    // 外部手改文件留下的孤儿来源:磁盘直读同样执行配对不变量,不让 isCustomized 误报。
+    expect(
+      __testing.normalize({ claudeCodeProviderId: 'anthropic' }),
+    ).toEqual({
+      claudeCode: null,
+      claudeCodeProviderId: null,
+      codex: null,
+      codexProviderId: null,
+    });
+  });
+
   it('normalizes malformed disk values to no override', () => {
     expect(
       __testing.normalize({
@@ -122,7 +134,8 @@ describe('subagent model settings store', () => {
       claudeCode: 'claude-sonnet-4-6',
       claudeCodeProviderId: null,
       codex: null,
-      codexProviderId: 'xd',
+      // codex 模型归一化为「不指定」后其来源随配对不变量一并清除,不留孤儿。
+      codexProviderId: null,
     });
   });
 
