@@ -200,7 +200,11 @@ function failureHint(err: unknown): string {
  * (签名/权限/配额)。携带最终要抛给调用方的错误。
  */
 class NonRetriableOssPutError extends Error {
-  constructor(readonly inner: unknown) {
+  constructor(
+    readonly inner: unknown,
+    /** HTTP 应用层拒绝时的状态码;body 构造失败等本地故障没有。 */
+    readonly httpStatus?: number,
+  ) {
     super('non-retriable OSS PUT failure');
     this.name = 'NonRetriableOssPutError';
   }
@@ -283,19 +287,35 @@ async function putBytesToOss(
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
       log.warn(`OSS PUT rejected status=${resp.status} host=${host} body=${txt.slice(0, 200)}`);
-      throw new NonRetriableOssPutError(new Error(`OSS PUT 失败 (${resp.status})`));
+      throw new NonRetriableOssPutError(new Error(`OSS PUT 失败 (${resp.status})`), resp.status);
     }
   };
 
+  const order = transportOrderFor(host);
+  // 记忆把 Electron 跳提到了首位——而它正是"对自定义 header 不可靠"的那条。
+  // 这种顺序下它的 HTTP 拒绝不能当最终结论,否则环境一变就要卡到 TTL 到期;
+  // 只有默认顺序(undici 先)的拒绝才权威。
+  const cachedFallbackFirst = order[0]?.name === 'electron-net';
   const failures: string[] = [];
   const hints: string[] = [];
-  for (const transport of transportOrderFor(host)) {
+  for (const transport of order) {
     try {
       await attempt(transport.impl);
     } catch (err) {
       if (err instanceof NonRetriableOssPutError) {
+        const retriableCacheArtifact =
+          cachedFallbackFirst && transport.name === 'electron-net' && err.httpStatus !== undefined;
+        if (!retriableCacheArtifact) {
+          bodySource.dispose?.();
+          throw err.inner;
+        }
+        // 这条记忆已经不值得信:清掉,让本次与后续都回到 undici 优先。
+        electronNetPreferredHosts.delete(host);
         bodySource.dispose?.();
-        throw err.inner;
+        failures.push(`${transport.name}:HTTP ${err.httpStatus}`);
+        hints.push(`HTTP_${err.httpStatus}`);
+        log.warn(`OSS PUT cached fallback rejected host=${host} status=${err.httpStatus}; retrying via undici`);
+        continue;
       }
       // 源文件读盘失败在 fetch 消费 body 时才浮出来,形态与网络失败一样;
       // 不甄别就会白读一遍磁盘,还把真实原因埋进"两条栈都失败"的汇总里。

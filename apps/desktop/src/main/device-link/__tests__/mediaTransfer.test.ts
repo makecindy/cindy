@@ -295,6 +295,33 @@ describe('putBytesToOss — 传输栈回退', () => {
     expect(__testing.electronNetPreferredHosts.get('oss.example')).toBe(firstStamp);
   });
 
+  it('记忆命中的 Electron 跳被 HTTP 拒绝 → 仍回落 undici,并清掉这条记忆', async () => {
+    // 记忆只是顺序优化,不该让结果比默认顺序更糟:Electron 是"对自定义 header
+    // 不可靠"的那条,它的 403 不能当最终结论,否则环境一变就卡到 TTL 到期。
+    __testing.electronNetPreferredHosts.set('oss.example', Date.now());
+    netFetchMock.mockResolvedValue({ ok: false, status: 403, text: async () => '<Error/>' });
+    undiciFetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
+
+    const r = await uploadLocalFile('/tmp/a.png');
+
+    expect(r.key).toBe(KEY);
+    expect(netFetchMock).toHaveBeenCalledTimes(1);
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    expect(__testing.electronNetPreferredHosts.has('oss.example')).toBe(false);
+  });
+
+  it('两跳都被 HTTP 拒绝 → 抛默认栈的状态码结论', async () => {
+    __testing.electronNetPreferredHosts.set('oss.example', Date.now());
+    netFetchMock.mockResolvedValue({ ok: false, status: 403, text: async () => '' });
+    undiciFetchMock.mockResolvedValue({ ok: false, status: 403, text: async () => '' });
+
+    await expect(uploadLocalFile('/tmp/a.png')).rejects.toThrow(/OSS PUT 失败 \(403\)/);
+    expect(apiFetch).toHaveBeenCalledWith(
+      DEL_PATH,
+      expect.objectContaining({ method: 'DELETE', body: { key: KEY } }),
+    );
+  });
+
   it('记忆过期后回到 undici 主路径', async () => {
     undiciFetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
     __testing.electronNetPreferredHosts.set(
