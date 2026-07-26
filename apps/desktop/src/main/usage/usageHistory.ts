@@ -682,6 +682,12 @@ export async function readUsageHistoryWith(
     last30EstimatedValue.amount > 0
       ? (addCompatibleRegionalMoney([last30, last30EstimatedValue], ledgerCurrency) ?? last30)
       : last30;
+  // 与合计口径一致:估算若因币种不兼容被聚合弃掉,就不能再单独外露非零值,
+  // 否则 UI 会声称「总额已含订阅估算」而实际未含。
+  const exposedLast30EstimatedValue =
+    last30EstimatedValue.currency === last30WithEstimatedValue.currency
+      ? last30EstimatedValue
+      : zeroEstimate();
   const anomalyRaw = computeAnomaly(spendByDay, todayKey, {
     activeDayMin,
     anomalyMinToday,
@@ -707,7 +713,7 @@ export async function readUsageHistoryWith(
       today,
       last30Days: last30,
       last30DaysWithEstimatedValue: last30WithEstimatedValue,
-      last30DaysEstimatedValue: last30EstimatedValue,
+      last30DaysEstimatedValue: exposedLast30EstimatedValue,
       todayTokens,
       last30DaysTokens,
     },
