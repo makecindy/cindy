@@ -1563,6 +1563,17 @@ export const remoteSessionStore = {
     // 只升不降:重复取消 / 乱序收口都不能把下限拉回去。
     if (current !== undefined && current >= floor) return;
     interactionRevisionFloors.set(key, floor);
+    // 下限只挡「后来写入」的过期快照,列表里可能已经躺着一份:dismiss push 早于
+    // resolve promise 落定时,一份在途旧快照能在这个方法跑到之前把 revision R 重新
+    // 填回去。不一起清掉,那张卡会继续显示,而对它点取消只是「看起来成功」的
+    // no-op(被控端已 complete,resolve 不再受理)。见 #530 review。
+    const existing = pendingInteractions.get(sessionId);
+    if (!existing?.length) return;
+    const next = existing.filter((item) => item.request.requestId !== requestId
+      || !isInteractionResolveSuppressed(sessionId, item));
+    if (next.length === existing.length) return;
+    pendingInteractions.set(sessionId, next);
+    emit();
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {

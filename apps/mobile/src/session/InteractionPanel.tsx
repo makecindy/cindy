@@ -44,6 +44,7 @@ import {
   planReviewFilePath,
   planReviewPlan,
   readRequestId,
+  remoteInteractionHandling,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
   sortPendingInteractions,
@@ -428,7 +429,12 @@ function InteractionItem({
   // 边界也只放 cancel 过来。手机侧因此给只读摘要 + 取消出口,让用户至少能把
   // 会话从等待里放出来,而不是对着一张没有任何按钮的卡干等。
   if (kind === 'plugin_setup') {
-    const cancelDecision = buildPluginSetupCancelDecision(item.request);
+    // 取消入口以共享分类器为准:terminal 快照(被控端 settle 后短暂保留的收尾帧)
+    // 归 desktop-only,此时被控端已 complete、不再受理 resolve,给按钮只会让用户点出
+    // 一个「看起来成功」的 no-op(#530 review)。
+    const cancelDecision = remoteInteractionHandling(item) === 'cancel-only'
+      ? buildPluginSetupCancelDecision(item.request)
+      : null;
     return (
       <UnsupportedCard
         busy={busy}

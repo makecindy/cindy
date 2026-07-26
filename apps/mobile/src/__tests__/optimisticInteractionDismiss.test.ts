@@ -170,6 +170,20 @@ describe('optimistic interaction dismiss', () => {
     expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([7]);
   });
 
+  it('抬高下限时把已经躺在列表里的过期版本一起清掉', () => {
+    // dismiss push 早于 resolve promise 落定:一份在途旧快照先把 revision 3 填回列表。
+    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 3), interaction('r2')]);
+    // 此时才收口。只登记下限不清列表的话,这张过期卡会继续显示,而对它点取消只是
+    // 「看起来成功」的 no-op(被控端已 complete)。
+    remoteSessionStore.markInteractionRevisionResolved('s1', 'setup-1', 3);
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.requestId)).toEqual(['r2']);
+
+    // 被控端确实推进(取消未生效)时,更高 revision 仍能把卡带回来。
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 4));
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.requestId).sort())
+      .toEqual(['r2', 'setup-1']);
+  });
+
   it('连 revision 都没有的快照不能覆盖已进入 revision 语义的那份', () => {
     remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 5));
     // 旧被控端 / 非法快照(缺 revision):不得把内容换回去,否则取消又会发过期的

@@ -25,6 +25,7 @@ import {
   interactionKind,
   normalizeAskQuestions,
   pendingInteractionsBlockRemoteComposer,
+  remoteInteractionHandling,
   permissionRiskSummary,
   permissionTitle,
   selectActivePendingInteraction,
@@ -220,6 +221,12 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain('optimisticDismiss: false');
     expect(interactionPanelSource).toContain('resolvedRevision: cancelDecision.expectedRevision');
     expect(interactionPanelSource).toContain('markInteractionRevisionResolved');
+    // terminal 快照(被控端已 settle)不得给取消按钮:那只会点出一个「看起来成功」
+    // 的 no-op。门控以共享分类器为单一真相源。
+    expect(interactionPanelSource).toContain("remoteInteractionHandling(item) === 'cancel-only'");
+    expect(remoteInteractionHandling({
+      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 2, terminal: true },
+    })).toBe('desktop-only');
 
     expect(interactionBlocksRemoteComposer({
       request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
