@@ -167,6 +167,23 @@ export function CreateWorkerPopover({
   const currentModel = activeModels.find((m) => m.id === model);
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
 
+  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被可见性开关隐藏」时
+  // 有效;其余(断开/下架/被隐藏/换了模型)收窄为 null 交回默认路由解析。可见性判据
+  // 与 activeModels 的 isVisible 同源(codex review:同模型多来源时,用户隐藏了记忆
+  // 来源的那份条目后,面板已不显示该行,不能仍显式路由过去)。device-link 恒 null。
+  const narrowProviderSource = useCallback(
+    (candidate: string | null, modelId: string): string | null => {
+      if (!candidate || deviceId) return null;
+      const provider = connectedProvidersForAgent(providers, agent).find(
+        (p) => p.id === candidate,
+      );
+      if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
+      const catalogModel = getModel(provider, modelId, agent);
+      return catalogModel && isModelEnabled(agent, candidate, catalogModel) ? candidate : null;
+    },
+    [agent, deviceId, providers],
+  );
+
   // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
   // CatalogModel)。显式选了来源按该来源条目查;未显式(null)也要先解析**生效默认
   // 来源**再查它自己的条目(codex review:拍平并集是首来源 wins,默认来源不支持时
@@ -185,8 +202,14 @@ export function CreateWorkerPopover({
     },
     [activeModels, agent, deviceId, providers],
   );
+  // Fast 判定先对 providerSource 收窄:记忆来源刚失效(断开/掉模型/被隐藏)而收敛
+  // effect 尚未把 state 置 null 的同一渲染里,直接用旧值会得到 false 并把记忆的
+  // fast=true 清掉,回退默认来源支持 Fast 也不会恢复(codex review)。收窄后按
+  // 「实际会生效的来源」口径判定,不经历 false 窗口。
   const currentModelSupportsFast = Boolean(
-    agent === 'codex' && activeCaps?.hasFastMode && providerFastSupported(providerSource, model),
+    agent === 'codex' &&
+      activeCaps?.hasFastMode &&
+      providerFastSupported(narrowProviderSource(providerSource, model), model),
   );
   const noAvailableLocalModels =
     prefsRestored &&
@@ -194,23 +217,6 @@ export function CreateWorkerPopover({
     !modelCatalogLoading &&
     (activeCaps !== null || activeCapabilitiesState.error !== null) &&
     activeModels.length === 0;
-
-  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被可见性开关隐藏」时
-  // 有效;其余(断开/下架/被隐藏/换了模型)收窄为 null 交回默认路由解析。可见性判据
-  // 与 activeModels 的 isVisible 同源(codex review:同模型多来源时,用户隐藏了记忆
-  // 来源的那份条目后,面板已不显示该行,不能仍显式路由过去)。device-link 恒 null。
-  const narrowProviderSource = useCallback(
-    (candidate: string | null, modelId: string): string | null => {
-      if (!candidate || deviceId) return null;
-      const provider = connectedProvidersForAgent(providers, agent).find(
-        (p) => p.id === candidate,
-      );
-      if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
-      const catalogModel = getModel(provider, modelId, agent);
-      return catalogModel && isModelEnabled(agent, candidate, catalogModel) ? candidate : null;
-    },
-    [agent, deviceId, providers],
-  );
 
   // 打开弹窗时恢复上次选择；initial task 不记忆，避免把旧任务误带到下一次创建。
   useEffect(() => {

@@ -664,4 +664,43 @@ describe('CreateWorkerPopover', () => {
       ),
     );
   });
+
+  it('keeps remembered Fast when a stale source narrows to a Fast-capable default', async () => {
+    // 记忆来源已失效(不在目录)但模型仍有支持 Fast 的默认来源:Fast 判定必须按
+    // 收窄后的来源口径,不得在收敛 effect 前的渲染窗口里用旧失效来源清掉 fast=true
+    // (codex review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: true, providerId: 'ghost-provider' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5', supportsFastMode: true }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'gpt-5.5' }],
+      hasFastMode: true,
+    } as never;
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: null, fast: true }),
+      ),
+    );
+  });
 });
