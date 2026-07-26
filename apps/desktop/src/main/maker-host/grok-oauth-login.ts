@@ -252,9 +252,11 @@ export class CallbackListener {
   private pending: Array<{ res: ServerResponse; cors: Record<string, string> }> = [];
   private callbackLang: OAuthResultPageLang = 'en';
   /**
-   * 首个终态回调(code / error / state 不匹配)之后的登录结果状态机;重放/迟到的
-   * 回调必须按它回执 —— 失败终态回 4xx、exchange 进行中挂起同候,不能一律 200,
-   * 否则 consent 页会把失败/未定的登录误读成成功。
+   * 登录结果状态机,仅由 state 已匹配的回调驱动:收到 code → 'exchanging',
+   * succeed()/fail() 收口为 'success'/'failed'(state 匹配的 error 回调直接
+   * 'failed')。重放/迟到的回调按它回执:成功重放 200、失败重放 400、exchanging
+   * 挂起同候(挂起连接在 fail() 时收 500)。state 不匹配的请求一律 400 拒绝,
+   * 不进入状态机也不入 pending。
    */
   private outcome: 'exchanging' | 'success' | 'failed' | null = null;
   private resolve: ((code: string) => void) | null = null;
@@ -318,23 +320,12 @@ export class CallbackListener {
     const state = parsed.searchParams.get('state') ?? undefined;
     const oauthError =
       parsed.searchParams.get('error_description') ?? parsed.searchParams.get('error') ?? undefined;
-    // 已有终态结果后网页侧可能重试 fetch(超时重发/用户手动访问)—— 不改写登录结果,
-    // 按状态机回执:成功 200 / 失败 400;exchange 未收口时挂起同候(与首个连接一起在
-    // succeed()/fail() 回执),不能提前发 200 —— exchange 随后失败会让页面白显成功。
-    if (this.outcome !== null) {
-      if (this.outcome === 'exchanging') {
-        this.pending.push({ res, cors });
-        return;
-      }
-      const replayStatus = this.outcome === 'success' ? 200 : 400;
-      res.writeHead(replayStatus, { 'content-type': 'text/plain; charset=utf-8', ...cors });
-      res.end(this.outcome === 'success' ? 'OK' : 'login failed');
-      return;
-    }
-    // state 是回调真实性的唯一凭证。固定端口 + fetch 重试的新流程下,上一次登录
-    // 尝试的 consent 页 tab 可能仍在带旧 state 重试 —— 凡 state 不匹配的回调
-    // (无论携带 code 还是 error)只回 400 拒绝该请求,绝不 settle 当前登录,
-    // 否则旧 tab 一次滞留重试就能杀死用户刚发起的新登录。
+    // state 是回调真实性的唯一凭证,最先校验。固定端口 + fetch 重试的新流程下,
+    // 上一次登录尝试的 consent 页 tab 可能仍在带旧 state 重试 —— 凡 state 不匹配
+    // 的请求(无论携带 code 还是 error、无论登录处于何种阶段)一律 400 拒绝:
+    // 不 settle 当前登录(旧 tab 一次滞留重试不能杀死新发起的登录)、不入 pending
+    // 挂起(否则不知道 state 的本机进程可在 exchange 窗口内囤积任意多连接)、
+    // 不吃成功重放(避免旧 tab 白显成功)。
     if (state !== this.expectedState) {
       res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', ...cors });
       res.end(
@@ -346,6 +337,20 @@ export class CallbackListener {
           action,
         }),
       );
+      return;
+    }
+    // 已有终态结果后网页侧可能重试 fetch(超时重发/用户手动访问)—— 不改写登录结果,
+    // 按状态机回执:成功 200 / 失败 400;exchange 未收口时挂起同候(与首个连接一起在
+    // succeed()/fail() 回执),不能提前发 200 —— exchange 随后失败会让页面白显成功。
+    // 能走到这里的都已通过 state 校验,pending 只会积累同一 consent 页的合法重试。
+    if (this.outcome !== null) {
+      if (this.outcome === 'exchanging') {
+        this.pending.push({ res, cors });
+        return;
+      }
+      const replayStatus = this.outcome === 'success' ? 200 : 400;
+      res.writeHead(replayStatus, { 'content-type': 'text/plain; charset=utf-8', ...cors });
+      res.end(this.outcome === 'success' ? 'OK' : 'login failed');
       return;
     }
     if (!code) {

@@ -200,6 +200,13 @@ describe('CallbackListener(xAI loopback 回调)', () => {
     });
     await expectStillPending(retry);
 
+    // exchange 挂起窗口内 state 不匹配的请求立即 400 拒绝,不得入 pending 挂起
+    // (否则不知道 state 的本机进程可囤积任意多连接)。
+    const staleDuringExchange = await send('GET', '/callback?code=x&state=wrong', {
+      origin: XAI_ORIGIN,
+    });
+    expect(staleDuringExchange.status).toBe(400);
+
     listener.succeed();
     const [first, second] = await Promise.all([firstGet, retry]);
     for (const r of [first, second]) {
@@ -208,11 +215,16 @@ describe('CallbackListener(xAI loopback 回调)', () => {
       expect(r.body).toContain('html');
     }
 
-    // 成功收口后的迟到回调直接重放成功回执。
+    // 成功收口后的迟到回调直接重放成功回执;state 不匹配的迟到请求仍被 400 拒绝,
+    // 不得吃到成功重放。
     const late = await send('GET', '/callback?code=first&state=state-5', {
       origin: XAI_ORIGIN,
     });
     expect(late.status).toBe(200);
+    const staleAfterSuccess = await send('GET', '/callback?code=x&state=wrong', {
+      origin: XAI_ORIGIN,
+    });
+    expect(staleAfterSuccess.status).toBe(400);
   });
 
   it('exchange 失败后挂起的重试与首个一起收到 500,迟到回调重放 400', async () => {
