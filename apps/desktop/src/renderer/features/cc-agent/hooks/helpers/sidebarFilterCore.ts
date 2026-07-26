@@ -377,7 +377,7 @@ export function moveManualProjectOrder(
   return withoutSource;
 }
 
-/* ============================== manual pinned session order load/persist ============================== */
+/* ============================== manual pinned sidebar order load/persist ============================== */
 
 /**
  * 数据落在 main 进程 electron-store(userData/sidebar-settings.json),通过 IPC 同步读 / 异步写,
@@ -415,8 +415,8 @@ export function persistManualPinnedOrder(order: readonly string[]): void {
 }
 
 /**
- * 归一化置顶手动顺序：剔除已不在 activeSessionIds 集合中的条目（去重），
- * 然后把 activeSessionIds 里没在 prev 出现过的"新置顶"按入参顺序追加在末尾。
+ * 归一化置顶手动顺序：剔除已不在 activeEntryIds 集合中的条目（去重），
+ * 然后把 activeEntryIds 里没在 prev 出现过的"新置顶"按入参顺序追加在末尾。
  *
  * 注意：本函数只在用户**拖拽**时被调用（手动重排是排序意图唯一明确的来源）。
  * "新置顶要排到首位"由消费 manualPinnedOrder 的 visiblePinned 在排序时处理
@@ -425,9 +425,9 @@ export function persistManualPinnedOrder(order: readonly string[]): void {
  */
 export function normalizeManualPinnedOrder(
   prev: readonly string[],
-  activeSessionIds: readonly string[],
+  activeEntryIds: readonly string[],
 ): string[] {
-  const activeSet = new Set(activeSessionIds);
+  const activeSet = new Set(activeEntryIds);
   const seen = new Set<string>();
   const next: string[] = [];
 
@@ -437,7 +437,7 @@ export function normalizeManualPinnedOrder(
     next.push(id);
   }
 
-  for (const id of activeSessionIds) {
+  for (const id of activeEntryIds) {
     if (seen.has(id)) continue;
     seen.add(id);
     next.push(id);

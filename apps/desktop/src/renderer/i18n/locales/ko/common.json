@@ -5279,6 +5279,8 @@
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",
+        "pin": "프로젝트 고정",
+        "unpin": "프로젝트 고정 해제",
         "syncCodex": "이 프로젝트의 Codex 세션 동기화",
         "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
         "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",

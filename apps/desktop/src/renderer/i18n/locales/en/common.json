@@ -5289,6 +5289,8 @@
       },
       "projectAction": {
         "rename": "Rename project",
+        "pin": "Pin project",
+        "unpin": "Unpin project",
         "showFiles": "Show Files",
         "archivedAll": "Archive all",
         "unarchiveAll": "Restore all",

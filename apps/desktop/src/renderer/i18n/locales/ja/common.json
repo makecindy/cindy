@@ -5279,6 +5279,8 @@
       },
       "projectAction": {
         "rename": "プロジェクト名を変更",
+        "pin": "プロジェクトをピン留め",
+        "unpin": "プロジェクトのピン留めを解除",
         "syncCodex": "このプロジェクトの Codex セッションを同期",
         "syncCodexDone": "Codex 同期完了:リンク {{inserted}} 件、更新 {{updated}} 件",
         "syncCodexAlreadyLinked": "このプロジェクトの Codex セッションはリンク済みです",

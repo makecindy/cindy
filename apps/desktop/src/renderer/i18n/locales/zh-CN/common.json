@@ -5279,6 +5279,8 @@
       },
       "projectAction": {
         "rename": "重命名项目",
+        "pin": "置顶项目",
+        "unpin": "取消置顶项目",
         "showFiles": "查看文件",
         "archivedAll": "全部归档",
         "unarchiveAll": "全部取消归档",
