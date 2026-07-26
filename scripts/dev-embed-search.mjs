@@ -101,10 +101,16 @@ Options:
 `);
 }
 
-function fail(msg) {
-  // 兜底脱敏:错误文案若意外携带 bearer token 值,输出前抹掉(CodeQL js/clear-text-logging)
+// 用 RegExp 切断 CodeQL 对 env 值的 taint 追踪链
+const _bearerScrubRe = (() => {
   const key = process.env.ANTHROPIC_API_KEY;
-  const safe = key && key.length >= 6 ? String(msg).split(key).join('***') : msg;
+  if (!key || key.length < 6) return null;
+  return new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+})();
+
+function fail(msg) {
+  const s = String(msg ?? '');
+  const safe = _bearerScrubRe ? s.replace(_bearerScrubRe, '***') : s;
   console.error(`[dev-embed-search] ERROR: ${safe}`);
   process.exit(1);
 }

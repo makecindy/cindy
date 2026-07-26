@@ -54,8 +54,7 @@
       "tmp": "^0.2.7",
       "fast-uri": "^3.1.4",
       "sharp": "^0.35.0",
-      "@esbuild-kit/core-utils>esbuild": "^0.25.0",
-      "xcode>uuid": "^11.1.1"
+      "@esbuild-kit/core-utils>esbuild": "^0.25.0"
     },
     "patchedDependencies": {
       "harmonyos-sans-sc-webfont-splitted": "dependency-patches/harmonyos-sans-sc-webfont-splitted.patch",

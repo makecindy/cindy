@@ -116,14 +116,70 @@ function extractXdtImageLines(segment: string, imageUrls: string[]): string {
 }
 
 function stripHtmlTags(text: string): string {
-  // 属性区排除 '<':消除跨标签起点的 O(n²) 回溯(CodeQL js/polynomial-redos)。
-  // 循环剥到稳定:单次替换会把 "<scr<x>ipt>" 剩成 "<script>"(js/incomplete-multi-character-sanitization)。
-  let prev = text;
-  for (;;) {
-    const next = prev.replace(/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>\n]*)?\/?>/g, '');
-    if (next === prev) return next;
-    prev = next;
+  // Single-pass linear scan. Strips HTML tags while preserving autolinks like
+  // <https://...>. Also strips nested/malicious fragments like "<scr<x>ipt>"
+  // (where removing inner tags would reassemble a valid tag) in one pass,
+  // without the O(n²) repeat-until-stable loop.
+  const len = text.length;
+  let out = '';
+  let i = 0;
+  while (i < len) {
+    if (text.charCodeAt(i) !== 0x3c /* < */) {
+      out += text[i];
+      i += 1;
+      continue;
+    }
+    // Potential tag start — probe ahead without consuming
+    let j = i + 1;
+    // Optional '/' for closing tags
+    if (j < len && text.charCodeAt(j) === 0x2f) j += 1;
+    // Tag name: [A-Za-z][A-Za-z0-9-]*
+    const nameStart = j;
+    if (j < len && isAsciiAlpha(text.charCodeAt(j))) {
+      j += 1;
+      while (j < len && isTagNameChar(text.charCodeAt(j))) j += 1;
+    }
+    if (j === nameStart) {
+      out += '<';
+      i += 1;
+      continue;
+    }
+    // After tag name, check what follows
+    const afterName = j < len ? text.charCodeAt(j) : 0;
+    if (afterName === 0x3a /* : */) {
+      // URI scheme (autolink like <https://...>) — preserve literally
+      out += '<';
+      i += 1;
+      continue;
+    }
+    if (afterName === 0x3c /* < */) {
+      // Nested fragment (e.g. <scr<x>ipt>) — strip everything to the
+      // outermost '>' to prevent reassembly after inner tags are removed
+      while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
+      i = j + 1;
+      continue;
+    }
+    if (afterName === 0x3e || afterName === 0x2f ||
+        afterName === 0x20 || afterName === 0x09 ||
+        afterName === 0x0a || afterName === 0x0d) {
+      // Valid HTML tag — skip to closing '>'
+      while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
+      i = j + 1;
+      continue;
+    }
+    // Unknown char after name (not a tag) — emit '<' literally
+    out += '<';
+    i += 1;
   }
+  return out;
+}
+
+function isAsciiAlpha(c: number): boolean {
+  return (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a);
+}
+
+function isTagNameChar(c: number): boolean {
+  return isAsciiAlpha(c) || (c >= 0x30 && c <= 0x39) || c === 0x2d;
 }
 
 function wrapTables(text: string): string {
