@@ -3691,6 +3691,8 @@ interface ElectronAPI {
         model?: string;
         effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
         fast?: boolean;
+        /** 显式选定的模型来源(标准面板 per-worker 选择);缺省 = 跟随默认路由解析。 */
+        providerId?: string | null;
       },
     ) => Promise<{ teamId: string; workerSessionId: string; workerId: string }>;
 

@@ -217,6 +217,8 @@ function draftEnableOrcaOptions(collab: CollabDraft) {
     model: cfg.model,
     effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
     fast: cfg.fast,
+    // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
+    providerId: cfg.providerId ?? undefined,
     delegateTask: cfg.initialTask || undefined,
   };
 }
@@ -2468,6 +2470,7 @@ export function NewMakerDraftRoute() {
                 model: form.model,
                 effort: form.effort,
                 fast: form.fast,
+                providerId: form.providerId,
                 initialTask: form.initialTask || undefined,
               },
             });

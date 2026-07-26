@@ -130,6 +130,13 @@ export interface OrcaWorkerCreateParams {
   model?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean;
+  /**
+   * 显式选定的模型来源(标准模型选择面板的 per-worker 选择)。string = 显式来源,
+   * 走下方精确 preflight 校验「已连接且提供该模型」,不满足即失败,不静默换路由;
+   * undefined / null = 未显式选择,沿用 defaults 缓存 / Lead 继承 / spawn-aware
+   * 默认路由的既有解析(含 requiresExplicitRoute 唯一来源救援与 stale 回落)。
+   */
+  providerId?: string | null;
   initialTask?: string;
 }
 
@@ -484,23 +491,31 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const cachedProviderFallback = cachedProviderFallbackId === null
       ? undefined
       : agentProviders.find((provider) => provider.id === cachedProviderFallbackId);
+    // 标准面板显式选定的来源(string)直接生效,由下方精确 preflight 把关「已连接且
+    // 提供该模型」;null/undefined 维持既有解析,包括「显式 model 不等于显式来源」的
+    // 强制默认路由与 requiresExplicitRoute 唯一来源救援。
+    const explicitSourceId = typeof params.providerId === 'string' ? params.providerId : null;
     const resolved = {
       ...resolvedConfig,
       // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。
       // 例外是该模型只有一个来源且它必须依赖 session provider store 注入自己的凭证。
-      providerId: params.model !== undefined
-        && explicitModelProviders.length === 1
-        && explicitModelProvider?.requiresExplicitRoute
-        ? explicitModelProvider.id
+      providerId: explicitSourceId !== null
+        ? explicitSourceId
         : params.model !== undefined
-          ? null
-          : cachedProviderRouteIsStale
-            ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
-            : resolvedConfig.providerId,
+          && explicitModelProviders.length === 1
+          && explicitModelProvider?.requiresExplicitRoute
+          ? explicitModelProvider.id
+          : params.model !== undefined
+            ? null
+            : cachedProviderRouteIsStale
+              ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
+              : resolvedConfig.providerId,
     };
-    const budgetRouteProviderId = params.model !== undefined
-      ? explicitModelDefaultProviderId
-      : (cachedProviderRouteIsStale ? cachedProviderFallbackId : resolved.providerId);
+    const budgetRouteProviderId = explicitSourceId !== null
+      ? explicitSourceId
+      : params.model !== undefined
+        ? explicitModelDefaultProviderId
+        : (cachedProviderRouteIsStale ? cachedProviderFallbackId : resolved.providerId);
 
     // codex/ 预算模型依赖 Cindy AI API key；XD/default 路由即使因 provider 缺失，
     // 也要先返回这条可操作的凭证错误，避免被下方通用的精确路由失败遮蔽。

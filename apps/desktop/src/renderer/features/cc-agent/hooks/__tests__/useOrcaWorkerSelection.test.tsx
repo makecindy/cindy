@@ -356,6 +356,7 @@ describe('useOrcaWorkerSelection', () => {
         role: 'tester',
         agent: 'codex',
         model: 'gpt-5.4',
+        providerId: null,
         initialTask: '',
       });
     });
@@ -381,6 +382,7 @@ describe('useOrcaWorkerSelection', () => {
         role: 'tester',
         agent: 'codex',
         model: 'gpt-5.4',
+        providerId: null,
         initialTask: 'run once',
       });
     });

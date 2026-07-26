@@ -27,6 +27,14 @@ const mocks = vi.hoisted(() => ({
   },
   capabilitiesLoading: false,
   providersLoading: false,
+  // 本地已连接来源目录(narrowProviderSource 走真函数,消费这份最小 ProviderView 形状)。
+  localProviders: [] as Array<{
+    id: string;
+    name: string;
+    connected: boolean;
+    agents: string[];
+    models: Record<string, Array<{ id: string }>>;
+  }>,
 }));
 
 function model(id: string, efforts = ['high'], defaultEffort = 'high') {
@@ -46,20 +54,42 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [], loading: mocks.providersLoading }),
+  useProviders: () => ({ providers: mocks.localProviders, loading: mocks.providersLoading }),
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({
   useDeviceProviders: () => ({ providers: [], loading: mocks.providersLoading, error: null }),
 }));
 
-vi.mock('@/components/new-chat/FastModeToggle', () => ({
-  FastModeToggle: () => null,
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => vi.fn(),
 }));
 
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: ({ modelId }: { modelId: string }) => (
-    <div data-testid="model-selector">{modelId}</div>
+  ModelSelector: (props: {
+    modelId: string;
+    currentProviderId?: string | null;
+    onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
+    fastMode?: boolean;
+    onFastModeChange?: (enabled: boolean) => void;
+    modelMemory?: unknown;
+  }) => (
+    <div
+      data-testid="model-selector"
+      // onProviderChange 是「供应商分段模式」的开关(面板内部 sourcesEnabled 判据),
+      // fastMode/onFastModeChange 是行级配置列的 Fast 开关(替代外置 FastModeToggle)。
+      data-sources-enabled={String(props.onProviderChange !== undefined)}
+      data-current-provider={props.currentProviderId ?? ''}
+      data-fast-wired={String(props.onFastModeChange !== undefined)}
+      data-memory-wired={String(props.modelMemory !== undefined)}
+    >
+      {props.modelId}
+      <button
+        type="button"
+        data-testid="pick-openai-row"
+        onClick={() => props.onProviderChange?.('openai', 'gpt-5.5', 'medium')}
+      />
+    </div>
   ),
 }));
 
@@ -83,6 +113,7 @@ describe('CreateWorkerPopover', () => {
     };
     mocks.capabilitiesLoading = false;
     mocks.providersLoading = false;
+    mocks.localProviders = [];
   });
 
   afterEach(() => {
@@ -293,7 +324,7 @@ describe('CreateWorkerPopover', () => {
     await waitFor(() =>
       expect(screen.getByTestId('model-selector').textContent).toBe('codex/gpt-5.5'),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Claude Code' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Claude' }));
 
     await waitFor(() =>
       expect(screen.getByTestId('model-selector').textContent).toBe('claude-sonnet-4-6'),
@@ -317,5 +348,72 @@ describe('CreateWorkerPopover', () => {
       (screen.getByRole('button', { name: 'orca.createWorker.submit' }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
+  });
+
+  it('mounts the standard panel with provider sections for local creation', async () => {
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourcesEnabled).toBe('true');
+    // Fast 收进面板行级配置列(外置开关已移除),模型级记忆与 composer 共用。
+    expect(selector.dataset.fastWired).toBe('true');
+    expect(selector.dataset.memoryWired).toBe('true');
+  });
+
+  it('keeps the degraded flat panel for device-link remote creation', async () => {
+    render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourcesEnabled).toBe('false');
+    expect(selector.dataset.memoryWired).toBe('false');
+  });
+
+  it('submits the provider picked from a source section row', async () => {
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5', ['medium'], 'medium')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(await screen.findByTestId('pick-openai-row'));
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'openai', effort: 'medium' }),
+      ),
+    );
+  });
+
+  it('narrows a restored provider that no longer offers the model to null', async () => {
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'ghost-provider' },
+      }),
+    );
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+    );
   });
 });

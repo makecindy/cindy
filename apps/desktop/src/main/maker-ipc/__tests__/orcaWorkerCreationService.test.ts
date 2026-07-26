@@ -1206,4 +1206,82 @@ describe('buildNoProviderMessage', () => {
     expect(msg).toContain('设置 → 模型供应商');
     expect(msg).not.toContain('改用');
   });
+
+  it('honors an explicit panel-selected provider over the forced default route', async () => {
+    const { deps, service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          { id: 'openai', name: 'OpenAI', models: ['gpt-5.5'] },
+        ],
+      })),
+    });
+
+    // 显式 model 且未显式来源时既有语义是强制默认路由(providerId=null);
+    // 标准面板显式选定来源后必须原样生效,不再被强制回落。
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'openai', model: 'gpt-5.5' },
+    });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+    }));
+  });
+
+  it('rejects an explicit provider that does not offer the requested model', async () => {
+    const { deps, service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          { id: 'openai', name: 'OpenAI', models: ['gpt-5.4'] },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+    });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('does not demand the gateway API key for a budget model on an explicit non-gateway route', async () => {
+    const { service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{ id: 'custom-codex', name: 'Custom Codex', models: ['codex/budget'] }],
+      })),
+      readClaudeApiKey: vi.fn((): string | null => null),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'codex/budget',
+      providerId: 'custom-codex',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'custom-codex', model: 'codex/budget' },
+    });
+  });
 });

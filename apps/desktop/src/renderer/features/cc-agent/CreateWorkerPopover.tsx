@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
+import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
+import {
+  getProviderModelEffort,
+  getProviderModelFast,
+  setProviderModelChoice,
+  setProviderModelEffort,
+  setProviderModelFast,
+} from '@/state/providerModelMemory';
 import type { Effort } from '@/lib/userPreferences.types';
 import { selectWorkerModels } from './workerModelAvailability';
 
@@ -19,6 +29,8 @@ interface WorkerAgentPrefs {
   model: string;
   effort: Effort;
   fast: boolean;
+  /** 上次显式选定的模型来源;null = 未显式选择(跟随默认路由解析)。 */
+  providerId: string | null;
 }
 
 interface WorkerPrefs {
@@ -29,8 +41,8 @@ interface WorkerPrefs {
 
 const DEFAULT_PREFS: WorkerPrefs = {
   lastAgent: 'codex',
-  codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false },
-  'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false },
+  codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false, providerId: null },
+  'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
 };
 
 function readWorkerPrefs(): WorkerPrefs {
@@ -38,18 +50,20 @@ function readWorkerPrefs(): WorkerPrefs {
     const raw = window.localStorage.getItem(PREFS_KEY);
     if (!raw) return DEFAULT_PREFS;
     const parsed = JSON.parse(raw) as Partial<WorkerPrefs>;
+    const agentPrefs = (agent: 'codex' | 'claude-code'): WorkerAgentPrefs => {
+      const p = parsed[agent];
+      return {
+        ...DEFAULT_PREFS[agent],
+        ...(p ?? {}),
+        fast: p?.fast === true,
+        // 老版本 prefs 无此字段 → null(未显式);非法类型同样回落。
+        providerId: typeof p?.providerId === 'string' && p.providerId ? p.providerId : null,
+      };
+    };
     return {
       lastAgent: parsed.lastAgent === 'claude-code' ? 'claude-code' : 'codex',
-      codex: {
-        ...DEFAULT_PREFS.codex,
-        ...(parsed.codex ?? {}),
-        fast: parsed.codex?.fast === true,
-      },
-      'claude-code': {
-        ...DEFAULT_PREFS['claude-code'],
-        ...(parsed['claude-code'] ?? {}),
-        fast: parsed['claude-code']?.fast === true,
-      },
+      codex: agentPrefs('codex'),
+      'claude-code': agentPrefs('claude-code'),
     };
   } catch {
     return DEFAULT_PREFS;
@@ -70,6 +84,8 @@ export interface CreateWorkerForm {
   model: string;
   effort?: Effort;
   fast?: boolean;
+  /** 显式选定的模型来源;null = 未显式,由 main 侧按默认路由解析。 */
+  providerId: string | null;
   initialTask: string;
 }
 
@@ -94,12 +110,16 @@ export function CreateWorkerPopover({
   deviceId,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [role, setRole] = useState('developer');
   const [customRole, setCustomRole] = useState('');
   const [agent, setAgent] = useState<'claude-code' | 'codex'>('codex');
   const [model, setModel] = useState(DEFAULT_PREFS.codex.model);
   const [effort, setEffort] = useState<Effort>(DEFAULT_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_PREFS.codex.fast);
+  // 显式选定的模型来源(标准面板供应商分段);null = 未显式。device-link 远程创建
+  // 面板退化为被控端纯列表(无来源维度),恒为 null。
+  const [providerSource, setProviderSource] = useState<string | null>(null);
   const [initialTask, setInitialTask] = useState('');
   const [prefs, setPrefs] = useState<WorkerPrefs>(DEFAULT_PREFS);
   const [prefsRestored, setPrefsRestored] = useState(false);
@@ -149,6 +169,20 @@ export function CreateWorkerPopover({
     (activeCaps !== null || activeCapabilitiesState.error !== null) &&
     activeModels.length === 0;
 
+  // 显式来源仅在「已连接且确实提供该模型」时有效;其余(断开/下架/换了模型)收窄为
+  // null 交回默认路由解析。与 SubagentModelSection / ImDefaultSettingsSection 同规则,
+  // 防止提交「选 A 落 B」的不可能组合。device-link 无本地来源维度,恒 null。
+  const narrowProviderSource = useCallback(
+    (candidate: string | null, modelId: string): string | null => {
+      if (!candidate || deviceId) return null;
+      const provider = connectedProvidersForAgent(providers, agent).find(
+        (p) => p.id === candidate,
+      );
+      return provider && providerOffersModel(provider, modelId, agent) ? candidate : null;
+    },
+    [agent, deviceId, providers],
+  );
+
   // 打开弹窗时恢复上次选择；initial task 不记忆，避免把旧任务误带到下一次创建。
   useEffect(() => {
     if (!open) {
@@ -162,9 +196,10 @@ export function CreateWorkerPopover({
     setModel(agentPrefs.model);
     setEffort(agentPrefs.effort);
     setFast(agentPrefs.fast);
+    setProviderSource(deviceId ? null : agentPrefs.providerId);
     setInitialTask('');
     setPrefsRestored(true);
-  }, [open]);
+  }, [deviceId, open]);
 
   // capabilities 可能尚未加载或模型被移除；加载后把当前选择收敛到可用模型和 effort。
   useEffect(() => {
@@ -181,7 +216,22 @@ export function CreateWorkerPopover({
     if (selected.efforts.length > 0 && !selected.efforts.includes(effort)) {
       setEffort(selected.defaultEffort ?? selected.efforts[selected.efforts.length - 1]);
     }
-  }, [activeModels, agent, effort, model, open, prefsRestored, modelCatalogLoading]);
+    // 恢复出来的显式来源可能已断开或不提供收敛后的模型 —— 目录就绪后同步收窄。
+    if (providerSource !== null) {
+      const narrowed = narrowProviderSource(providerSource, selected.id);
+      if (narrowed !== providerSource) setProviderSource(narrowed);
+    }
+  }, [
+    activeModels,
+    agent,
+    effort,
+    model,
+    modelCatalogLoading,
+    narrowProviderSource,
+    open,
+    prefsRestored,
+    providerSource,
+  ]);
 
   useEffect(() => {
     if (currentModel && !currentModelSupportsFast && fast) {
@@ -197,8 +247,9 @@ export function CreateWorkerPopover({
       setModel(remembered.model);
       setEffort(remembered.effort);
       setFast(remembered.fast);
+      setProviderSource(deviceId ? null : remembered.providerId);
     },
-    [prefs],
+    [deviceId, prefs],
   );
 
   const updateModel = useCallback(
@@ -211,11 +262,51 @@ export function CreateWorkerPopover({
       if (!available?.supportsFastMode) {
         setFast(false);
       }
+      // 仅换模型:当前显式来源不提供新模型时收窄,避免形成不可能组合。
+      setProviderSource((prev) => narrowProviderSource(prev, nextModel));
     },
-    [activeModels, effort],
+    [activeModels, effort, narrowProviderSource],
+  );
+
+  // 分段行原子选择 (来源, 模型, effort):与 composer 的 handleProviderChange 同语义。
+  // 面板回传的 reconciledEffort 已按模型级全局预设解析,模型不支持时仍按 efforts 校准。
+  const handleProviderChange = useCallback(
+    (providerId: string | null, modelId?: string, reconciledEffort?: Effort) => {
+      const nextModel = modelId ?? model;
+      setProviderSource(narrowProviderSource(providerId, nextModel));
+      if (!modelId) return;
+      setModel(modelId);
+      const available = activeModels.find((m) => m.id === modelId);
+      if (!available) return;
+      if (reconciledEffort && available.efforts.includes(reconciledEffort)) {
+        setEffort(reconciledEffort);
+      } else if (available.efforts.length > 0 && !available.efforts.includes(effort)) {
+        setEffort(available.defaultEffort ?? available.efforts[available.efforts.length - 1]);
+      }
+      if (!available.supportsFastMode) {
+        setFast(false);
+      }
+    },
+    [activeModels, effort, model, narrowProviderSource],
   );
 
   const updateEffort = setEffort;
+
+  // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
+  // device-link 远程创建不传:被控端记忆需镜像通道,宁可无记忆也不掺控制端本机。
+  const modelMemory = useMemo(
+    () =>
+      deviceId
+        ? undefined
+        : {
+            getEffort: getProviderModelEffort,
+            setEffort: setProviderModelEffort,
+            setChoice: setProviderModelChoice,
+            getFast: getProviderModelFast,
+            setFast: setProviderModelFast,
+          },
+    [deviceId],
+  );
 
   const activeRole = customRole || role;
   const customRoleError =
@@ -236,10 +327,18 @@ export function CreateWorkerPopover({
     if (!canCreate || submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
+    // 提交前对 (来源, 模型) 再收窄一次:收敛 effect 与提交之间目录可能已变化。
+    const submitProviderId = narrowProviderSource(providerSource, model);
     const nextPrefs: WorkerPrefs = {
       ...prefs,
       lastAgent: agent,
-      [agent]: { model, effort, fast },
+      [agent]: {
+        model,
+        effort,
+        fast,
+        // device-link 创建不覆盖本地来源记忆(远程面板没有来源维度)。
+        providerId: deviceId ? prefs[agent].providerId : submitProviderId,
+      },
     };
     setPrefs(nextPrefs);
     writeWorkerPrefs(nextPrefs);
@@ -250,6 +349,7 @@ export function CreateWorkerPopover({
         model,
         effort: currentModel && currentModel.efforts.length > 0 ? effort : undefined,
         fast: currentModelSupportsFast ? fast : undefined,
+        providerId: submitProviderId,
         initialTask,
       });
     } finally {
@@ -261,9 +361,12 @@ export function CreateWorkerPopover({
     prefs,
     activeRole,
     agent,
+    deviceId,
     model,
     effort,
     fast,
+    providerSource,
+    narrowProviderSource,
     currentModel,
     currentModelSupportsFast,
     initialTask,
@@ -335,31 +438,28 @@ export function CreateWorkerPopover({
           <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
             {t('orca.createWorker.agentLabel')}
           </div>
-          <div className="inline-flex rounded-lg bg-[var(--surface-elevated)] border border-[var(--border-default)] p-1">
-            {(['codex', 'claude-code'] as const).map((a) => (
-              <button
-                key={a}
-                type="button"
-                className={cn(
-                  'rounded-md px-4 py-1.5 text-13 leading-none border transition-colors',
-                  agent === a
-                    ? 'bg-[var(--surface-chip)] border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
-                    : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-                )}
-                onClick={() => updateAgent(a)}
-              >
-                {a === 'codex' ? 'Codex' : 'Claude Code'}
-              </button>
-            ))}
-          </div>
+          {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
+              「不自建选择 UI」的组件复用原则)。 */}
+          <VendorSegmentedSwitcher
+            value={vendorKey}
+            width={220}
+            ariaLabel={t('orca.createWorker.agentLabel')}
+            onChange={(next) => updateAgent(next === 'codex' ? 'codex' : 'claude-code')}
+          />
         </div>
 
         <div className="mb-4">
           <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
             {t('orca.createWorker.modelLabel')}
           </div>
+          {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
+              处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列,替代此前的
+              外置开关)全开;选定来源随创建参数显式下发,由 OrcaWorkerCreationService
+              精确 preflight。device-link 远程创建维持既有退化:被控端纯列表、无来源维度,
+              且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
+              外置 FastModeToggle,不能删。 */}
           <div className="flex items-center gap-2">
-            {currentModelSupportsFast && (
+            {deviceId && currentModelSupportsFast && (
               <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
             )}
             <ModelSelector
@@ -370,6 +470,19 @@ export function CreateWorkerPopover({
               vendorKey={vendorKey}
               deviceId={deviceId}
               popoverSide="bottom"
+              currentProviderId={deviceId ? undefined : providerSource}
+              onProviderChange={deviceId ? undefined : handleProviderChange}
+              onNavigateToProviders={
+                deviceId
+                  ? undefined
+                  : () => {
+                      onClose();
+                      navigate('/settings?tab=providers');
+                    }
+              }
+              modelMemory={modelMemory}
+              fastMode={deviceId ? undefined : fast}
+              onFastModeChange={deviceId ? undefined : (enabled) => setFast(enabled)}
             />
           </div>
           {noAvailableLocalModels ? (

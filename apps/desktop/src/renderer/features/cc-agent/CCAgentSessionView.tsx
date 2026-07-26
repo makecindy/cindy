@@ -1809,6 +1809,8 @@ export function CCAgentSessionView({
           effort: form.effort as
             'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined,
           fast: form.fast,
+          // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
+          providerId: form.providerId ?? undefined,
           delegateTask: form.initialTask || undefined,
         });
         void sessionsStore.forceRefresh('active');

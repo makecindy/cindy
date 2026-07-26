@@ -309,6 +309,8 @@ export function useOrcaWorkerSelection({
             model: form.model,
             effort: form.effort,
             fast: form.fast,
+            // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
+            providerId: form.providerId ?? undefined,
             label,
             initialTask: form.initialTask || undefined,
           });
