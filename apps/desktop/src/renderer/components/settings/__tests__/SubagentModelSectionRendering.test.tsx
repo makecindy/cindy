@@ -59,6 +59,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     currentProviderId?: string | null;
     sourceDisconnected?: boolean;
     reselectEmitsChange?: boolean;
+    onNavigateToProviders?: () => void;
     onProviderChange?: (providerId: string | null, modelId?: string) => void;
     onModelChange: (modelId: string) => void;
     configurationEnabled?: boolean;
@@ -72,6 +73,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-current-provider={props.currentProviderId ?? ''}
       data-source-disconnected={String(props.sourceDisconnected === true)}
       data-reselect-emits={String(props.reselectEmitsChange === true)}
+      data-connect-cta={String(props.onNavigateToProviders !== undefined)}
       // onProviderChange 是「供应商分段模式」的开关(ModelSelector 内部
       // sourcesEnabled = !!onProviderChange),这里暴露出来供断言。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
@@ -266,5 +268,18 @@ describe('SubagentModelSection standard panel contract', () => {
       claudeCode: 'claude-haiku-4-5',
       claudeCodeProviderId: 'stale-cache-provider',
     });
+  });
+
+  it('keeps the connect CTA off while any source is connected, preserving stale diagnostics', async () => {
+    // 面板 noSource 是 per-model 判定:存的模型 stale 而 agent 仍有来源时,接 CTA 会把
+    // trigger 换成「连接来源」,盖掉裸 id + 断开态诊断(codex review)。mock 目录里有
+    // anthropic 已连接 → CTA 必须不接线。
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-ghost-model', claudeCodeProviderId: 'anthropic' }),
+    );
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.connectCta).toBe('false');
+    expect(selector.dataset.sourceDisconnected).toBe('true');
   });
 });

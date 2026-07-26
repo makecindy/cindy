@@ -126,6 +126,12 @@ export function SubagentModelSection() {
             providerOffersModel(p, settings.claudeCode, 'claude-code')),
       ),
   );
+  // 「连接来源」CTA 只在整个 agent 零已连接来源时接线:面板的 noSource 判定是
+  // per-model 的,已存模型 stale(所有来源都掉了它)但 agent 还有其它来源时,
+  // 接了 CTA 会把 trigger 换成「连接来源」,反而盖掉裸 id + 断开态的诊断显示
+  // (codex review)。零来源时 per-model 判定必然同真,CTA 语义完整。
+  const hasAnyClaudeSource =
+    connectedProvidersForAgent(providers, 'claude-code').length > 0;
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -165,7 +171,10 @@ export function SubagentModelSection() {
                 sourceDisconnected={sourceDisconnected}
                 // 零已连接来源的空态 CTA / 列表底部「连接来源」:开了供应商分段就必须
                 // 给恢复动作,否则空态是死卡(codex review);与 composer 同跳转。
-                onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                // 仅零来源时接线,见 hasAnyClaudeSource 注。
+                onNavigateToProviders={
+                  hasAnyClaudeSource ? undefined : () => navigate('/settings?tab=providers')
+                }
                 // 存储来源断开时面板高亮的是**解析出的回退来源**,点它必须照常回调,
                 // 才能把显示与存储重新对齐(codex review);纯同值重选在下方去重跳过。
                 reselectEmitsChange
