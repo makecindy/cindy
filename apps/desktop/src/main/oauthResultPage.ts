@@ -74,10 +74,9 @@ export function pickOAuthResultPageLang(acceptLanguage: string | undefined): OAu
 function returnLabel(lang: OAuthResultPageLang, brandName: string): string {
   switch (lang) {
     case 'zh': return `返回 ${brandName}`;
+    case 'en': return `Return to ${brandName}`;
     case 'ja': return `${brandName} に戻る`;
     case 'ko': return `${brandName}(으)로 돌아가기`;
-    case 'en':
-    default: return `Return to ${brandName}`;
   }
 }
 
