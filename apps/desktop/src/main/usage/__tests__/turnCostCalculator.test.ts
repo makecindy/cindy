@@ -337,7 +337,7 @@ describe('resolveClaudeTurnCostSinks', () => {
     expect(result.perModel.map((item) => item.source)).toEqual(['gateway', 'gateway']);
   });
 
-  it('degrades to the gateway-quoted currency when a fallback segment mixes currencies', () => {
+  it('skips the USD SDK fallback under a non-USD catalog — no reliable price, no money', () => {
     const pricing = catalog(
       quote('claude-opus-4-8', 5, 25, { currency: 'CNY' }),
     );
@@ -354,9 +354,9 @@ describe('resolveClaudeTurnCostSinks', () => {
       currency: 'CNY',
       kind: 'actual-cost',
     });
-    expect(result.perModel.map((item) => item.money?.currency)).toEqual([
-      'CNY',
-      'USD',
+    expect(result.perModel.map((item) => item.money)).toEqual([
+      expect.objectContaining({ currency: 'CNY', amount: 5 }),
+      null,
     ]);
     expect(result.perModel.map((item) => item.source)).toEqual([
       'gateway',

@@ -138,6 +138,13 @@ export function resolveTurnCost(args: {
     // quote 缺失(冷缓存 / /models 同步失败 / 目录无该模型价):回退 SDK 自报
     // 数字,真实 gateway 计费不能整轮记 0。codex/ 预算路由的 SDK 数字未含 0.15
     // 折扣,这里补乘一次 —— gateway 价路径的价表已折好,两路互斥不双重打折。
+    // 目录币种非 USD 时不回退:SDK 自报 USD 既不匹配网关价目、单位也对不上,
+    // 记入即错标——按「无可靠报价」语义返回无金额(token 照常统计),与 codex
+    // 无价条目的既有处理一致,也让单轮金额不可能混币种。
+    const xdQuotes = pricing?.xd ? Object.values(pricing.xd) : [];
+    if (xdQuotes.length > 0 && xdQuotes[0].currency !== 'USD') {
+      return { model, money: null, source: 'sdk-fallback' };
+    }
     const fallbackUsd =
       Math.max(0, sdkCostDelta ?? 0) *
       getCodexBudgetEffectiveCostMultiplier(model);
