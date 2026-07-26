@@ -71,12 +71,12 @@ export function pickOAuthResultPageLang(acceptLanguage: string | undefined): OAu
   return 'en';
 }
 
-const RETURN_LABEL = new Map<OAuthResultPageLang, (brandName: string) => string>([
-  ['zh', (brandName) => `返回 ${brandName}`],
-  ['en', (brandName) => `Return to ${brandName}`],
-  ['ja', (brandName) => `${brandName} に戻る`],
-  ['ko', (brandName) => `${brandName}(으)로 돌아가기`],
-]);
+const RETURN_LABEL: Record<OAuthResultPageLang, (brandName: string) => string> = {
+  zh: (brandName) => `返回 ${brandName}`,
+  en: (brandName) => `Return to ${brandName}`,
+  ja: (brandName) => `${brandName} に戻る`,
+  ko: (brandName) => `${brandName}(으)로 돌아가기`,
+};
 
 /** Builds the stable app-focus CTA shared by browser callback pages. */
 export function buildOAuthReturnAction(
@@ -84,8 +84,8 @@ export function buildOAuthReturnAction(
   source: string,
   brandName: string,
 ): { href: string; label: string } {
-  const labelFor = RETURN_LABEL.get(lang);
-  const fn = typeof labelFor === 'function' ? labelFor : RETURN_LABEL.get('en')!;
+  const labelFor = RETURN_LABEL[lang];
+  const fn = typeof labelFor === 'function' ? labelFor : RETURN_LABEL.en;
   return {
     href: `${DEEP_LINK_URL_PREFIX}focus/${encodeURIComponent(source)}`,
     label: fn(brandName),
