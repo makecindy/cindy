@@ -5530,6 +5530,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             id: provider.id,
             name: provider.name,
             models: (provider.models['claude-code'] ?? []).map((model) => model.id),
+            // Fast 能力 per-(provider, model):显式来源的 Fast 判定按该来源自己的条目。
+            fastModels: (provider.models['claude-code'] ?? [])
+              .filter((model) => model.supportsFastMode)
+              .map((model) => model.id),
             requiresExplicitRoute: provider.routing['claude-code']?.authStrategy === 'api-key-header'
               || provider.routing['claude-code']?.authStrategy === 'oauth-token',
           })),
@@ -5537,6 +5541,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             id: provider.id,
             name: provider.name,
             models: (provider.models.codex ?? []).map((model) => model.id),
+            fastModels: (provider.models.codex ?? [])
+              .filter((model) => model.supportsFastMode)
+              .map((model) => model.id),
             requiresExplicitRoute: provider.routing.codex?.authStrategy === 'api-key-header'
               || provider.routing.codex?.authStrategy === 'oauth-token',
           })),

@@ -42,6 +42,11 @@ export interface OrcaWorkerProviderSnapshot {
   id: string;
   name: string;
   models: readonly string[];
+  /**
+   * 该来源下 supportsFastMode 的模型 id 集合。Fast 能力是 per-(provider, model) 的,
+   * 同 id 模型在不同来源可分叉;缺省 = 该快照来源无 Fast 元数据,按不支持处理。
+   */
+  fastModels?: readonly string[];
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
   requiresExplicitRoute?: boolean;
 }
@@ -515,6 +520,20 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
               ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
               : resolvedConfig.providerId,
     };
+    // 显式来源下 Fast 按该来源自己的模型条目判定 —— getAvailableModels 是跨来源拍平
+    // 清单(首来源 wins),同 id 模型的 supportsFastMode 在不同来源可分叉:首来源不支持
+    // 会误杀显式来源真正支持的 Fast,反向则可能把 Fast 放到不支持的来源上(codex review)。
+    if (explicitSourceId !== null) {
+      const explicitRouteProvider = agentProviders.find(
+        (provider) => provider.id === explicitSourceId,
+      );
+      const providerSupportsFast =
+        explicitRouteProvider?.fastModels?.includes(resolved.model) === true;
+      const requestedFast = params.agent === 'codex' && params.fast !== undefined
+        ? params.fast
+        : (defaults.fastMode ?? !!lead.fastMode);
+      resolved.fastMode = providerSupportsFast && requestedFast === true;
+    }
     const budgetRouteProviderId = explicitSourceId !== null
       ? explicitSourceId
       : params.model !== undefined

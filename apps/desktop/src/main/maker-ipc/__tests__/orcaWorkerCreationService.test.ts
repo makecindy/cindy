@@ -1255,6 +1255,59 @@ describe('buildNoProviderMessage', () => {
     });
   });
 
+  it('resolves Fast from the explicit provider catalog entry, not the flattened union', async () => {
+    // gpt-5.5 在 xd(拍平清单首来源,不支持 Fast)与 openai(支持)都有:显式选 openai
+    // 时 Fast 必须按 openai 自己的条目放行,不被拍平首来源误杀;反向显式选 xd 时压掉。
+    const routing = () => providerRoutingContext({
+      'claude-code': [],
+      codex: [
+        { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'], fastModels: [] },
+        { id: 'openai', name: 'OpenAI', models: ['gpt-5.5'], fastModels: ['gpt-5.5'] },
+      ],
+    });
+    const supportsFastByUnion = (supported: boolean) => vi.fn((agent: AgentKind) => (
+      agent === 'codex'
+        ? [{ id: 'gpt-5.5', efforts: ['high'], defaultEffort: 'high', supportsFastMode: supported }]
+        : []
+    ));
+
+    const enabled = createDeps({
+      getProviderRoutingContext: vi.fn(async () => routing()),
+      // 拍平清单说不支持(首来源 xd wins)——显式 openai 仍应放行。
+      getAvailableModels: supportsFastByUnion(false),
+    });
+    await expect(enabled.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      fast: true,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'openai', fastMode: true },
+    });
+
+    const suppressed = createDeps({
+      getProviderRoutingContext: vi.fn(async () => routing()),
+      // 拍平清单说支持(假设首来源换位)——显式 xd 不支持,必须压掉。
+      getAvailableModels: supportsFastByUnion(true),
+    });
+    await expect(suppressed.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      fast: true,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'xd', fastMode: false },
+    });
+  });
+
   it('rejects an explicit provider that does not offer the requested model', async () => {
     const { deps, service } = createDeps({
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({

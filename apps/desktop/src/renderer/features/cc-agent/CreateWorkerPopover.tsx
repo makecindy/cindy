@@ -287,13 +287,15 @@ export function CreateWorkerPopover({
       if (available && available.efforts.length > 0 && !available.efforts.includes(effort)) {
         setEffort(available.defaultEffort ?? available.efforts[available.efforts.length - 1]);
       }
-      if (!available?.supportsFastMode) {
+      // 仅换模型:当前显式来源不提供新模型时收窄,避免形成不可能组合;
+      // Fast 与选行路径同判据(providerFastSupported,per-provider),不用拍平并集值。
+      const narrowed = narrowProviderSource(providerSource, nextModel);
+      setProviderSource(narrowed);
+      if (!providerFastSupported(narrowed, nextModel)) {
         setFast(false);
       }
-      // 仅换模型:当前显式来源不提供新模型时收窄,避免形成不可能组合。
-      setProviderSource((prev) => narrowProviderSource(prev, nextModel));
     },
-    [activeModels, effort, narrowProviderSource],
+    [activeModels, effort, narrowProviderSource, providerFastSupported, providerSource],
   );
 
   // 分段行原子选择 (来源, 模型):与 composer 的 handleProviderChange 同语义。
@@ -320,10 +322,12 @@ export function CreateWorkerPopover({
       if (!providerFastSupported(narrowed, modelId)) {
         setFast(false);
       } else {
+        // 面板行的 Fast 闪电按全局预设显示,无预设 = 关:选行后必须对齐显示,
+        // 不能沿用上一个模型的 true(codex review)。
         const rememberedFast = providerId
           ? getProviderModelFast(agent, providerId, modelId)
           : undefined;
-        if (rememberedFast !== undefined) setFast(rememberedFast);
+        setFast(rememberedFast === true);
       }
     },
     [activeModels, agent, effort, model, narrowProviderSource, providerFastSupported],

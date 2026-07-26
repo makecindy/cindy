@@ -5,6 +5,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __resetForTest as resetProviderModelMemoryForTest,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelFast,
@@ -129,6 +130,8 @@ vi.mock('../workerModelAvailability', () => ({
 describe('CreateWorkerPopover', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    // providerModelMemory 有进程内 cache,只清 localStorage 会把记忆泄漏到后续用例。
+    resetProviderModelMemoryForTest();
     mocks.modelsByAgent.codex = [model('codex/gpt-5.5')];
     mocks.modelsByAgent['claude-code'] = [model('claude-opus-4-7')];
     mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'codex/gpt-5.5' }] };
@@ -144,6 +147,7 @@ describe('CreateWorkerPopover', () => {
   afterEach(() => {
     cleanup();
     window.localStorage.clear();
+    resetProviderModelMemoryForTest();
   });
 
   it('disables immediately and collapses repeated click events into one request', async () => {
