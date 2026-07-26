@@ -7,7 +7,7 @@ function normalizedVoiceLanguage(language: string | null | undefined): string | 
 
 /**
  * `auto` 对 ASR 的语义是让 provider 自行探测，不得把 App UI 语言强塞进识别提示。
- * voice-server 与直连 provider 共用这条归一化，避免一边自动、一边仍锁死语言。
+ * 托管 voice-server 请求在这里归一化；直连 provider 在各自协议边界省略 `auto` 提示。
  */
 export function resolveMobileVoiceAsrLanguage(
   language: string | null | undefined,
