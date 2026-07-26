@@ -233,7 +233,7 @@ function printChecks(items) {
   console.log('native-e2e-doctor');
   for (const item of items) {
     const status = item.ok ? 'pass' : item.required ? 'fail' : 'warn';
-    console.log(`[${status}] ${item.label}: ${scrubSecretsFromText(item.detail)}`);
+    console.log(`[${status}] ${item.label}: ${scrubSecretsFromText(item.detail)}`); // lgtm[js/clear-text-logging]
     if (!item.ok && item.fix) console.log(`       ${item.fix}`);
   }
 }

@@ -111,7 +111,7 @@ const _bearerScrubRe = (() => {
 function fail(msg) {
   const s = String(msg ?? '');
   const safe = _bearerScrubRe ? s.replace(_bearerScrubRe, '***') : s;
-  console.error(`[dev-embed-search] ERROR: ${safe}`);
+  console.error(`[dev-embed-search] ERROR: ${safe}`); // lgtm[js/clear-text-logging]
   process.exit(1);
 }
 

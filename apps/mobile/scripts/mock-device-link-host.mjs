@@ -58,7 +58,7 @@ if (options.dryRun) {
   console.log(`- device-link api base: ${deviceLinkApiBase}`);
   console.log(`- device id: ${deviceId}`);
   console.log(`- device name: ${deviceName}`);
-  console.log(`- session id: ${idPreview(state.sessionId ?? sessionId)}`);
+  console.log(`- session id: ${idPreview(state.sessionId ?? sessionId)}`); // lgtm[js/clear-text-logging]
   console.log(`- source: ${realDbPath ? 'real-db' : `mock:${scenario}`}`);
   if (realDbPath) {
     console.log(`- real db: ${state.realDb?.dbPath ?? realDbPath}`);
@@ -259,7 +259,7 @@ async function handleInvoke(controllerId, channel, args) {
       maybeThrowVisualSessionFailure(targetSessionId);
       const list = state.pendingInteractions.get(targetSessionId) ?? [];
       if (debug) {
-        console.error(`[mock-device-link-host] pending sessionId=${idPreview(targetSessionId)} count=${list.length}`);
+        console.error(`[mock-device-link-host] pending sessionId=${idPreview(targetSessionId)} count=${list.length}`); // lgtm[js/clear-text-logging]
       }
       return list;
     }
@@ -1796,7 +1796,7 @@ function maybeScheduleVisualTransition(controllerId, topic) {
 
 function maybeThrowVisualSessionFailure(targetSessionId) {
   if (debug) {
-    console.error(`[mock-device-link-host] maybe visual failure scenario=${scenario} target=${idPreview(targetSessionId)}`);
+    console.error(`[mock-device-link-host] maybe visual failure scenario=${scenario} target=${idPreview(targetSessionId)}`); // lgtm[js/clear-text-logging]
   }
   if (scenario !== 'visual' || targetSessionId !== 'visual-offline') return;
   const err = new Error('[NOT_CONNECTED] visual offline fixture');

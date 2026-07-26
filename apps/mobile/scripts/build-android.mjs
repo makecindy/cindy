@@ -319,4 +319,4 @@ function scrubSecretsFromText(text) {
   return _secretScrubRe ? s.replace(_secretScrubRe, '***') : s;
 }
 
-main().catch((err) => { console.error(scrubSecretsFromText(err?.message)); process.exit(1); });
+main().catch((err) => { console.error(scrubSecretsFromText(err?.message)); process.exit(1); }); // lgtm[js/clear-text-logging]

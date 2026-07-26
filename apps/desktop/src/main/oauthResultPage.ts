@@ -84,10 +84,11 @@ export function buildOAuthReturnAction(
   source: string,
   brandName: string,
 ): { href: string; label: string } {
-  const labelFor = RETURN_LABEL.get(lang) ?? RETURN_LABEL.get('en')!;
+  const labelFor = RETURN_LABEL.get(lang);
+  const fn = typeof labelFor === 'function' ? labelFor : RETURN_LABEL.get('en')!;
   return {
     href: `${DEEP_LINK_URL_PREFIX}focus/${encodeURIComponent(source)}`,
-    label: labelFor(brandName),
+    label: fn(brandName),
   };
 }
 
