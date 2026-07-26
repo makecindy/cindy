@@ -51,6 +51,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
   ModelSelector: (props: {
     modelId: string;
     currentProviderId?: string | null;
+    sourceDisconnected?: boolean;
+    reselectEmitsChange?: boolean;
     onProviderChange?: (providerId: string | null, modelId?: string) => void;
     onModelChange: (modelId: string) => void;
     configurationEnabled?: boolean;
@@ -62,6 +64,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       data-testid="model-selector"
       data-model={props.modelId}
       data-current-provider={props.currentProviderId ?? ''}
+      data-source-disconnected={String(props.sourceDisconnected === true)}
+      data-reselect-emits={String(props.reselectEmitsChange === true)}
       // onProviderChange 是「供应商分段模式」的开关(ModelSelector 内部
       // sourcesEnabled = !!onProviderChange),这里暴露出来供断言。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
@@ -83,6 +87,11 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         type="button"
         data-testid="pick-unspecified"
         onClick={() => props.fallbackOption?.onSelect()}
+      />
+      <button
+        type="button"
+        data-testid="reselect-current-row"
+        onClick={() => props.onProviderChange?.(props.currentProviderId ?? null, undefined)}
       />
     </div>
   ),
@@ -198,5 +207,27 @@ describe('SubagentModelSection standard panel contract', () => {
     render(<SubagentModelSection />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.disabled).toBe('true');
+  });
+
+  it('flags the stored provider as disconnected instead of silently falling back', async () => {
+    // 已存来源断开时 trigger 必须显示真实存储来源 + 断开态;静默回落默认图标会让
+    // 显示与存储分叉,重连后旧来源静默复活(codex review)。
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-opus-5', claudeCodeProviderId: 'ghost-provider' }),
+    );
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourceDisconnected).toBe('true');
+    // 点面板高亮的回退行必须能把显示来源钉回存储(reselectEmitsChange 开启)。
+    expect(selector.dataset.reselectEmits).toBe('true');
+  });
+
+  it('skips the write when reselecting the exact persisted (model, provider) pair', async () => {
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-opus-5', claudeCodeProviderId: 'anthropic' }),
+    );
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('reselect-current-row'));
+    await waitFor(() => expect(settingsSet).not.toHaveBeenCalled());
   });
 });

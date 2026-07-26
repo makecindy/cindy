@@ -52,17 +52,33 @@ export function normalizeSubagentModelId(value: unknown): string | null {
 }
 
 /**
- * patch 配对一致性:显式清除某个模型时,同 patch 强制清除对应来源。
- * 来源依附于模型才有语义;不归一会允许写入「claudeCode=null 但 providerId 非空」的
- * 孤儿状态并被 override store 持久化到磁盘(copilot review)。UI 已原子清除,
- * 这里是 IPC 契约边界的兜底。
+ * patch 配对一致性:按「patch 合并当前存储」后的有效模型判定 —— 有效模型为 null
+ * (不指定)时,对应来源强制清为 null。来源依附于模型才有语义;不归一会允许两类
+ * 孤儿写入被 override store 持久化到磁盘:同 patch 清模型但漏清来源(copilot
+ * review),以及模型本就未指定时的 provider-only patch(codex review,会造成
+ * 「显示不指定却 isCustomized=true」)。UI 已原子写,这里是 IPC 契约边界的兜底。
  */
 export function reconcileSubagentModelSettingsPatch(
   patch: SubagentModelSettingsPatch,
+  current: SubagentModelSettings,
 ): SubagentModelSettingsPatch {
   const next = { ...patch };
-  if (next.claudeCode === null) next.claudeCodeProviderId = null;
-  if (next.codex === null) next.codexProviderId = null;
+  const clearOrphan = (
+    modelKey: 'claudeCode' | 'codex',
+    providerKey: 'claudeCodeProviderId' | 'codexProviderId',
+  ) => {
+    const effectiveModel = next[modelKey] !== undefined ? next[modelKey] : current[modelKey];
+    if (effectiveModel !== null) return;
+    const effectiveProvider =
+      next[providerKey] !== undefined ? next[providerKey] : current[providerKey];
+    // 只在确有孤儿要清(有效来源非 null)或 patch 本就动了该 key 时写入,
+    // 避免给无关 patch 添 key。
+    if (effectiveProvider !== null || next[providerKey] !== undefined) {
+      next[providerKey] = null;
+    }
+  };
+  clearOrphan('claudeCode', 'claudeCodeProviderId');
+  clearOrphan('codex', 'codexProviderId');
   return next;
 }
 

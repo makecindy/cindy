@@ -127,19 +127,45 @@ describe('subagent model settings store', () => {
   });
 
   it('reconciles a model-clearing patch to also clear its providerId (IPC boundary contract)', () => {
+    const current = {
+      claudeCode: 'claude-opus-5',
+      claudeCodeProviderId: 'anthropic',
+      codex: 'gpt-5.5',
+      codexProviderId: 'xd',
+    };
     // 来源依附模型:显式清模型的 patch 未带 providerId 时,不得留下孤儿来源落盘。
-    expect(reconcileSubagentModelSettingsPatch({ claudeCode: null })).toEqual({
+    expect(reconcileSubagentModelSettingsPatch({ claudeCode: null }, current)).toEqual({
       claudeCode: null,
       claudeCodeProviderId: null,
     });
-    expect(reconcileSubagentModelSettingsPatch({ codex: null, claudeCode: 'claude-opus-5' })).toEqual({
+    expect(
+      reconcileSubagentModelSettingsPatch({ codex: null, claudeCode: 'claude-opus-5' }, current),
+    ).toEqual({
       codex: null,
       codexProviderId: null,
       claudeCode: 'claude-opus-5',
     });
-    // 只动 providerId、不动模型的 patch 原样通过。
-    expect(reconcileSubagentModelSettingsPatch({ claudeCodeProviderId: 'anthropic' })).toEqual({
+    // 存储已有模型时,provider-only patch 原样通过。
+    expect(
+      reconcileSubagentModelSettingsPatch({ claudeCodeProviderId: 'anthropic' }, current),
+    ).toEqual({
       claudeCodeProviderId: 'anthropic',
+    });
+  });
+
+  it('rejects a provider-only patch while the effective model is unspecified', () => {
+    // 模型本就未指定时来源无所依附:provider-only patch 不得写出「显示不指定却
+    // isCustomized」的孤儿 override(codex review)。
+    const current = {
+      claudeCode: null,
+      claudeCodeProviderId: null,
+      codex: null,
+      codexProviderId: null,
+    };
+    expect(
+      reconcileSubagentModelSettingsPatch({ claudeCodeProviderId: 'anthropic' }, current),
+    ).toEqual({
+      claudeCodeProviderId: null,
     });
   });
 });

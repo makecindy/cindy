@@ -102,6 +102,16 @@ export function SubagentModelSection() {
   if (!settings) return null;
 
   const unspecifiedLabel = t('settings.subagentModels.unspecified');
+  // 已存显式来源当前断开(目录就绪后判定):trigger 显示**真实存储来源** + 断开错误态,
+  // 不静默回落默认来源图标 —— 否则界面显示的来源与存储值分叉,重连后旧来源会静默
+  // 复活,用户无从自查(codex review)。
+  const sourceDisconnected = Boolean(
+    !providersLoading &&
+      settings.claudeCodeProviderId &&
+      !connectedProvidersForAgent(providers, 'claude-code').some(
+        (p) => p.id === settings.claudeCodeProviderId,
+      ),
+  );
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -137,11 +147,23 @@ export function SubagentModelSection() {
                 onEffortChange={() => undefined}
                 vendorKey="cc"
                 currentProviderId={settings.claudeCodeProviderId}
+                sourceDisconnected={sourceDisconnected}
+                // 存储来源断开时面板高亮的是**解析出的回退来源**,点它必须照常回调,
+                // 才能把显示与存储重新对齐(codex review);纯同值重选在下方去重跳过。
+                reselectEmitsChange
                 onProviderChange={(providerId, modelId) => {
                   // 分段行原子选择 (来源, 模型);面板未回传模型时沿用已存模型,
                   // 尚未指定过模型则忽略(来源必须依附于某个模型才有语义)。
                   const nextModel = modelId ?? settings.claudeCode;
-                  if (nextModel) void setClaudeModel(nextModel, providerId);
+                  if (!nextModel) return;
+                  // 显式同值(reselectEmitsChange 带来的重选自己)不产生空写。
+                  if (
+                    nextModel === settings.claudeCode &&
+                    providerId === settings.claudeCodeProviderId
+                  ) {
+                    return;
+                  }
+                  void setClaudeModel(nextModel, providerId);
                 }}
                 switching={pending}
                 // 目录未就绪时禁用整行:此窗口内无法判定「来源是否提供该模型」,放行

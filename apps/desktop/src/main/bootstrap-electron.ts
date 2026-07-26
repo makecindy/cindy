@@ -419,6 +419,7 @@ import {
   writeCompactionPct,
 } from './maker-host/compaction-settings-store.js';
 import {
+  readSubagentModelSettings,
   readSubagentModelSettingsState,
   resetSubagentModelSettings,
   writeSubagentModelSettingsPatch,
@@ -2503,7 +2504,14 @@ const registerIpcHandlers = () => {
     return subagentModelSettingsWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (_e, patch: unknown) => {
-    writeSubagentModelSettingsPatch(parseSubagentModelSettingsPatch(patch));
+    // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
+    // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
+    writeSubagentModelSettingsPatch(
+      reconcileSubagentModelSettingsPatch(
+        parseSubagentModelSettingsPatch(patch),
+        readSubagentModelSettings(),
+      ),
+    );
     return subagentModelSettingsWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async () => {
@@ -5763,8 +5771,7 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     }
     patch[key] = normalizeSubagentModelId(value);
   }
-  // 配对一致性:显式清除模型时同 patch 清除对应来源,防孤儿 providerId 落盘。
-  return reconcileSubagentModelSettingsPatch(patch);
+  return patch;
 }
 
 function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
