@@ -91,6 +91,7 @@ import {
 } from '@/session/SessionMenuSheet';
 import type { SessionMenuView } from '@/session/sessionMenu';
 import {
+  interactionBlocksRemoteComposer,
   interactionKind,
   readRequestId,
   selectPendingInteractionByRequestId,
@@ -1269,6 +1270,10 @@ export default function SessionScreen() {
     planViewerState: pendingPlanViewerState,
   });
   const hasActivePendingInteraction = activePendingInteraction !== null;
+  // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
+  // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
+  // 锁死(线上已复现);它们改为贴在输入框上方,聊天不受影响。
+  const pendingInteractionBlocksComposer = interactionBlocksRemoteComposer(activePendingInteraction);
   const remoteUnavailableReason = useMemo(
     () => describeRemoteError(connectionError),
     [connectionError],
@@ -1289,12 +1294,13 @@ export default function SessionScreen() {
     () => buildSessionOperationLayout({
       hasCurrentSession,
       hasActivePendingInteraction,
+      pendingInteractionBlocksComposer,
       remoteUnavailableReason,
       // composer 用 composer-only reason:Lead → editable(可发消息),worker → read-only;
       // 缓存种入行在 fresh 同步前同走此禁发通道。
       readOnlyReason: cacheSeededReason ?? pendingCreationReason ?? composerReadOnlyReason,
     }),
-    [cacheSeededReason, composerReadOnlyReason, hasActivePendingInteraction, hasCurrentSession, pendingCreationReason, remoteUnavailableReason],
+    [cacheSeededReason, composerReadOnlyReason, hasActivePendingInteraction, hasCurrentSession, pendingCreationReason, pendingInteractionBlocksComposer, remoteUnavailableReason],
   );
   useEffect(() => {
     if (!pendingInteractionActiveRequestId) return;
@@ -6857,6 +6863,37 @@ export default function SessionScreen() {
                 />
               ))}
             </ComposerPaletteFrame>
+          ) : null}
+
+          {/*
+            手机端终结不了的请求(plugin_setup 等)只贴在输入框上方:能看清电脑端
+            在等什么、能取消,但不吃掉 composer —— 否则用户既处理不了这张卡又发不
+            出消息。高度按 palette 量级收紧,内容超出走内部滚动。
+          */}
+          {sessionOperationLayout.pendingInteractionPlacement === 'above-composer' ? (
+            <View
+              style={[
+                styles.pendingInteractionSurface,
+                { maxHeight: nativeShellLayout.paletteMaxHeight },
+              ]}
+              testID="interaction.aboveComposerSurface"
+            >
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                testID="interaction.aboveComposerScroll"
+              >
+                <InteractionPanel
+                  deviceId={deviceId}
+                  sessionId={sessionId}
+                  interactions={pending}
+                  activeRequestId={pendingInteractionActiveRequestId}
+                  onActiveRequestIdChange={setPendingInteractionActiveRequestId}
+                  onError={setError}
+                  readOnlyReason={collaborationReadOnlyReason}
+                />
+              </ScrollView>
+            </View>
           ) : null}
 
           {sessionOperationLayout.composerSlot === 'pending-interaction' ? (

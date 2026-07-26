@@ -32,7 +32,9 @@ import {
   buildPermissionReviewPresentation,
   buildPlanReviewEvidencePresentation,
   buildInteractionResolveActionPresentation,
+  buildPluginSetupCancelDecision,
   buildPlanReviewDecision,
+  buildRemotePluginSetupSummary,
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   resolveInteractionResilient,
@@ -301,10 +303,18 @@ function InteractionItem({
   const requestId = readRequestId(item);
   const kind = interactionKind(item);
 
-  const submitDecision = async (decision: Record<string, unknown>) => {
+  const submitDecision = async (
+    decision: Record<string, unknown>,
+    options: { optimisticDismiss?: boolean } = {},
+  ) => {
     if (!canStartInteractionResolve({ requestId, submittingRequestId: submittingRequestIdRef.current })) return;
     const currentRequestId = requestId;
     if (!currentRequestId) return;
+    // 乐观 dismiss 只适合「决定即终局」的卡。plugin_setup 的取消由被控端按
+    // expectedRevision 裁决(旧快照会被改判成重新体检而非取消),抢先撤卡会在
+    // 取消其实没生效时留下一张被抑制、再也灌不回来的幽灵卡 —— 那类卡走非乐观
+    // 路径,等被控端 dismiss 推送为准。
+    const optimisticDismiss = options.optimisticDismiss !== false;
     submittingRequestIdRef.current = currentRequestId;
     setBusy(true);
     onError(null);
@@ -313,18 +323,22 @@ function InteractionItem({
     // 登记在途抑制,防权威快照 / push 重放在被控端确认前把同卡灌回闪回;保留
     // item 快照,真失败时原卡复原供重试。
     const itemSnapshot = item;
-    remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId);
+    if (optimisticDismiss) remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId);
     try {
       await resolveInteractionResilient(maker, sessionId, currentRequestId, decision);
       if (kind === 'plan_review') clearPlanReviewDraft(currentRequestId);
-      remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
+      if (optimisticDismiss) {
+        remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
+      }
     } catch (err) {
       // resolveInteractionResilient 已带弱网重试 + pending 列表权威分辨,走到
       // 这里就是决定确未生效:复原卡片 + 报错。
-      remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, {
-        kind: 'restore',
-        item: itemSnapshot,
-      });
+      if (optimisticDismiss) {
+        remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, {
+          kind: 'restore',
+          item: itemSnapshot,
+        });
+      }
       onError(formatRemoteError(err));
     } finally {
       if (submittingRequestIdRef.current === currentRequestId) {
@@ -383,6 +397,32 @@ function InteractionItem({
         kind={kind}
         message={t('interaction.panel.issueConfirmUnsupported')}
         request={item.request}
+        touchLayout={touchLayout}
+      />
+    );
+  }
+  // plugin_setup:配置动作(OAuth / 写本地设置)只能在被控端完成,被控端的 IPC
+  // 边界也只放 cancel 过来。手机侧因此给只读摘要 + 取消出口,让用户至少能把
+  // 会话从等待里放出来,而不是对着一张没有任何按钮的卡干等。
+  if (kind === 'plugin_setup') {
+    const cancelDecision = buildPluginSetupCancelDecision(item.request);
+    return (
+      <UnsupportedCard
+        busy={busy}
+        cancel={cancelDecision
+          ? {
+            accessibilityLabel: t('interaction.panel.cancelRequestAccessibility'),
+            label: t('interaction.panel.cancelRequest'),
+            onPress: () => void submitDecision(cancelDecision, { optimisticDismiss: false }),
+          }
+          : null}
+        kind={kind}
+        // 不是「暂不支持」:手机能看懂、能取消,只是配置动作必须回电脑端做完。
+        kindLabel={t('interaction.panel.desktopOnlyKind')}
+        message={t('interaction.panel.pluginSetupDesktopOnly')}
+        request={item.request}
+        requestId={requestId}
+        summaryLines={pluginSetupSummaryLines(item.request)}
         touchLayout={touchLayout}
       />
     );
@@ -1237,24 +1277,60 @@ function PlanReviewCard({
   );
 }
 
+function pluginSetupSummaryLines(request: PendingInteraction['request']): string[] {
+  const summary = buildRemotePluginSetupSummary(request);
+  return [summary.ghostName, summary.intro, ...summary.stepTitles]
+    .filter((line): line is string => typeof line === 'string' && line.length > 0);
+}
+
 function UnsupportedCard({
+  busy = false,
+  cancel = null,
   kind,
+  kindLabel,
   message,
   request,
+  requestId = null,
+  summaryLines,
   touchLayout,
 }: {
+  busy?: boolean;
+  /** 本端唯一能做的动作(目前只有 plugin_setup 的取消);null = 纯展示卡。 */
+  cancel?: { accessibilityLabel: string; label: string; onPress(): void } | null;
   kind: string;
+  /** eyebrow 覆写;缺省是「暂不支持」。 */
+  kindLabel?: string;
   message: string;
   request: PendingInteraction['request'];
+  requestId?: string | null;
+  /** 可读摘要;缺省时回退成 request 预览(未知类型只能这样交底)。 */
+  summaryLines?: string[];
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
+  const lines = summaryLines?.length ? summaryLines : [contentToPreview(request)];
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.unsupported.card">
-      <Text style={styles.kind}>{t('interaction.panel.unsupportedKind')}</Text>
+      <Text style={styles.kind}>{kindLabel ?? t('interaction.panel.unsupportedKind')}</Text>
       <Text style={styles.cardTitle}>{message}</Text>
-      <Text style={styles.body} numberOfLines={6}>{contentToPreview(request)}</Text>
+      {lines.map((line, index) => (
+        <Text key={`${kind}-line-${index}`} style={styles.body} numberOfLines={6}>{line}</Text>
+      ))}
+      {cancel ? (
+        <View style={actionsStyle(styles, touchLayout)}>
+          <ResolveButton
+            accessibilityLabel={cancel.accessibilityLabel}
+            busy={busy}
+            label={cancel.label}
+            onPress={cancel.onPress}
+            requestId={requestId}
+            touchStyle={resolveButtonLayoutStyle(touchLayout, 'secondary')}
+            testID="interaction.unsupported.cancelButton"
+            variant="secondary"
+          />
+        </View>
+      ) : null}
     </View>
   );
 }

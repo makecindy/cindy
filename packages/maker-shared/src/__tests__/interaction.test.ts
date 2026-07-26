@@ -14,14 +14,18 @@ import {
   buildPlanReviewDecision,
   buildPlanReviewDecisionSummary,
   buildPlanReviewEvidencePresentation,
+  buildPluginSetupCancelDecision,
+  buildRemotePluginSetupSummary,
   canStartInteractionResolve,
   encodeMultiSelectAnswer,
   extractPlanOutline,
   formatPermissionInput,
+  interactionBlocksRemoteComposer,
   normalizeAskQuestions,
   normalizeIssueConfirm,
   permissionRiskSummary,
   permissionTitle,
+  remoteInteractionHandling,
   selectActivePendingInteraction,
   selectionFromAnswer,
   sessionScopedPermissionSuggestions,
@@ -376,6 +380,7 @@ describe('interaction shared model', () => {
       { request: { kind: 'ask_user_question', requestId: 'ask-1' } },
       { request: { kind: 'permission', requestId: 'permission-1' } },
       { request: { kind: 'plan_review', requestId: 'plan-1' } },
+      { request: { kind: 'plugin_setup', requestId: 'setup-1' } },
       { request: { kind: 'custom', requestId: 'custom-1' } },
     ];
 
@@ -384,6 +389,7 @@ describe('interaction shared model', () => {
       'permission-1',
       'ask-1',
       'issue-1',
+      'setup-1',
       'custom-1',
     ]);
     expect(selectActivePendingInteraction(interactions)?.request.requestId).toBe('plan-1');
@@ -515,5 +521,63 @@ describe('interaction shared model', () => {
       uiLanguage: 'zh-CN',
     });
     expect(buildIssueConfirmDecision(false)).toEqual({ confirmed: false });
+  });
+
+  it('only lets remotely resolvable interactions take over the controller composer', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'permission', requestId: 'p1' } })).toBe('resolvable');
+    expect(remoteInteractionHandling({ request: { kind: 'ask_user_question', requestId: 'a1' } })).toBe('resolvable');
+    expect(remoteInteractionHandling({ request: { kind: 'plan_review', requestId: 'pl1' } })).toBe('resolvable');
+    expect(remoteInteractionHandling({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe('cancel-only');
+    // 收尾帧不再 actionable,取消也没有意义。
+    expect(remoteInteractionHandling({
+      request: { kind: 'plugin_setup', requestId: 's1', revision: 2, terminal: true },
+    })).toBe('desktop-only');
+    expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1' } })).toBe('desktop-only');
+    // 被控端将来新增的类型默认落进「不阻塞」,不会再把手机会话锁死。
+    expect(remoteInteractionHandling({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe('desktop-only');
+
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'permission', requestId: 'p1' } })).toBe(true);
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
+    expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
+    expect(interactionBlocksRemoteComposer(null)).toBe(false);
+  });
+
+  it('builds a revision-pinned plugin setup cancel decision and a readable remote summary', () => {
+    expect(buildPluginSetupCancelDecision({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      revision: 3,
+    })).toEqual({ kind: 'plugin_setup', action: 'cancel', expectedRevision: 3 });
+
+    // revision 缺失 / 非法时不构造决定:被控端只接受与当前快照一致的 revision,
+    // 发出去也只会被丢弃,调用方据此不给取消入口。
+    expect(buildPluginSetupCancelDecision({ kind: 'plugin_setup', requestId: 's1' })).toBeNull();
+    expect(buildPluginSetupCancelDecision({ kind: 'plugin_setup', requestId: 's1', revision: 1.5 })).toBeNull();
+    expect(buildPluginSetupCancelDecision({ kind: 'plugin_setup', requestId: 's1', revision: -1 })).toBeNull();
+    expect(buildPluginSetupCancelDecision({ kind: 'permission', requestId: 'p1', revision: 1 })).toBeNull();
+
+    expect(buildRemotePluginSetupSummary({
+      kind: 'plugin_setup',
+      requestId: 's1',
+      revision: 1,
+      ghost: { id: 'cindy-web-search', name: 'Cindy Web Search' },
+      intro: ' 需要一个搜索 API key ',
+      steps: [
+        { id: 'brave', title: ' 配置 Brave key ' },
+        { id: 'tavily', title: 'Tavily key' },
+        { id: 'blank', title: '   ' },
+        'not-a-step',
+      ],
+    })).toEqual({
+      ghostName: 'Cindy Web Search',
+      intro: '需要一个搜索 API key',
+      stepTitles: ['配置 Brave key', 'Tavily key'],
+    });
+
+    expect(buildRemotePluginSetupSummary({ kind: 'plugin_setup', requestId: 's1' })).toEqual({
+      ghostName: null,
+      intro: null,
+      stepTitles: [],
+    });
   });
 });

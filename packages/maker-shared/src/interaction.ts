@@ -361,6 +361,7 @@ export function interactionDisplayTitle(kind: string): string {
   if (kind === 'permission') return '需要授权电脑端操作';
   if (kind === 'ask_user_question') return '需要回答 Agent 问题';
   if (kind === 'issue_confirm') return '需要确认 Issue 内容';
+  if (kind === 'plugin_setup') return '需要在电脑端配置插件';
   return '需要处理远程请求';
 }
 
@@ -370,6 +371,7 @@ export function interactionDisplayHint(kind: string, readOnly = false): string {
   if (kind === 'permission') return '只把本次决定回传给当前电脑端会话。';
   if (kind === 'ask_user_question') return '回答会保存草稿,提交后电脑端继续。';
   if (kind === 'issue_confirm') return '确认标题和正文后再提交。';
+  if (kind === 'plugin_setup') return '配置要在电脑端完成，这里可以取消这次请求。';
   return '手机版会按桌面端的请求顺序处理。';
 }
 
@@ -378,7 +380,84 @@ export function interactionKindLabel(kind: string): string {
   if (kind === 'permission') return '授权';
   if (kind === 'ask_user_question') return '问题';
   if (kind === 'issue_confirm') return 'Issue';
+  if (kind === 'plugin_setup') return '插件';
   return '请求';
+}
+
+/**
+ * 控制端(手机 / 另一台桌面)对一张待处理交互卡实际能做什么。
+ *
+ * 被控桌面会把**所有** pending interaction 经 device-link 推给控制端,但控制端
+ * 能给出终局决定的只有权限 / 提问 / 计划三类。其余必须回被控端完成:
+ * plugin_setup 的 run_action 要开 OAuth 或写可信本地设置(被控端 IPC 边界只放
+ * cancel 过来,见 desktop `interactionResolveOrigin`),issue_confirm 只在桌面提交。
+ *
+ * - `resolvable`:控制端能终结这张卡。
+ * - `cancel-only`:控制端做不完,但能取消,把会话从等待里放出来。
+ * - `desktop-only`:控制端只能展示,等被控端处理。
+ */
+export type RemoteInteractionHandling = 'resolvable' | 'cancel-only' | 'desktop-only';
+
+const REMOTE_RESOLVABLE_KINDS = new Set(['permission', 'ask_user_question', 'plan_review']);
+
+export function remoteInteractionHandling(item: PendingInteractionLike): RemoteInteractionHandling {
+  const kind = interactionKind(item);
+  if (REMOTE_RESOLVABLE_KINDS.has(kind)) return 'resolvable';
+  // terminal 快照只是被控端收尾展示用的最后一帧,已经不 actionable,取消无意义。
+  if (kind === 'plugin_setup' && item.request.terminal !== true) return 'cancel-only';
+  return 'desktop-only';
+}
+
+/**
+ * 这张卡是否有资格独占控制端输入框。
+ *
+ * 只有控制端能终结的卡才可以——控制端做不完的卡若也替换输入框,用户既处理不了
+ * 卡、又发不出消息,整个会话在手机上被锁死(只能回电脑端解),这是必须避免的
+ * 死锁:任何被控端新增的 interaction kind 默认都落进「不阻塞」这一侧。
+ */
+export function interactionBlocksRemoteComposer(item: PendingInteractionLike | null | undefined): boolean {
+  return !!item && remoteInteractionHandling(item) === 'resolvable';
+}
+
+/**
+ * plugin_setup 的远端取消决定。
+ *
+ * 被控端只接受 `expectedRevision` 与当前快照一致的命令(不一致 = 控制端看到的是
+ * 旧快照,被控端会改为重新体检并推新快照),因此 revision 缺失时不构造决定——
+ * 调用方据此不给取消入口,而不是发一条注定被丢弃的命令。
+ */
+export function buildPluginSetupCancelDecision(
+  request: InteractionRequestLike,
+): { kind: 'plugin_setup'; action: 'cancel'; expectedRevision: number } | null {
+  if (request.kind !== 'plugin_setup') return null;
+  const revision = request.revision;
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0) return null;
+  return { kind: 'plugin_setup', action: 'cancel', expectedRevision: revision };
+}
+
+/**
+ * plugin_setup 卡在控制端的只读摘要:插件名 + 引导语 + 各步骤标题。
+ *
+ * 控制端不渲染表单(Secret 输入与 OAuth 都在被控端),但也不该把 raw JSON 摔给
+ * 用户——至少要能看懂「哪个插件、要配什么」再决定是取消还是回电脑端处理。
+ */
+export function buildRemotePluginSetupSummary(request: InteractionRequestLike): {
+  ghostName: string | null;
+  intro: string | null;
+  stepTitles: string[];
+} {
+  const ghost = isPlainRecord(request.ghost) ? request.ghost : null;
+  const ghostName = typeof ghost?.name === 'string' && ghost.name.trim() ? ghost.name.trim() : null;
+  const intro = typeof request.intro === 'string' && request.intro.trim() ? request.intro.trim() : null;
+  const steps = Array.isArray(request.steps) ? request.steps : [];
+  const stepTitles = steps
+    .map((step) => (isPlainRecord(step) && typeof step.title === 'string' ? step.title.trim() : ''))
+    .filter((title) => title.length > 0);
+  return { ghostName, intro, stepTitles };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function buildPendingInteractionQueuePresentation(
@@ -423,6 +502,10 @@ const INTERACTION_PRIORITY: Record<string, number> = {
   permission: 1,
   ask_user_question: 2,
   issue_confirm: 3,
+  // 控制端做不完的卡排在能处理的卡之后,免得它抢走 active 位、把用户按在一张
+  // 只能回电脑端处理的卡上(手机侧另有不阻塞输入框的兜底,见
+  // interactionBlocksRemoteComposer)。
+  plugin_setup: 4,
 };
 
 export function interactionPriority(item: PendingInteractionLike): number {

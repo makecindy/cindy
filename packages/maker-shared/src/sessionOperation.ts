@@ -71,15 +71,25 @@ export interface SessionComposerLayout {
 export interface SessionOperationLayoutInput {
   hasCurrentSession: boolean;
   hasActivePendingInteraction: boolean;
+  /**
+   * 活跃的待处理卡能否在本端终结(见 `interactionBlocksRemoteComposer`)。
+   * 只有能终结的卡才允许接管输入框;做不完的卡只展示,输入框继续可用,否则会话
+   * 会被一张手机处理不了的卡锁死。缺省 true 保持既有调用方语义。
+   */
+  pendingInteractionBlocksComposer?: boolean;
   remoteUnavailableReason?: string | null;
   readOnlyReason?: string | null;
 }
+
+/** 待处理卡放哪:接管输入框 / 贴在输入框上方 / 不显示。 */
+export type SessionPendingInteractionPlacement = 'composer' | 'above-composer' | 'none';
 
 export interface SessionOperationLayout {
   canUseComposer: boolean;
   composerDisabledReason: string | null;
   composerSlot: SessionComposerSlot;
   messageHistoryMode: SessionMessageHistoryMode;
+  pendingInteractionPlacement: SessionPendingInteractionPlacement;
   showPendingInteraction: boolean;
   showQueue: boolean;
 }
@@ -225,6 +235,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
       composerDisabledReason: '当前会话还没有同步完成。',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     };
@@ -236,21 +247,30 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
       composerDisabledReason: input.remoteUnavailableReason,
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     };
   }
 
-  if (input.hasActivePendingInteraction) {
+  const blocksComposer = input.pendingInteractionBlocksComposer !== false;
+  if (input.hasActivePendingInteraction && blocksComposer) {
     return {
       canUseComposer: false,
       composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'composer',
       showPendingInteraction: true,
       showQueue: false,
     };
   }
+
+  // 本端处理不了的卡只贴在输入框上方:用户能看到电脑端在等什么、能取消(若该
+  // 类型支持),同时继续发消息 —— 卡不再是死路。
+  const placement: SessionPendingInteractionPlacement = input.hasActivePendingInteraction
+    ? 'above-composer'
+    : 'none';
 
   if (input.readOnlyReason) {
     return {
@@ -258,7 +278,8 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
       composerDisabledReason: input.readOnlyReason,
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
-      showPendingInteraction: false,
+      pendingInteractionPlacement: placement,
+      showPendingInteraction: placement !== 'none',
       showQueue: true,
     };
   }
@@ -268,7 +289,8 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     composerDisabledReason: null,
     composerSlot: 'editable',
     messageHistoryMode: 'visible',
-    showPendingInteraction: false,
+    pendingInteractionPlacement: placement,
+    showPendingInteraction: placement !== 'none',
     showQueue: true,
   };
 }

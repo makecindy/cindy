@@ -15,6 +15,7 @@ describe('shared session operation model', () => {
       composerDisabledReason: '当前会话还没有同步完成。',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -28,6 +29,7 @@ describe('shared session operation model', () => {
       composerDisabledReason: '网络或被控端暂时不可用，可以稍后重新同步。',
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -41,6 +43,7 @@ describe('shared session operation model', () => {
       composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'composer',
       showPendingInteraction: true,
       showQueue: false,
     });
@@ -54,6 +57,7 @@ describe('shared session operation model', () => {
       composerDisabledReason: '协作模式手机版第一版为只读安全降级。',
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showQueue: true,
     });
 
@@ -65,6 +69,7 @@ describe('shared session operation model', () => {
       composerDisabledReason: null,
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: true,
     });

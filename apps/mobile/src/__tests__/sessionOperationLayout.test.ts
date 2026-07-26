@@ -11,6 +11,7 @@ describe('session operation layout', () => {
       composerDisabledReason: '当前会话还没有同步完成。',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -25,8 +26,43 @@ describe('session operation layout', () => {
       composerDisabledReason: '先处理当前授权或提问后才能继续输入。',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'composer',
       showPendingInteraction: true,
       showQueue: false,
+    });
+  });
+
+  it('keeps the composer usable when the pending request cannot be resolved on mobile', () => {
+    // 手机终结不了的卡(plugin_setup 等)只贴在输入框上方:否则用户既处理不了卡
+    // 又发不出消息,会话在手机上被锁死。
+    expect(buildSessionOperationLayout({
+      hasCurrentSession: true,
+      hasActivePendingInteraction: true,
+      pendingInteractionBlocksComposer: false,
+    })).toEqual({
+      canUseComposer: true,
+      composerDisabledReason: null,
+      composerSlot: 'editable',
+      messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'above-composer',
+      showPendingInteraction: true,
+      showQueue: true,
+    });
+
+    // 协作只读会话里,禁发理由仍归只读,但卡照样展示在输入框上方。
+    expect(buildSessionOperationLayout({
+      hasCurrentSession: true,
+      hasActivePendingInteraction: true,
+      pendingInteractionBlocksComposer: false,
+      readOnlyReason: 'worker session is read-only on mobile',
+    })).toEqual({
+      canUseComposer: false,
+      composerDisabledReason: 'worker session is read-only on mobile',
+      composerSlot: 'read-only',
+      messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'above-composer',
+      showPendingInteraction: true,
+      showQueue: true,
     });
   });
 
@@ -40,6 +76,7 @@ describe('session operation layout', () => {
       composerDisabledReason: '网络或被控端暂时不可用，可以稍后重新同步。',
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: false,
     });
@@ -55,6 +92,7 @@ describe('session operation layout', () => {
       composerDisabledReason: 'worker session is read-only on mobile',
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: true,
     });
@@ -69,6 +107,7 @@ describe('session operation layout', () => {
       composerDisabledReason: null,
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
+      pendingInteractionPlacement: 'none',
       showPendingInteraction: false,
       showQueue: true,
     });

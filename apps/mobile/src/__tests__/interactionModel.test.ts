@@ -21,6 +21,7 @@ import {
   extractPlanOutline,
   formatPermissionInput,
   isPlanReviewResolveBusy,
+  interactionBlocksRemoteComposer,
   interactionKind,
   normalizeAskQuestions,
   permissionRiskSummary,
@@ -202,6 +203,26 @@ describe('interactionModel', () => {
     expect(interactionPanelSource).toContain("if (kind === 'issue_confirm')");
     expect(interactionPanelSource).toContain("t('interaction.panel.issueConfirmUnsupported')");
     expect(interactionPanelSource).not.toContain('buildIssueConfirmReviewPresentation');
+  });
+
+  it('gives plugin setup requests a cancel exit instead of a dead card', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+
+    // 桌面把 plugin_setup 也推给控制端,而配置动作只能在桌面完成。手机侧必须留
+    // 取消出口:没有出口 + 卡接管输入框 = 会话锁死(线上已复现)。
+    expect(interactionPanelSource).toContain("if (kind === 'plugin_setup')");
+    expect(interactionPanelSource).toContain('buildPluginSetupCancelDecision(item.request)');
+    expect(interactionPanelSource).toContain("t('interaction.panel.pluginSetupDesktopOnly')");
+    expect(interactionPanelSource).toContain('interaction.unsupported.cancelButton');
+    // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消)。
+    expect(interactionPanelSource).toContain('optimisticDismiss: false');
+
+    expect(interactionBlocksRemoteComposer({
+      request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
+    })).toBe(false);
+    expect(interactionBlocksRemoteComposer({
+      request: { kind: 'permission', requestId: 'perm-1' },
+    })).toBe(true);
   });
 
   it('keeps read-only pending interactions as a short desktop-style blocker', () => {
