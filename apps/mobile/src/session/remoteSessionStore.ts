@@ -102,21 +102,48 @@ function interactionResolveKey(sessionId: string, requestId: string): string {
 }
 
 /**
- * 按 revision 封顶的抑制表(revision 化交互专用,当前只有 plugin_setup)。
+ * revision 化交互(当前只有 plugin_setup)的**决定下限**:本端已经对某个 revision
+ * 提交过决定后,该 request 还能接受的最低 revision。
  *
- * 这类卡的决定不是终局:被控端按 `expectedRevision` 裁决,命令被接受 ≠ 决定生效
- * (revision 对不上时它改为重新体检,并推一个更高 revision 的新快照)。所以既不能
- * 乐观撤卡(取消没生效就留下幽灵卡),也不能像 confirmed 那样无条件抑制该
- * requestId(那样卡再也回不来)。折中是记住「我的决定作用在哪个 revision 上」:
- * - revision ≤ 记录值 → 提交决定之前的旧快照,过滤(挡「早发晚到」闪回);
- * - revision > 记录值 → 被控端确实推进过,放行(卡确实还需要用户处理)。
- * key = `${sessionId}\u0000${requestId}` → 被抑制的最高 revision。
+ * 只有一个来源:本端对 revision R 提交过决定(plugin_setup 取消)→ 下限抬到 R+1。
+ * R 及更旧的快照正是我决定之前的那批,滤掉才不会在决定生效后把卡带回来
+ * (取消成功的 dismiss push 先到、取消前发出的慢快照后到)。
+ *
+ * 为什么不是「取消后无条件抑制该 requestId」(confirmedInteractionDismissals 那种):
+ * 这类决定不是终局 —— 被控端按 `expectedRevision` 裁决,对不上时改为重新体检并推
+ * 更高 revision 的新快照。无条件抑制会让那张仍需用户处理的卡永久隐身;下限则天然
+ * 放行 R+1 及以后的快照。
+ *
+ * 下限只升不降,也**不按单轮快照回收**:一旦允许回落,晚到的旧快照就又拿回了覆盖权
+ * (#530 review)。条目数等于会话里被取消过的 plugin_setup 请求数(极小),随
+ * removeDevice / clear 清理。
+ *
+ * 注意它只管「成员能不能回来」。快照之间的乱序(没有任何决定,单纯弱网早发晚到)由
+ * pickFresherInteraction 就地比较 revision 解决,不走这张表。
  */
-const resolvedInteractionRevisionCeilings = new Map<string, number>();
+const interactionRevisionFloors = new Map<string, number>();
 
 function interactionRevision(item: PendingInteraction): number | null {
   const revision = item.request.revision;
   return typeof revision === 'number' && Number.isFinite(revision) ? revision : null;
+}
+
+/**
+ * 同一 request 的两份快照取较新者。
+ *
+ * dedupe 只按 requestId、后写覆盖,所以一份早发晚到的旧快照会把 UI 从 revision 6
+ * 换回 4,用户随后点取消还会发出过期的 expectedRevision(#530 review)。成员关系仍
+ * 以权威快照为准,这里只保证**内容不回退**。
+ */
+function pickFresherInteraction(
+  incoming: PendingInteraction,
+  existing: PendingInteraction | undefined,
+): PendingInteraction {
+  if (!existing) return incoming;
+  const incomingRevision = interactionRevision(incoming);
+  const existingRevision = interactionRevision(existing);
+  if (incomingRevision === null || existingRevision === null) return incoming;
+  return incomingRevision < existingRevision ? existing : incoming;
 }
 
 function isInteractionResolveSuppressed(sessionId: string, item: PendingInteraction): boolean {
@@ -124,12 +151,21 @@ function isInteractionResolveSuppressed(sessionId: string, item: PendingInteract
   if (typeof requestId !== 'string' || requestId.length === 0) return false;
   const key = interactionResolveKey(sessionId, requestId);
   if (inFlightInteractionResolves.has(key) || confirmedInteractionDismissals.has(key)) return true;
-  const ceiling = resolvedInteractionRevisionCeilings.get(key);
-  if (ceiling === undefined) return false;
+  const floor = interactionRevisionFloors.get(key);
+  if (floor === undefined) return false;
   const revision = interactionRevision(item);
-  // revision 缺失(旧被控端 / 非法快照)时按「不比记录更新」保守处理:宁可多滤一帧
-  // 旧快照,也不让已决定的卡闪回。
-  return revision === null || revision <= ceiling;
+  // revision 缺失(旧被控端 / 非法快照)时保守过滤:这个 request 已经进入 revision
+  // 语义,一份连 revision 都没有的快照没有资格把它带回来。
+  return revision === null || revision < floor;
+}
+
+function interactionsByRequestId(list: readonly PendingInteraction[]): Map<string, PendingInteraction> {
+  const byId = new Map<string, PendingInteraction>();
+  for (const item of list) {
+    const requestId = item.request.requestId;
+    if (typeof requestId === 'string' && requestId.length > 0) byId.set(requestId, item);
+  }
+  return byId;
 }
 const inputProjections = new Map<string, InputProjection>();
 const sessionLiveActivity = new Map<string, RemoteSessionLiveActivity>();
@@ -1351,33 +1387,19 @@ export const remoteSessionStore = {
       if (!key.startsWith(sessionPrefix)) continue;
       if (!presentIds.has(key.slice(sessionPrefix.length))) confirmedInteractionDismissals.delete(key);
     }
-    // revision 封顶抑制同样按「缺席即过期」回收;此外只要本轮出现更高 revision,
-    // 说明被控端已经推进到我的决定之后,封顶失去意义,一并清掉免得无界累积。
-    // 表为空是绝对常态(只有刚取消过 plugin_setup 才有条目),此时不扫快照。
-    if (resolvedInteractionRevisionCeilings.size > 0) {
-      const highestRevisions = new Map<string, number>();
-      for (const item of list) {
-        const requestId = item.request.requestId;
-        if (typeof requestId !== 'string' || requestId.length === 0) continue;
-        const revision = interactionRevision(item);
-        if (revision === null) continue;
-        const current = highestRevisions.get(requestId);
-        if (current === undefined || revision > current) highestRevisions.set(requestId, revision);
-      }
-      for (const [key, ceiling] of [...resolvedInteractionRevisionCeilings]) {
-        if (!key.startsWith(sessionPrefix)) continue;
-        const requestId = key.slice(sessionPrefix.length);
-        if (!presentIds.has(requestId)) {
-          resolvedInteractionRevisionCeilings.delete(key);
-          continue;
-        }
-        const highest = highestRevisions.get(requestId);
-        if (highest !== undefined && highest > ceiling) resolvedInteractionRevisionCeilings.delete(key);
-      }
-    }
     // 全量快照也要过在途抑制:决定已乐观提交、被控端还没确认时,快照仍会带着
-    // 这张卡,不过滤就闪回。
-    const next = dedupeInteractions(list.filter((item) => !isInteractionResolveSuppressed(sessionId, item)));
+    // 这张卡,不过滤就闪回。成员关系仍以本轮快照为准(缺席 = 被控端已移除),但
+    // revision 化的条目取较新者,避免早发晚到的旧快照把内容换回旧版本。
+    const currentByRequestId = interactionsByRequestId(pendingInteractions.get(sessionId) ?? emptyPendingInteractions);
+    const next = dedupeInteractions(list
+      .filter((item) => !isInteractionResolveSuppressed(sessionId, item))
+      .map((item) => {
+        const requestId = item.request.requestId;
+        return pickFresherInteraction(
+          item,
+          typeof requestId === 'string' ? currentByRequestId.get(requestId) : undefined,
+        );
+      }));
     // Only a reconnect snapshot that actually restores a visible pending card may
     // finalize streaming. A snapshot containing only an already-dismissed stale
     // request must not close the current assistant row.
@@ -1458,11 +1480,20 @@ export const remoteSessionStore = {
   },
 
   applyInteractionRequest(sessionId: string, item: PendingInteraction): void {
-    // push 重放 / reseed 在乐观提交窗口内不得复活这张卡(见 inFlightInteractionResolves)。
+    // push 重放 / reseed 在乐观提交窗口内不得复活这张卡(见 inFlightInteractionResolves);
+    // 本端已对某 revision 做过决定时,更旧的快照也不得把它带回来(见 interactionRevisionFloors)。
     if (isInteractionResolveSuppressed(sessionId, item)) return;
     const streamingChanged = flushAndFinalizeRemoteStreamingMessages(sessionId);
     const existing = pendingInteractions.get(sessionId) ?? [];
-    const next = dedupeInteractions([...existing, item]);
+    // 早发晚到的旧 push 不得把手上更新的那份换回旧版本。
+    const requestId = item.request.requestId;
+    const fresher = pickFresherInteraction(
+      item,
+      typeof requestId === 'string' && requestId.length > 0
+        ? existing.find((candidate) => candidate.request.requestId === requestId)
+        : undefined,
+    );
+    const next = dedupeInteractions([...existing, fresher]);
     if (deepValueEqual(existing, next)) {
       if (streamingChanged) emit();
       return;
@@ -1511,20 +1542,22 @@ export const remoteSessionStore = {
   },
 
   /**
-   * 非乐观提交(revision 化交互,当前只有 plugin_setup)的收口:不撤卡,只把
-   * 「决定已作用于 revision R」记下来,让 R 及更旧的快照失去覆盖权。
+   * 非乐观提交(revision 化交互,当前只有 plugin_setup)的收口:不撤卡,只把下限
+   * 抬到 revision+1,让本次决定作用的那份快照及更旧的都失去覆盖权。
    *
    * 为什么不能复用 settleOptimisticInteractionDismiss 的 confirmed:那是无条件
    * 抑制该 requestId,而这里的决定可能没生效(被控端按 expectedRevision 裁决,
-   * 对不上就改为重新体检并推更高 revision),无条件抑制会让卡永久隐身。判据与
-   * 回收见 resolvedInteractionRevisionCeilings。
+   * 对不上就改为重新体检并推更高 revision),无条件抑制会让卡永久隐身。判据见
+   * interactionRevisionFloors。
    */
-  suppressResolvedInteractionRevision(sessionId: string, requestId: string, revision: number): void {
-    if (!requestId || !Number.isFinite(revision)) return;
+  markInteractionRevisionResolved(sessionId: string, requestId: string, revision: number): void {
+    if (!requestId || !Number.isInteger(revision)) return;
     const key = interactionResolveKey(sessionId, requestId);
-    const current = resolvedInteractionRevisionCeilings.get(key);
-    if (current !== undefined && current >= revision) return;
-    resolvedInteractionRevisionCeilings.set(key, revision);
+    const floor = revision + 1;
+    const current = interactionRevisionFloors.get(key);
+    // 只升不降:重复取消 / 乱序收口都不能把下限拉回去。
+    if (current !== undefined && current >= floor) return;
+    interactionRevisionFloors.set(key, floor);
   },
 
   applyRemotePush(deviceId: string, channel: string, payload: unknown): void {
@@ -1980,6 +2013,12 @@ export const remoteSessionStore = {
         sessionMakerTurnRunning.delete(sessionId);
         sessionParkedTaskUpdates.delete(sessionId);
         sessionDeviceIndex.delete(sessionId);
+        // revision 下限按会话回收:它不参与单轮快照回收(那会把覆盖权还给晚到的
+        // 旧快照),所以只能在会话本身消失时清,保持有界。
+        const sessionPrefix = interactionResolveKey(sessionId, '');
+        for (const key of interactionRevisionFloors.keys()) {
+          if (key.startsWith(sessionPrefix)) interactionRevisionFloors.delete(key);
+        }
         removedSession = true;
       }
     }
@@ -1995,7 +2034,7 @@ export const remoteSessionStore = {
     pendingInteractions.clear();
     inFlightInteractionResolves.clear();
     confirmedInteractionDismissals.clear();
-    resolvedInteractionRevisionCeilings.clear();
+    interactionRevisionFloors.clear();
     inputProjections.clear();
     sessionLiveActivity.clear();
     sessionRunning.clear();

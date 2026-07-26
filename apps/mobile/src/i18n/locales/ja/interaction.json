@@ -84,6 +84,32 @@
     "planFeedbackSubmit": "プランのフィードバックを送信",
     "planFeedbackAccessibility": "プランを変更するフィードバック"
   },
+  "kinds": {
+    "permission": {
+      "title": "パソコンの操作を許可してください",
+      "label": "許可"
+    },
+    "ask_user_question": {
+      "title": "エージェントからの質問があります",
+      "label": "質問"
+    },
+    "plan_review": {
+      "title": "実行プランの確認が必要です",
+      "label": "プラン"
+    },
+    "issue_confirm": {
+      "title": "Issue の内容を確認してください",
+      "label": "Issue"
+    },
+    "plugin_setup": {
+      "title": "パソコンでプラグインの設定が必要です",
+      "label": "プラグイン"
+    },
+    "fallback": {
+      "title": "リモートリクエストの対応が必要です",
+      "label": "リクエスト"
+    }
+  },
   "rewind": {
     "readError": "巻き戻しプレビューを読み込めませんでした。再同期してからやり直してください。",
     "noFilesNote": "ロールバックするファイルはありません。このメッセージ以降の会話履歴のみを切り詰めます。",

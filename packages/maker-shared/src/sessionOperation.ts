@@ -72,9 +72,15 @@ export interface SessionOperationLayoutInput {
   hasCurrentSession: boolean;
   hasActivePendingInteraction: boolean;
   /**
-   * 活跃的待处理卡能否在本端终结(见 `interactionBlocksRemoteComposer`)。
-   * 只有能终结的卡才允许接管输入框;做不完的卡只展示,输入框继续可用,否则会话
-   * 会被一张手机处理不了的卡锁死。缺省 true 保持既有调用方语义。
+   * 待处理卡是否该接管输入框。
+   *
+   * 判据是**整个 pending 集合**里还有没有本端能终结的卡,调用方请用
+   * `pendingInteractionsBlockRemoteComposer(interactions)` 计算 —— 不要按「当前正在
+   * 看的那张卡能不能终结」传值:队列里还有权限 / 提问 / 计划卡在等回答时,用户切到
+   * 一张本端终结不了的卡不该把输入框放开,否则就绕过了那张阻塞交互。
+   *
+   * 传 false 时卡只展示、输入框继续可用;否则会话会被一张本端处理不了的卡锁死。
+   * 缺省 true 保持既有调用方语义。
    */
   pendingInteractionBlocksComposer?: boolean;
   remoteUnavailableReason?: string | null;

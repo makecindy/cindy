@@ -123,10 +123,10 @@ describe('optimistic interaction dismiss', () => {
     expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.requestId)).toEqual(['r1']);
   });
 
-  it('非乐观提交按 revision 封顶抑制:旧快照被滤,被控端推进后的新 revision 放行', () => {
+  it('非乐观提交把 revision 下限抬过本次决定:旧快照被滤,被控端推进后的新 revision 放行', () => {
     remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 3)]);
-    // 取消命令已被接受(卡不撤,等被控端 dismiss push);登记「决定作用于 revision 3」。
-    remoteSessionStore.suppressResolvedInteractionRevision('s1', 'setup-1', 3);
+    // 取消命令已被接受(卡不撤,等被控端 dismiss push);下限抬到 4。
+    remoteSessionStore.markInteractionRevisionResolved('s1', 'setup-1', 3);
     remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', { sessionId: 's1', requestId: 'setup-1' });
     expect(remoteSessionStore.getPendingInteractions('s1')).toEqual([]);
 
@@ -143,20 +143,31 @@ describe('optimistic interaction dismiss', () => {
       .toEqual(['r2', 'setup-1']);
   });
 
-  it('revision 封顶条目按「缺席即过期」与「被控端已推进」两条路径回收', () => {
-    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 1)]);
-    remoteSessionStore.suppressResolvedInteractionRevision('s1', 'setup-1', 1);
-    // 一轮不含该卡的快照 → 条目过期,同 id 新请求(哪怕 revision 仍是 1)不受历史影响。
+  it('revision 下限只升不降:缺席一轮快照后,更旧的 revision 仍拿不回覆盖权', () => {
+    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 3)]);
+    remoteSessionStore.markInteractionRevisionResolved('s1', 'setup-1', 3);
+    // 一轮不含该卡的快照到达(被控端已移除)。曾经在这里回收下限,于是更晚到的旧
+    // 快照又能把已取消的卡写回来(#530 review)——下限现在不因缺席回落。
     remoteSessionStore.setPendingInteractions('s1', []);
-    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 1));
-    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.requestId)).toEqual(['setup-1']);
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 3));
+    expect(remoteSessionStore.getPendingInteractions('s1')).toEqual([]);
+  });
 
-    // 另一条回收路径:快照里出现更高 revision → 封顶失效,不无界累积。
-    remoteSessionStore.suppressResolvedInteractionRevision('s1', 'setup-1', 1);
-    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 5)]);
-    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([5]);
-    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 1));
-    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([1]);
+  it('被接受的快照抬高下限:晚到的旧 revision 不能把新卡换回旧卡', () => {
+    // 弱网乱序:先到的新 push 已经把卡推进到 revision 6。
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 6));
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([6]);
+
+    // 更早发出的 getPendingInteractions 响应(revision 4)晚到:dedupe 只按 requestId,
+    // 不挡就会把 UI 回退到 revision 4,取消时还会发过期的 expectedRevision。
+    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 4)]);
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([6]);
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 4));
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([6]);
+
+    // 真正更新的快照仍可落地。
+    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 7)]);
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([7]);
   });
 
   it('抑制按 (sessionId, requestId) 隔离:不影响其它会话的同名 request', () => {

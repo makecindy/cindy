@@ -460,6 +460,9 @@ export function buildRemotePluginSetupSummary(request: InteractionRequestLike): 
   intro: string | null;
   stepTitles: string[];
 } {
+  // 作为导出的 shared API 显式挡住误用:换个 kind 传进来时返回空摘要,而不是
+  // 从任意 request 上刮字段、让调用错误看起来「正常返回」。
+  if (request.kind !== 'plugin_setup') return { ghostName: null, intro: null, stepTitles: [] };
   const ghost = isPlainRecord(request.ghost) ? request.ghost : null;
   const ghostName = typeof ghost?.name === 'string' && ghost.name.trim() ? ghost.name.trim() : null;
   const intro = typeof request.intro === 'string' && request.intro.trim() ? request.intro.trim() : null;

@@ -84,6 +84,32 @@
     "planFeedbackSubmit": "플랜 피드백 제출",
     "planFeedbackAccessibility": "플랜을 변경할 피드백"
   },
+  "kinds": {
+    "permission": {
+      "title": "컴퓨터 작업을 허용해 주세요",
+      "label": "권한"
+    },
+    "ask_user_question": {
+      "title": "에이전트가 답변을 기다립니다",
+      "label": "질문"
+    },
+    "plan_review": {
+      "title": "실행 계획 확인이 필요합니다",
+      "label": "계획"
+    },
+    "issue_confirm": {
+      "title": "이슈 내용을 확인해 주세요",
+      "label": "이슈"
+    },
+    "plugin_setup": {
+      "title": "컴퓨터에서 플러그인 설정이 필요합니다",
+      "label": "플러그인"
+    },
+    "fallback": {
+      "title": "원격 요청을 처리해야 합니다",
+      "label": "요청"
+    }
+  },
   "rewind": {
     "readError": "되감기 미리보기를 읽을 수 없습니다. 다시 동기화한 후 시도하세요.",
     "noFilesNote": "롤백할 파일이 없습니다. 이 메시지 이후의 대화 기록만 잘립니다.",

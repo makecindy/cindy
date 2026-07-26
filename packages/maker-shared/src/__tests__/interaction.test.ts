@@ -598,5 +598,14 @@ describe('interaction shared model', () => {
       intro: null,
       stepTitles: [],
     });
+
+    // 换个 kind 传进来必须返回空摘要,而不是从任意 request 上刮字段让误用「看起来正常」。
+    expect(buildRemotePluginSetupSummary({
+      kind: 'permission',
+      requestId: 'p1',
+      ghost: { id: 'x', name: 'Not a plugin setup' },
+      intro: 'nope',
+      steps: [{ id: 's', title: 'nope' }],
+    })).toEqual({ ghostName: null, intro: null, stepTitles: [] });
   });
 });

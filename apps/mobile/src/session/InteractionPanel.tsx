@@ -134,14 +134,27 @@ export function InteractionPanel({
   const activeRequestIdForPresentation = readRequestId(activeInteraction);
   const selectedQueueItem = queuePresentation.items.find((item) => item.requestId === activeRequestIdForPresentation)
     ?? queuePresentation.active;
+  // 共享层的 title / label 是中文直出(desktop 时代留下的),控制端要按当前 locale
+  // 翻译后再渲染,否则这些队列文案在 en / ja / ko 下仍是中文(#530 review)。
+  const localizedKindText = (kind: string, field: 'title' | 'label') => t(
+    `interaction.kinds.${kind}.${field}`,
+    { defaultValue: t(`interaction.kinds.fallback.${field}`) },
+  );
+  const localizeQueueItem = <T extends { kind: string }>(item: T): T => ({
+    ...item,
+    label: localizedKindText(item.kind, 'label'),
+    title: localizedKindText(item.kind, 'title'),
+  });
   const activeQueuePresentation = {
     ...queuePresentation,
-    active: selectedQueueItem,
+    active: selectedQueueItem ? localizeQueueItem(selectedQueueItem) : selectedQueueItem,
     items: queuePresentation.items.map((item) => ({
-      ...item,
+      ...localizeQueueItem(item),
       active: item.requestId === activeRequestIdForPresentation,
     })),
-    title: selectedQueueItem?.title ?? queuePresentation.title,
+    title: selectedQueueItem
+      ? localizedKindText(selectedQueueItem.kind, 'title')
+      : queuePresentation.title,
   };
   const touchLayout = buildInteractionTouchLayout({
     actionCount: resolveActionCount(kind),
@@ -305,7 +318,7 @@ function InteractionItem({
 
   const submitDecision = async (
     decision: Record<string, unknown>,
-    options: { optimisticDismiss?: boolean; suppressRevisionOnSuccess?: number } = {},
+    options: { optimisticDismiss?: boolean; resolvedRevision?: number } = {},
   ) => {
     if (!canStartInteractionResolve({ requestId, submittingRequestId: submittingRequestIdRef.current })) return;
     const currentRequestId = requestId;
@@ -329,14 +342,15 @@ function InteractionItem({
       if (kind === 'plan_review') clearPlanReviewDraft(currentRequestId);
       if (optimisticDismiss) {
         remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
-      } else if (options.suppressRevisionOnSuccess !== undefined) {
+      } else if (options.resolvedRevision !== undefined) {
         // 非乐观路径也必须挡「早发晚到」:提交前发出的慢快照仍带着这张卡,dismiss
-        // push 先到时它会把已取消的卡写回来(#530 review P1)。这里只封顶到本次决定
-        // 作用的 revision —— 决定没生效时被控端会推更高 revision,卡照样回来。
-        remoteSessionStore.suppressResolvedInteractionRevision(
+        // push 先到时它会把已取消的卡写回来(#530 review P1)。这里只把 revision
+        // 下限抬过本次决定作用的那份 —— 决定没生效时被控端会推更高 revision,
+        // 卡照样回来。
+        remoteSessionStore.markInteractionRevisionResolved(
           sessionId,
           currentRequestId,
-          options.suppressRevisionOnSuccess,
+          options.resolvedRevision,
         );
       }
     } catch (err) {
@@ -424,7 +438,7 @@ function InteractionItem({
             label: t('interaction.panel.cancelRequest'),
             onPress: () => void submitDecision(cancelDecision, {
               optimisticDismiss: false,
-              suppressRevisionOnSuccess: cancelDecision.expectedRevision,
+              resolvedRevision: cancelDecision.expectedRevision,
             }),
           }
           : null}
@@ -1315,13 +1329,17 @@ function UnsupportedCard({
   message: string;
   request: PendingInteraction['request'];
   requestId?: string | null;
-  /** 可读摘要;缺省时回退成 request 预览(未知类型只能这样交底)。 */
+  /**
+   * 可读摘要。**未提供**时才回退成 request 预览(未知类型只能这样交底);提供了
+   * 空数组表示「这类卡本来就该只显示标题」,不能再掉回 raw JSON —— 那正是本次要
+   * 消灭的展示(#530 review)。
+   */
   summaryLines?: string[];
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { t } = useTranslation();
-  const lines = summaryLines?.length ? summaryLines : [contentToPreview(request)];
+  const lines = summaryLines ?? [contentToPreview(request)];
   return (
     <View style={cardStyle(styles, touchLayout)} testID="interaction.unsupported.card">
       <Text style={styles.kind}>{kindLabel ?? t('interaction.panel.unsupportedKind')}</Text>

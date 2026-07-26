@@ -218,8 +218,8 @@ describe('interactionModel', () => {
     // 取消由被控端按 expectedRevision 裁决,不能乐观撤卡(撤了可能其实没取消);
     // 但仍要按该 revision 封顶抑制,否则取消前发出的慢快照会把卡写回来。
     expect(interactionPanelSource).toContain('optimisticDismiss: false');
-    expect(interactionPanelSource).toContain('suppressRevisionOnSuccess: cancelDecision.expectedRevision');
-    expect(interactionPanelSource).toContain('suppressResolvedInteractionRevision');
+    expect(interactionPanelSource).toContain('resolvedRevision: cancelDecision.expectedRevision');
+    expect(interactionPanelSource).toContain('markInteractionRevisionResolved');
 
     expect(interactionBlocksRemoteComposer({
       request: { kind: 'plugin_setup', requestId: 'setup-1', revision: 1 },
@@ -227,6 +227,23 @@ describe('interactionModel', () => {
     expect(interactionBlocksRemoteComposer({
       request: { kind: 'permission', requestId: 'perm-1' },
     })).toBe(true);
+  });
+
+  it('localizes queue titles and kind labels instead of rendering the shared Chinese defaults', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+
+    // 共享层的 title / label 是中文直出;控制端必须按 locale 翻译后再渲染,否则
+    // 队列头在 en / ja / ko 下仍是中文。
+    expect(interactionPanelSource).toContain('interaction.kinds.${kind}.${field}');
+    expect(interactionPanelSource).not.toContain('title: selectedQueueItem?.title');
+
+    for (const lang of ['zh-CN', 'en', 'ja', 'ko']) {
+      const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
+      for (const kind of ['permission', 'ask_user_question', 'plan_review', 'issue_confirm', 'plugin_setup', 'fallback']) {
+        expect(bundle.kinds?.[kind]?.title, `${lang}/${kind}.title`).toBeTruthy();
+        expect(bundle.kinds?.[kind]?.label, `${lang}/${kind}.label`).toBeTruthy();
+      }
+    }
   });
 
   it('keys mobile composer blocking off the whole pending set', () => {
