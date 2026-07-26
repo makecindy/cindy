@@ -18,7 +18,8 @@
 //                                   (linux 两种 arch 都可打,但只能在同架构
 //                                   宿主上——原生模块与 vec0.so 不交叉编译;
 //                                   win32 仅 x64)
-//   --region   cn|global|dev        默认 cn;决定应用身份、端点清单与发布目标
+//   --region   cn|global|dev        版本无关包默认 global；传 --version 时必填，
+//                                   决定应用身份、端点清单与发布目标
 //   --version  x.y.z|major|minor|patch
 //              缺省 = 版本无关打包:占位版本 0.0.0,包不参与热更新
 //              (updateService 对 0.0.0 短路),开源社区拉仓即可打;

@@ -6,17 +6,17 @@ export function printHelp(log = console.log) {
 
   log('\n  桌面端启动:');
   log('    # 推荐：先清理已有 Cindy dev 进程，再启动远程 API 模式');
-  log('    # 国内版，读取仓内 config/endpoint.json');
+  log('    # Cindy（Global，默认），读取仓内 config/endpoint.global.json');
+  log('    pnpm restart:desktop:remote');
+  log('    # 中国大陆版，读取仓内 config/endpoint.json');
   log('    pnpm restart:desktop:remote --region=cn');
-  log('    # 海外版，读取仓内 config/endpoint.global.json');
-  log('    pnpm restart:desktop:remote --region=global');
-  log('    # 海外版，读取对应区域的线上 CDN 端点清单');
-  log('    pnpm restart:desktop:remote --region=global --endpoints-cdn');
+  log('    # Cindy，读取 Global 线上 CDN 端点清单');
+  log('    pnpm restart:desktop:remote --endpoints-cdn');
   log('    # Human 可直接启动；不会先清旧进程，Agent 不要使用');
+  log('    pnpm dev:desktop:remote');
   log('    pnpm dev:desktop:remote --region=cn');
-  log('    pnpm dev:desktop:remote --region=global');
   log('    # 连接本地 http://localhost:3333（只起客户端，不起 server）');
-  log('    pnpm restart:desktop:local --region=cn');
+  log('    pnpm restart:desktop:local');
 
   log('\n  Agent 二进制安装 / 升级（Claude Code、Codex、ripgrep）:');
   log('    # 按 latest.json 当前 pin 安装到本机，不修改 pin');
@@ -38,16 +38,16 @@ export function printHelp(log = console.log) {
   log('    pnpm update:ripgrep 15.1.0');
 
   log('\n  Mobile 本地开发:');
-  log('    # 国服：生成 iOS 工程、打开 Xcode 并启动 Metro');
+  log('    # Cindy（Global，默认）：生成 iOS 工程、打开 Xcode 并启动 Metro');
   log('    pnpm mobile:xcode');
-  log('    # 海外版：生成 iOS 工程、打开 Xcode 并启动 Metro');
-  log('    pnpm mobile:xcode --region=global');
-  log('    # 国服模拟器：先 rebuild 安装，再 start 启动 Metro');
+  log('    # 中国大陆版：生成 iOS 工程、打开 Xcode 并启动 Metro');
+  log('    pnpm mobile:xcode --region=cn');
+  log('    # Cindy 模拟器：先 rebuild 安装，再 start 启动 Metro');
   log('    pnpm mobile:sim:rebuild');
   log('    pnpm mobile:sim:start');
-  log('    # 海外模拟器：先 rebuild 安装，再 start 启动 Metro');
-  log('    pnpm mobile:sim:rebuild -- --region=global');
-  log('    pnpm mobile:sim:start -- --region=global');
+  log('    # 中国大陆版模拟器：先 rebuild 安装，再 start 启动 Metro');
+  log('    pnpm mobile:sim:rebuild -- --region=cn');
+  log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');
 

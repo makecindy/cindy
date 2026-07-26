@@ -21,7 +21,7 @@ Expo Go or an installed distribution build as proof that local source changes ar
 
 Required Expo public env:
 
-- `EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL`: endpoint manifest bootstrap base (per-region hotfix CDN). Runtime business endpoints (auth / device-link / gateway) are resolved from `<base>/endpoint.json` at startup; in dev they default to the repo's `config/endpoint.json` and can still be overridden with explicit `EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL` / `EXPO_PUBLIC_CINDY_AUTH_BASE_URL`. Set `EXPO_PUBLIC_ENDPOINTS_CDN=1` to make dev fetch the online manifest used by packaged clients.
+- `EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL`: endpoint manifest bootstrap base (per-region hotfix CDN). Runtime business endpoints (auth / device-link / gateway) are resolved from `<base>/endpoint.json` at startup; in dev they default to the repo's `config/endpoint.global.json` and can still be overridden with explicit `EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL` / `EXPO_PUBLIC_CINDY_AUTH_BASE_URL`. Set `EXPO_PUBLIC_ENDPOINTS_CDN=1` to make dev fetch the online manifest used by packaged clients.
 
 The mobile redirect URI is region-specific: `cindycn://auth` for CN and
 `cindy://auth` for Global. Cindy Auth and native social login callbacks must
@@ -167,7 +167,7 @@ The Maestro voice flow remains a stable UI/controller regression and may use moc
 
 Mobile voice input keeps the same provider-neutral fallback order as desktop: Volcengine SAUC first, then Qwen realtime, then OpenAI-compatible realtime. Every candidate/recovery obtains a fresh one-shot ticket from `voice-server`; refinement keeps its two-model fallback and falls back to raw ASR text if both fail.
 
-The default app id is `com.xd.lizcn`. Override when testing Expo Go or a custom dev build:
+The default app id is `com.xd.cindy`. Override when testing Expo Go or a custom dev build:
 
 ```bash
 XDT_MOBILE_E2E_APP_ID=host.exp.Exponent pnpm --filter mobile test:e2e:maestro

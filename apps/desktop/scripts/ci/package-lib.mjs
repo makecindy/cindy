@@ -65,13 +65,14 @@ export function isExplicitVersion(value) {
 export function parsePackageArgs(argv, defaults = {}) {
   const out = {
     platform: defaults.platform ?? process.platform,
-    region: 'cn',
+    region: 'global',
     versionSpec: null,
     skipSmoke: false,
     allowUnsigned: false,
     noSign: false,
   };
   let archFlag = null;
+  let regionSpecified = false;
   const takeValue = (flag, i) => {
     const v = argv[i + 1];
     if (!v || v.startsWith('--')) throw new Error(`${flag} 需要一个值`);
@@ -85,7 +86,12 @@ export function parsePackageArgs(argv, defaults = {}) {
       case '--': break;
       case '--platform': out.platform = takeValue(a, i); i++; break;
       case '--arch': archFlag = takeValue(a, i); i++; break;
-      case '--region': out.region = takeValue(a, i); i++; break;
+      case '--region':
+        if (regionSpecified) throw new Error('--region 只能传一次');
+        regionSpecified = true;
+        out.region = takeValue(a, i);
+        i++;
+        break;
       case '--version': out.versionSpec = takeValue(a, i); i++; break;
       case '--skip-smoke': out.skipSmoke = true; break;
       case '--allow-unsigned': out.allowUnsigned = true; break;
@@ -130,6 +136,9 @@ export function parsePackageArgs(argv, defaults = {}) {
   }
   if (!SUPPORTED_REGIONS.includes(out.region)) {
     throw new Error(`不支持的 region: ${out.region}(可选 ${SUPPORTED_REGIONS.join('/')})`);
+  }
+  if (out.versionSpec !== null && !regionSpecified) {
+    throw new Error('版本化打包必须显式传 --region cn、global 或 dev');
   }
   if (
     out.versionSpec !== null &&

@@ -153,7 +153,7 @@ function isHttpUrl(value: string): boolean {
 // 新值(消费点全部是调用时读取,无模块顶层捕获——新增顶层派生前先想清楚)。
 // 初始值即构建期烘焙值;__DEV__ 下闸门不拉取,行为与现状完全一致。
 
-// auth 不分 cn/global 字段:dev 读 cn 正本(dev 默认 region=cn);prod 由 region 化
+// auth 不分 cn/global 字段:dev 读所选 region 正本(默认 global);prod 由 region 化
 // 清单回填。显式 env 覆写仍最高优先。
 export let AUTH_API_BASE_URL = normalizeBaseUrlWithDefault(
   configuredValue('EXPO_PUBLIC_CINDY_AUTH_BASE_URL'),

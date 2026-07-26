@@ -40,7 +40,7 @@ const DESKTOP_ROOT = path.resolve(__dirname, '..');
  * (本脚本刻意零外部依赖,不 import lib.mjs;一致性由
  * scripts/__tests__/brand-identity-sync.test.mjs 断言兜底)。
  * 区域化:产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev'),由调用方
- * (ci/lib.mjs runSmokeTest)经 --app-name= 传入覆盖,本默认值只服务 cn / 手跑。
+ * (ci/lib.mjs runSmokeTest)经 --app-name= 传入覆盖,本默认值服务 global / 手跑。
  */
 const PACKAGED_APP_NAME = 'Cindy';
 

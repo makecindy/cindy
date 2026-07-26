@@ -29,7 +29,7 @@ export const BRAND_USER_DATA_DIR_NAME = 'Cindy';
 // local 模式读生成的 config/endpoint.local.json,--endpoints-cdn 走线上 CDN),这里只
 // 保留 region 身份。飞书登录构建变量已退役,不再创建或补写。
 function desktopEnvSpec() {
-  return [{ key: 'VITE_CINDY_AUTH_REGION', value: 'cn', force: false }];
+  return [{ key: 'VITE_CINDY_AUTH_REGION', value: 'global', force: false }];
 }
 const closeDarwinTerminalTtyScript = Object.freeze([
   'on closeMatchingTerminalTab(targetTty)',

@@ -87,7 +87,8 @@ test("help groups copyable desktop, binary, and Mobile workflows", async () => {
 	);
 
 	for (const command of [
-		"pnpm dev:desktop:remote --region=global",
+		"pnpm dev:desktop:remote",
+		"pnpm dev:desktop:remote --region=cn",
 		"pnpm install:agent-binaries",
 		"pnpm mobile:build:ios -- --region cn --execute",
 		"pnpm mobile:build:android -- --region cn --execute",

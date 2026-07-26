@@ -48,6 +48,10 @@ vi.mock('react-i18next', () => ({
     },
   }),
 }));
+vi.mock('../../../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
 vi.mock('@/features/feature-context', () => ({
   useRegisterSidebarUpper: vi.fn(),
   useRegisterContentHeader: vi.fn(),

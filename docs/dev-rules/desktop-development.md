@@ -10,8 +10,8 @@
 Agent 启动 Desktop 只使用仓库根的安全包装命令，并显式选择目标区域：
 
 ```bash
-pnpm restart:desktop:remote --region=cn
 pnpm restart:desktop:remote --region=global
+pnpm restart:desktop:remote --region=cn
 ```
 
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
@@ -26,8 +26,8 @@ Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录�
 两个 restart 命令都支持下列参数；**用户没提就不要主动加**（不带 = 共库 + 正常调度）。
 这些参数只对 dev 生效，不影响用户机器上的正式版。
 
-- `--region=cn|global`（默认 `cn`）：切换构建身份与仓内端点清单（`global` 读
-  `config/endpoint.global.json`）。
+- `--region=cn|global`（默认 `global`）：切换构建身份与仓内端点清单；中国大陆版
+  必须显式传 `--region=cn`，读取 `config/endpoint.json`。
 - `--isolated` / `--isolated=<名字>`：使用独立 userData 沙箱，数据库、登录态、会话、定时
   任务与设备身份都与正式版彻底隔离（首次需重新登录）；命名沙箱每个名字一条独立沙箱，
   名字限 `A-Za-z0-9_-`、≤32 字符。用户说「独立数据库／隔离数据／沙箱启动／不要动正式版

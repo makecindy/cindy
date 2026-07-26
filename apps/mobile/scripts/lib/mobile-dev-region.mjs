@@ -1,4 +1,4 @@
-/** 本地 mobile 开发允许选择的地区；未显式指定时统一使用国服。 */
+/** 本地 mobile 开发允许选择的地区；未显式指定时统一使用 Global。 */
 export const MOBILE_DEV_REGIONS = Object.freeze(['cn', 'global', 'dev']);
 export const LOCAL_MOBILE_REGION_CONFIG_ENV_KEY = 'CINDY_USE_LOCAL_REGION_CONFIG';
 
@@ -7,7 +7,7 @@ export function withLocalMobileRegionConfig(env) {
   return { ...env, [LOCAL_MOBILE_REGION_CONFIG_ENV_KEY]: '1' };
 }
 
-export const DEFAULT_MOBILE_DEV_REGION = 'cn';
+export const DEFAULT_MOBILE_DEV_REGION = 'global';
 
 /**
  * 从本地开发命令参数中提取 `--region`，并把其它参数原样交还调用方。

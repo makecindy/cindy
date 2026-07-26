@@ -6,7 +6,13 @@
  * key 不存在则跳过"双语义。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('../../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
+
 import {
   scheduleToCamel,
   scheduleCreateToRow,

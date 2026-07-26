@@ -18,9 +18,12 @@ pnpm mobile:sim:whoami
 
 ```bash
 pnpm mobile:sim:rebuild
-pnpm mobile:sim:rebuild -- --region=global
-pnpm mobile:sim:start -- --region=global
+pnpm mobile:sim:rebuild -- --region=cn
+pnpm mobile:sim:start -- --region=cn
 ```
+
+不传 `--region` 的日常入口默认运行 Cindy（Global）；中国大陆版必须显式传
+`--region=cn`。发布构建继续要求显式指定 region。
 
 不要用临时 Metro、端口探测或手工修改 `.env` 代替这些脚本。多 worktree、原生构建、
 登录态和日志排查见 `apps/mobile/docs/simulator-debugging.md`。

@@ -11,6 +11,10 @@ vi.mock('electron', () => ({
   app: { isPackaged: true, getPath: () => { throw new Error('not used in tests'); } },
   shell: {},
 }));
+vi.mock('../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
 vi.mock('../logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
@@ -18,8 +22,7 @@ vi.mock('../logger', () => ({
 import { healWindowsShortcuts, type ShortcutSelfHealDeps } from '../windowsShortcutSelfHeal';
 import { brandAppId, brandExecutableName } from '@cindy/maker-shared/brand-identity';
 
-// 被测模块经 shared/brandRegion 消费 CURRENT_APP_ID / 区域快捷方式名;vitest 下无
-// VITE_CINDY_AUTH_REGION → 区域回落 cn → brandAppId('cn') / brandExecutableName('cn')。
+// 本文件专测 CN 产物的历史快捷方式修复，显式固定区域，避免继承宿主环境。
 const EXPECTED_APP_ID = brandAppId('cn');
 // 重建目标 .lnk 基名(与实现的 SHORTCUT_BASENAME 同源;cn = 'Cindy')。
 const NEW_SHORTCUT_NAME = brandExecutableName('cn');

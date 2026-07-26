@@ -13,8 +13,8 @@ import {
 } from '../../scripts/lib/mobile-dev-region.mjs';
 
 describe('mobile:xcode 参数', () => {
-  it('不传 region 时默认 cn', () => {
-    expect(parseMobileXcodeArgs([])).toEqual({ help: false, region: 'cn' });
+  it('不传 region 时默认 global', () => {
+    expect(parseMobileXcodeArgs([])).toEqual({ help: false, region: 'global' });
   });
 
   it('支持 --region value / --region=value 与 pnpm 的分隔符', () => {
@@ -30,9 +30,9 @@ describe('mobile:xcode 参数', () => {
 });
 
 describe('mobile simulator region 参数', () => {
-  it('默认 cn，并仅移除 region 参数', () => {
+  it('默认 global，并仅移除 region 参数', () => {
     expect(extractMobileDevRegionArgs(['--port', '8082'])).toEqual({
-      region: 'cn',
+      region: 'global',
       passthrough: ['--port', '8082'],
     });
     expect(extractMobileDevRegionArgs(['--', '--region=global', '--clean'])).toEqual({

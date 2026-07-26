@@ -3,7 +3,7 @@ const iosSyncBannerMask = { left: 235, top: 440, width: 520, height: 100 };
 const profiles = {
   'ios-iphone-17-pro-native': {
     platform: 'ios',
-    appId: 'com.xd.lizcn',
+    appId: 'com.xd.cindy',
     visualProfile: 'ios-iphone-17-pro-native',
     visualIgnoreTopPx: 120,
   },

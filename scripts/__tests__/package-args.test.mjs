@@ -19,6 +19,36 @@ test('PLATFORM_ARCHS: linux 支持 x64 与 arm64', () => {
   assert.deepEqual([...PLATFORM_ARCHS.darwin].sort(), ['arm64', 'x64']);
 });
 
+test('parsePackageArgs: 版本无关本地包默认 global', () => {
+  const out = parsePackageArgs([], { platform: 'linux', arch: 'x64' });
+  assert.equal(out.region, 'global');
+  assert.equal(out.versionSpec, null);
+});
+
+test('parsePackageArgs: 版本化打包必须显式指定 region', () => {
+  assert.throws(
+    () => parsePackageArgs(['--version', '1.2.3'], {
+      platform: 'linux',
+      arch: 'x64',
+    }),
+    /必须显式传 --region/,
+  );
+  assert.equal(
+    parsePackageArgs(['--version', '1.2.3', '--region', 'global'], {
+      platform: 'linux',
+      arch: 'x64',
+    }).region,
+    'global',
+  );
+  assert.equal(
+    parsePackageArgs(['--version', '1.2.3', '--region', 'cn'], {
+      platform: 'linux',
+      arch: 'x64',
+    }).region,
+    'cn',
+  );
+});
+
 test('parsePackageArgs: linux 显式 --arch 指向宿主架构时放行', () => {
   // defaults 注入宿主身份,让断言不依赖跑测试的机器。
   for (const arch of ['x64', 'arm64']) {

@@ -12,7 +12,7 @@
  *
  * ⚠️ 语义边界:
  *  - 这是**构建期单点,不是运行时开关**。区域(cn/global)是唯一的构建期维度,
- *    经打包命令的 CINDY_AUTH_REGION 选择,默认 cn。appId / userData 目录名
+ *    经打包命令的 CINDY_AUTH_REGION 选择,默认 global。appId / userData 目录名
  *    按区域派生(cn 与 global 是两个可并存的系统身份,appId 与 mobile 的
  *    com.xd.cindycn / com.xd.cindy 同一套);exe 名 cn/global 同值 'Cindy'
  *    (2026-07-26 显示名统一决策,文件层双装隔离随之放弃,dev 仍独立)。
@@ -43,15 +43,15 @@ import { BRAND_NAME } from './branding.js';
  * 三装),连接独立的 dev 服务器(config/endpoint.dev.json,服务端就绪前为
  * 约定占位域名)。行为语义上 dev 归 cn 系(登录线/文案等运行时按区域分支处
  * 与 cn 同待遇),差异只在端点与身份。注意与「开发模式(未注入区域的本地
- * dev 构建)」区分:那仍默认 cn 身份。
+ * dev 构建)」区分:那仍默认 global 身份。
  */
 export type CindyRegion = 'cn' | 'global' | 'dev';
 
-/** 默认区域:国内。开发模式 / 未显式注入区域的构建一律落在这里。 */
-export const DEFAULT_CINDY_REGION: CindyRegion = 'cn';
+/** 默认区域:Global。开发模式 / 未显式注入区域的构建一律落在这里。 */
+export const DEFAULT_CINDY_REGION: CindyRegion = 'global';
 
 /**
- * 归一化区域输入(构建脚本 env / 运行时注入值)。空值 → 默认 cn;
+ * 归一化区域输入(构建脚本 env / 运行时注入值)。空值 → 默认 global;
  * 非法值抛错——打包链路宁可失败也不能默默打出身份错误的包。
  */
 export function resolveCindyRegion(raw?: string | null): CindyRegion {
@@ -164,7 +164,7 @@ export const BRAND_IDENTITY: BrandIdentity = Object.freeze({
   legacyDbFilePrefixes: Object.freeze(['xdt-maker']),
 });
 
-/** 按区域取 appId(AUMID / bundle id);默认 cn。 */
+/** 按区域取 appId(AUMID / bundle id);默认 global。 */
 export function brandAppId(
   region: CindyRegion = DEFAULT_CINDY_REGION,
   identity: BrandIdentity = BRAND_IDENTITY,
@@ -180,7 +180,7 @@ export function brandBundleIdPrefix(
   return identity.appIdByRegion[region];
 }
 
-/** 按区域取可执行文件基名(exe / mac .app / 安装目录 / 快捷方式名);默认 cn。 */
+/** 按区域取可执行文件基名(exe / mac .app / 安装目录 / 快捷方式名);默认 global。 */
 export function brandExecutableName(
   region: CindyRegion = DEFAULT_CINDY_REGION,
   identity: BrandIdentity = BRAND_IDENTITY,
@@ -188,7 +188,7 @@ export function brandExecutableName(
   return identity.executableNameByRegion[region];
 }
 
-/** 按区域取 Electron userData 目录名;默认 cn。 */
+/** 按区域取 Electron userData 目录名;默认 global。 */
 export function brandUserDataDirName(
   region: CindyRegion = DEFAULT_CINDY_REGION,
   identity: BrandIdentity = BRAND_IDENTITY,

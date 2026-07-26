@@ -9,7 +9,12 @@
  */
 
 import type { TFunction } from 'i18next';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
 
 import { buildTurnUsageDetails, normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { formatModelShort } from '../usageFormat';

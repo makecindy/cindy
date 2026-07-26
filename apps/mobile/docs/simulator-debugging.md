@@ -31,15 +31,16 @@ apply". Treat the following as a contract, not optional steps:
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
 
 ```bash
-pnpm mobile:sim:start      # start THIS worktree's cn dev-client Metro; injects git
+pnpm mobile:sim:start      # start THIS worktree's Global dev-client Metro; injects git
                            # branch/commit into the __DEV__ build label (EXPO_PUBLIC_*)
-pnpm mobile:sim:start -- --region=global # global JS region; rebuild global native app first
+pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild 对应 native app
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
-pnpm mobile:sim:whoami -- --region=global # inspect the global native app + Metro ownership
-pnpm mobile:sim:rebuild    # rebuild + reinstall the cn native dev app (native changes only)
+pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
+pnpm mobile:sim:rebuild    # rebuild + reinstall the Global native dev app (native changes only)
 ```
 
-`mobile:sim:start` and `mobile:sim:rebuild` default to `cn`. Before touching
+`mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
+Mainland build requires explicit `--region=cn`. Before touching
 Expo, all `mobile:sim:*` commands initialize the protocol submodule and repair
 the workspace dependencies when needed. The start/rebuild scripts also
 synchronize

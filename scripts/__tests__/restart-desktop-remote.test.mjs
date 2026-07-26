@@ -123,6 +123,7 @@ test("desktop restart process-control phase does not initialize startup configur
 	);
 	assert.deepEqual(startupEnv, {
 		CINDY_AUTH_REGION: "global",
+		VITE_CINDY_AUTH_REGION: "global",
 		XDT_ENDPOINT_MANIFEST_FILE: "config/endpoint.global.json",
 	});
 });

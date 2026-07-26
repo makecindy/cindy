@@ -12,12 +12,15 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function makeRepoRoot(manifest) {
+function makeRepoRoot(manifest, globalManifest = manifest) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'endpoint-local-file-'));
   tempDirs.push(dir);
   fs.mkdirSync(path.join(dir, 'config'), { recursive: true });
   if (manifest !== undefined) {
     fs.writeFileSync(path.join(dir, 'config', 'endpoint.json'), manifest);
+  }
+  if (globalManifest !== undefined) {
+    fs.writeFileSync(path.join(dir, 'config', 'endpoint.global.json'), globalManifest);
   }
   return dir;
 }
@@ -40,9 +43,14 @@ const CN_MANIFEST = JSON.stringify({
   cdnBaseUrl: 'https://cdn.example.invalid/app',
   mobileUpdateBaseUrl: 'https://mobile-update.example.invalid',
 });
+const GLOBAL_MANIFEST = JSON.stringify({
+  ...JSON.parse(CN_MANIFEST),
+  oauthBrokerApiBaseUrl: 'https://oauth.global.example.invalid',
+  cdnBaseUrl: 'https://cdn.global.example.invalid/app',
+});
 
-test('localhost 八件套覆写,其余字段照抄 cn 正本,返回绝对路径', () => {
-  const repoRoot = makeRepoRoot(CN_MANIFEST);
+test('localhost 八件套覆写,默认其余字段照抄 Global 正本,返回绝对路径', () => {
+  const repoRoot = makeRepoRoot(CN_MANIFEST, GLOBAL_MANIFEST);
   const target = generateEndpointLocalFile({ repoRoot });
   assert.equal(target, path.join(repoRoot, 'config', 'endpoint.local.json'));
   const local = JSON.parse(fs.readFileSync(target, 'utf8'));
@@ -55,8 +63,8 @@ test('localhost 八件套覆写,其余字段照抄 cn 正本,返回绝对路径'
   assert.equal(local.skillhubApiBaseUrl, 'http://localhost:3341');
   assert.equal(local.pluginApiBaseUrl, 'http://localhost:3343');
   // 其余字段与正本一致(oauth broker 等本地不起的服务沿用远程值)
-  assert.equal(local.oauthBrokerApiBaseUrl, 'https://oauth.example.invalid');
-  assert.equal(local.cdnBaseUrl, 'https://cdn.example.invalid/app');
+  assert.equal(local.oauthBrokerApiBaseUrl, 'https://oauth.global.example.invalid');
+  assert.equal(local.cdnBaseUrl, 'https://cdn.global.example.invalid/app');
   assert.equal(local.schemaVersion, 1);
 });
 
@@ -70,9 +78,26 @@ test('幂等:重复生成整文件重写,手改会丢', () => {
   assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).authApiBaseUrl, 'http://localhost:3344');
 });
 
-test('cn 正本缺失 / 非法直接抛错(fail closed,不造半截配置)', () => {
-  assert.throws(() => generateEndpointLocalFile({ repoRoot: makeRepoRoot(undefined) }));
-  assert.throws(() => generateEndpointLocalFile({ repoRoot: makeRepoRoot('not-json{{') }));
+test('所选正本缺失 / 非法时给出明确错误(fail closed,不造半截配置)', () => {
+  assert.throws(
+    () =>
+      generateEndpointLocalFile({
+        repoRoot: makeRepoRoot(undefined),
+        region: 'dev',
+      }),
+    /Missing endpoint manifest config\/endpoint\.dev\.json.*endpoint\.dev\.json\.example/,
+  );
+  assert.throws(
+    () =>
+      generateEndpointLocalFile({
+        repoRoot: makeRepoRoot(CN_MANIFEST, 'not-json{{'),
+      }),
+    /Invalid JSON in endpoint manifest config\/endpoint\.global\.json/,
+  );
+  assert.throws(() => generateEndpointLocalFile({
+    repoRoot: makeRepoRoot(CN_MANIFEST),
+    region: 'us',
+  }));
 });
 
 test('生成物能过客户端 parser 的 allowHttp 校验(与仓内正本同一守门语义)', async () => {

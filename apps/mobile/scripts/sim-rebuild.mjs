@@ -34,7 +34,7 @@
 //   node scripts/sim-rebuild.mjs --force-build   # 跳过 fingerprint 产物缓存,强制完整重编
 //   node scripts/sim-rebuild.mjs --build-only    # 只构建 + 入产物缓存,不装/不启动模拟器
 //                                                #(预热缓存,或模拟器正被别的验证占用时)
-// 或仓库根:pnpm mobile:sim:rebuild [-- --region=global] [-- --clean] [-- --force-build] [-- --build-only]
+// 或仓库根:pnpm mobile:sim:rebuild [-- --region=cn] [-- --clean] [-- --force-build] [-- --build-only]
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import {

@@ -3,7 +3,7 @@
  * dev-local-env.mjs — dev(local 模式)的端点清单包装。
  *
  * 生成 config/endpoint.local.json(api/auth/device-link 指 localhost,其余抄
- * cn 正本;见 scripts/shared/endpoint-local-file.mjs)并经
+ * 所选 region 正本;见 scripts/shared/endpoint-local-file.mjs)并经
  * XDT_ENDPOINT_MANIFEST_FILE 指给主进程(clientEndpointsService file 模式)。
  * 已显式设置 XDT_ENDPOINT_MANIFEST_FILE 时尊重用户值,不生成不覆盖。
  *
@@ -13,9 +13,13 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  applyDesktopDevStartupConfig,
+  stripDesktopDevRegionArgs,
+} from '../../../scripts/shared/desktop-dev-region.mjs';
 import { generateEndpointLocalFile } from '../../../scripts/shared/endpoint-local-file.mjs';
 
-const [command, ...args] = process.argv.slice(2);
+const [command, ...rawArgs] = process.argv.slice(2);
 if (!command) {
   console.error('usage: node scripts/dev-local-env.mjs <command> [args...]');
   process.exit(2);
@@ -23,8 +27,13 @@ if (!command) {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const env = { ...process.env, XDT_DESKTOP_DEV_MODE: 'local' };
+const startupConfig = applyDesktopDevStartupConfig({ argv: rawArgs, env, mode: 'local' });
+const args = stripDesktopDevRegionArgs(rawArgs);
 if (!env.XDT_ENDPOINT_MANIFEST_FILE?.trim()) {
-  env.XDT_ENDPOINT_MANIFEST_FILE = generateEndpointLocalFile({ repoRoot });
+  env.XDT_ENDPOINT_MANIFEST_FILE = generateEndpointLocalFile({
+    repoRoot,
+    region: startupConfig.region,
+  });
   console.log(`[dev-local-env] endpoint manifest → ${env.XDT_ENDPOINT_MANIFEST_FILE}`);
 }
 

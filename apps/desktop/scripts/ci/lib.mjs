@@ -74,7 +74,7 @@ export const PACKAGED_APP_NAME = 'Cindy';
  * cn/global 同值 'Cindy'(2026-07-26 显示名统一决策,放弃文件层双装隔离),
  * dev 独立。镜像 brandIdentity.ts 的 executableNameByRegion,一致性由
  * scripts/__tests__/brand-identity-sync.test.mjs 断言兜底。
- * PACKAGED_APP_NAME 保留为 cn 基线值,供未传 region 的 legacy 脚本使用。
+ * PACKAGED_APP_NAME 保留为正式版共同基线值,供未传 region 的 legacy 脚本使用。
  */
 export const PACKAGED_APP_NAME_BY_REGION = Object.freeze({
   cn: 'Cindy',
@@ -82,7 +82,7 @@ export const PACKAGED_APP_NAME_BY_REGION = Object.freeze({
   dev: 'CindyDev',
 });
 
-export function packagedAppName(region = 'cn') {
+export function packagedAppName(region = 'global') {
   const name = PACKAGED_APP_NAME_BY_REGION[region];
   if (!name) throw new Error(`unknown region: ${region}`);
   return name;
@@ -96,11 +96,11 @@ export function packagedAppName(region = 'cn') {
  */
 export const RELEASE_ARTIFACT_BASENAME_BY_REGION = Object.freeze({
   cn: 'cindy',
-  global: 'cindy-global',
+  global: 'cindy',
   dev: 'cindy-dev',
 });
 
-export function releaseArtifactBasename(region = 'cn') {
+export function releaseArtifactBasename(region = 'global') {
   const name = RELEASE_ARTIFACT_BASENAME_BY_REGION[region];
   if (!name) throw new Error(`unknown region: ${region}`);
   return name;
@@ -207,7 +207,7 @@ function restorePackageJson() {
 // no-cache 不一定被 CDN 尊重),客户端 manifestService 与 promote-canary-* 都带了,
 // 唯独发布脚本此前漏了——2026-07-03 事故的直接诱因就是发版时读到陈旧基线,误判
 // "版本变了" 而对已存在的版本化路径做了字节不同的覆盖上传。
-export async function fetchExistingManifestIfAvailable(platformKey, region = 'cn') {
+export async function fetchExistingManifestIfAvailable(platformKey, region = 'global') {
   const cdnBase = resolveReleaseCdnBaseUrl(region);
   const canaryUrl = `${cdnBase}/manifest-${platformKey}-canary.json?t=${Date.now()}`;
   const canaryRes = await fetch(canaryUrl);
@@ -789,7 +789,7 @@ export function createMacDMG(appPath, dmgPath, volumeName, identity) {
 
 // ── Smoke test (启动 packaged app) ──────────────────────────────────────────
 
-export function runSmokeTest(platform, arch, region = 'cn') {
+export function runSmokeTest(platform, arch, region = 'global') {
   console.log('==> Running packaged smoke test...');
   const result = spawnSync(
     'node',

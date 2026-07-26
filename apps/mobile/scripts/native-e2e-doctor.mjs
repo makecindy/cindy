@@ -10,7 +10,7 @@ import { resolveMobileE2eProfile } from './mobile-e2e-profile.mjs';
 const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
 const repoRoot = resolve(mobileRoot, '..', '..');
-const defaultAppId = 'com.xd.lizcn';
+const defaultAppId = 'com.xd.cindy';
 
 loadEnvFile(resolve(mobileRoot, '.env'));
 

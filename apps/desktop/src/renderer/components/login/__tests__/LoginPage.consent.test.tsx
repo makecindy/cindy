@@ -34,6 +34,10 @@ const CONSENT_TEXT: Record<string, string> = {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => CONSENT_TEXT[key] ?? key }),
 }));
+vi.mock('../../../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
 vi.mock('@/hooks/useLogin', () => ({ useLogin: () => loginHook.value }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
 

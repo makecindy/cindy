@@ -111,31 +111,31 @@ describe('BRAND_IDENTITY invariants', () => {
 });
 
 describe('区域解析与派生', () => {
-  it('resolveCindyRegion:空值 → 默认 cn;合法值归一化;非法值抛错', () => {
-    expect(resolveCindyRegion(undefined)).toBe('cn');
-    expect(resolveCindyRegion(null)).toBe('cn');
-    expect(resolveCindyRegion('')).toBe('cn');
-    expect(resolveCindyRegion('  ')).toBe('cn');
+  it('resolveCindyRegion:空值 → 默认 global;合法值归一化;非法值抛错', () => {
+    expect(resolveCindyRegion(undefined)).toBe('global');
+    expect(resolveCindyRegion(null)).toBe('global');
+    expect(resolveCindyRegion('')).toBe('global');
+    expect(resolveCindyRegion('  ')).toBe('global');
     expect(resolveCindyRegion('cn')).toBe('cn');
     expect(resolveCindyRegion('global')).toBe('global');
     expect(resolveCindyRegion('GLOBAL')).toBe('global');
     expect(() => resolveCindyRegion('us')).toThrow(/Invalid Cindy region/);
   });
 
-  it('brandAppId / brandBundleIdPrefix 按区域取值,默认 cn', () => {
-    expect(DEFAULT_CINDY_REGION).toBe('cn');
-    expect(brandAppId()).toBe('com.xd.cindycn');
+  it('brandAppId / brandBundleIdPrefix 按区域取值,默认 global', () => {
+    expect(DEFAULT_CINDY_REGION).toBe('global');
+    expect(brandAppId()).toBe('com.xd.cindy');
     expect(brandAppId('global')).toBe('com.xd.cindy');
     expect(brandBundleIdPrefix('cn')).toBe('com.xd.cindycn');
     expect(brandBundleIdPrefix('global')).toBe('com.xd.cindy');
   });
 
-  it('brandExecutableName / brandUserDataDirName 按区域取值,默认 cn', () => {
+  it('brandExecutableName / brandUserDataDirName 按区域取值,默认 global', () => {
     expect(brandExecutableName()).toBe('Cindy');
     // global 与 cn 同值(2026-07-26 显示名统一决策);dev 仍独立。
     expect(brandExecutableName('global')).toBe('Cindy');
     expect(brandExecutableName('dev')).toBe('CindyDev');
-    expect(brandUserDataDirName()).toBe('Cindy');
+    expect(brandUserDataDirName()).toBe('CindyGlobal');
     expect(brandUserDataDirName('global')).toBe('CindyGlobal');
   });
 });
@@ -146,7 +146,7 @@ describe('派生 helper', () => {
   });
 
   it('allUserDataDirNames 本区域目录名恒为首位 + 全部历史值,且不含另一区域', () => {
-    expect(allUserDataDirNames()).toEqual(['Cindy', 'xdt-maker']);
+    expect(allUserDataDirNames()).toEqual(['CindyGlobal', 'xdt-maker']);
     expect(allUserDataDirNames('cn')).toEqual(['Cindy', 'xdt-maker']);
     // global 的匹配集不含 cn 的 'Cindy':orphan-reaper 按路径认领进程,
     // 跨区域匹配会误杀另一个安装的进程。

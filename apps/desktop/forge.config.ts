@@ -24,7 +24,7 @@ import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 const _require = createRequire(__filename);
 
 // ── 构建期身份(2026-07-17 Cindy 渠道分叉) ─────────────────────────────────────
-// 区域默认 cn;打海外包时由发布脚本注入 CINDY_AUTH_REGION=global。appId 随区域
+// 区域默认 global;中国大陆包由发布脚本显式注入 CINDY_AUTH_REGION=cn。appId 随区域
 // 派生(com.xd.cindycn / com.xd.cindy),必须与运行时 shared/brandRegion
 // (经 vite.main.config 的 VITE_CINDY_AUTH_REGION define 烘焙)同源——AUMID
 // 三位一体:NSIS appId = 运行时 setAppUserModelId = 快捷方式 AUMID。

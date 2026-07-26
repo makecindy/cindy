@@ -5081,7 +5081,7 @@ async function runSmokeTest(userId: string): Promise<void> {
 
 // AUMID 三位一体:必须与 NSIS appId(forge.config 按构建区域从 brandAppId() 取)
 // 与快捷方式 AUMID 逐字符一致。值经 shared/brandRegion 按构建期区域烘焙
-// (cn=com.xd.cindycn / global=com.xd.cindy,dev 默认 cn)。
+// (cn=com.xd.cindycn / global=com.xd.cindy；未注入 region 时默认 global)。
 const WINDOWS_APP_USER_MODEL_ID = CURRENT_APP_ID;
 
 /**

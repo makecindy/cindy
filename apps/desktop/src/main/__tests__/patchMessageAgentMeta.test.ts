@@ -19,6 +19,10 @@ vi.mock('electron', () => ({
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mockSend } }],
   },
 }));
+vi.mock('../../shared/brandRegion', () => ({
+  CURRENT_CINDY_REGION: 'cn',
+  CURRENT_APP_ID: 'com.xd.cindycn',
+}));
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
