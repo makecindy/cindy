@@ -138,6 +138,7 @@ import {
   type AgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import {
   useDeviceProviders,
   evictDeviceProviders,
@@ -149,7 +150,7 @@ import {
   useProjectPickerOptions,
 } from '@/hooks/useProjectPickerOptions';
 import { resolveFastSupported, deriveModelsFromProviders } from '@/lib/providerModels';
-import { effectiveSourceIdForModel, getModel, sessionModelSupportsFastMode, connectedProvidersForAgent } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -206,10 +207,25 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * 由 draft.collab 拼出 createSession 后 enableOrca 的入参:与会话内 requestEnableCollab 同口径。
  * 有 workerConfig(用户在「开启协同」弹窗配过 role/model/…)则透传全量;否则只带 workerAgent 回退默认。
  */
-function draftEnableOrcaOptions(collab: CollabDraft) {
+function draftEnableOrcaOptions(collab: CollabDraft, providers: ProviderView[]) {
   const workerAgent: 'claude-code' | 'codex' = collab.worker === 'codex' ? 'codex' : 'claude-code';
   const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
+  // 草稿里持久化的来源在发送时按 live 目录重新收窄(已连接 + 提供该模型 + 未被可见性
+  // 隐藏,与 CreateWorkerPopover.narrowProviderSource 同规则):草稿可跨重启存活,来源
+  // 可能已断开/掉模型 —— 直接透传会撞 main 的 PROVIDER_ROUTE_UNAVAILABLE 精确 preflight,
+  // 让协同静默退化成单会话(codex review)。收窄为 undefined = 交回默认路由解析。
+  const providerId = (() => {
+    if (!cfg.providerId) return undefined;
+    const provider = connectedProvidersForAgent(providers, workerAgent).find(
+      (p) => p.id === cfg.providerId,
+    );
+    if (!provider || !providerOffersModel(provider, cfg.model, workerAgent)) return undefined;
+    const catalogModel = getModel(provider, cfg.model, workerAgent);
+    return catalogModel && isModelEnabled(workerAgent, cfg.providerId, catalogModel)
+      ? cfg.providerId
+      : undefined;
+  })();
   return {
     workerAgent,
     role: cfg.role,
@@ -217,8 +233,7 @@ function draftEnableOrcaOptions(collab: CollabDraft) {
     model: cfg.model,
     effort: cfg.effort as 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined,
     fast: cfg.fast,
-    // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
-    providerId: cfg.providerId ?? undefined,
+    providerId,
     delegateTask: cfg.initialTask || undefined,
   };
 }
@@ -1561,7 +1576,7 @@ export function NewMakerDraftRoute() {
                   try {
                     const result = await window.electronAPI.maker.enableOrca(
                       newSession.id,
-                      draftEnableOrcaOptions(effectiveCollab),
+                      draftEnableOrcaOptions(effectiveCollab, localProviders),
                     );
                     // worktree 创建在后台完成,组件可能已经切走;这里读取当前 URL,
                     // 避免用 render 时捕获的旧路由误判。
@@ -1675,7 +1690,7 @@ export function NewMakerDraftRoute() {
             try {
               const result = await window.electronAPI.maker.enableOrca(
                 newSession.id,
-                draftEnableOrcaOptions(effectiveCollab),
+                draftEnableOrcaOptions(effectiveCollab, localProviders),
               );
               orcaNavTarget = `/cc-agent/${newSession.id}`;
               orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
@@ -1958,7 +1973,7 @@ export function NewMakerDraftRoute() {
         try {
           const result = await window.electronAPI.maker.enableOrca(
             newSession.id,
-            draftEnableOrcaOptions(effectiveCollab),
+            draftEnableOrcaOptions(effectiveCollab, localProviders),
           );
           orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };
         } catch (err) {
