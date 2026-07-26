@@ -808,4 +808,42 @@ describe('CreateWorkerPopover', () => {
       ),
     );
   });
+
+  it('keys memory compatibility copies to the effective source while an explicit source is stale', async () => {
+    // 目录仍在加载(收敛 effect 未跑)、恢复出的显式来源已失效:活跃行编辑的记忆
+    // 写入按收窄后口径落 key —— 全局预设槽不受影响,但来源槽兼容副本不得写给
+    // 已失效来源(copilot review;ChatInput 的 effectiveSourceId 同语义)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'ghost-provider' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    mocks.providersLoading = true;
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('ghost-provider'),
+    );
+    fireEvent.click(screen.getByTestId('edit-active-effort'));
+
+    expect(getProviderModelEffort('codex', 'openai', 'gpt-5.5')).toBe('low');
+    const raw = JSON.parse(window.localStorage.getItem('xdt:providerModelMemory:v2') ?? '{}');
+    expect(Object.keys(raw)).toContain('codex:openai');
+    expect(Object.keys(raw)).not.toContain('codex:ghost-provider');
+  });
 });

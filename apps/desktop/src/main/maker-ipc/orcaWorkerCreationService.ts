@@ -48,6 +48,15 @@ export interface OrcaWorkerProviderSnapshot {
    * 回落拍平清单解析(兼容旧组装方,不整体压灭 Fast)。
    */
   fastModels?: readonly string[];
+  /**
+   * 该来源下各模型的 effort 元数据。effort 档位同样是 per-(provider, model) 的:
+   * 自定义来源追加同 id 模型时不经过基础目录的跨来源一致性校验,efforts /
+   * defaultEffort 可与拍平清单的首见条目分叉;缺省 = 该快照来源未提供 effort
+   * 元数据,effort 归一保留拍平清单解析(兼容旧组装方)。
+   */
+  effortMetaByModel?: Readonly<
+    Record<string, { efforts: readonly string[]; defaultEffort: string | null }>
+  >;
   /** true 表示该来源必须写入 session provider store 才能注入自己的 API key/OAuth token。 */
   requiresExplicitRoute?: boolean;
 }
@@ -310,8 +319,17 @@ function resolveWorkerConfig(params: {
   lead: OrcaLeadSessionSnapshot;
   defaults: OrcaWorkerDefaultsSnapshot;
   availableModels: OrcaWorkerModelCapabilities[];
+  /**
+   * 显式来源对某 model 的 effort 元数据;返回 undefined(未显式选来源 / 来源无该
+   * 元数据)时按拍平清单条目归一。effort 档位是 per-(provider, model) 的,显式来源
+   * 的归一必须用它自己的条目,否则拍平首见条目会误拒该来源支持的档位(explicit
+   * 时归一直接 error 早退)或误放行它不支持的档位(codex review)。
+   */
+  explicitEffortMeta?: (
+    model: string,
+  ) => { efforts: readonly string[]; defaultEffort: string | null } | undefined;
 }): ResolveWorkerConfigResult {
-  const { input, lead, defaults, availableModels } = params;
+  const { input, lead, defaults, availableModels, explicitEffortMeta } = params;
   const model = input.model
     ?? defaults.model
     ?? (input.agent === lead.agentKind ? lead.model : input.agent === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6');
@@ -322,8 +340,15 @@ function resolveWorkerConfig(params: {
       message: `model "${model}" not available for ${input.agent}. valid: ${availableModels.map((candidate) => candidate.id).join(', ')}`,
     };
   }
+  const sourceEffortMeta = explicitEffortMeta?.(model);
   const normalizedEffort = normalizeResolvedEffort({
-    model: modelCapabilities,
+    model: sourceEffortMeta
+      ? {
+          id: model,
+          efforts: sourceEffortMeta.efforts,
+          defaultEffort: sourceEffortMeta.defaultEffort,
+        }
+      : modelCapabilities,
     effort: input.effort ?? defaults.effort ?? lead.effort,
     explicit: input.effort !== undefined,
   });
@@ -472,7 +497,26 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     }
 
     const defaults = deps.getWorkerDefaults(params.agent);
-    const resolvedConfig = resolveWorkerConfig({ input: params, lead, defaults, availableModels });
+    // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
+    // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
+    // 共用内核自防调用方漏归一),维持既有解析,包括「显式 model 不等于显式来源」的
+    // 强制默认路由与 requiresExplicitRoute 唯一来源救援。
+    const explicitSourceId =
+      typeof params.providerId === 'string' && params.providerId.trim().length > 0
+        ? params.providerId.trim()
+        : null;
+    const explicitSourceProvider = explicitSourceId === null
+      ? undefined
+      : agentProviders.find((provider) => provider.id === explicitSourceId);
+    const resolvedConfig = resolveWorkerConfig({
+      input: params,
+      lead,
+      defaults,
+      availableModels,
+      // 显式来源的 effort 归一必须按该来源自己的条目(codex review):explicit effort
+      // 被拍平首见条目误拒发生在归一内部的 error 早退,后面按路由来源的重归一救不了。
+      explicitEffortMeta: (model) => explicitSourceProvider?.effortMetaByModel?.[model],
+    });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
     }
@@ -497,14 +541,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const cachedProviderFallback = cachedProviderFallbackId === null
       ? undefined
       : agentProviders.find((provider) => provider.id === cachedProviderFallbackId);
-    // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
-    // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
-    // 共用内核自防调用方漏归一),维持既有解析,包括「显式 model 不等于显式来源」的
-    // 强制默认路由与 requiresExplicitRoute 唯一来源救援。
-    const explicitSourceId =
-      typeof params.providerId === 'string' && params.providerId.trim().length > 0
-        ? params.providerId.trim()
-        : null;
     const resolved = {
       ...resolvedConfig,
       // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。
@@ -521,23 +557,44 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
               ? (cachedProviderFallback?.requiresExplicitRoute ? cachedProviderFallback.id : null)
               : resolvedConfig.providerId,
     };
-    // Fast 按**实际路由来源**自己的模型条目判定(显式来源、defaults 缓存来源、
-    // spawn 默认来源统一)—— getAvailableModels 是跨来源拍平清单(首来源 wins,且不含
-    // 连接态),同 id 模型的 supportsFastMode 在不同来源可分叉:首来源不支持会误杀
-    // 真实路由来源的 Fast,反向则把 Fast 放到不支持的来源上(codex review 两轮)。
-    const fastRouteProviderId = explicitSourceId
+    // Fast 与 effort 都按**实际路由来源**自己的模型条目判定(显式来源、defaults 缓存
+    // 来源、spawn 默认来源统一)—— getAvailableModels 是跨来源拍平清单(首来源 wins,
+    // 且不含连接态),同 id 模型的 supportsFastMode / efforts 在不同来源可分叉:首来源
+    // 的元数据会误杀或误放行真实路由来源的能力(codex review 三轮)。
+    const routeProviderId = explicitSourceId
       ?? resolved.providerId
       ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolved.model);
-    const fastRouteProvider = fastRouteProviderId === null
+    const routeProvider = routeProviderId === null
       ? undefined
-      : agentProviders.find((provider) => provider.id === fastRouteProviderId);
+      : agentProviders.find((provider) => provider.id === routeProviderId);
     // 只有该来源确实带了 Fast 元数据才覆盖;无元数据(旧组装方)保留拍平解析。
-    if (fastRouteProvider?.fastModels) {
-      const providerSupportsFast = fastRouteProvider.fastModels.includes(resolved.model);
+    if (routeProvider?.fastModels) {
+      const providerSupportsFast = routeProvider.fastModels.includes(resolved.model);
       const requestedFast = params.agent === 'codex' && params.fast !== undefined
         ? params.fast
         : (defaults.fastMode ?? !!lead.fastMode);
       resolved.fastMode = providerSupportsFast && requestedFast === true;
+    }
+    // effort 按路由来源自己的条目**重归一**:resolveWorkerConfig 已按拍平首见条目
+    // 归一过,但自定义来源的同 id 模型 efforts/defaultEffort 可分叉 —— 面板行按
+    // 该来源元数据显示可选档位,创建却按首见条目得出 effort:null,或反向拒绝该行
+    // 支持的档位(codex review)。重归一用与 resolveWorkerConfig 相同的**原始输入**,
+    // 不能拿已归一的 resolved.effort 二次级联;无元数据(旧组装方)保留拍平归一结果。
+    const routeEffortMeta = routeProvider?.effortMetaByModel?.[resolved.model];
+    if (routeEffortMeta) {
+      const renormalized = normalizeResolvedEffort({
+        model: {
+          id: resolved.model,
+          efforts: routeEffortMeta.efforts,
+          defaultEffort: routeEffortMeta.defaultEffort,
+        },
+        effort: params.effort ?? defaults.effort ?? lead.effort,
+        explicit: params.effort !== undefined,
+      });
+      if (!renormalized.ok) {
+        return { ok: false, errorCode: 'INVALID_PARAMS', message: renormalized.message };
+      }
+      resolved.effort = renormalized.effort;
     }
     const budgetRouteProviderId = explicitSourceId !== null
       ? explicitSourceId

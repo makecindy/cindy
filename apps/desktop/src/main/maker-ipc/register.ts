@@ -5534,6 +5534,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             fastModels: (provider.models['claude-code'] ?? [])
               .filter((model) => model.supportsFastMode)
               .map((model) => model.id),
+            // effort 档位同样 per-(provider, model):供 service 按实际路由来源重归一。
+            effortMetaByModel: Object.fromEntries(
+              (provider.models['claude-code'] ?? []).map((model) => [
+                model.id,
+                { efforts: model.efforts, defaultEffort: model.defaultEffort },
+              ]),
+            ),
             requiresExplicitRoute: provider.routing['claude-code']?.authStrategy === 'api-key-header'
               || provider.routing['claude-code']?.authStrategy === 'oauth-token',
           })),
@@ -5544,6 +5551,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
             fastModels: (provider.models.codex ?? [])
               .filter((model) => model.supportsFastMode)
               .map((model) => model.id),
+            effortMetaByModel: Object.fromEntries(
+              (provider.models.codex ?? []).map((model) => [
+                model.id,
+                { efforts: model.efforts, defaultEffort: model.defaultEffort },
+              ]),
+            ),
             requiresExplicitRoute: provider.routing.codex?.authStrategy === 'api-key-header'
               || provider.routing.codex?.authStrategy === 'oauth-token',
           })),

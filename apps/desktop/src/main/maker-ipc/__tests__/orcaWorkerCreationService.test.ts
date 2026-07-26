@@ -1308,6 +1308,118 @@ describe('buildNoProviderMessage', () => {
     });
   });
 
+  it('normalizes effort against the explicit provider catalog entry, not the flattened union', async () => {
+    // gpt-5.5 的拍平首见条目只有 medium 档,而显式来源 openai 的同 id 条目支持
+    // low/medium/high:explicit effort=high 必须按 openai 自己的元数据放行,不被
+    // 拍平条目在 resolveWorkerConfig 内 error 早退误拒(codex review)。
+    const { service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'codex'
+          ? [{ id: 'gpt-5.5', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }]
+          : []
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5'] },
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            models: ['gpt-5.5'],
+            effortMetaByModel: {
+              'gpt-5.5': { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+            },
+          },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      effort: 'high',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'openai', effort: 'high' },
+    });
+  });
+
+  it('rejects efforts the explicit no-effort provider copy does not support and defaults to null', async () => {
+    // 自定义来源的 gpt-5.5 副本无 effort 档(efforts:[]):explicit effort 必须按该
+    // 来源条目拒绝,不能沿用拍平首见条目的档位表放行;非显式输入则落该来源的
+    // defaultEffort(null),不带着拍平归一出的档位派发(codex review)。
+    const routing = () => providerRoutingContext({
+      'claude-code': [],
+      codex: [
+        { id: 'xd', name: 'XD Gateway', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex/budget'] },
+        {
+          id: 'custom',
+          name: 'Custom Gateway',
+          models: ['gpt-5.5'],
+          effortMetaByModel: { 'gpt-5.5': { efforts: [], defaultEffort: null } },
+        },
+      ],
+    });
+
+    const rejected = createDeps({ getProviderRoutingContext: vi.fn(async () => routing()) });
+    await expect(rejected.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'custom',
+      effort: 'high',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_PARAMS',
+    });
+
+    const defaulted = createDeps({ getProviderRoutingContext: vi.fn(async () => routing()) });
+    await expect(defaulted.service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: 'custom',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'custom', effort: null },
+    });
+  });
+
+  it('renormalizes effort against the default route provider when no explicit source is set', async () => {
+    // 未显式选来源时实际路由来源是 lead/defaults 解析出的 xd:其 gpt-5.5 条目只有
+    // low 档,lead effort=medium 按拍平条目(四档)归一原样通过,必须再按路由来源
+    // 条目重归一落到该来源的 defaultEffort(codex review;与 Fast 的路由来源口径一致)。
+    const { service } = createDeps({
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'codex/budget'],
+          effortMetaByModel: { 'gpt-5.5': { efforts: ['low'], defaultEffort: 'low' } },
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model: 'gpt-5.5', effort: 'low' },
+    });
+  });
+
   it('rejects an explicit provider that does not offer the requested model', async () => {
     const { deps, service } = createDeps({
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({

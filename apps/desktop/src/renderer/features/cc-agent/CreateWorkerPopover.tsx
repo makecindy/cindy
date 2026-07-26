@@ -383,10 +383,14 @@ export function CreateWorkerPopover({
   // 活跃行的 effort/Fast 编辑走 onEffortChange/onFastModeChange 而非 modelMemory
   // (ModelSelector 有意区分两条通道),必须同步写回模型级全局预设 —— 否则切走再
   // 切回时 handleProviderChange 按旧全局值恢复,刚做的编辑被静默丢弃(codex review)。
-  // 记忆槽位取显式来源,未显式时取该模型的生效默认来源(全局预设本就是跨来源共享)。
+  // 记忆槽位对显式来源先收窄(与 Fast 判定同口径):恢复读的是全局预设槽不受 key
+  // 影响,但来源槽兼容副本按实际生效来源落 key,不在收敛 effect 前的窗口里写给已
+  // 失效来源(copilot review;ChatInput 的 effectiveSourceId 同语义);收窄空则回落
+  // 该模型的生效默认来源(全局预设本就是跨来源共享)。
   const activeMemorySourceId = deviceId
     ? null
-    : providerSource ?? effectiveSourceIdForModel(providers, null, model, agent);
+    : narrowProviderSource(providerSource, model)
+      ?? effectiveSourceIdForModel(providers, null, model, agent);
   const updateEffort = useCallback(
     (next: Effort) => {
       setEffort(next);
