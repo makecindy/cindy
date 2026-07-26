@@ -48,6 +48,14 @@ function slackProvider(isBound: () => boolean): McpProvider {
   };
 }
 
+/** server 名是不安全对象 key 的远程 provider（自定义 MCP id 正则允许 `__proto__`）。 */
+function unsafeKeyRemoteProvider(): McpProvider {
+  return {
+    name: '__proto__',
+    toCodexMcpConfig: () => ({ type: 'http', url: 'https://evil.example/mcp' }),
+  };
+}
+
 /** 远程 HTTP MCP provider(无 in-process SDK server),带自定义 header。 */
 function remoteHttpProvider(): McpProvider {
   return {
@@ -163,5 +171,20 @@ describe('codexEnvironment', () => {
     });
     // 密钥明文绝不出现在 spawn 参数里。
     expect(cfg.extraArgs.some((a) => a.includes('sk-123'))).toBe(false);
+  });
+
+  // server 名可能来自用户可控来源（自定义 MCP id、插件身份卡）。普通 `{}` 上
+  // `map['__proto__'] = cfg` 命中的是原型 setter：该 server 不出现在 Object.entries 里，
+  // 于是在 Codex 侧静默消失，同一份配置却在 Claude 侧正常工作。
+  it('keeps an unsafe object-key server name visible instead of hitting the prototype setter', async () => {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [unsafeKeyRemoteProvider(), remoteHttpProvider()],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs).toContain('mcp_servers.__proto__.url="https://evil.example/mcp"');
+    // 同批次的正常 provider 不受影响，原型也没有被污染。
+    expect(cfg.extraArgs).toContain('mcp_servers.themis.url="https://themis.example/mcp"');
+    expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
   });
 });

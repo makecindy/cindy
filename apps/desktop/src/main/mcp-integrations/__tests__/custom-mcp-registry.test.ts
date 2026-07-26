@@ -16,6 +16,8 @@ const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn() }));
 
 vi.mock('../../maker-host/custom-mcp-store.js', () => ({
   listCustomMcpServers: storeMock.listCustomMcpServers,
+  // 只把读库这一步换成 mock；判定逻辑用真实实现，避免名单在测试里漂移。
+  isUnsafeMcpServerId: (id: string) => ['__proto__', 'constructor', 'prototype'].includes(id),
 }));
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
@@ -74,6 +76,26 @@ describe('refreshCustomMcpProviders', () => {
     expect(arr[0]?.toClaudeSdkConfig?.({ agentKind: 'claude-code', workingDir: '/tmp' })).toEqual({
       type: 'sdk',
     });
+  });
+
+  // 保留名 / 不安全 key 的校验是后加的，旧版本存下来的行不会被重新校验（refresh 直接
+  // 读库建 provider）。这类 id 当对象 key 用会踩原型 setter，在按 `{}` 建表的装配点静默
+  // 消失，造成「Claude 里能用、Codex 里不见」的分叉，所以两端一律不装。
+  it('quarantines persisted ids that are unsafe as object keys', async () => {
+    const arr: McpProvider[] = [builtin('cindy_browser')];
+    registerCustomMcpArrays(arr);
+    storeMock.listCustomMcpServers.mockResolvedValue([
+      config('__proto__'),
+      config('constructor'),
+      config('prototype'),
+      config('safe_one'),
+    ]);
+
+    await refreshCustomMcpProviders();
+
+    expect(arr.map((p) => p.name)).toEqual(['cindy_browser', 'safe_one']);
+    // 没有污染原型：普通对象仍然干净。
+    expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
   });
 
   it('still allows ids that merely resemble a builtin name', async () => {

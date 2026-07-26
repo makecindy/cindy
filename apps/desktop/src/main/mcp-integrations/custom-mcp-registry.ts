@@ -16,7 +16,7 @@
 import { createLogger } from '../logger.js';
 import type { McpProvider } from '@cindy/maker-core';
 
-import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { isUnsafeMcpServerId, listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { readCustomMcpToken } from '../secrets/providerSecretStore.js';
 import { CustomMcpProvider } from './custom-mcp-provider.js';
 
@@ -88,6 +88,20 @@ export async function refreshCustomMcpProviders(): Promise<void> {
     // 信任(策略只看 serverName)。这里直接不装它，撞名的自定义 MCP 视为无效配置。
     const builtinNames = new Set(arr.map((p) => p.name));
     for (const provider of providers) {
+      // 历史行隔离：保留名 / 不安全 key 的校验是后加的，旧版本存下来的行不会被重新
+      // 校验（这里直接读库建 provider）。这类 id 当对象 key 用会踩原型 setter，在
+      // 按 `{}` 建表的装配点（codex 的 remoteHttpServers 等）静默消失，造成「Claude 里
+      // 能用、Codex 里不见」的分叉。两端一律不装，用户删掉重建即可（delete 按 id 走，
+      // 不受新校验影响）。
+      if (isUnsafeMcpServerId(provider.name)) {
+        if (!skippedNames.has(provider.name)) {
+          log.warn('skipping custom MCP whose id is unsafe as an object key; delete and recreate it', {
+            serverName: provider.name,
+          });
+        }
+        skippedNames.add(provider.name);
+        continue;
+      }
       if (builtinNames.has(provider.name)) {
         if (!skippedNames.has(provider.name)) {
           log.warn('skipping custom MCP that collides with a builtin server name', {

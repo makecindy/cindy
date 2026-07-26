@@ -1048,6 +1048,14 @@ export class ClaudeCodeAgent extends BaseAgent {
      *
      * 本地 canUseTool 与远端 onApprovalRequest 都走这里 —— 否则同一套 MCP 配置在
      * SSH 会话里又会退回"逐次弹窗 + 没有 forced prompt 保护"的老行为。
+     *
+     * **已知差异(bypassPermissions)**: 该档位下 SDK 直接跳过全部权限检查
+     * (allowDangerouslySkipPermissions, 见 SDK PermissionMode 文档), canUseTool 根本
+     * 不会被调用, 所以这里的 prompt-each-time 拦不住 Full access 会话 —— 那是该档位
+     * 本身的语义("Accepts all permissions"), 不是本函数的兜底范围。Codex 侧的
+     * forcePrompt 因为走自己的 approval 通道, 在 Full access 下仍会弹, 两端在这一档
+     * 上不等价。要抹平得把 Full access 改成"SDK 停在可回调档 + canUseTool 里模拟放行",
+     * 那会动到所有 Full access 会话的执行路径, 需要实机验证后单独做。
      */
     const classifyMcpApprovalPolicy = (
       toolName: string,

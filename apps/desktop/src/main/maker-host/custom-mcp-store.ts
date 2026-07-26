@@ -34,6 +34,16 @@ export const CUSTOM_MCP_ID_RE = /^[a-z0-9_-]+$/;
  * 兜底，这里从源头再拒一次，避免这种 id 流进任何按 key 建表的下游。
  */
 const UNSAFE_OBJECT_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * 该 id 是否不适合当对象 key。
+ *
+ * 校验是**新加的**，旧版本存下来的行不会被重新校验：启动刷新直接读库建 provider。
+ * 装配层因此要能自己识别并隔离这类历史行，共用这一个判定，避免两处名单漂移。
+ */
+export function isUnsafeMcpServerId(id: string): boolean {
+  return UNSAFE_OBJECT_KEYS.has(id);
+}
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
 
