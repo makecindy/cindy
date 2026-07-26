@@ -12,8 +12,12 @@
 //
 // 版本事实源:同目录 source.properties 的 Pkg.Revision。
 // generate-third-party-notices.mjs 读的是同一个文件(readAndroidPlatformToolsVersion),
-// 所以许可清单里的版本号不会和实际打进包的二进制漂移。升级版本时改 source.properties
-// 并同步更新下面的 sha256(可用 `--print-hashes` 现算)。
+// 所以许可清单里的版本号不会和实际打进包的二进制漂移。
+//
+// 升级版本时三处必须一起改:source.properties 的 Pkg.Revision、PINNED[key].version、
+// PINNED[key].files 的 sha256(把新版三个文件放好后用 `--print-hashes` 现算)。漏改任
+// 一处都会 fail-closed,不会静默打包错版本 —— 漏改 version 被 verifyInstalled 的版本
+// 绑定挡下(报 version mismatch),漏改 sha256 则在下载解压后的校验里失败。
 //
 // 非 Windows 平台不在本脚本职责内:forge 的 stageAndroidPlatformTools 对非 win32
 // 缺失即跳过,运行时由 src/main/mcp-integrations/android.ts 按需下载到 userData。
