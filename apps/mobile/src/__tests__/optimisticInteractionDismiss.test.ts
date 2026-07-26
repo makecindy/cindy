@@ -201,6 +201,20 @@ describe('optimistic interaction dismiss', () => {
     expect(remoteSessionStore.getPendingInteractions('s2').map((i) => i.request.title)).toEqual(['updated']);
   });
 
+  it('非法 revision(负数 / 小数)不参与新旧比较,也不能登记下限', () => {
+    // 被控端契约是非负整数;非法值按「没有 revision」处理,不得覆盖已有的合法版本。
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 4));
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', -1));
+    remoteSessionStore.applyInteractionRequest('s1', pluginSetup('setup-1', 2.5));
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([4]);
+
+    // 非法值也不能登记下限,否则会凭一个无效数字把后续合法快照挡掉。
+    remoteSessionStore.markInteractionRevisionResolved('s1', 'setup-1', -1);
+    remoteSessionStore.markInteractionRevisionResolved('s1', 'setup-1', 2.5);
+    remoteSessionStore.setPendingInteractions('s1', [pluginSetup('setup-1', 4)]);
+    expect(remoteSessionStore.getPendingInteractions('s1').map((i) => i.request.revision)).toEqual([4]);
+  });
+
   it('抑制按 (sessionId, requestId) 隔离:不影响其它会话的同名 request', () => {
     remoteSessionStore.setPendingInteractions('s1', [interaction('r1')]);
     remoteSessionStore.beginOptimisticInteractionDismiss('s1', 'r1');

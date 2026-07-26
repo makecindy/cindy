@@ -141,16 +141,27 @@ export function InteractionPanel({
     `interaction.kinds.${kind}.${field}`,
     { defaultValue: t(`interaction.kinds.fallback.${field}`) },
   );
-  const localizeQueueItem = <T extends { kind: string }>(item: T): T => ({
+  // positionLabel 同样是中文直出,且会被插进队列切换的 accessibility 文案 —— 不翻的话
+  // VoiceOver / TalkBack 在 en / ja / ko 下会念出混语(#530 review)。
+  const localizedPositionLabel = (index: number) => {
+    if (index === 0) return t('interaction.panel.queuePositionCurrent');
+    if (index === 1) return t('interaction.panel.queuePositionNext');
+    return t('interaction.panel.queuePositionNth', { index: index + 1 });
+  };
+  const localizeQueueItem = <T extends { kind: string; positionLabel: string }>(item: T, index: number): T => ({
     ...item,
     label: localizedKindText(item.kind, 'label'),
+    positionLabel: localizedPositionLabel(index),
     title: localizedKindText(item.kind, 'title'),
   });
+  const selectedQueueIndex = queuePresentation.items.findIndex((item) => item.requestId === activeRequestIdForPresentation);
   const activeQueuePresentation = {
     ...queuePresentation,
-    active: selectedQueueItem ? localizeQueueItem(selectedQueueItem) : selectedQueueItem,
-    items: queuePresentation.items.map((item) => ({
-      ...localizeQueueItem(item),
+    active: selectedQueueItem
+      ? localizeQueueItem(selectedQueueItem, selectedQueueIndex >= 0 ? selectedQueueIndex : 0)
+      : selectedQueueItem,
+    items: queuePresentation.items.map((item, index) => ({
+      ...localizeQueueItem(item, index),
       active: item.requestId === activeRequestIdForPresentation,
     })),
     title: selectedQueueItem

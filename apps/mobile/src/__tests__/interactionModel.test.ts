@@ -243,6 +243,10 @@ describe('interactionModel', () => {
     // 队列头在 en / ja / ko 下仍是中文。
     expect(interactionPanelSource).toContain('interaction.kinds.${kind}.${field}');
     expect(interactionPanelSource).not.toContain('title: selectedQueueItem?.title');
+    // positionLabel 会被插进队列切换的 accessibility 文案,同样必须翻译,
+    // 否则读屏在非中文 locale 下念混语。
+    expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionCurrent')");
+    expect(interactionPanelSource).toContain("t('interaction.panel.queuePositionNth', { index: index + 1 })");
 
     for (const lang of ['zh-CN', 'en', 'ja', 'ko']) {
       const bundle = JSON.parse(readFileSync(resolve(process.cwd(), `src/i18n/locales/${lang}/interaction.json`), 'utf8'));
@@ -250,6 +254,10 @@ describe('interactionModel', () => {
         expect(bundle.kinds?.[kind]?.title, `${lang}/${kind}.title`).toBeTruthy();
         expect(bundle.kinds?.[kind]?.label, `${lang}/${kind}.label`).toBeTruthy();
       }
+      for (const key of ['queuePositionCurrent', 'queuePositionNext', 'queuePositionNth']) {
+        expect(bundle.panel?.[key], `${lang}/panel.${key}`).toBeTruthy();
+      }
+      expect(bundle.panel?.queuePositionNth, `${lang}/panel.queuePositionNth`).toContain('{{index}}');
     }
   });
 

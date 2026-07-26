@@ -123,9 +123,14 @@ function interactionResolveKey(sessionId: string, requestId: string): string {
  */
 const interactionRevisionFloors = new Map<string, number>();
 
+/**
+ * 合法的交互 revision:非负整数,与被控端对 `expectedRevision` 的要求一致
+ * (parseGhostSetupInteractionCommand)。负数 / 小数不参与新旧比较与抑制判定,
+ * 免得非法快照混进 revision 语义里(#530 review)。
+ */
 function interactionRevision(item: PendingInteraction): number | null {
   const revision = item.request.revision;
-  return typeof revision === 'number' && Number.isFinite(revision) ? revision : null;
+  return typeof revision === 'number' && Number.isInteger(revision) && revision >= 0 ? revision : null;
 }
 
 /**
@@ -1556,7 +1561,8 @@ export const remoteSessionStore = {
    * interactionRevisionFloors。
    */
   markInteractionRevisionResolved(sessionId: string, requestId: string, revision: number): void {
-    if (!requestId || !Number.isInteger(revision)) return;
+    // 同 interactionRevision:只接受非负整数,与被控端 expectedRevision 契约一致。
+    if (!requestId || !Number.isInteger(revision) || revision < 0) return;
     const key = interactionResolveKey(sessionId, requestId);
     const floor = revision + 1;
     const current = interactionRevisionFloors.get(key);
