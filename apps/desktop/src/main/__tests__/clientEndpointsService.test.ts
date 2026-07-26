@@ -331,6 +331,28 @@ describe('弹框前的自动重试(mac 首装瞬时失败自愈)', () => {
     expect(promptRetry.mock.calls[0][0]).not.toMatch(/^fetch-failed/);
     expect(result).toBeNull();
   });
+
+  it('missing-manifest-base-url(打包配置事故)不消耗重试预算,立刻弹框', async () => {
+    const fetchManifest = vi.fn<BlockingResolveDeps['fetchManifest']>().mockResolvedValue({
+      ok: false,
+      detail: 'missing-manifest-base-url',
+    });
+    const promptRetry = vi.fn().mockReturnValue('exit');
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const result = await resolveClientEndpointsBlocking({
+      fetchManifest,
+      promptRetry,
+      exitApp: vi.fn(),
+      autoRetryDelaysMs: [10, 20],
+      sleep,
+    });
+
+    expect(fetchManifest).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(promptRetry).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
 });
 
 describe('getter / IPC', () => {

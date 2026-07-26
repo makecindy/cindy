@@ -288,6 +288,23 @@ describe('runStartupEndpointResolve(CDN 解析)', () => {
       expect(fetchManifest).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
     });
+
+    it('missing-manifest-base-url(打包配置事故)不消耗重试预算', async () => {
+      const { startup } = await freshModules();
+      const fetchManifest = vi.fn<FetchManifest>()
+        .mockResolvedValue({ ok: false, detail: 'missing-manifest-base-url' });
+      const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+      const outcome = await startup.runStartupEndpointResolve({
+        fetchManifest,
+        autoRetryDelaysMs: [10, 20],
+        sleep,
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: 'fetch-failed:missing-manifest-base-url' });
+      expect(fetchManifest).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
   });
 
   it('自建变体(IS_OTA_SELFHOST=1):mobileUpdateBaseUrl 只能在 CDN 清单校验通过后生效', async () => {

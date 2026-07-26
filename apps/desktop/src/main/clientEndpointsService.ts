@@ -255,6 +255,8 @@ export async function resolveClientEndpointsBlocking(
       }
 
       reason = fetchFailedReason(fetched.detail);
+      // 构建/打包配置事故(基址为空)重试不会改变结果,立即跳出。
+      if (fetched.detail === 'missing-manifest-base-url') break;
       const delay = retryDelays[attempt];
       if (delay === undefined) break; // 预算用尽 → 阻断弹框
       log.warn(

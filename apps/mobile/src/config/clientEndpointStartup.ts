@@ -124,6 +124,8 @@ async function fetchManifestWithRetry(args: {
       fetched = { ok: false, detail: describeFetchFailure(err) };
     }
     if (fetched.ok) return fetched;
+    // 构建/打包配置事故(基址为空)重试不会改变结果,立即退出。
+    if (fetched.detail === 'missing-manifest-base-url') return fetched;
     const delay = args.retryDelays[attempt];
     if (delay === undefined) return fetched; // 预算用尽 → 交调用方阻断
     await args.sleep(delay);
