@@ -153,10 +153,14 @@ function stripHtmlTags(text: string): string {
       continue;
     }
     if (afterName === 0x3c /* < */) {
-      // Nested fragment (e.g. <scr<x>ipt>) — strip to first '>' to
-      // prevent reassembly after inner tags are removed
+      // Nested fragment (e.g. <scr<x>ipt>) — strip to first '>'
       while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
-      if (j >= len) { out += '<'; i += 1; continue; }
+      if (j >= len) {
+        // No '>' in the remainder — emit rest literally (avoids O(n²) rescan)
+        out += text.slice(i);
+        i = len;
+        continue;
+      }
       i = j + 1;
       continue;
     }
@@ -177,10 +181,14 @@ function stripHtmlTags(text: string): string {
       while (j < len && text.charCodeAt(j) !== 0x3e && text.charCodeAt(j) !== 0x3c) j += 1;
       if (j < len && text.charCodeAt(j) === 0x3e) {
         i = j + 1;
+      } else if (j >= len) {
+        // End-of-string — no closing '>', emit rest literally (avoids O(n²))
+        out += text.slice(i);
+        i = len;
       } else {
-        // Hit another '<' or end-of-string — not a complete tag
-        out += '<';
-        i += 1;
+        // Hit another '<' — malformed/nested tag, skip the outer '<' to
+        // prevent reassembly (e.g. "<div <script>" → strip "<div ")
+        i = j;
       }
       continue;
     }

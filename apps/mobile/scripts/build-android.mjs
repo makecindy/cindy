@@ -306,7 +306,7 @@ async function main() {
 const _secretScrubRe = (() => {
   const pats = [];
   for (const [name, value] of Object.entries(process.env)) {
-    if (!value || value.length < 6) continue;
+    if (!value || value.length < 6 || value.length > 512 || value.includes("\n")) continue;
     if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
       pats.push(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     }
