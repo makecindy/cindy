@@ -163,19 +163,34 @@ function hostOf(url: string): string {
 }
 
 /**
- * 用户可见错误只带最必要的判因线索:cause 链上第一个 errno(ETIMEDOUT /
- * ECONNREFUSED / 证书类),够反馈截图判因,又不把 host、地址族、完整链路
- * 抖到控制端界面上——那些只进主进程日志。
+ * 用户可见错误只带最必要的判因线索:第一个 errno(ETIMEDOUT / ECONNREFUSED /
+ * 证书类),够反馈截图判因,又不把 host、地址族、完整链路抖到控制端界面上
+ * ——那些只进主进程日志。
+ *
+ * 必须同时下探 `AggregateError.errors`:undici 开着 happy-eyeballs,每个地址族
+ * 的真实 errno 恰恰只存在于聚合分支里,只走 cause 链会在最典型的场景下什么码
+ * 都拿不到。
  */
 function failureHint(err: unknown): string {
-  for (let cur: unknown = err, depth = 0; cur instanceof Error && depth <= 4; depth += 1) {
+  const seen = new Set<unknown>();
+  const visit = (cur: unknown, depth: number): string | null => {
+    if (!(cur instanceof Error) || depth > 4 || seen.has(cur)) return null;
+    seen.add(cur);
     const code = (cur as NodeJS.ErrnoException).code;
     if (typeof code === 'string' && code) return code;
     // Chromium 侧不带 errno,可判因的码在 message 里(net::ERR_PROXY_CONNECTION_FAILED 等)。
     const chromiumCode = /net::ERR_[A-Z0-9_]+/.exec(cur.message);
     if (chromiumCode) return chromiumCode[0];
-    cur = cur.cause;
-  }
+    if (cur instanceof AggregateError) {
+      for (const inner of cur.errors) {
+        const hit = visit(inner, depth + 1);
+        if (hit) return hit;
+      }
+    }
+    return visit(cur.cause, depth + 1);
+  };
+  const hit = visit(err, 0);
+  if (hit) return hit;
   if (err instanceof Error) return err.name === 'TypeError' ? 'NETWORK_ERROR' : err.name;
   return 'UNKNOWN';
 }

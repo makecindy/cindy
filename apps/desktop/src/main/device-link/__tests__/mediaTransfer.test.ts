@@ -251,6 +251,24 @@ describe('putBytesToOss — 传输栈回退', () => {
     expect(message).not.toContain('AK-TEST');
   });
 
+  it('happy-eyeballs 的 AggregateError → 可见串仍给出地址族的真实 errno', async () => {
+    // undici 开着 autoSelectFamily 时,每个地址族的 errno 只存在于聚合分支里,
+    // 只沿 cause 链找会退化成一句没信息量的 NETWORK_ERROR。
+    const undiciErr = new TypeError('fetch failed');
+    undiciErr.cause = new AggregateError([
+      Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:443'), { code: 'ECONNREFUSED' }),
+      Object.assign(new Error('connect ETIMEDOUT [::1]:443'), { code: 'ETIMEDOUT' }),
+    ]);
+    undiciFetchMock.mockRejectedValue(undiciErr);
+    netFetchMock.mockRejectedValue(new TypeError('net::ERR_PROXY_CONNECTION_FAILED'));
+
+    const message = await uploadLocalFile('/tmp/a.png').catch((err: Error) => err.message);
+
+    expect(message).toContain('ECONNREFUSED');
+    expect(message).not.toContain('NETWORK_ERROR');
+    expect(message).not.toContain('10.0.0.1');
+  });
+
   it('换栈成功后按 host 记住,下一次直接走 Electron net,不再白等 undici 超时', async () => {
     undiciFetchMock.mockRejectedValue(new TypeError('fetch failed'));
     netFetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
