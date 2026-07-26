@@ -90,9 +90,25 @@ export interface SessionOperationLayoutInput {
 /** 待处理卡放哪:接管输入框 / 贴在输入框上方 / 不显示。 */
 export type SessionPendingInteractionPlacement = 'composer' | 'above-composer' | 'none';
 
+/**
+ * 禁发理由的来源标识,locale 无关。
+ *
+ * `session-syncing` / `pending-interaction` 两条文案由本模型自己造(中文默认值),
+ * 控制端要按 locale 翻译后再展示 —— 它会经 composer 与队列行的 accessibility
+ * hint 读给用户,直出中文会让读屏在 en / ja / ko 下念混语(#530 review)。
+ * `caller-provided` 表示理由是调用方传进来的(remoteUnavailableReason /
+ * readOnlyReason),已由调用方负责本地化,原样展示即可。
+ */
+export type SessionComposerDisabledReasonSource =
+  | 'session-syncing'
+  | 'pending-interaction'
+  | 'caller-provided';
+
 export interface SessionOperationLayout {
   canUseComposer: boolean;
   composerDisabledReason: string | null;
+  /** 上面那条理由的来源;null 表示没有禁发理由。 */
+  composerDisabledReasonSource: SessionComposerDisabledReasonSource | null;
   composerSlot: SessionComposerSlot;
   messageHistoryMode: SessionMessageHistoryMode;
   pendingInteractionPlacement: SessionPendingInteractionPlacement;
@@ -239,6 +255,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     return {
       canUseComposer: false,
       composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
       pendingInteractionPlacement: 'none',
@@ -251,6 +268,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     return {
       canUseComposer: false,
       composerDisabledReason: input.remoteUnavailableReason,
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'editable',
       messageHistoryMode: 'visible',
       pendingInteractionPlacement: 'none',
@@ -264,6 +282,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     return {
       canUseComposer: false,
       composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
+      composerDisabledReasonSource: 'pending-interaction',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
       pendingInteractionPlacement: 'composer',
@@ -282,6 +301,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
     return {
       canUseComposer: false,
       composerDisabledReason: input.readOnlyReason,
+      composerDisabledReasonSource: 'caller-provided',
       composerSlot: 'read-only',
       messageHistoryMode: 'visible',
       pendingInteractionPlacement: placement,
@@ -293,6 +313,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
   return {
     canUseComposer: true,
     composerDisabledReason: null,
+    composerDisabledReasonSource: null,
     composerSlot: 'editable',
     messageHistoryMode: 'visible',
     pendingInteractionPlacement: placement,

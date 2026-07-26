@@ -26,6 +26,7 @@
   },
   "screen": {
     "composerSyncing": "セッションデータを同期中です。完了すると送信できます。",
+    "composerSessionNotSynced": "この会話はまだ同期が完了していません。",
     "composerCreating": "セッションを作成中です。最初のメッセージ送信後に続けて送信できます。",
     "nextAgentSwitch": "次から {{agent}} · {{model}} に切り替え",
     "createFailedTitle": "セッションの作成に失敗しました",

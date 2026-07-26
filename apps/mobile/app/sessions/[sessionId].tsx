@@ -435,7 +435,7 @@ import {
   canUseLocalCodexRateLimitControl,
   shouldFallbackToLegacyCodexUsage,
 } from '@/session/sessionControls';
-import { buildSessionOperationLayout } from '@/session/sessionOperationLayout';
+import { buildSessionOperationLayout, composerDisabledReasonI18nKey } from '@/session/sessionOperationLayout';
 import {
   summarizeSessionOverview,
   type SessionActionStripActionId,
@@ -1326,11 +1326,21 @@ export default function SessionScreen() {
     }
   }, [activePendingKind, activePendingRequestId, sessionOperationLayout.composerSlot]);
   const canUseComposer = sessionOperationLayout.canUseComposer;
+  // 共享模型自造的那两条禁发理由是中文直出,而它会经 composer 与队列行的
+  // accessibility hint 读给用户 —— 按 locale 翻译后再用,否则读屏在 en / ja / ko
+  // 下念混语(#530 review)。调用方自己传进去的理由(离线 / 只读 / 同步中)已本地化,
+  // 此时 key 为 null,原样使用。
+  const composerDisabledReasonKey = composerDisabledReasonI18nKey(
+    sessionOperationLayout.composerDisabledReasonSource,
+  );
+  const composerDisabledReason = composerDisabledReasonKey
+    ? t(composerDisabledReasonKey)
+    : sessionOperationLayout.composerDisabledReason;
   // inline 队列操作可用性:旧队列弹层由 showQueue 整体隐藏(离线/被撤销、pending
   // interaction 等),inline 化后气泡必须留在消息流里,故改为保留渲染、按同一规则
   // 禁用操作(取消/编辑/插话/重试/恢复),禁用理由沿用 composerDisabledReason。
   const queueInlineReadOnlyReason = collaborationReadOnlyReason
-    ?? (sessionOperationLayout.showQueue ? null : sessionOperationLayout.composerDisabledReason);
+    ?? (sessionOperationLayout.showQueue ? null : composerDisabledReason);
   const showMessageHistory = sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
   // 冷开即出壳:session 元信息还没回来,但不是真正不可用(离线/被撤销,看 remoteUnavailableReason)——
@@ -1554,7 +1564,7 @@ export default function SessionScreen() {
       ? t('session.screen.nextAgentSwitch', { agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind), model: composerRuntimeSummary.modelSummary })
       : composerRuntimeSummary.modelSummary
     : '';
-  const composerSendUnavailableReason = canUseComposer ? null : sessionOperationLayout.composerDisabledReason;
+  const composerSendUnavailableReason = canUseComposer ? null : composerDisabledReason;
   // 引用已是 ComposerDocument 内的 atom；排队编辑同样可能只有引用而没有可见
   // 文本，因此必须计入 payload，否则「保存修改」会被错误禁用。
   const composerQuoteCount = composerDocumentQuotes(composerDocument).length;
@@ -6959,7 +6969,7 @@ export default function SessionScreen() {
             <View style={styles.readOnlyComposer} testID="session.collaborationReadOnlyComposer">
               <Text style={styles.collaborationTitle}>{t('session.screen.readOnlyMode')}</Text>
               <Text style={styles.collaborationText}>
-                {sessionOperationLayout.composerDisabledReason}
+                {composerDisabledReason}
               </Text>
             </View>
           ) : (

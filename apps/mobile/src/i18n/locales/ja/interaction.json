@@ -34,6 +34,7 @@
     "queuePositionCurrent": "現在",
     "queuePositionNext": "次",
     "queuePositionNth": "{{index}} 番目",
+    "composerBlockedByPending": "パソコンからの保留中のリクエストを処理してから入力を続けてください。",
     "missingRequestId": "このリモート操作には requestId がないため、決定を返信できません。",
     "issueConfirmUnsupported": "Issue の送信確認はパソコンでのみ行えます。デスクトップアプリに戻って確認またはキャンセルしてください。",
     "unsupportedType": "このリモート操作タイプはモバイルではまだ対応していません。",

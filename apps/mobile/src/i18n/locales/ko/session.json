@@ -26,6 +26,7 @@
   },
   "screen": {
     "composerSyncing": "세션 데이터를 동기화 중입니다. 완료되면 보낼 수 있습니다.",
+    "composerSessionNotSynced": "이 대화는 아직 동기화가 끝나지 않았습니다.",
     "composerCreating": "세션을 만드는 중입니다. 첫 메시지가 전송되면 계속 보낼 수 있습니다.",
     "nextAgentSwitch": "다음부터 {{agent}} · {{model}}(으)로 전환",
     "createFailedTitle": "세션 생성 실패",
