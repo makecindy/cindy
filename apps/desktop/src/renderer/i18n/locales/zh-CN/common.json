@@ -2097,6 +2097,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "模型",
+        "effortLabel": "推理强度",
         "permissionLabel": "权限模式",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
