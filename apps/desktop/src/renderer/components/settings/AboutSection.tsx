@@ -36,7 +36,7 @@ const DESKTOP_SOCIAL_LINKS = [
     id: 'discord',
     labelKey: 'settings.about.social.discordLabel',
     descriptionKey: 'settings.about.social.discordDescription',
-    url: 'https://discord.gg/UxHPUGXdd',
+    url: 'https://discord.gg/V4yKguac7K',
   },
   {
     id: 'x',
