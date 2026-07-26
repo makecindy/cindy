@@ -5753,7 +5753,8 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
   }
   const input = raw as Record<string, unknown>;
   const patch: SubagentModelSettingsPatch = {};
-  for (const key of ['claudeCode', 'codex'] as const) {
+  // providerId 与 model id 同约束(短标识串),共用同一套校验/归一化。
+  for (const key of ['claudeCode', 'claudeCodeProviderId', 'codex', 'codexProviderId'] as const) {
     if (!(key in input)) continue;
     const value = input[key];
     if (!isValidSubagentModelIdInput(value)) {

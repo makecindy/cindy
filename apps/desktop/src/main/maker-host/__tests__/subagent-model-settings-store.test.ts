@@ -47,7 +47,9 @@ describe('subagent model settings store', () => {
   it('defaults both agents to no override', () => {
     expect(readSubagentModelSettings()).toEqual({
       claudeCode: null,
+      claudeCodeProviderId: null,
       codex: null,
+      codexProviderId: null,
     });
   });
 
@@ -59,7 +61,27 @@ describe('subagent model settings store', () => {
     });
     expect(readSubagentModelSettings()).toEqual({
       claudeCode: 'claude-haiku-4-5-20251001',
+      claudeCodeProviderId: null,
       codex: null,
+      codexProviderId: null,
+    });
+  });
+
+  it('persists (model, providerId) written in one patch', () => {
+    writeSubagentModelSettingsPatch({
+      claudeCode: 'claude-opus-5',
+      claudeCodeProviderId: 'anthropic',
+    });
+
+    expect(JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))).toEqual({
+      claudeCode: 'claude-opus-5',
+      claudeCodeProviderId: 'anthropic',
+    });
+    expect(readSubagentModelSettings()).toEqual({
+      claudeCode: 'claude-opus-5',
+      claudeCodeProviderId: 'anthropic',
+      codex: null,
+      codexProviderId: null,
     });
   });
 
@@ -71,15 +93,35 @@ describe('subagent model settings store', () => {
     expect(readSubagentModelSettings().claudeCode).toBeNull();
   });
 
+  it('clearing the model together with providerId removes the whole override', () => {
+    writeSubagentModelSettingsPatch({
+      claudeCode: 'claude-opus-5',
+      claudeCodeProviderId: 'anthropic',
+    });
+    writeSubagentModelSettingsPatch({ claudeCode: null, claudeCodeProviderId: null });
+
+    expect(fs.existsSync(settingsFile)).toBe(false);
+    expect(readSubagentModelSettings()).toEqual({
+      claudeCode: null,
+      claudeCodeProviderId: null,
+      codex: null,
+      codexProviderId: null,
+    });
+  });
+
   it('normalizes malformed disk values to no override', () => {
     expect(
       __testing.normalize({
         claudeCode: '  claude-sonnet-4-6  ',
+        claudeCodeProviderId: 42,
         codex: 'bad\nmodel',
+        codexProviderId: '  xd  ',
       }),
     ).toEqual({
       claudeCode: 'claude-sonnet-4-6',
+      claudeCodeProviderId: null,
       codex: null,
+      codexProviderId: 'xd',
     });
   });
 });

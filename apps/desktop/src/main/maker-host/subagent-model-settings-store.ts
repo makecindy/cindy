@@ -30,7 +30,9 @@ function normalize(raw: unknown): SubagentModelSettings {
   const input = raw as Record<string, unknown>;
   return {
     claudeCode: normalizeSubagentModelId(input.claudeCode),
+    claudeCodeProviderId: normalizeSubagentModelId(input.claudeCodeProviderId),
     codex: normalizeSubagentModelId(input.codex),
+    codexProviderId: normalizeSubagentModelId(input.codexProviderId),
   };
 }
 

@@ -6,10 +6,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import type { SubagentModelSettingsState } from '../../../shared/subagentModelSettings';
@@ -22,6 +24,7 @@ export function SubagentModelSection() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<SubagentModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
+  const { providers, loading: providersLoading } = useProviders();
 
   useEffect(() => {
     let disposed = false;
@@ -38,13 +41,34 @@ export function SubagentModelSection() {
     };
   }, []);
 
+  // 显式来源只有在「已连接且确实提供该模型」时才落库,否则收窄为 null(跟随默认路由)。
+  // 与 ImDefaultSettingsSection.resolveProviderId 同规则,防止存下「选 A 落 B」的不可能组合。
+  const resolveProviderId = useCallback(
+    (modelId: string, providerId: string | null): string | null => {
+      if (!providerId) return null;
+      // 目录未就绪时不做收窄判断:此刻「找不到来源」是数据没到,不是来源真断了,
+      // 收窄会把已存来源静默清掉。落库值仍会在下次目录就绪后的写入被校验。
+      if (providersLoading) return providerId;
+      const provider = connectedProvidersForAgent(providers, 'claude-code').find(
+        (p) => p.id === providerId,
+      );
+      return provider && providerOffersModel(provider, modelId, 'claude-code')
+        ? providerId
+        : null;
+    },
+    [providers, providersLoading],
+  );
+
+  // (model, providerId) 原子落库:模型与来源是同一次选择的两个维度,分两次写会在
+  // 写入间隙出现「新模型 + 旧来源」的不可能组合被派发读到。清除模型时来源一并清除。
   const setClaudeModel = useCallback(
-    async (model: string | null) => {
+    async (model: string | null, providerId: string | null) => {
       if (!settings || pending) return;
       setPending(true);
       try {
         const next = await window.electronAPI.maker.subagentModelSettingsSet({
           claudeCode: model,
+          claudeCodeProviderId: model === null ? null : resolveProviderId(model, providerId),
         });
         setSettings(next);
       } catch (err) {
@@ -56,7 +80,7 @@ export function SubagentModelSection() {
         setPending(false);
       }
     },
-    [pending, settings, t],
+    [pending, resolveProviderId, settings, t],
   );
 
   const reset = useCallback(async () => {
@@ -98,23 +122,39 @@ export function SubagentModelSection() {
           </div>
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <div className="min-w-0 flex-1">
+              {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择
+                  面板,处处同行为):供应商分段、订阅来源全开,(model, providerId) 原子
+                  落库。仅 effort/Fast 配置列保持关闭(configurationEnabled=false)——
+                  子代理派发通道 CLAUDE_CODE_SUBAGENT_MODEL 只有模型 id,没有 effort/Fast
+                  维度,展示可调项会承诺一个不存在的能力(功能特殊化理由,见 PR 说明)。 */}
               <ModelSelector
                 modelId={settings.claudeCode ?? ''}
                 effort="high"
                 onModelChange={(modelId) => {
-                  void setClaudeModel(modelId);
+                  // 仅换模型:尽量保留当前来源,新模型不属于该来源时由 resolveProviderId 收窄。
+                  void setClaudeModel(modelId, settings.claudeCodeProviderId);
                 }}
                 onEffortChange={() => undefined}
                 vendorKey="cc"
+                currentProviderId={settings.claudeCodeProviderId}
+                onProviderChange={(providerId, modelId) => {
+                  // 分段行原子选择 (来源, 模型);面板未回传模型时沿用已存模型,
+                  // 尚未指定过模型则忽略(来源必须依附于某个模型才有语义)。
+                  const nextModel = modelId ?? settings.claudeCode;
+                  if (nextModel) void setClaudeModel(nextModel, providerId);
+                }}
                 switching={pending}
                 triggerVariant="field"
                 popoverSide="bottom"
                 configurationEnabled={false}
+                // 已存模型不在可见清单(被隐藏/来源断开/下架)时显示裸 id 而非占位符,
+                // 用户能看到自己存的是什么;与 IM workdir 偏好入口同规则。
+                unknownModelLabel={(id) => id}
                 fallbackOption={{
                   active: settings.claudeCode === null,
                   label: unspecifiedLabel,
                   onSelect: () => {
-                    void setClaudeModel(null);
+                    void setClaudeModel(null, null);
                   },
                 }}
               />
