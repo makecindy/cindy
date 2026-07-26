@@ -113,6 +113,11 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         data-testid="edit-active-effort"
         onClick={() => props.onEffortChange('low')}
       />
+      <button
+        type="button"
+        data-testid="pick-xd-row-bare"
+        onClick={() => props.onProviderChange?.('xd', 'gpt-5.5')}
+      />
     </div>
   ),
 }));
@@ -610,6 +615,53 @@ describe('CreateWorkerPopover', () => {
     fireEvent.click(await screen.findByTestId('edit-active-effort'));
     await waitFor(() =>
       expect(getProviderModelEffort('codex', 'openai', 'codex/gpt-5.5')).toBe('low'),
+    );
+  });
+
+  it('restores the target row preset when switching sources that share the same model', async () => {
+    // 同一模型在 openai(当前生效)与 xd 都有:点 xd 行是真实来源切换,必须恢复
+    // xd 行显示的预设,不能因「模型相同」被当成钉当前来源而保留 live 值(codex review)。
+    setProviderModelChoice('codex', 'xd', 'gpt-5.5', 'low');
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd', effort: 'low' }),
+      ),
     );
   });
 });

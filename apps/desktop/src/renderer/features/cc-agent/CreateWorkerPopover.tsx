@@ -307,12 +307,16 @@ export function CreateWorkerPopover({
     (providerId: string | null, modelId?: string, reconciledEffort?: Effort) => {
       const nextModel = modelId ?? model;
       const narrowed = narrowProviderSource(providerId, nextModel);
+      // 「钉/重选当前生效来源」与「切到恰好提供同一模型的另一来源」必须区分
+      // (codex review):前者保留表单 live 值(仅把生效来源钉成显式);后者是真实
+      // 来源切换,要恢复目标行显示的预设。判据 = 目标来源是否就是切换前的生效来源
+      // (显式值,未显式时为解析出的默认来源),不能只看模型是否相同。
+      const effectiveBefore = deviceId
+        ? null
+        : providerSource ?? effectiveSourceIdForModel(providers, null, model, agent);
       setProviderSource(narrowed);
-      // 钉来源(reselect 当前模型行 / 未回传模型)不是换模型:保留表单当前
-      // effort/Fast,不按全局预设重载 —— 否则仅仅钉个来源就静默改配置
-      // (codex review)。来源导致的 Fast 能力收窄由 currentModelSupportsFast
-      // 联动 effect 兜底。
-      if (!modelId || modelId === model) return;
+      if (!modelId) return;
+      if (modelId === model && narrowed !== null && narrowed === effectiveBefore) return;
       setModel(modelId);
       const available = activeModels.find((m) => m.id === modelId);
       if (!available) return;
@@ -335,7 +339,17 @@ export function CreateWorkerPopover({
         setFast(rememberedFast === true);
       }
     },
-    [activeModels, agent, effort, model, narrowProviderSource, providerFastSupported],
+    [
+      activeModels,
+      agent,
+      deviceId,
+      effort,
+      model,
+      narrowProviderSource,
+      providerFastSupported,
+      providerSource,
+      providers,
+    ],
   );
 
   // 活跃行的 effort/Fast 编辑走 onEffortChange/onFastModeChange 而非 modelMemory
