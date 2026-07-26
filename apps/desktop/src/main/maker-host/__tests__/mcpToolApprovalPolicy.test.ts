@@ -33,6 +33,26 @@ describe('desktop Claude read-only allowlist', () => {
     expect(tools.every((tool) => !tool.endsWith('__call_tool'))).toBe(true);
   });
 
+  // allowedTools 进 SDK options，属于请求前缀的一部分（maker-core-and-agent-behavior.md
+  // §3.1 缓存率）。内容或顺序变化都会打断 prompt cache，所以这里锁死精确顺序，而不是
+  // 只做 arrayContaining 的包含性检查。
+  it('keeps the exact tool list and order stable for prompt-cache prefix', () => {
+    expect(getDesktopClaudeReadOnlyAllowedTools()).toEqual([
+      'mcp__cindy__ghost_list',
+      'mcp__cindy__ghost_forge_guide',
+      'mcp__cindy_browser__list_tools',
+      'mcp__cindy_android__list_tools',
+      'mcp__cindy_computer__list_tools',
+      'mcp__cindy_feishu_bot__list_tools',
+      'mcp__cindy_scheduler__list_tools',
+      'mcp__cindy_ssh__list_tools',
+      'mcp__cindy_helper__list_tools',
+      'mcp__cindy_memory__list_tools',
+      'mcp__cindy_contacts__list_tools',
+      'mcp__cindy_slack__slack_status',
+    ]);
+  });
+
   it('returns an isolated copy', () => {
     const first = getDesktopClaudeReadOnlyAllowedTools();
     first.push('Bash');

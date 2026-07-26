@@ -27,6 +27,13 @@ export type { CustomMcpConfig, McpTransport };
 
 /** MCP id slug 规则（与 safeStorage key 名 `mcp_token_<id>` 合法字符对齐）。 */
 export const CUSTOM_MCP_ID_RE = /^[a-z0-9_-]+$/;
+
+/**
+ * slug 正则允许下划线，于是 `__proto__` / `constructor` 这类名字是合法 id，而 server 名
+ * 会被当作普通对象的 key 使用（agent 侧的 mcpServers map）。装配层已改用 null-prototype
+ * 兜底，这里从源头再拒一次，避免这种 id 流进任何按 key 建表的下游。
+ */
+const UNSAFE_OBJECT_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
 
@@ -56,6 +63,9 @@ export function validateCustomMcpConfig(
   if (typeof c.id !== 'string' || c.id.length === 0) return invalid('id required');
   if (c.id.length > MAX_ID_LEN) return invalid(`id too long (max ${MAX_ID_LEN})`);
   if (!CUSTOM_MCP_ID_RE.test(c.id)) return invalid('id must match /^[a-z0-9_-]+$/');
+  if (UNSAFE_OBJECT_KEYS.has(c.id)) {
+    return invalid(`id '${c.id}' is not allowed`);
+  }
   if (reservedIds.includes(c.id)) {
     return invalid(`id '${c.id}' is reserved by a builtin MCP server; pick another id`);
   }

@@ -883,7 +883,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         sessionId: opts.sessionId,
         getSessionContext: () => context,
       };
-      const out: Record<string, McpServerConfig> = {};
+      // null-prototype: server 名来自用户可控的自定义 MCP id, 而 id 正则允许下划线,
+      // `__proto__` 是合法 id。用普通 `{}` 时 `out['__proto__'] = config` 命中的是原型
+      // 访问器 —— 不产生自有属性(hasOwnProperty / Object.keys 都看不见, 去重与归属判定
+      // 一起失效), 反而把这个 map 的原型换成了 config。null-prototype 让这类名字退化成
+      // 普通字符串键。
+      const out: Record<string, McpServerConfig> = Object.create(null);
       for (const provider of providers) {
         if (provider.name === 'cindy_memory' && (!makerMemoryEnabled || opts.remoteHostId)) continue;
         if (provider.isEnabled && !provider.isEnabled(context)) continue;
@@ -904,7 +909,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       // canUseTool 只认这批真实注册过的 server 名, 不靠 `mcp__` 工具名切分猜归属
       // (见 resolveMcpToolTarget: 自定义 server id 可以含 `__`, 盲切会被冒名顶替)。
       registeredMcpServerNames = new Set(Object.keys(out));
-      return Object.keys(out).length > 0 ? out : undefined;
+      // 交回普通对象: SDK / RPC 序列化路径按普通对象处理(有的实现会调 obj.hasOwnProperty)。
+      // spread 走 CreateDataProperty, 不触发 `__proto__` setter, 所以这一步是安全的。
+      return Object.keys(out).length > 0 ? { ...out } : undefined;
     };
 
     // ── userMessageStream + permission callback 准备 ────────────────────────
@@ -1847,8 +1854,23 @@ export class ClaudeCodeAgent extends BaseAgent {
               };
             }
             // permission kind
+            // 没接 resolver → 与本地 canUseTool 同款 fail-closed: 只放行已知只读工具,
+            // 其余(含未知工具与所有 MCP 工具)一律 deny。这里过去 return allow, 一个
+            // misconfigured / 裸 handle 的远端会话可以在无人在场时跑破坏性工具 ——
+            // 本地那侧不允许的事, 远端没有理由更宽。
             if (!interactionResolver) {
-              return { kind: 'permission', behavior: 'allow' };
+              const remoteTool = params.toolName ?? '';
+              if (isReadOnlyClaudeTool(remoteTool)) {
+                return { kind: 'permission', behavior: 'allow' };
+              }
+              log.warn('cc remote: approval without interactionResolver → fail-closed deny', {
+                tool: remoteTool || 'unknown',
+              });
+              return {
+                kind: 'permission',
+                behavior: 'deny',
+                reason: 'no interaction resolver attached; denying non-read-only tool (fail-closed)',
+              };
             }
             // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
             // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。

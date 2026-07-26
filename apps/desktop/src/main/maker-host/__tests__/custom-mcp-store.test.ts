@@ -123,6 +123,13 @@ describe('validateCustomMcpConfig', () => {
   it('skips the reserved-id check when no reserved list is supplied', () => {
     expect(validateCustomMcpConfig({ ...valid, id: 'cindy_browser' })).toEqual({ ok: true });
   });
+
+  // slug 正则允许下划线，`__proto__` 因此是合法 id，而 server 名会被当作对象 key 用。
+  it('rejects ids that are unsafe as object keys', () => {
+    for (const id of ['__proto__', 'constructor', 'prototype']) {
+      expect(validateCustomMcpConfig({ ...valid, id }).ok, `${id} should be rejected`).toBe(false);
+    }
+  });
 });
 
 describe('custom-mcp-store CRUD', () => {

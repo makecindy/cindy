@@ -463,6 +463,38 @@ describe('a custom server cannot take over a builtin name', () => {
     expect(configs).toEqual([{ name: 'cindy_browser', marker: 'builtin' }]);
     await handle.close();
   });
+
+  it('treats an unsafe object-key server name as an ordinary key', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+
+    const deps = createDeps(() => 'prompt');
+    // 自定义 MCP 的 id 正则允许下划线，`__proto__` 是合法 id。普通 `{}` 作 map 时这个键
+    // 会打到原型访问器上：server 注册不进去、去重看不见它，map 的原型还被换成 config。
+    deps.mcpProviders = [
+      { name: '__proto__', toClaudeSdkConfig: () => ({ type: 'http', marker: 'evil' }) },
+      { name: 'cindy_browser', toClaudeSdkConfig: () => ({ type: 'sdk', marker: 'builtin' }) },
+    ] as McpProvider[];
+
+    const agent = new ClaudeCodeAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'session-proto-mcp',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    // 作为普通自有键存在，且没有污染原型。
+    expect(Object.keys(mcpServers ?? {}).sort()).toEqual(['__proto__', 'cindy_browser']);
+    expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
+    expect(({} as { marker?: string }).marker).toBeUndefined();
+    await handle.close();
+  });
 });
 
 describe('fail-closed still precedes the MCP policy', () => {
@@ -473,6 +505,111 @@ describe('fail-closed still precedes the MCP policy', () => {
 
     // host 策略说的是"值不值得打扰用户"，不代表"没有用户在场也能跑"。
     expect(result.behavior).toBe('deny');
+    await handle.close();
+  });
+});
+
+describe('remote sessions share the same permission semantics', () => {
+  /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
+  async function startRemoteSession(
+    policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
+    options?: { attachResolver?: (req: InteractionRequest) => InteractionDecision },
+  ) {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+
+    let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
+    const deps = createDeps(policy);
+    // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
+    deps.mcpProviders = [
+      { name: 'cindy_browser', toClaudeSdkConfig: () => ({ type: 'http', url: 'https://x/mcp' }) },
+      { name: 'cindy_contacts', toClaudeSdkConfig: () => ({ type: 'http', url: 'https://y/mcp' }) },
+    ] as McpProvider[];
+    deps.remoteCcQueryFactory = (async (args: {
+      onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
+    }) => {
+      onApprovalRequest = args.onApprovalRequest;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+
+    const agent = new ClaudeCodeAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-mcp-policy',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+    const seen: InteractionRequest[] = [];
+    if (options?.attachResolver) {
+      handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
+        seen.push(req);
+        return options.attachResolver!(req);
+      });
+    }
+    if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
+    return { handle, onApprovalRequest, seen };
+  }
+
+  it('auto-approves trusted MCP tools without prompting', async () => {
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'auto-approve', {
+      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+    });
+
+    const result = await onApprovalRequest({
+      requestId: 'r-1',
+      kind: 'permission',
+      toolName: 'mcp__cindy_browser__call_tool',
+      input: { name: 'browser', args: { action: 'snapshot' } },
+    });
+
+    expect(result.behavior).toBe('allow');
+    expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('drops session grants for prompt-each-time tools', async () => {
+    const { handle, onApprovalRequest } = await startRemoteSession(() => 'prompt-each-time', {
+      attachResolver: () => ({
+        kind: 'permission',
+        behavior: 'allow',
+        permissionUpdates: [{ type: 'addRules', destination: 'session', behavior: 'allow' }],
+      }),
+    });
+
+    const result = (await onApprovalRequest({
+      requestId: 'r-2',
+      kind: 'permission',
+      toolName: 'mcp__cindy_contacts__call_tool',
+      input: { name: 'contacts_delete' },
+    })) as { behavior?: string; permissionUpdates?: unknown[] };
+
+    expect(result.behavior).toBe('allow');
+    expect(result.permissionUpdates).toBeUndefined();
+    await handle.close();
+  });
+
+  it('fails closed instead of allowing when no resolver is attached', async () => {
+    const { handle, onApprovalRequest } = await startRemoteSession(() => 'prompt');
+
+    // 改动前这里 return allow —— 裸远端会话可以在无人在场时跑破坏性工具。
+    const denied = await onApprovalRequest({
+      requestId: 'r-3',
+      kind: 'permission',
+      toolName: 'Bash',
+      input: { command: 'rm -rf /' },
+    });
+    expect(denied.behavior).toBe('deny');
+
+    // 只读工具仍然放行，与本地 canUseTool 的白名单语义一致。
+    const allowed = await onApprovalRequest({
+      requestId: 'r-4',
+      kind: 'permission',
+      toolName: 'Read',
+      input: { file_path: '/tmp/x' },
+    });
+    expect(allowed.behavior).toBe('allow');
     await handle.close();
   });
 });
