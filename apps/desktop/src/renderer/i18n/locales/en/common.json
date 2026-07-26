@@ -2297,10 +2297,10 @@
           "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
         },
         "securityTitle": "Install and permissions",
-        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. New installs stay disabled until you review permissions and enable them.",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. Plugins are enabled automatically after install and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "installConfirmTitle": "Install “{{name}}”?",
-        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility, then installed disabled. Review its setup and enable it when ready."
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",

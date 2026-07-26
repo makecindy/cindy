@@ -706,8 +706,9 @@ export function GhostPluginPage() {
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId);
       if (!isMarketBusyLeaseActive(marketBusyLease)) return;
+      // 市场首装装完即开(2026-07-26 定案),toast 用"已安装"而非沉睡文案。
       toast.success(
-        t('settings.ghosts.toast.installedAsleep', {
+        t('settings.ghosts.toast.installed', {
           name: result.ghost.manifest.name,
         }),
       );

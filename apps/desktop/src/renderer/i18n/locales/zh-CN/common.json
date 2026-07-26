@@ -2296,10 +2296,10 @@
           "invalidPackage": "该插件包无效，或当前 Cindy 版本不支持它。"
         },
         "securityTitle": "安装与权限",
-        "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。安装后默认不生效，由你确认权限后再开启。",
+        "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。安装完成后即自动开启，可随时在插件页停用。",
         "noPermissions": "此插件未声明额外能力。",
         "installConfirmTitle": "安装「{{name}}」？",
-        "installConfirmDescription": "安装包将经过完整性与清单校验，并以未生效状态安装。你可以在安装后查看配置并手动开启。"
+        "installConfirmDescription": "安装包将经过完整性与清单校验。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。"
       },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",

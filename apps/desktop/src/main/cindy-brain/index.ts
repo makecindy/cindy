@@ -2352,7 +2352,6 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
-    initiallyEnabled?: boolean;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -2381,10 +2380,11 @@ export async function installOrUpdateMarketGhostPackage(
     // mutation.
     releaseMutation = beginGhostMutation(mutationOwner);
     if (!installed) {
-      // defaultInstall 首次装入即启用；手动市场安装仍保持沉睡，等待用户主动开启。
-      return installAndDock(manager, cindyFilePath, {
-        enable: expected.initiallyEnabled === true,
-      });
+      // 2026-07-26 定案:市场首装一律装完即开(defaultInstall 与手动安装归一),
+      // 用户不必再手动点一次开关。市场包走官方分发链路(服务端校验 + sha256
+      // 校验下载),装完即开风险可控;本地 .cindy 文件装入仍保持"装入 ≠ 授权
+      // 运行"的默认沉睡(installAndDock 缺省 false + 确认框勾选)。
+      return installAndDock(manager, cindyFilePath, { enable: true });
     }
 
     const runtime = getGhostRuntime();

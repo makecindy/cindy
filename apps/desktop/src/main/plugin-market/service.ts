@@ -331,7 +331,6 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     options: {
       allowPermissionExpansion?: boolean;
-      initiallyEnabled?: boolean;
     } = {},
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -379,10 +378,11 @@ export class PluginMarketService {
     try {
       await downloadVerifiedPlugin(download.url, download, tempPath);
       requireSameMarketOwner(owner);
+      // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
+      // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
-        initiallyEnabled: options.initiallyEnabled === true,
       });
       // Once the package directory is committed, finish provenance against the
       // owner captured at operation start even if the active session changes.
@@ -526,12 +526,8 @@ export class PluginMarketService {
         await this.withMutation(summary.id, async () => {
           requireSameMarketOwner(owner);
           const detail = await this.api.detail(summary.id);
-          await this.installDetail(
-            detail,
-            { initiallyEnabled: true },
-            owner,
-            ledger,
-          );
+          // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
+          await this.installDetail(detail, {}, owner, ledger);
         });
       } catch (error) {
         // 单个默认插件失败不拖垮整个市场；下次同步可重试。

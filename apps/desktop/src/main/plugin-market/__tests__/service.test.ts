@@ -329,7 +329,6 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: 'cindy-test',
         version: '1.0.0',
-        initiallyEnabled: true,
       },
     );
     expect(snapshot.items[0]).toMatchObject({
@@ -342,12 +341,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
   });
 
-  it('keeps a manual market install disabled by default', async () => {
+  // 2026-07-26 定案:市场首装一律装完即开,手动安装与 defaultInstall 归一,
+  // 不再向装入入口透传 initiallyEnabled(启用语义收敛在市场装入入口本身)。
+  it('manual market install goes through the auto-enable install entry', async () => {
     const item = summary();
     runtime.install.mockResolvedValue({
       manifest: manifest(),
       dir: '/userData/cindy-brain/cindy-test',
-      enabled: false,
+      enabled: true,
     });
     const h = harness([item]);
 
@@ -358,7 +359,6 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: 'cindy-test',
         version: '1.0.0',
-        initiallyEnabled: false,
       },
     );
   });
@@ -388,7 +388,6 @@ describe('PluginMarketService migration and defaultInstall', () => {
       {
         ghostId: item.ghostId,
         version: item.currentRelease.version,
-        initiallyEnabled: true,
       },
     );
     expect(snapshot.items[0]).toMatchObject({
