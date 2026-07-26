@@ -251,10 +251,15 @@ export function useHookWorkspacePrefs(
         if (active) setImDefaults({ agentKind: state.agentKind, agents: state.agents });
       })
       .catch(() => {});
+    // 初次拉取同样受 latest-wins 守卫(Copilot review): 回复未归时若已收到其它
+    // 窗口的写入广播(revision 已前进), 旧快照不得回滚新状态。
+    const initialSourcesRevision = providerSourceRevisionRef.current;
     void window.electronAPI.hookControl
       .getWorkspaceProviderSources()
       .then((res) => {
-        if (active) setProviderSources(res.entries);
+        if (active && providerSourceRevisionRef.current === initialSourcesRevision) {
+          setProviderSources(res.entries);
+        }
       })
       .catch(() => {});
     // 多窗口同步(codex review): 会话副窗也能开设置页, 其它窗口写入时以广播的
