@@ -322,6 +322,24 @@ describe('putBytesToOss — 传输栈回退', () => {
     );
   });
 
+  it('写入记忆时顺手清掉过期条目,长跑进程不会攒下一堆一次性 host', async () => {
+    // 清理原本只在"再次命中同一 host"时发生,多 region / 多 bucket 场景下这张
+    // 表会在 main 进程整个生命周期里只增不减。
+    __testing.electronNetPreferredHosts.set(
+      'stale-1.example',
+      Date.now() - __testing.TRANSPORT_PREFERENCE_TTL_MS - 1,
+    );
+    __testing.electronNetPreferredHosts.set('fresh.example', Date.now());
+    undiciFetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    netFetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
+
+    await uploadLocalFile('/tmp/a.png');
+
+    expect(__testing.electronNetPreferredHosts.has('stale-1.example')).toBe(false);
+    expect(__testing.electronNetPreferredHosts.has('fresh.example')).toBe(true);
+    expect(__testing.electronNetPreferredHosts.has('oss.example')).toBe(true);
+  });
+
   it('记忆过期后回到 undici 主路径', async () => {
     undiciFetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
     __testing.electronNetPreferredHosts.set(

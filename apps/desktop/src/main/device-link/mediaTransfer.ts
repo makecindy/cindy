@@ -232,6 +232,18 @@ const ELECTRON_NET_TRANSPORT: OssPutTransport = {
   impl: (url, init) => net.fetch(url, init),
 };
 
+/**
+ * 记住某 host 要走 Electron 优先。顺手清掉已过期的条目:清理原本只发生在
+ * "再次命中同一 host"时,多 region / 多 bucket 场景下这张表会在 main 进程的
+ * 整个生命周期里只增不减。
+ */
+function rememberElectronNetPreference(host: string, now: number): void {
+  for (const [known, at] of electronNetPreferredHosts) {
+    if (now - at >= TRANSPORT_PREFERENCE_TTL_MS) electronNetPreferredHosts.delete(known);
+  }
+  electronNetPreferredHosts.set(host, now);
+}
+
 function transportOrderFor(host: string): OssPutTransport[] {
   const preferredAt = electronNetPreferredHosts.get(host);
   if (preferredAt !== undefined && Date.now() - preferredAt < TRANSPORT_PREFERENCE_TTL_MS) {
@@ -332,7 +344,7 @@ async function putBytesToOss(
       // 只在"确实是从 undici 失败里救回来"时记时间戳。命中记忆直接成功的不刷新,
       // 否则只要每 30 分钟内传一次文件,TTL 就永远到不了期,undici 再也不被探测。
       if (failures.length > 0) {
-        electronNetPreferredHosts.set(host, Date.now());
+        rememberElectronNetPreference(host, Date.now());
         log.info(`OSS PUT recovered via Electron net host=${host} (undici unusable: ${failures.join('; ')})`);
       }
     } else {
