@@ -502,15 +502,15 @@ export function VoiceInputOverlay() {
     log.warn('global voice input start failed:', message);
     await stopEngine();
     await restoreSystemAudioForRecording();
-    const modelSelection = await window.electronAPI.voiceInput.getModelSelection().catch((selectionError) => {
+    const readiness = await window.electronAPI.voiceInput.getReadiness().catch((readinessError) => {
       log.warn(
-        'read voice input model selection after start failure failed:',
-        selectionError instanceof Error ? selectionError.message : String(selectionError),
+        'read voice input readiness after start failure failed:',
+        readinessError instanceof Error ? readinessError.message : String(readinessError),
       );
       return null;
     });
-    const readinessRecovery = modelSelection && !modelSelection.readiness.ok
-      ? resolveVoiceInputReadinessRecovery(modelSelection.readiness, modelSelection.selection.serviceMode)
+    const readinessRecovery = readiness && !readiness.ok
+      ? resolveVoiceInputReadinessRecovery(readiness, readiness.serviceMode)
       : null;
     if (startAttemptIdRef.current !== failureAttemptId) return;
     const promptReason = authErrorReason ?? message;

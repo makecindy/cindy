@@ -386,6 +386,7 @@ function VoiceInputServiceSourceCard() {
   const [customAsrApiKey, setCustomAsrApiKey] = useState('');
   const [connectionTest, setConnectionTest] = useState<VoiceInputConnectionTestViewState>({ status: 'idle' });
   const connectionTestRequestRef = useRef(0);
+  const customAsrFormDirtyRef = useRef(false);
 
   const localMode = appMode === 'local';
   const serviceMode: VoiceInputServiceModeData = localMode
@@ -393,8 +394,17 @@ function VoiceInputServiceSourceCard() {
     : (selection?.serviceMode ?? 'cindy');
   const byok = serviceMode === 'byok';
   const customAsrSelected = selection?.asrProvider === 'custom-realtime-asr';
+  const customAsrHasUnsavedChanges = customAsrSelected && (
+    !selection?.customAsr
+    || customAsrProtocol !== selection.customAsr.protocol
+    || customAsrWebsocketUrl.trim() !== selection.customAsr.websocketUrl
+    || customAsrModel.trim() !== selection.customAsr.model
+    || Boolean(customAsrApiKey.trim())
+  );
 
   useEffect(() => {
+    if (customAsrSelected && customAsrFormDirtyRef.current) return;
+    customAsrFormDirtyRef.current = false;
     if (!selection?.customAsr) {
       setCustomAsrProtocol('openai-realtime');
       setCustomAsrWebsocketUrl('');
@@ -405,7 +415,8 @@ function VoiceInputServiceSourceCard() {
     setCustomAsrProtocol(selection.customAsr.protocol);
     setCustomAsrWebsocketUrl(selection.customAsr.websocketUrl);
     setCustomAsrModel(selection.customAsr.model);
-  }, [selection?.customAsr]);
+    setCustomAsrApiKey('');
+  }, [customAsrSelected, selection?.customAsr]);
 
   useEffect(() => {
     connectionTestRequestRef.current += 1;
@@ -417,6 +428,10 @@ function VoiceInputServiceSourceCard() {
     selection?.customAsr?.protocol,
     selection?.customAsr?.websocketUrl,
     customAsrApiKeyConfigured,
+    customAsrProtocol,
+    customAsrWebsocketUrl,
+    customAsrModel,
+    customAsrApiKey,
   ]);
 
   const openProvidersTab = useCallback(() => {
@@ -524,13 +539,6 @@ function VoiceInputServiceSourceCard() {
   const customAsrCanSave = customAsrUrlValidationError === null
     && Boolean(customAsrModel.trim())
     && (!customAsrEndpointRequiresNewKey || Boolean(customAsrApiKey.trim()));
-  const customAsrHasUnsavedChanges = customAsrSelected && (
-    !selection?.customAsr
-    || customAsrProtocol !== selection.customAsr.protocol
-    || customAsrWebsocketUrl.trim() !== selection.customAsr.websocketUrl
-    || customAsrModel.trim() !== selection.customAsr.model
-    || Boolean(customAsrApiKey.trim())
-  );
   const credentialRecoveryInVoiceSettings = customAsrSelected
     || readiness?.failureReason === 'codex-realtime-unsupported';
 
@@ -540,7 +548,10 @@ function VoiceInputServiceSourceCard() {
       websocketUrl: customAsrWebsocketUrl,
       model: customAsrModel,
     }, customAsrApiKey);
-    if (saved) setCustomAsrApiKey('');
+    if (saved) {
+      customAsrFormDirtyRef.current = false;
+      setCustomAsrApiKey('');
+    }
   }, [
     customAsrApiKey,
     customAsrModel,
@@ -694,7 +705,10 @@ function VoiceInputServiceSourceCard() {
                       label: t('settings.voiceInput.serviceSource.customAsr.protocol.qwen'),
                     },
                   ]}
-                  onChange={setCustomAsrProtocol}
+                  onChange={(value) => {
+                    customAsrFormDirtyRef.current = true;
+                    setCustomAsrProtocol(value);
+                  }}
                   ariaLabel={t('settings.voiceInput.serviceSource.customAsr.protocol.ariaLabel')}
                 />
               </VoiceInputInlineSettingRow>
@@ -706,7 +720,10 @@ function VoiceInputServiceSourceCard() {
                 <input
                   type="url"
                   value={customAsrWebsocketUrl}
-                  onChange={(event) => setCustomAsrWebsocketUrl(event.target.value)}
+                  onChange={(event) => {
+                    customAsrFormDirtyRef.current = true;
+                    setCustomAsrWebsocketUrl(event.target.value);
+                  }}
                   placeholder={t('settings.voiceInput.serviceSource.customAsr.websocketUrl.placeholder')}
                   maxLength={MAX_CUSTOM_ASR_WEBSOCKET_URL_CHARS}
                   spellCheck={false}
@@ -735,7 +752,10 @@ function VoiceInputServiceSourceCard() {
                 <input
                   type="text"
                   value={customAsrModel}
-                  onChange={(event) => setCustomAsrModel(event.target.value)}
+                  onChange={(event) => {
+                    customAsrFormDirtyRef.current = true;
+                    setCustomAsrModel(event.target.value);
+                  }}
                   placeholder={t('settings.voiceInput.serviceSource.customAsr.model.placeholder')}
                   maxLength={MAX_CUSTOM_ASR_MODEL_CHARS}
                   spellCheck={false}
@@ -760,7 +780,10 @@ function VoiceInputServiceSourceCard() {
                 <input
                   type="password"
                   value={customAsrApiKey}
-                  onChange={(event) => setCustomAsrApiKey(event.target.value)}
+                  onChange={(event) => {
+                    customAsrFormDirtyRef.current = true;
+                    setCustomAsrApiKey(event.target.value);
+                  }}
                   placeholder={t(customAsrEndpointRequiresNewKey
                     ? 'settings.voiceInput.serviceSource.customAsr.apiKey.placeholder'
                     : customAsrApiKeyConfigured

@@ -62,6 +62,8 @@ export class ElevenLabsScribeProvider implements AsrProvider {
   private stableResolvers: Array<(text: string | undefined) => void> = [];
   private recoveryPromise?: Promise<void>;
   private stopRequested = false;
+  private startResolve?: () => void;
+  private startReject?: (error: Error) => void;
 
   constructor(options: ElevenLabsScribeProviderOptions) {
     this.apiKey = options.apiKey;
@@ -121,6 +123,8 @@ export class ElevenLabsScribeProvider implements AsrProvider {
         socket.off('error', onError);
         socket.off('close', onClose);
         socket.off('unexpected-response', onUnexpectedResponse);
+        this.startResolve = undefined;
+        this.startReject = undefined;
       };
       const fail = (error: Error, terminateSocket: boolean): void => {
         if (settled) return;
@@ -146,16 +150,9 @@ export class ElevenLabsScribeProvider implements AsrProvider {
       }, this.connectTimeoutMs);
       const onOpen = (): void => {
         if (settled) return;
-        settled = true;
-        cleanup();
         if (this.stopRequested) {
-          socket.close();
-          reject(new Error('ElevenLabs Scribe connection opened after stop.'));
-          return;
+          fail(new Error('ElevenLabs Scribe connection opened after stop.'), true);
         }
-        this.connected = true;
-        this.callback({ type: 'connected', at: Date.now() });
-        resolve();
       };
       const onError = (error: Error): void => {
         fail(error, false);
@@ -168,6 +165,15 @@ export class ElevenLabsScribeProvider implements AsrProvider {
         const statusCode = response.statusCode ?? 'unknown';
         const statusMessage = response.statusMessage ? ` ${response.statusMessage}` : '';
         fail(new Error(`ElevenLabs Scribe handshake failed: HTTP ${statusCode}${statusMessage}`), true);
+      };
+      this.startResolve = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      this.startReject = (error) => {
+        fail(error, true);
       };
       socket.once('open', onOpen);
       socket.once('error', onError);
@@ -238,6 +244,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
   async stop(): Promise<void> {
     this.stopRequested = true;
     this.connected = false;
+    this.startReject?.(new Error('ElevenLabs Scribe stopped before the session was ready.'));
     this.recoveryPartialPrefix = '';
     this.clearUncommittedAudio();
     this.resolveStableWaiters(undefined);
@@ -354,6 +361,7 @@ export class ElevenLabsScribeProvider implements AsrProvider {
           this.connected = true;
           this.callback({ type: 'connected', at: Date.now() });
         }
+        this.startResolve?.();
         break;
       case 'partial_transcript':
         if (typeof message.text === 'string') {
@@ -380,11 +388,15 @@ export class ElevenLabsScribeProvider implements AsrProvider {
       case 'input_error':
       case 'chunk_size_exceeded':
       case 'transcriber_error':
-        this.callback({
-          type: 'error',
-          message: typeof message.error === 'string' ? message.error : String(message.message_type),
-          at: Date.now(),
-        });
+        {
+          const eventMessage = typeof message.error === 'string' ? message.error : String(message.message_type);
+          this.callback({
+            type: 'error',
+            message: eventMessage,
+            at: Date.now(),
+          });
+          this.startReject?.(new Error(eventMessage));
+        }
         this.resolveStableWaiters(undefined);
         break;
     }
@@ -458,6 +470,8 @@ export class ElevenLabsScribeProvider implements AsrProvider {
     this.recoveryPartialPrefix = '';
     this.lastStable = undefined;
     this.sentAudioMs = 0;
+    this.startResolve = undefined;
+    this.startReject = undefined;
     this.clearUncommittedAudio();
     this.resolveStableWaiters(undefined);
   }

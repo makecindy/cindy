@@ -1275,6 +1275,7 @@ interface ElectronAPI {
     testConnection: () => Promise<VoiceInputConnectionTestResult>;
     getReadiness: () => Promise<{
       ok: boolean;
+      serviceMode: VoiceInputServiceModeData;
       provider:
         | 'custom-realtime-asr'
         | 'elevenlabs-scribe-realtime'
@@ -1293,6 +1294,7 @@ interface ElectronAPI {
     getReadinessCached: () =>
       | {
           ok: boolean;
+          serviceMode: VoiceInputServiceModeData;
           provider:
             | 'custom-realtime-asr'
             | 'elevenlabs-scribe-realtime'

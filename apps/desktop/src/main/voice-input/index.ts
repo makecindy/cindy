@@ -202,6 +202,7 @@ type ActiveVoiceInput = {
 
 type VoiceInputReadiness = {
   ok: boolean;
+  serviceMode: VoiceInputServiceMode;
   provider: VoiceInputProviderKind;
   providerModel: string;
   auth: 'api-key' | 'codex';
@@ -1232,9 +1233,11 @@ function toVoiceInputReadiness(
   provider: VoiceInputProviderKind,
   profile: VoiceInputAsrProfile,
   credential: AsrCredentialReadiness,
+  serviceMode: VoiceInputServiceMode,
 ): VoiceInputReadiness {
   return {
     ok: credential.ok,
+    serviceMode,
     provider,
     providerModel: resolveVoiceInputProviderModel(provider),
     auth: profile.auth,
@@ -1250,14 +1253,20 @@ function toVoiceInputReadiness(
 // new dictation will try first. When nothing on the chain is ready, report
 // the user-selected primary's failure so settings deep-links stay accurate.
 async function getVoiceInputReadiness(): Promise<VoiceInputReadiness> {
+  const serviceMode: VoiceInputServiceMode = isVoiceInputByokMode() ? 'byok' : 'cindy';
   for (const kind of resolveVoiceInputAsrChain()) {
     const profile = getVoiceInputAsrProfile(kind);
     const credential = await getAsrProfileCredentialReadiness(profile);
-    if (credential.ok) return toVoiceInputReadiness(kind, profile, credential);
+    if (credential.ok) return toVoiceInputReadiness(kind, profile, credential, serviceMode);
   }
   const primary = resolveVoiceInputProviderKind();
   const primaryProfile = getVoiceInputAsrProfile(primary);
-  return toVoiceInputReadiness(primary, primaryProfile, await getAsrProfileCredentialReadiness(primaryProfile));
+  return toVoiceInputReadiness(
+    primary,
+    primaryProfile,
+    await getAsrProfileCredentialReadiness(primaryProfile),
+    serviceMode,
+  );
 }
 
 // The startable chain for one dictation session: credential-ready candidates
