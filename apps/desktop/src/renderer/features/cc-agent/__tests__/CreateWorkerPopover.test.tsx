@@ -703,4 +703,109 @@ describe('CreateWorkerPopover', () => {
       ),
     );
   });
+
+  it('keeps live source and effort edits across agent tab switches', async () => {
+    // 切 tab 的恢复读的是 prefs:切走前必须把当前 agent 的 live 编辑快照进内存
+    // prefs,否则「选好来源/改好 effort 还没提交就切了个 tab」会被静默回滚到打开
+    // 弹窗时的旧值(codex review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
+    fireEvent.click(screen.getByTestId('edit-active-effort'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Claude' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').textContent).toContain('claude-opus-4-7'),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('xd'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd', effort: 'low' }),
+      ),
+    );
+  });
+
+  it('falls back to the target row default effort when switching sources without a preset', async () => {
+    // 模型预设槽为空、live effort 来自更早的 workerCreationPrefs(预设 store 之前的
+    // 老数据):此时面板非活跃行显示的是 defaultEffort,切过去必须用它,不能因旧
+    // live 值恰好也被支持而保留 —— 行上显示 high、创建却用 low 是显示与派发不一致
+    // (codex review);与 Fast 的「无预设 = 对齐显示」同规则。(若用户编辑过 effort,
+    // 预设写在 `${agent}:*` 全局槽跨来源共享,remembered 分支已保证与行显示一致。)
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'low', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd', effort: 'high' }),
+      ),
+    );
+  });
 });

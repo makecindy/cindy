@@ -277,14 +277,31 @@ export function CreateWorkerPopover({
   const vendorKey = agent === 'codex' ? 'codex' : 'cc';
   const updateAgent = useCallback(
     (nextAgent: 'claude-code' | 'codex') => {
+      if (nextAgent === agent) return;
+      // 切走前把当前 agent 的 live 编辑(模型/effort/Fast/来源)快照进内存 prefs:
+      // 恢复读的是 prefs,不快照会把「改了还没提交就切了个 tab」的编辑静默回滚到
+      // 打开弹窗时的旧值(codex review)。只更新内存态,localStorage 仍只在提交时
+      // 写 —— 关闭弹窗不持久化未提交编辑,语义不变。
+      const snapshot: WorkerPrefs = {
+        ...prefs,
+        [agent]: {
+          model,
+          effort,
+          fast,
+          // device-link 面板无来源维度(providerSource 恒 null),保留本地记忆原值,
+          // 与提交路径同规则。
+          providerId: deviceId ? prefs[agent].providerId : providerSource,
+        },
+      };
+      setPrefs(snapshot);
       setAgent(nextAgent);
-      const remembered = prefs[nextAgent];
+      const remembered = snapshot[nextAgent];
       setModel(remembered.model);
       setEffort(remembered.effort);
       setFast(remembered.fast);
       setProviderSource(deviceId ? null : remembered.providerId);
     },
-    [deviceId, prefs],
+    [agent, deviceId, effort, fast, model, prefs, providerSource],
   );
 
   const updateModel = useCallback(
@@ -331,7 +348,13 @@ export function CreateWorkerPopover({
         (providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
       if (remembered && available.efforts.includes(remembered)) {
         setEffort(remembered);
-      } else if (available.efforts.length > 0 && !available.efforts.includes(effort)) {
+      } else if (available.efforts.length > 0) {
+        // 该模型无共享预设(如 workerCreationPrefs 早于预设 store 的老数据)时,对齐
+        // 目标行显示的 defaultEffort(非活跃行的 effort 徽标 = 预设 ?? defaultEffort,
+        // 见 ModelSelector 行级 effort 派生):旧 live 值恰好也被目标支持时保留它,
+        // 会让创建参数与行上显示的档位不一致(codex review);与下方 Fast 的
+        // 「无预设 = 对齐显示」同规则。钉/重选当前生效来源已在上方早退,live 值
+        // 不受本分支影响。
         setEffort(available.defaultEffort ?? available.efforts[available.efforts.length - 1]);
       }
       if (!providerFastSupported(narrowed, modelId)) {
@@ -349,7 +372,6 @@ export function CreateWorkerPopover({
       activeModels,
       agent,
       deviceId,
-      effort,
       model,
       narrowProviderSource,
       providerFastSupported,
