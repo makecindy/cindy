@@ -245,8 +245,11 @@ function matchesTarget(pkgJson, target) {
   return (
     matchesPackageConstraint(pkgJson.os, target.os) &&
     matchesPackageConstraint(pkgJson.cpu, target.cpu) &&
-    // libc 只对 linux 有意义，其余平台的 target 不带该轴，交给 matchesPackageConstraint
-    // 按「未声明约束一律放行」处理。
+    // libc 只对 linux 有意义，非 linux 目标可以省略这一轴（desktop-win / desktop-macos
+    // 与移动端的 target 就没带），省略时由 matchesPackageConstraint() 按「未声明约束一律
+    // 放行」处理；SUPPORTED_TARGETS 叉乘出来的 target 则各轴齐全，os 不是 linux 时也带
+    // libc，那种情况下这一轴只会挡掉声明了 libc 约束的包，而声明该约束的包都把 os 限定
+    // 在 linux，早已被上面的 os 轴挡掉。
     matchesPackageConstraint(pkgJson.libc, target.libc)
   );
 }
