@@ -99,6 +99,11 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         data-testid="reselect-current-row"
         onClick={() => props.onProviderChange?.(props.currentProviderId ?? null, undefined)}
       />
+      <button
+        type="button"
+        data-testid="pick-model-flat"
+        onClick={() => props.onModelChange('claude-haiku-4-5')}
+      />
     </div>
   ),
 }));
@@ -245,5 +250,21 @@ describe('SubagentModelSection standard panel contract', () => {
     render(<SubagentModelSection />);
     fireEvent.click(await screen.findByTestId('reselect-current-row'));
     await waitFor(() => expect(settingsSet).not.toHaveBeenCalled());
+  });
+
+  it('keeps the stored provider untouched when only the model changes', async () => {
+    // 换模型路径携带的是已存来源而非新选择:旧目录缓存滞后窗口里做收窄会把
+    // 暂时不可见的有效订阅来源写成 null(真实丢数据,greptile 3/5 blocker);
+    // 保留原值无路由危害(子代理派发只带模型 id),组合失配由断开态可见。
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-opus-5', claudeCodeProviderId: 'stale-cache-provider' }),
+    );
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('pick-model-flat'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
+      claudeCode: 'claude-haiku-4-5',
+      claudeCodeProviderId: 'stale-cache-provider',
+    });
   });
 });

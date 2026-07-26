@@ -43,11 +43,14 @@ export function SubagentModelSection() {
     };
   }, []);
 
-  // 显式来源只有在「已连接且确实提供该模型」时才落库,否则收窄为 null(跟随默认路由)。
-  // 与 ImDefaultSettingsSection.resolveProviderId 同规则,防止存下「选 A 落 B」的不可能组合。
-  // 目录未就绪的写入窗口由选择器 disabled(providersLoading)整体关死 —— 收窄逻辑本身
-  // 不留 loading 例外,否则该窗口内换模型会把「新模型 + 旧来源」的无效组合放行落库
-  // 且事后无自动纠正(greptile review)。
+  // 【仅显式选行路径】来源在「已连接且确实提供该模型」时才落库,否则收窄为 null。
+  // 选行的候选与本收窄读同一份 providers 快照,面板能点到的行必过校验,无误清风险;
+  // 与 ImDefaultSettingsSection.resolveProviderId 同规则。
+  // 换模型(onModelChange)路径**不走本收窄**:它携带的是已存来源而非新选择,旧目录
+  // 缓存刷新窗口(loading=false 但数据滞后)里收窄会把暂时不可见的有效订阅来源写成
+  // null,真实丢数据(greptile 3/5 blocker);而保留原值没有路由危害 —— 子代理派发
+  // 通道只带模型 id,providerId 是纯展示/选择维度,组合失配由 sourceDisconnected
+  // 断开态可见兜底,用户显式重选即可纠正,不属于静默错误。
   const resolveProviderId = useCallback(
     (modelId: string, providerId: string | null): string | null => {
       if (!providerId) return null;
@@ -66,9 +69,9 @@ export function SubagentModelSection() {
   const setClaudeModel = useCallback(
     async (model: string | null, providerId: string | null) => {
       if (!settings || pending) return;
-      // 去重放在收窄之后:reselectEmitsChange 的重选、以及收窄后与存储等值的组合,
-      // 都不产生空写覆盘(copilot review)。
-      const nextProviderId = model === null ? null : resolveProviderId(model, providerId);
+      // providerId 语义由调用方确定:选行路径已按当前目录收窄;换模型路径保留已存
+      // 来源原值(见 resolveProviderId 注)。这里只做同值去重,不再二次收窄。
+      const nextProviderId = model === null ? null : providerId;
       if (model === settings.claudeCode && nextProviderId === settings.claudeCodeProviderId) {
         return;
       }
@@ -152,7 +155,8 @@ export function SubagentModelSection() {
                 modelId={settings.claudeCode ?? ''}
                 effort="high"
                 onModelChange={(modelId) => {
-                  // 仅换模型:尽量保留当前来源,新模型不属于该来源时由 resolveProviderId 收窄。
+                  // 仅换模型:来源维度原值保留,不做收窄(缓存滞后窗口收窄=丢数据;
+                  // 组合失配由 sourceDisconnected 断开态可见,见 resolveProviderId 注)。
                   void setClaudeModel(modelId, settings.claudeCodeProviderId);
                 }}
                 onEffortChange={() => undefined}
@@ -168,9 +172,10 @@ export function SubagentModelSection() {
                 onProviderChange={(providerId, modelId) => {
                   // 分段行原子选择 (来源, 模型);面板未回传模型时沿用已存模型,
                   // 尚未指定过模型则忽略(来源必须依附于某个模型才有语义)。
-                  // 同值去重(含收窄后等值)统一在 setClaudeModel 内处理。
+                  // 显式选择在此收窄;同值去重统一在 setClaudeModel 内处理。
                   const nextModel = modelId ?? settings.claudeCode;
-                  if (nextModel) void setClaudeModel(nextModel, providerId);
+                  if (!nextModel) return;
+                  void setClaudeModel(nextModel, resolveProviderId(nextModel, providerId));
                 }}
                 switching={pending}
                 // 目录未就绪时禁用整行:此窗口内无法判定「来源是否提供该模型」,放行
