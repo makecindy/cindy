@@ -7,12 +7,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import { connectedProvidersForAgent, providerOffersModel, visibleModelUnion } from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { useProviders } from '@/hooks/useProviders';
+import { isModelEnabled } from '@/state/modelVisibilityPrefs';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import type { SubagentModelSettingsState } from '../../../shared/subagentModelSettings';
@@ -126,12 +127,15 @@ export function SubagentModelSection() {
             providerOffersModel(p, settings.claudeCode, 'claude-code')),
       ),
   );
-  // 「连接来源」CTA 只在整个 agent 零已连接来源时接线:面板的 noSource 判定是
-  // per-model 的,已存模型 stale(所有来源都掉了它)但 agent 还有其它来源时,
-  // 接了 CTA 会把 trigger 换成「连接来源」,反而盖掉裸 id + 断开态的诊断显示
-  // (codex review)。零来源时 per-model 判定必然同真,CTA 语义完整。
-  const hasAnyClaudeSource =
-    connectedProvidersForAgent(providers, 'claude-code').length > 0;
+  // 「连接来源」CTA 只在「零可选模型」时接线,判据 = 已连接来源的可见模型并集为空
+  // (与面板列表同口径),而非只看 provider 连接标志 —— 来源连接着但动态模型发现为
+  // 空清单时,面板是零分段的 no-results,同样需要恢复入口(codex review)。反向:
+  // 仍有可选模型而已存模型 stale 时不接线,保留裸 id + 断开态的诊断显示,不被
+  // 「连接来源」标签覆盖(codex review 前轮)。
+  const hasSelectableClaudeModel =
+    visibleModelUnion(providers, 'claude-code', (pid, m) =>
+      isModelEnabled('claude-code', pid, m),
+    ).length > 0;
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -159,7 +163,10 @@ export function SubagentModelSection() {
                   维度,展示可调项会承诺一个不存在的能力(功能特殊化理由,见 PR 说明)。 */}
               <ModelSelector
                 modelId={settings.claudeCode ?? ''}
-                effort="high"
+                // effort 传空串:configurationEnabled=false 只关配置列,trigger 仍会在
+                // effort 命中模型 efforts 时展示档位文案 —— 固定 "high" 会让该行看起来
+                // 有 effort 维度,与「子代理通道无 effort」的事实不符(copilot review)。
+                effort=""
                 onModelChange={(modelId) => {
                   // 仅换模型:来源维度原值保留,不做收窄(缓存滞后窗口收窄=丢数据;
                   // 组合失配由 sourceDisconnected 断开态可见,见 resolveProviderId 注)。
@@ -175,7 +182,7 @@ export function SubagentModelSection() {
                 // 提前接线会与「目录未就绪整行禁用」的交互冲突/闪烁(copilot review);
                 // 有来源时不接线以保留 stale 诊断,见 hasAnyClaudeSource 注。
                 onNavigateToProviders={
-                  providersLoading || hasAnyClaudeSource
+                  providersLoading || hasSelectableClaudeModel
                     ? undefined
                     : () => navigate('/settings?tab=providers')
                 }

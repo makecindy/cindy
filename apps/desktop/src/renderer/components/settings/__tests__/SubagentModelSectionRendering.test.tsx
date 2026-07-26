@@ -33,7 +33,11 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 // 已连接 anthropic(提供 claude-opus-5 / claude-haiku-4-5);ghost-provider 不存在。
-const providersMock = vi.hoisted(() => ({ loading: false }));
+const providersMock = vi.hoisted(() => ({
+  loading: false,
+  // 可按用例清空:provider 连接着但动态模型发现为空清单的场景。
+  claudeModels: [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }] as Array<{ id: string }>,
+}));
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
     providers: [
@@ -43,7 +47,7 @@ vi.mock('@/hooks/useProviders', () => ({
         connected: true,
         agents: ['claude-code'],
         models: {
-          'claude-code': [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }],
+          'claude-code': providersMock.claudeModels,
           codex: [],
         },
       },
@@ -70,6 +74,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     <div
       data-testid="model-selector"
       data-model={props.modelId}
+      data-effort={(props as { effort?: string }).effort ?? ''}
       data-current-provider={props.currentProviderId ?? ''}
       data-source-disconnected={String(props.sourceDisconnected === true)}
       data-reselect-emits={String(props.reselectEmitsChange === true)}
@@ -156,6 +161,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   providersMock.loading = false;
+  providersMock.claudeModels = [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }];
   vi.clearAllMocks();
 });
 
@@ -283,5 +289,22 @@ describe('SubagentModelSection standard panel contract', () => {
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.connectCta).toBe('false');
     expect(selector.dataset.sourceDisconnected).toBe('true');
+  });
+
+  it('never advertises an effort dimension on the trigger', async () => {
+    // 子代理派发通道没有 effort 维度:effort 必须传空串,否则 trigger 会在命中模型
+    // efforts 时展示档位文案,承诺不存在的能力(copilot review)。
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.effort).toBe('');
+  });
+
+  it('wires the connect CTA when connected providers expose zero selectable models', async () => {
+    // 来源连接着但动态模型发现为空:面板是零分段 no-results,CTA 判据必须按
+    // 「可选模型并集」而非 provider 连接标志(codex review)。
+    providersMock.claudeModels = [];
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.connectCta).toBe('true');
   });
 });
