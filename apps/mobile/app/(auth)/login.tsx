@@ -40,6 +40,7 @@ import {
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
   resolveDeletionBubbleFrame,
+  resolveDeletionBubbleLinkHitSlop,
   type LoginDeletionBubbleFrame,
   type LoginSurfaceMode,
 } from '@/auth/loginSkinLayout';
@@ -1368,7 +1369,7 @@ function AccountDeletionStatusPanel({
       {onDismiss ? (
         <Pressable
           accessibilityRole="button"
-          hitSlop={B.linkHitSlop}
+          hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}
           onPress={onDismiss}
           style={[styles.deletionBubbleLink, { marginTop: scaled(B.bodyLinkGap) }]}
           testID="login.accountDeletionDismissButton"

@@ -190,8 +190,11 @@ for (const expr of [
 }
 const mResolveCallM = /resolveDeletionBubbleFrame\(stage, insets\.top\)/.exec(mLoginSrc);
 if (!mResolveCallM) throw new Error('mobile resolveDeletionBubbleFrame(stage, insets.top) 调用未命中');
-if (!/hitSlop=\{B\.linkHitSlop\}/.test(mLoginSrc))
-  throw new Error('mobile dismiss hitSlop(B.linkHitSlop)未命中');
+if (!/hitSlop=\{resolveDeletionBubbleLinkHitSlop\(frame\.scale\)\}/.test(mLoginSrc))
+  throw new Error('mobile dismiss hitSlop(resolveDeletionBubbleLinkHitSlop)未命中');
+// 热区钳制函数结构断言:上=min(18, bodyLinkGap×scale)、下=min(18, padding×scale)
+if (!/top: Math\.min\(18, bodyLinkGap \* scale\)/.test(mSkinSrc) || !/bottom: Math\.min\(18, padding \* scale\)/.test(mSkinSrc))
+  throw new Error('resolveDeletionBubbleLinkHitSlop 钳制公式未命中');
 // 入场门(PR #464 review):Animated.View opacity=panelEntrance.opacity + pointerEvents 仅 done。
 // 按 opening tag 整段取(容纳后续追加的属性/注释,如 Android 无障碍隐藏),再逐项断言,
 // 避免属性顺序或新增属性把单条长正则打断。
@@ -301,7 +304,7 @@ const truth = {
     mobile: {
       renderPosition: leaf('position:absolute,left/top/width 由 resolveDeletionBubbleFrame(stage, insets.top) 行内注入;不参与布局流', M.loginTsx, 'login.tsx:1140-1197 deletionBubbleFrame + AccountDeletionStatusPanel frame prop'),
       styleFacts: leaf('不透明底+1px 描边;无 shadow/elevation/固定高(样式块守护断言)', M.loginTsx, 'login.tsx:1439-1449 makeStyles.deletionBubble'),
-      dismissHitSlop: leaf('hitSlop {top:12,bottom:12,left:20,right:20} → 热区 47≥44', M.loginTsx, 'login.tsx hitSlop={LOGIN_DELETION_BUBBLE.linkHitSlop}'),
+      dismissHitSlop: leaf("hitSlop 按气泡内可用空间钳制:top=min(18, bodyLinkGap×scale)、bottom=min(18, padding×scale)、左右 20——RN hitSlop 不越父边界,虚标无效(PR #494 codex);热区随整个登录 stage 同步缩放(320pt 窗口下主按钮本身 ≈34pt),不追未缩放 44pt 绝对值", M.skinLayout, 'resolveDeletionBubbleLinkHitSlop(scale)'),
       dismissGate: leaf('仅 completed 态渲染 dismiss Pressable(onDismiss 仅 completed 传入)', M.loginTsx, 'login.tsx:1315-1327 {onDismiss ? <Pressable/> : null}'),
       entranceGate: leaf("Animated.View 包装:opacity=panelEntrance.opacity(与登录组同一 Animated 值);pointerEvents 仅 handoffPhase==='done' 放行且取 box-none(全屏包装层不作触摸目标,避免挡住下方登录组命中;入场完成前 none = 不可见不可点)(PR #464 review)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View pointerEvents/style'),
       a11yModalGate: leaf("气泡对读屏隐藏 = 协议弹窗打开 || 入场未完成;iOS accessibilityElementsHidden + Android importantForAccessibility 双端都给(opacity/pointerEvents 不影响读屏,不隐藏则会念出不可见的注销状态)(PR #464 codex)", M.loginTsx, 'login.tsx 气泡渲染点 Animated.View importantForAccessibility'),
@@ -373,9 +376,9 @@ const truth = {
         lineHeight: copyLineHeight,
         titleBodyGap: numField(mBubbleObj, 'titleBodyGap'),
         bodyLinkGap: numField(mBubbleObj, 'bodyLinkGap'),
-        // hitSlop 是物理 pt(不随缩放)
-        linkHitSlopY: numField(mBubbleObj, 'top'),
-        linkHitSlopX: numField(mBubbleObj, 'left'),
+        // hitSlop 名义上限(物理 pt;实际上/下按气泡内可用空间钳制,见 hitSlopRule)
+        linkHitSlopMax: 18,
+        linkHitSlopX: 20,
         // 各端落位(stage 设计单位)
         phoneWidth: numField(mBubbleObj, 'width'),
         phoneX: numField(mBubbleObj, 'x'),
@@ -388,8 +391,8 @@ const truth = {
       'LOGIN_DELETION_BUBBLE(stage 设计单位)',
       {
         lineHeight: 'LOGIN_DELETION_BUBBLE.lineHeight=LOGIN_COPY_LINE_HEIGHT',
-        linkHitSlopY: 'LOGIN_DELETION_BUBBLE.linkHitSlop.top/bottom(物理 pt)',
-        linkHitSlopX: 'LOGIN_DELETION_BUBBLE.linkHitSlop.left/right(物理 pt)',
+        linkHitSlopMax: 'resolveDeletionBubbleLinkHitSlop 的 18 上限(物理 pt)',
+        linkHitSlopX: 'resolveDeletionBubbleLinkHitSlop left/right=20(物理 pt)',
         phoneWidth: 'LOGIN_DELETION_BUBBLE.phone.width',
         phoneX: 'LOGIN_DELETION_BUBBLE.phone.x',
         padLandscapeWidth: 'LOGIN_DELETION_BUBBLE.padLandscape.width(= WORD_MARK 框宽)',

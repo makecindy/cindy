@@ -4,7 +4,7 @@
  "total": 48,
  "passed": 48,
  "failures": 0,
- "generatedAt": "2026-07-26T04:57:32.431Z",
+ "generatedAt": "2026-07-26T05:42:37.014Z",
  "results": [
   {
    "id": "overlay:desk",
@@ -114,7 +114,7 @@
   {
    "id": "gap-link:phone:completed",
    "pass": true,
-   "detail": "正文↔我知道了=11.5(期望 11.4 = 22×0.5200)"
+   "detail": "正文↔我知道了=11.4(期望 11.4 = 22×0.5200)"
   },
   {
    "id": "gap-bottom:phone:completed",
@@ -129,12 +129,12 @@
   {
    "id": "hit-area:phone:completed",
    "pass": true,
-   "detail": "命中区 82×48(≥44,hitSlop 物理 pt)"
+   "detail": "命中区 82×33.8(期望高 33.8,边界内取最大;整个登录 stage 同缩放)"
   },
   {
    "id": "gap-link:phone:stress",
    "pass": true,
-   "detail": "正文↔我知道了=11.5(期望 11.4 = 22×0.5200)"
+   "detail": "正文↔我知道了=11.4(期望 11.4 = 22×0.5200)"
   },
   {
    "id": "gap-bottom:phone:stress",
@@ -149,7 +149,7 @@
   {
    "id": "hit-area:phone:stress",
    "pass": true,
-   "detail": "命中区 82×48(≥44,hitSlop 物理 pt)"
+   "detail": "命中区 82×33.8(期望高 33.8,边界内取最大;整个登录 stage 同缩放)"
   },
   {
    "id": "stress-grows:phone",

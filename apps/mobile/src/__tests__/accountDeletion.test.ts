@@ -211,7 +211,7 @@ describe('mobile account deletion', () => {
     expect(panel).toContain('accessibilityRole="button"');
     expect(panel).toContain('onPress={onDismiss}');
     expect(panel).toContain('testID="login.accountDeletionDismissButton"');
-    expect(panel).toContain('hitSlop={B.linkHitSlop}');
+    expect(panel).toContain('hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}');
     expect(panel).toContain('styles.deletionBubbleLinkText');
     expect(login).toContain("textDecorationLine: 'underline'");
 

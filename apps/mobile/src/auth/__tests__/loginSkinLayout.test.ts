@@ -19,6 +19,7 @@ import {
   RESEND_COUNTDOWN_SECONDS,
   resendCountdownRemaining,
   resolveDeletionBubbleFrame,
+  resolveDeletionBubbleLinkHitSlop,
   resolveLoginStage,
   resolveLoginSurface,
   resolveLoginSurfaceMode,
@@ -239,11 +240,19 @@ describe('loginSkin 注销提示气泡浮层布局(figma 678:1075;**stage 设计
     // pad 竖屏:字标框宽按可见图形等比反算 269.51 ×(556/297.32)≈ 504
     expect(LOGIN_DELETION_BUBBLE.padPortrait).toEqual({ width: 504, top: 72 });
     expect(Math.round(269.51 * (556 / 297.32))).toBe(504);
-    // hitSlop 是物理 pt(不缩放):最窄受支持尺寸(320pt Split View,scale=320/750)下
-    // 行高折算 23×0.426667≈9.81pt,加上下各 18 → 45.8 ≥ 44
-    const slop = LOGIN_DELETION_BUBBLE.linkHitSlop;
-    expect(slop).toEqual({ top: 18, bottom: 18, left: 20, right: 20 });
-    expect(LOGIN_DELETION_BUBBLE.lineHeight * (320 / 750) + slop.top + slop.bottom).toBeGreaterThanOrEqual(44);
+    // hitSlop:RN 不会越过父 View 边界,上/下取「气泡内可用空间」钳制(虚标无效);
+    // 手算:scale=0.52(390pt 屏)→ top=min(18, 22×0.52)=11.44、bottom=min(18, 20×0.52)=10.4
+    const s52 = resolveDeletionBubbleLinkHitSlop(0.52);
+    expect(s52.top).toBeCloseTo(11.44, 10);
+    expect(s52.bottom).toBeCloseTo(10.4, 10);
+    expect(s52.left).toBe(20);
+    expect(s52.right).toBe(20);
+    // pad scale=1:间距 22/padding 20 均超 18 上限 → 钳到 18(名义扩张的上限)
+    expect(resolveDeletionBubbleLinkHitSlop(1)).toEqual({ top: 18, bottom: 18, left: 20, right: 20 });
+    // 最窄 320pt(scale=320/750≈0.426667):top=9.386.., bottom=8.533..
+    const narrow = resolveDeletionBubbleLinkHitSlop(320 / 750);
+    expect(narrow.top).toBeCloseTo(22 * (320 / 750), 6);
+    expect(narrow.bottom).toBeCloseTo(20 * (320 / 750), 6);
   });
 
   it('phone:宽 = 670 × 屏宽/750(随屏缩放,不写死),水平居中,top 原样带 safe-area', () => {

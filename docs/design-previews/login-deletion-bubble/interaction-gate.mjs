@@ -178,8 +178,15 @@ for (const plat of ['desk', 'phone']) {
         `命中区 ${g.hitW.toFixed(0)}×${g.hitH.toFixed(0)}(期望高 ${wantHit.toFixed(1)} = (${G.lineHeight}+2×${G.linkHitPadding})×${k.toFixed(4)})`,
       );
     } else {
-      // 触摸端:hitSlop 是物理 pt(不缩放),命中盒须 ≥44×44
-      check(`hit-area:${tag}`, g.hitW >= 44 && g.hitH >= 44, `命中区 ${g.hitW.toFixed(0)}×${g.hitH.toFixed(0)}(≥44,hitSlop 物理 pt)`);
+      // 触摸端:hitSlop 按气泡内可用空间钳制(RN 不越父边界,虚标无效)——
+      // 期望高 = 行高×k + min(18, bodyLinkGap×k) + min(18, padding×k)
+      const wantHit =
+        G.lineHeight * k + Math.min(18, G.bodyLinkGap * k) + Math.min(18, G.padding * k);
+      check(
+        `hit-area:${tag}`,
+        Math.abs(g.hitH - wantHit) <= 1.5 && g.hitW > g.hitH,
+        `命中区 ${g.hitW.toFixed(0)}×${g.hitH.toFixed(1)}(期望高 ${wantHit.toFixed(1)},边界内取最大;整个登录 stage 同缩放)`,
+      );
     }
     if (state === 'deletion-stress') {
       await gotoCase(plat, 'light', 'zh-CN', 'deletion-completed');

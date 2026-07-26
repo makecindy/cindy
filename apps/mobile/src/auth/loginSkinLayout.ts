@@ -479,12 +479,6 @@ export const LOGIN_DELETION_BUBBLE = {
   lineHeight: LOGIN_COPY_LINE_HEIGHT,
   titleBodyGap: 5,
   bodyLinkGap: 22,
-  /**
-   * 「我知道了」热区扩张:**物理 pt**(hitSlop 不参与缩放,也不影响布局)。
-   * 文字行高 23 设计单位折算后很小(最窄 Split View 320pt 屏 scale≈0.4267 → 9.8pt),
-   * 上下各 18 保证任何受支持尺寸下总高 ≥44pt(9.8+36=45.8)。
-   */
-  linkHitSlop: { top: 18, bottom: 18, left: 20, right: 20 },
   phone: { width: 670, x: 40, stageWidth: LOGIN_STAGE_WIDTH },
   padLandscape: { width: 556, x: 607, top: 72 },
   padPortrait: { width: 504, top: 72 },
@@ -495,6 +489,30 @@ export const LOGIN_DELETION_BUBBLE = {
  * 设计单位经 surface.scale 折算为物理 pt;left 钳制在屏内(不出屏、不贴负边)。
  * 断点三分支与 resolveLoginSurfaceMode 同语义,消费端直接传 useLoginSurface() 输出。
  */
+/**
+ * 「我知道了」热区(物理 pt):RN 的 hitSlop **不会越过父 View 边界**(双端一致),
+ * 上/下扩张只能取「气泡内可用空间」——上限 = 正文↔链接间距、下限 = 气泡下 padding
+ * (均为设计单位 × scale),写大了是虚标(Codex 审查 PR #494 指出:320pt 窗口下
+ * 名义 45.8pt 实际被裁到 ≈30pt)。不追未缩放的 44pt 绝对下限:整个登录系统按 stage
+ * 缩放(320pt 窗口下登录主按钮本身仅 ≈34pt 高),孤立保 44 需打破「正文↔链接 22 /
+ * 底距 20 恒定」的拍板视觉;热区随系统同步缩放、边界内取最大。左右两侧文本外富余
+ * 充足,固定 20。
+ */
+export function resolveDeletionBubbleLinkHitSlop(scale: number): {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+} {
+  const { bodyLinkGap, padding } = LOGIN_DELETION_BUBBLE;
+  return {
+    top: Math.min(18, bodyLinkGap * scale),
+    bottom: Math.min(18, padding * scale),
+    left: 20,
+    right: 20,
+  };
+}
+
 export function resolveDeletionBubbleFrame(
   surface: LoginSurfaceLayout,
   safeTop: number,
