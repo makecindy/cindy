@@ -361,6 +361,30 @@ html:lang(ko) {
 .ProseMirror .composer-list-prefix-indent {
   padding-left: 1em;
 }
+.ProseMirror .composer-list-fallback-container {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding-left: calc(1em + var(--composer-list-fallback-indent, 1.25em));
+  overflow-wrap: anywhere;
+}
+.ProseMirror .composer-list-fallback-prefix {
+  display: inline-block;
+  box-sizing: border-box;
+  width: calc(1em + var(--composer-list-fallback-indent, 1.25em));
+  margin-left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+  white-space: nowrap;
+  vertical-align: top;
+}
+.ProseMirror .composer-list-fallback-unindented {
+  position: relative;
+  left: calc(-1em - var(--composer-list-fallback-indent, 1.25em));
+}
+.ProseMirror .composer-list-fallback-break {
+  display: block;
+  height: 0;
+  line-height: 0;
+}
 .ProseMirror .composer-list-line-indent {
   display: inline-block;
   box-sizing: border-box;

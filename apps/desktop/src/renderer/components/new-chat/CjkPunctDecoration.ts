@@ -40,6 +40,12 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { EditorState, Transaction } from '@tiptap/pm/state';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import { matchListPrefix } from '@/lib/composerListContinuation';
+import {
+  findSlashCommandMatches,
+  getSlashCommandRoster,
+  getSlashCommandRosterUpdate,
+  type SlashCommandMatch,
+} from './SlashCommandDecoration';
 
 const PLUGIN_KEY = new PluginKey<DecorationSet>('cjkPunctDecoration');
 
@@ -52,9 +58,14 @@ const PLUGIN_KEY = new PluginKey<DecorationSet>('cjkPunctDecoration');
  */
 const CJK_PUNCT_REGEX = /[\u3000-\u303f\uff00-\uffef]/g;
 
+const LONG_ALPHANUMERIC_BODY_RE = /^\s*[A-Za-z0-9]{12,}\s*$/;
+
 type ListLineRange = { from: number; to: number };
 
-function listLineRanges(doc: PMNode): ListLineRange[] {
+function listLineRanges(
+  doc: PMNode,
+  slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
+): ListLineRange[] {
   const ranges: ListLineRange[] = [];
   doc.descendants((block, blockPos) => {
     if (!block.isTextblock) return true;
@@ -62,8 +73,25 @@ function listLineRanges(doc: PMNode): ListLineRange[] {
     let lineText = '';
     let lineStart = 0;
     let lineEnd = 0;
+    let lineHasInlineAtom = false;
     const flush = () => {
-      if (matchListPrefix(lineText)) {
+      const match = matchListPrefix(lineText);
+      if (!match) return;
+      const prefix = lineText.slice(0, match.prefixLength);
+      const body = lineText.slice(match.prefixLength);
+      const overlapsSlashCommandPill = slashCommandMatches.some(
+        (slashMatch) =>
+          slashMatch.from < contentBase + lineEnd && slashMatch.to > contentBase + lineStart,
+      );
+      // Only suppress per-character decorations when the list extension owns a
+      // complete hanging wrapper. Atom/pill/tab/long-run fallbacks deliberately
+      // leave punctuation to this plugin so body glyphs keep the CJK font stack.
+      if (
+        !lineHasInlineAtom &&
+        !overlapsSlashCommandPill &&
+        !prefix.includes('\t') &&
+        !LONG_ALPHANUMERIC_BODY_RE.test(body)
+      ) {
         ranges.push({
           from: contentBase + lineStart,
           to: contentBase + lineEnd,
@@ -77,12 +105,14 @@ function listLineRanges(doc: PMNode): ListLineRange[] {
         lineText = '';
         lineStart = pos + node.nodeSize;
         lineEnd = lineStart;
+        lineHasInlineAtom = false;
       } else if (node.isText) {
         lineText += node.text ?? '';
         lineEnd = pos + node.nodeSize;
       } else {
         lineText += '\uFFFC';
         lineEnd = pos + node.nodeSize;
+        lineHasInlineAtom = true;
       }
       return false;
     });
@@ -120,9 +150,12 @@ const CJK_FONT_STACK =
  * 用 descendants 遍历所有 text node, 对每个 text node 内的字符做正则匹配。
  * 注意 from/to 是 doc-level position, 不是 text-node-local offset。
  */
-function buildDecorations(doc: PMNode): DecorationSet {
+function buildDecorations(
+  doc: PMNode,
+  slashCommandMatches: ReadonlyArray<Pick<SlashCommandMatch, 'from' | 'to'>> = [],
+): DecorationSet {
   const decorations: Decoration[] = [];
-  const listRanges = listLineRanges(doc);
+  const listRanges = listLineRanges(doc, slashCommandMatches);
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
@@ -160,16 +193,19 @@ export const CjkPunctDecoration = Extension.create({
         key: PLUGIN_KEY,
         state: {
           init(_config, state: EditorState) {
-            return buildDecorations(state.doc);
+            const roster = getSlashCommandRoster(state);
+            return buildDecorations(state.doc, findSlashCommandMatches(state.doc, roster));
           },
-          apply(tr: Transaction, old: DecorationSet) {
-            // doc 没变 → decoration 位置不变, 直接复用
-            if (!tr.docChanged) return old;
+          apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
+            const rosterUpdate = getSlashCommandRosterUpdate(tr);
+            // doc 没变且命令 roster 没变 → decoration 位置不变, 直接复用
+            if (!tr.docChanged && rosterUpdate === undefined) return old;
             // doc 变了 → 全量重算。
             // 之前考虑过用 old.map(tr.mapping, tr.doc) 做增量, 但 chat input
             // 文本量很小 (< 1KB 常见), 全量重扫成本可忽略, 而增量映射要额外
             // 处理"变化范围内新增/删除的 CJK 标点", 代码复杂度上升不划算。
-            return buildDecorations(tr.doc);
+            const roster = rosterUpdate ?? getSlashCommandRoster(oldState);
+            return buildDecorations(tr.doc, findSlashCommandMatches(tr.doc, roster));
           },
         },
         props: {

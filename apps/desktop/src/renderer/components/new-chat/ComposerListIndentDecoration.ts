@@ -6,7 +6,9 @@
  * (`1. ` / `- ` / `- [ ] ` / `> ` 等,与列表接续共用 matchListPrefix 判定),
  * 单行段落使用 node decoration,hardBreak 分隔的多行段落按行使用 inline
  * decoration；连续数字/字母正文使用 marker/body 两个盒子，避免长串把
- * 列表标记单独挤到上一行。所有路径都把前缀的估算宽度写入 CSS 变量。
+ * 列表标记单独挤到上一行。包含 inline atom/pill 的段落使用段落级 fallback
+ * 容器和每行前缀槽位，避免 inline decoration 在 atom 边界被拆成多个 block。
+ * 所有路径都把前缀的估算宽度写入 CSS 变量。
  * CSS 将列表行作为独立的换行容器:首行用负 text-indent 把标记悬挂在左侧,
  * 自动换行后的续行则从正文起点开始。用户打完 `1. `(空格落下)那一刻
  * 缩进立即出现,即"已进入列表状态"的视觉信号;空项退出(前缀被删)时缩进
@@ -43,21 +45,52 @@ const CJK_PUNCTUATION_RE = /[\u3000-\u303f\uff00-\uffef]/;
 // 的自然断词行为，避免把整句变成逐字断行。
 const LONG_ALPHANUMERIC_BODY_RE = /^\s*[A-Za-z0-9]{12,}\s*$/;
 
+interface ListIndentValues {
+  ch: number;
+  em: number;
+}
+
+function listPrefixIndentValues(prefix: string): ListIndentValues {
+  let ch = 0;
+  let em = 0;
+  for (const char of prefix) {
+    if (char >= '0' && char <= '9') {
+      ch += 1;
+    } else if (char === '\t') {
+      ch += TAB_SIZE;
+    } else if (char === '、' || char === '\u3000') {
+      em += 1;
+    } else {
+      ch += 0.4;
+    }
+  }
+  return {
+    ch: Number(ch.toFixed(2)),
+    em: Number(em.toFixed(2)),
+  };
+}
+
+function listIndentValue({ ch, em }: ListIndentValues): string {
+  return em > 0 ? `calc(${ch}ch + ${em}em)` : `${ch}ch`;
+}
+
 function addLongRunDecoration(
   decorations: Decoration[],
   from: number,
   to: number,
   prefixLength: number,
   prefix: string,
+  extraClass = '',
 ): void {
   const prefixTo = from + prefixLength;
+  const classSuffix = extraClass ? ` ${extraClass}` : '';
   decorations.push(
     Decoration.inline(from, prefixTo, {
-      class: 'composer-list-long-run-marker',
+      class: `composer-list-long-run-marker${classSuffix}`,
       style: listPrefixIndentStyle(prefix),
     }),
     Decoration.inline(prefixTo, to, {
-      class: 'composer-list-long-run-body',
+      class: `composer-list-long-run-body${classSuffix}`,
       style: listPrefixIndentStyle(prefix),
     }),
   );
@@ -72,26 +105,9 @@ function addLongRunDecoration(
  * 完成后用 Range 实测并覆盖变量，避免比例字体下的 ch 近似误差。
  */
 export function listPrefixIndentStyle(prefix: string): string {
-  let ch = 0;
-  let em = 0;
-  for (const char of prefix) {
-    if (char >= '0' && char <= '9') {
-      ch += 1;
-    } else if (char === '\t') {
-      // CSS cannot express the rendered width of a tab in a proportional font.
-      // Use a deterministic pre-layout fallback; the plugin view replaces this
-      // value with the actual Range width once Chromium has laid out the span.
-      ch += TAB_SIZE;
-    } else if (char === '、' || char === '\u3000') {
-      em += 1;
-    } else {
-      ch += 0.4;
-    }
-  }
-  const chValue = Number(ch.toFixed(2));
-  const emValue = Number(em.toFixed(2));
-  const positive = emValue > 0 ? `calc(${chValue}ch + ${emValue}em)` : `${chValue}ch`;
-  const negative = emValue > 0 ? `calc(-${chValue}ch - ${emValue}em)` : `-${chValue}ch`;
+  const { ch, em } = listPrefixIndentValues(prefix);
+  const positive = listIndentValue({ ch, em });
+  const negative = em > 0 ? `calc(-${ch}ch - ${em}em)` : `-${ch}ch`;
   return [`--composer-list-hang:${positive}`, `--composer-list-hang-negative:${negative}`]
     .map((declaration) => `${declaration};`)
     .join('');
@@ -117,6 +133,7 @@ export function buildListIndentDecorations(
     let lineStartOffset = 0;
     let lineEndOffset = 0;
     let lineHasInlineAtom = false;
+    const hardBreaks: number[] = [];
     const lines: Array<{
       text: string;
       start: number;
@@ -136,6 +153,7 @@ export function buildListIndentDecorations(
         // `pos` is the end of the current line in the textblock content.
         lineEndOffset = pos;
         flushLine();
+        hardBreaks.push(pos);
         lineText = '';
         lineStartOffset = pos + node.nodeSize;
         lineEndOffset = lineStartOffset;
@@ -153,9 +171,56 @@ export function buildListIndentDecorations(
     lineEndOffset = block.content.size;
     flushLine(); // 段落最后一行
 
+    const lineMatches = lines.map((line) => ({
+      line,
+      match: matchListPrefix(line.text),
+    }));
+    const hasFallbackLine = lineMatches.some(({ line, match }) => {
+      if (!match) return false;
+      const overlapsSlashCommandPill = slashCommandMatches.some(
+        (slashMatch) =>
+          slashMatch.from < contentBase + line.end && slashMatch.to > contentBase + line.start,
+      );
+      return line.hasInlineAtom || overlapsSlashCommandPill;
+    });
+    const fallbackPrefixes = lineMatches
+      .filter(({ match }) => Boolean(match))
+      .map(({ line, match }) => listPrefixIndentValues(line.text.slice(0, match!.prefixLength)));
+    const fallbackIndent = fallbackPrefixes.reduce(
+      (max, value) => ({
+        ch: Math.max(max.ch, value.ch),
+        em: Math.max(max.em, value.em),
+      }),
+      { ch: 0, em: 0 },
+    );
+    const fallbackStyle = listIndentValue(fallbackIndent);
+
+    if (hasFallbackLine) {
+      decorations.push(
+        Decoration.node(blockPos, blockPos + block.nodeSize, {
+          class: 'composer-list-fallback-container',
+          style: `--composer-list-fallback-indent:${fallbackStyle};`,
+        }),
+      );
+      hardBreaks.forEach((breakPos) => {
+        decorations.push(
+          Decoration.node(contentBase + breakPos, contentBase + breakPos + 1, {
+            class: 'composer-list-fallback-break',
+          }),
+        );
+      });
+    }
+
     const addLineDecoration = (line: (typeof lines)[number]) => {
       const match = matchListPrefix(line.text);
       if (!match) {
+        if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
+          decorations.push(
+            Decoration.inline(contentBase + line.start, contentBase + line.end, {
+              class: 'composer-list-fallback-unindented',
+            }),
+          );
+        }
         return;
       }
       const from = contentBase + line.start;
@@ -165,7 +230,6 @@ export function buildListIndentDecorations(
       const overlapsSlashCommandPill = slashCommandMatches.some(
         (slashMatch) => slashMatch.from < to && slashMatch.to > from,
       );
-      const hasOverlappingInlineDecoration = line.hasInlineAtom || overlapsSlashCommandPill;
       const hasTabPrefix = prefix.includes('\t');
       const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix) || CJK_PUNCTUATION_RE.test(body);
       const lineClass = [
@@ -174,14 +238,15 @@ export function buildListIndentDecorations(
       ]
         .filter(Boolean)
         .join(' ');
-      if (hasOverlappingInlineDecoration) {
-        // Keep list-mode feedback without wrapping an inline decoration range.
-        // Prefix-only styling cannot be split by CJK punctuation, slash-command
-        // pills, or inline atoms, and is safer than producing multiple blocks.
+      if (hasFallbackLine) {
+        // The paragraph-level fallback supplies the available line width. The
+        // prefix gets a fixed slot (the widest marker in the paragraph), while
+        // atoms and slash pills remain ordinary inline content inside the same
+        // line flow. This avoids a width:100% wrapper being split at atom edges.
         decorations.push(
           Decoration.inline(from, from + match.prefixLength, {
             class: [
-              'composer-list-prefix-indent',
+              'composer-list-fallback-prefix',
               hasTabPrefix ? 'composer-list-tab-indent' : '',
               hasCjkPunctuation ? 'composer-list-cjk-font' : '',
             ]
@@ -193,7 +258,14 @@ export function buildListIndentDecorations(
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
-        addLongRunDecoration(decorations, from, to, match.prefixLength, prefix);
+        addLongRunDecoration(
+          decorations,
+          from,
+          to,
+          match.prefixLength,
+          prefix,
+          hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+        );
         return;
       }
       decorations.push(
@@ -214,15 +286,28 @@ export function buildListIndentDecorations(
       const to = line ? contentBase + line.end : contentBase;
       const hasLongAlphanumericBody = LONG_ALPHANUMERIC_BODY_RE.test(body);
       const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix) || CJK_PUNCTUATION_RE.test(body);
+      const hasTabPrefix = prefix.includes('\t');
       // A node decoration stays on the paragraph even when CjkPunctDecoration
       // adds nested inline spans, so punctuation cannot split the list wrapper.
-      if (
+      if (line && match && hasFallbackLine) {
+        decorations.push(
+          Decoration.inline(from, from + match.prefixLength, {
+            class: [
+              'composer-list-fallback-prefix',
+              hasTabPrefix ? 'composer-list-tab-indent' : '',
+              hasCjkPunctuation ? 'composer-list-cjk-font' : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+            'data-composer-list-prefix-length': String(match.prefixLength),
+          }),
+        );
+      } else if (
         line &&
         match &&
         !line.hasInlineAtom &&
         (!hasLongAlphanumericBody || prefix.includes('\t'))
       ) {
-        const hasTabPrefix = prefix.includes('\t');
         decorations.push(
           Decoration.node(blockPos, blockPos + block.nodeSize, {
             class: [
@@ -249,6 +334,7 @@ export function buildListIndentDecorations(
           contentBase + line.end,
           match.prefixLength,
           prefix,
+          hasCjkPunctuation ? 'composer-list-cjk-font' : '',
         );
       } else if (line && match) {
         decorations.push(
@@ -312,6 +398,12 @@ export const ComposerListIndentDecoration = Extension.create({
               tabSpans.forEach((span) => {
                 const prefixLength = Number(span.dataset.composerListPrefixLength ?? Number.NaN);
                 if (!Number.isFinite(prefixLength) || prefixLength <= 0) return;
+                // Once Chromium measurement has replaced the deterministic
+                // fallback with pixels, the same span no longer needs a
+                // synchronous Range/layout read on every editor update.
+                if (span.style.getPropertyValue('--composer-list-hang').trim().endsWith('px')) {
+                  return;
+                }
                 const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
                 let remaining = prefixLength;
                 let startNode: Text | null = null;

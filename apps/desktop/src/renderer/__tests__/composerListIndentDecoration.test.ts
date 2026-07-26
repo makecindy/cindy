@@ -142,7 +142,7 @@ describe('buildListIndentDecorations', () => {
       },
     });
     setSlashCommandRoster(editor, [{ name: 'foo', description: 'test command' }]);
-    expect(editor.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe(
+    expect(editor.view.dom.querySelector('p.composer-list-fallback-container')?.textContent).toBe(
       '- /foo abcdefghijklmnop',
     );
     expect(editor.view.dom.querySelector('span.slash-cmd-pill')?.textContent).toBe('/foo');
@@ -170,7 +170,7 @@ describe('buildListIndentDecorations', () => {
     expect(buildListIndentDecorations(ed.state.doc).find()).toHaveLength(0);
   });
 
-  it('uses prefix-only fallback so inline atoms keep their geometry', () => {
+  it('uses a paragraph fallback so inline atoms keep their geometry', () => {
     editor = new Editor({
       element: document.createElement('div'),
       extensions: [Document, Paragraph, Text, HardBreak, TestAtom, ComposerListIndentDecoration],
@@ -188,8 +188,8 @@ describe('buildListIndentDecorations', () => {
         ],
       },
     });
-    expect(buildListIndentDecorations(editor.state.doc).find()).toHaveLength(1);
-    expect(editor.view.dom.querySelector('span.composer-list-prefix-indent')?.textContent).toBe(
+    expect(editor.view.dom.querySelector('p.composer-list-fallback-container')).not.toBeNull();
+    expect(editor.view.dom.querySelector('span.composer-list-fallback-prefix')?.textContent).toBe(
       '- ',
     );
     expect(
@@ -249,7 +249,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(indentSpans(ed)).toEqual(['1、中文正文会在输入框边界自然换行']);
   });
 
-  it('keeps slash-command pills inline by falling back to prefix-only decoration', () => {
+  it('keeps slash-command pills inline inside the paragraph fallback flow', () => {
     editor = new Editor({
       element: document.createElement('div'),
       extensions: [
@@ -275,11 +275,53 @@ describe('ComposerListIndentDecoration in a real editor', () => {
       },
     });
     setSlashCommandRoster(editor, [{ name: 'foo', description: 'test command' }]);
-    expect(editor.view.dom.querySelector('span.composer-list-prefix-indent')?.textContent).toBe(
+    expect(editor.view.dom.querySelector('span.composer-list-fallback-prefix')?.textContent).toBe(
       '- ',
     );
+    expect(editor.view.dom.querySelector('p.composer-list-fallback-container')).not.toBeNull();
+    expect(editor.view.dom.querySelector('br.composer-list-fallback-break')).not.toBeNull();
     expect(editor.view.dom.querySelector('span.slash-cmd-pill')?.textContent).toBe('/foo');
-    expect(indentSpans(editor)).toEqual(['2. plain']);
+    expect(editor.view.dom.querySelector('p.composer-list-fallback-container')?.textContent).toBe(
+      '- /foo details2. plain',
+    );
+  });
+
+  it('keeps an inline atom and body punctuation inside the multiline fallback flow', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        TestAtom,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '- before ' },
+              { type: 'testAtom' },
+              { type: 'text', text: ' 《body》' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. next' },
+            ],
+          },
+        ],
+      },
+    });
+    const container = editor.view.dom.querySelector('p.composer-list-fallback-container');
+    expect(container).not.toBeNull();
+    expect(container?.querySelector('[data-test-atom]')).not.toBeNull();
+    expect(container?.querySelector('.composer-list-fallback-prefix')?.textContent).toBe('- ');
+    expect(container?.querySelectorAll('.composer-list-line-indent')).toHaveLength(0);
+    // The fallback does not suppress CjkPunctDecoration, so body punctuation
+    // still receives an explicit font span instead of being silently skipped.
+    expect(container?.querySelectorAll('span[style*="font-family"]')).not.toHaveLength(0);
   });
 
   it('keeps hanging indent for slash paths and unknown commands without pills', () => {
