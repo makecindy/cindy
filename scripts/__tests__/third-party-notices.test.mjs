@@ -84,6 +84,32 @@ test("multi-arch desktop notices describe every architecture they ship with", ()
   assert.match(linux, /for use with sharp on Linux \(glibc\) 64-bit ARM\./);
 });
 
+// 移动端安装包不分发构建期工具链的预编译二进制，但这些包的许可义务由其 JS 主包
+// 承载，主包必须留在声明里。
+test("mobile notices exclude build-time platform binaries but keep their JS packages", () => {
+  for (const artifact of ["mobile-ios", "mobile-android"]) {
+    const notices = read(`docs/legal/notices/${artifact}.txt`);
+    // 覆盖 name-darwin-arm64 与 @scope/darwin-arm64 两种命名形式。
+    assert.doesNotMatch(
+      notices,
+      /^- \S*(?:darwin|linux|win32|musl|freebsd)\S*@/im,
+    );
+    assert.match(notices, /^- lightningcss@/m);
+  }
+});
+
+// 闭包必须按显式目标平台收集：collectClosure() 判断可选依赖是否存在只看
+// node_modules 里有没有目录，省掉 target 会让产物随生成机器的安装集合漂移。
+test("every dependency closure is collected against an explicit target", () => {
+  const source = read("scripts/generate-third-party-notices.mjs");
+  const untargeted = [...source.matchAll(/collectClosure\(\s*\[[^\]]*\]\s*\)/g)];
+  assert.deepEqual(
+    untargeted.map((match) => match[0]),
+    [],
+    "collectClosure() 调用缺少目标平台参数，产物会随本机安装的平台可选包漂移",
+  );
+});
+
 test("commercial distributions do not resolve forbidden Sustainable Use dependencies", () => {
   const lockfile = read("pnpm-lock.yaml");
   assert.doesNotMatch(lockfile, /@codesandbox\/nodebox/);

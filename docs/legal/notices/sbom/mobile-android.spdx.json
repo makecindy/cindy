@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-android",
-  "documentNamespace": "https://cindy.app/spdx/mobile-android/9f845f2d234656d48bca8d491b1ea3a5bd15a79c4fa744be623e71f447ec805e",
+  "documentNamespace": "https://cindy.app/spdx/mobile-android/86e68102518a578d9ed29b1aff09ce263e307222c8cf54356267607f265c8bb9",
   "creationInfo": {
     "created": "2026-07-25T09:00:18Z",
     "creators": [
@@ -6560,108 +6560,6 @@
       ]
     },
     {
-      "name": "lightningcss-darwin-arm64",
-      "SPDXID": "SPDXRef-Package-0f68197d2c532d19",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-darwin-arm64@1.32.0"
-        }
-      ]
-    },
-    {
-      "name": "lightningcss-darwin-x64",
-      "SPDXID": "SPDXRef-Package-654a9c60e340e499",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-darwin-x64@1.32.0"
-        }
-      ]
-    },
-    {
-      "name": "lightningcss-linux-arm64-gnu",
-      "SPDXID": "SPDXRef-Package-e53a5cf23dfe9fe6",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-linux-arm64-gnu@1.32.0"
-        }
-      ]
-    },
-    {
-      "name": "lightningcss-linux-x64-gnu",
-      "SPDXID": "SPDXRef-Package-3514c4270c99770a",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-linux-x64-gnu@1.32.0"
-        }
-      ]
-    },
-    {
-      "name": "lightningcss-win32-arm64-msvc",
-      "SPDXID": "SPDXRef-Package-0491f1c7a23201bb",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-win32-arm64-msvc@1.32.0"
-        }
-      ]
-    },
-    {
-      "name": "lightningcss-win32-x64-msvc",
-      "SPDXID": "SPDXRef-Package-c9aa92c5ae5869f4",
-      "versionInfo": "1.32.0",
-      "downloadLocation": "https://github.com/parcel-bundler/lightningcss",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MPL-2.0",
-      "licenseDeclared": "MPL-2.0",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/lightningcss-win32-x64-msvc@1.32.0"
-        }
-      ]
-    },
-    {
       "name": "lodash.debounce",
       "SPDXID": "SPDXRef-Package-34b2f2c81ad9bbd3",
       "versionInfo": "4.0.8",
@@ -12281,36 +12179,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4ae3a8c2073b4202"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-0f68197d2c532d19"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-654a9c60e340e499"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e53a5cf23dfe9fe6"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-3514c4270c99770a"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-0491f1c7a23201bb"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-c9aa92c5ae5869f4"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

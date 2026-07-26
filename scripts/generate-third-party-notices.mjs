@@ -386,6 +386,50 @@ function mergeClosures(...closures) {
   };
 }
 
+/**
+ * 由根 package.json 的 `pnpm.supportedArchitectures` 叉乘出的目标平台集合。
+ *
+ * 覆盖「本仓声明支持的全部架构」而非单一发行产物的闭包必须逐个 target 收集再合并，
+ * 不能省掉 target 让 matchesTarget() 一律放行：collectClosure() 判断一个平台可选依赖
+ * 是否存在只看 `node_modules` 里有没有对应目录，而实际装出来的集合可能超出
+ * supportedArchitectures 的声明（例如 libc 只声明 glibc 时仍装进 musl 变体），产物
+ * 内容就会随生成机器漂移。这里不假设包管理器只安装声明过的架构。
+ */
+function readSupportedTargets() {
+  const declared = readJson(path.join(REPO_ROOT, "package.json")).pnpm
+    ?.supportedArchitectures;
+  for (const axis of ["os", "cpu", "libc"]) {
+    const values = declared?.[axis];
+    if (!Array.isArray(values) || values.length === 0) {
+      throw new Error(
+        `pnpm.supportedArchitectures.${axis} must list explicit values in the root package.json`,
+      );
+    }
+    // pnpm 支持 "current" 表示生成机器自身的架构，那会把机器差异重新带回产物。
+    if (values.includes("current")) {
+      throw new Error(
+        `pnpm.supportedArchitectures.${axis} must not use "current": license notices would depend on the generating machine`,
+      );
+    }
+  }
+  const targets = [];
+  for (const os of declared.os) {
+    for (const cpu of declared.cpu) {
+      for (const libc of declared.libc) targets.push({ os, cpu, libc });
+    }
+  }
+  return targets;
+}
+
+const SUPPORTED_TARGETS = readSupportedTargets();
+
+/** 在全部支持架构上收集闭包并合并，结果与生成机器的安装集合无关。 */
+function collectClosureForSupportedTargets(entryDirs) {
+  return mergeClosures(
+    ...SUPPORTED_TARGETS.map((target) => collectClosure(entryDirs, target)),
+  );
+}
+
 function cargoExecutable() {
   const candidate = process.env.USERPROFILE
     ? path.join(process.env.USERPROFILE, ".cargo", "bin", "cargo.exe")
@@ -1239,7 +1283,12 @@ if (!fs.existsSync(path.join(path.dirname(CARGO_MANIFEST), "Cargo.lock"))) {
   );
 }
 
-const projectNpm = collectClosure([REPO_ROOT, ...discoverWorkspaceDirs()]);
+const projectNpm = collectClosureForSupportedTargets([
+  REPO_ROOT,
+  ...discoverWorkspaceDirs(),
+]);
+// 桌面三份产物的 target 是各自的实际发行矩阵（如 Windows 只发 x64），刻意不等于
+// SUPPORTED_TARGETS——后者是仓库声明支持的全部架构，用于覆盖面更宽的聚合声明。
 const desktopWinNpm = collectClosure([DESKTOP_DIR], {
   os: "win32",
   cpu: "x64",
@@ -1252,7 +1301,16 @@ const desktopLinuxNpm = mergeClosures(
   collectClosure([DESKTOP_DIR], { os: "linux", cpu: "x64", libc: "glibc" }),
   collectClosure([DESKTOP_DIR], { os: "linux", cpu: "arm64", libc: "glibc" }),
 );
-const mobileNpm = collectClosure([MOBILE_DIR]);
+// 移动端产物的 target 是「app 实际分发到的设备」，不是仓库支持的构建架构：
+// 移动端 JS 依赖里的平台可选包（lightningcss / @parcel/watcher / @rollup 等预编译
+// 二进制）属于开发机上的构建期工具链，不进 iOS bundle 或 APK/AAB。npm 生态里纯 JS
+// 包不声明 os/cpu，matchesPackageConstraint() 对未声明的约束一律放行，所以按设备
+// target 过滤只会摘掉这些原生变体，包自身（含其许可义务）仍然照常声明。
+const mobileIosNpm = collectClosure([MOBILE_DIR], { os: "ios", cpu: "arm64" });
+const mobileAndroidNpm = collectClosure([MOBILE_DIR], {
+  os: "android",
+  cpu: "arm64",
+});
 const cargoClosure = collectCargoClosure();
 
 const apacheText =
@@ -1306,21 +1364,23 @@ const artifactDefinitions = {
     ],
   },
   "mobile-ios": {
-    closure: mobileNpm,
+    closure: mobileIosNpm,
     manual: buildMobileEntries(apacheText, "ios"),
     productName: "Cindy mobile application — iOS",
     description: ["iOS JS 生产依赖及仓库显式声明的原生 SDK/字体组件。"],
     notes: [
       "Expo managed 工程的完整 Pod 闭包在构建时生成;本文件不声称替代具体构建产物的 Podfile.lock 审计。",
+      "不含只在开发机构建期使用、不随 app 分发的平台可选原生包(其 JS 包自身仍已声明)。",
     ],
   },
   "mobile-android": {
-    closure: mobileNpm,
+    closure: mobileAndroidNpm,
     manual: buildMobileEntries(apacheText, "android"),
     productName: "Cindy mobile application — Android",
     description: ["Android JS 生产依赖及仓库显式声明的原生 SDK/字体组件。"],
     notes: [
       "Expo managed 工程的完整 Gradle 闭包在构建时生成;本文件不声称替代具体 APK/AAB 的依赖报告。",
+      "不含只在开发机构建期使用、不随 app 分发的平台可选原生包(其 JS 包自身仍已声明)。",
     ],
   },
 };
