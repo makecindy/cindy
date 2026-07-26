@@ -12,12 +12,16 @@ import {
 	checkTestFiles,
 	classifyFailure,
 	createOutputForwarder,
+	createWorkspaceRunReporter,
+	defaultWorkspaceConcurrency,
 	discoverTestFiles,
 	expandWorkspacePatterns,
 	filterRunsByWorkspace,
+	mapWithConcurrency,
 	normalizeRelPath,
 	parseWorkspacePatterns,
 	parseCliOptions,
+	parseWorkspaceConcurrency,
 	parseWorkspaceSelectorValue,
 	planRuns,
 	printSummary,
@@ -25,6 +29,7 @@ import {
 	resolveOutputStream,
 	runCommand,
 	runPlannedTests,
+	runWithExclusiveBarriers,
 	selectFilesForTier,
 	validateManifest,
 	validateManifestCoverage,
@@ -39,6 +44,14 @@ function readRootScripts() {
 
 function readWorkspacePackageJson(cwd) {
 	return JSON.parse(fs.readFileSync(path.join(ROOT, cwd, "package.json"), "utf8"));
+}
+
+async function waitFor(predicate, message = "condition was not reached") {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		if (predicate()) return;
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+	throw new Error(message);
 }
 
 test("parseWorkspacePatterns reads pnpm-workspace.yaml package globs", () => {
@@ -106,8 +119,31 @@ test("orca workflow unit tier uses its own declared test runner", () => {
 	assert.equal(orcaPackage.scripts.test, "vitest run");
 	assert.equal(orcaPackage.devDependencies.vitest, "^3.2.4");
 	assert.deepEqual(orcaWorkspace.tiers.unit.command, {
-		type: "packageScript",
-		script: "test",
+		type: "packageBin",
+		bin: "vitest",
+		args: ["run", "--maxWorkers=1"],
+	});
+});
+
+test("unit workspace concurrency reserves the full worker budget for heavy workspaces", () => {
+	const desktop = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "apps/desktop",
+	);
+	const mobile = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "apps/mobile",
+	);
+	const makerCore = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "packages/maker-core",
+	);
+	assert.equal(desktop.tiers.unit.execution, "exclusive");
+	assert.deepEqual(desktop.tiers.unit.command.args, ["run", "--maxWorkers=4"]);
+	assert.equal(mobile.tiers.unit.execution, "exclusive");
+	assert.deepEqual(mobile.tiers.unit.command.args, ["run", "--maxWorkers=4"]);
+	assert.equal(makerCore.tiers.unit.execution, undefined);
+	assert.deepEqual(makerCore.tiers.unit.command, {
+		type: "packageBin",
+		bin: "vitest",
+		args: ["run", "--maxWorkers=1"],
 	});
 });
 
@@ -384,6 +420,23 @@ test("validateManifest rejects invalid status and missing reason", () => {
 					tiers: {
 						unit: {
 							status: "required",
+							command: { type: "packageScript", script: "test" },
+							execution: "parallel-ish",
+						},
+					},
+				},
+			]),
+		/invalid execution mode/,
+	);
+	assert.throws(
+		() =>
+			validateManifest([
+				{
+					cwd: "x",
+					status: "required",
+					tiers: {
+						unit: {
+							status: "required",
 							coverage: "invalid",
 							command: { type: "packageScript", script: "test" },
 						},
@@ -555,6 +608,7 @@ test("parseCliOptions rejects --tier without a value", () => {
 		tier: "unit",
 		workspaces: [],
 		excludeWorkspaces: [],
+		workspaceConcurrency: undefined,
 	});
 });
 
@@ -575,6 +629,7 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 			tier: "unit",
 			workspaces: ["desktop", "apps/server", "@cindy/maker-core"],
 			excludeWorkspaces: ["packages/orca-workflow"],
+			workspaceConcurrency: undefined,
 		},
 	);
 	assert.deepEqual(parseWorkspaceSelectorValue(" desktop, apps/server "), [
@@ -584,6 +639,32 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 	assert.throws(
 		() => parseCliOptions(["--workspace", ","]),
 		/--workspace requires a value/,
+	);
+});
+
+test("workspace concurrency defaults to a bounded CPU count and accepts both CLI forms", () => {
+	assert.equal(defaultWorkspaceConcurrency(1), 1);
+	assert.equal(defaultWorkspaceConcurrency(2), 2);
+	assert.equal(defaultWorkspaceConcurrency(32), 4);
+	assert.equal(defaultWorkspaceConcurrency(Number.NaN), 1);
+	assert.equal(parseWorkspaceConcurrency("8"), 8);
+	assert.equal(
+		parseCliOptions(["--workspace-concurrency", "3"]).workspaceConcurrency,
+		3,
+	);
+	assert.equal(
+		parseCliOptions(["--workspace-concurrency=2"]).workspaceConcurrency,
+		2,
+	);
+	for (const value of ["0", "-1", "1.5", "nope", "999999999999999999999"]) {
+		assert.throws(
+			() => parseWorkspaceConcurrency(value),
+			/requires a positive integer/,
+		);
+	}
+	assert.throws(
+		() => parseCliOptions(["--workspace-concurrency"]),
+		/requires a positive integer/,
 	);
 });
 
@@ -715,6 +796,101 @@ test("runCommand completes successfully when its output consumer closes with EPI
 	const result = await pending;
 	assert.equal(result.exitCode, 0);
 	assert.match(result.output, /child-finished/);
+});
+
+test("mapWithConcurrency stays within the bound, remains work-conserving, and preserves result order", async () => {
+	const releases = [];
+	const started = [];
+	let active = 0;
+	let maxActive = 0;
+	const pending = mapWithConcurrency(["a", "b", "c"], 2, async (item) => {
+		started.push(item);
+		active += 1;
+		maxActive = Math.max(maxActive, active);
+		await new Promise((resolve) => releases.push(resolve));
+		active -= 1;
+		return item.toUpperCase();
+	});
+
+	await waitFor(() => started.length === 2);
+	assert.deepEqual(started, ["a", "b"]);
+	assert.equal(active, 2);
+	releases.shift()();
+	await waitFor(() => started.length === 3);
+	assert.deepEqual(started, ["a", "b", "c"]);
+	assert.equal(active, 2, "the freed slot should be reused immediately");
+	for (const release of releases.splice(0)) release();
+
+	assert.deepEqual(await pending, ["A", "B", "C"]);
+	assert.equal(maxActive, 2);
+});
+
+test("runWithExclusiveBarriers never overlaps exclusive and normal work", async () => {
+	const runs = [
+		{ id: "a", tierConfig: {} },
+		{ id: "b", tierConfig: {} },
+		{ id: "desktop", tierConfig: { execution: "exclusive" } },
+		{ id: "c", tierConfig: {} },
+	];
+	let normalActive = 0;
+	let exclusiveActive = false;
+	let maxNormalActive = 0;
+	const started = [];
+	const results = await runWithExclusiveBarriers(runs, 2, async (run) => {
+		started.push(run.id);
+		if (run.tierConfig.execution === "exclusive") {
+			assert.equal(normalActive, 0);
+			assert.equal(exclusiveActive, false);
+			exclusiveActive = true;
+		} else {
+			assert.equal(exclusiveActive, false);
+			normalActive += 1;
+			maxNormalActive = Math.max(maxNormalActive, normalActive);
+		}
+		await new Promise((resolve) => setImmediate(resolve));
+		if (run.tierConfig.execution === "exclusive") exclusiveActive = false;
+		else normalActive -= 1;
+		return run.id;
+	});
+
+	assert.deepEqual(started, ["a", "b", "desktop", "c"]);
+	assert.deepEqual(results, ["a", "b", "desktop", "c"]);
+	assert.equal(maxNormalActive, 2);
+});
+
+test("createWorkspaceRunReporter keeps passing output concise and flushes failed output as one block", () => {
+	let timestamp = 1_000;
+	const writes = [];
+	const reporter = createWorkspaceRunReporter({
+		stdout: { write: (chunk) => writes.push(String(chunk)) },
+		now: () => timestamp,
+	});
+	const run = {
+		workspace: { cwd: "packages/a" },
+		tier: "unit",
+	};
+	reporter.onRunStart(run);
+	reporter.onCommandComplete({
+		run,
+		stage: "test",
+		commandResult: { output: "passing output", exitCode: 0 },
+	});
+	reporter.onCommandComplete({
+		run,
+		stage: "test",
+		commandResult: { output: "failed output", exitCode: 1 },
+	});
+	timestamp = 2_250;
+	reporter.onRunComplete(run, {
+		exitCode: 1,
+		failure: "COMMAND_FAILED",
+	});
+	assert.equal(
+		writes.join(""),
+		"START packages/a unit\n" +
+			"\n[packages/a unit test]\nfailed output\n" +
+			"FAIL COMMAND_FAILED packages/a unit (1.3s)\n",
+	);
 });
 
 test("runPlannedTests skips test command when preflight fails", async () => {
@@ -873,6 +1049,96 @@ test("runPlannedTests continues after one workspace test fails", async () => {
 	assert.equal(result.length, 2);
 	assert.equal(result[0].failure, "TEST_ASSERTION_FAILED");
 	assert.equal(result[1].exitCode, 0);
+});
+
+test("runPlannedTests applies bounded concurrency while keeping results in manifest order", async () => {
+	const workspaces = ["a", "b", "c"].map((name) => ({
+		name,
+		cwd: `packages/${name}`,
+		status: "required",
+		tiers: {
+			unit: {
+				status: "required",
+				command: { type: "packageBin", bin: "vitest", args: ["run"] },
+			},
+		},
+	}));
+	const delays = new Map([
+		["packages/a", 20],
+		["packages/b", 1],
+		["packages/c", 5],
+	]);
+	let active = 0;
+	let maxActive = 0;
+	const result = await runPlannedTests({
+		root: "F:/repo",
+		workspaceCwds: workspaces.map((workspace) => workspace.cwd),
+		allFiles: workspaces.map(
+			(workspace) => `${workspace.cwd}/src/example.test.ts`,
+		),
+		manifest: { workspaces },
+		tier: "unit",
+		workspaceConcurrency: 2,
+		runCommandImpl: async (_command, _args, options) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			const workspace = normalizeRelPath(options.cwd).replace("F:/repo/", "");
+			await new Promise((resolve) => setTimeout(resolve, delays.get(workspace)));
+			active -= 1;
+			return { exitCode: 0, output: workspace };
+		},
+	});
+
+	assert.equal(maxActive, 2);
+	assert.deepEqual(
+		result.map((entry) => entry.workspace),
+		["packages/a", "packages/b", "packages/c"],
+	);
+});
+
+test("runPlannedTests treats an exclusive workspace as a concurrency barrier", async () => {
+	const workspaces = [
+		{ name: "a", cwd: "packages/a", execution: undefined },
+		{ name: "desktop", cwd: "apps/desktop", execution: "exclusive" },
+		{ name: "b", cwd: "packages/b", execution: undefined },
+	].map(({ name, cwd, execution }) => ({
+		name,
+		cwd,
+		status: "required",
+		tiers: {
+			unit: {
+				status: "required",
+				command: { type: "packageBin", bin: "vitest", args: ["run"] },
+				...(execution ? { execution } : {}),
+			},
+		},
+	}));
+	let normalActive = 0;
+	let desktopActive = false;
+	await runPlannedTests({
+		root: "F:/repo",
+		workspaceCwds: workspaces.map((workspace) => workspace.cwd),
+		allFiles: workspaces.map(
+			(workspace) => `${workspace.cwd}/src/example.test.ts`,
+		),
+		manifest: { workspaces },
+		tier: "unit",
+		workspaceConcurrency: 2,
+		runCommandImpl: async (_command, _args, options) => {
+			const workspace = normalizeRelPath(options.cwd).replace("F:/repo/", "");
+			if (workspace === "apps/desktop") {
+				assert.equal(normalActive, 0);
+				desktopActive = true;
+			} else {
+				assert.equal(desktopActive, false);
+				normalActive += 1;
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			if (workspace === "apps/desktop") desktopActive = false;
+			else normalActive -= 1;
+			return { exitCode: 0, output: workspace };
+		},
+	});
 });
 
 test("runPlannedTests passes selected include files to packageBin commands", async () => {

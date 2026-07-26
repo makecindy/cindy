@@ -11,11 +11,11 @@ import { describe, expect, it } from 'vitest';
 const sidebarSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 const filterHookSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useSidebarFilter.ts'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 describe('pinned project sidebar integration', () => {
   it('keeps pinned projects out of expanded Projects but available in the collapsed rail', () => {

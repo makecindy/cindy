@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +24,8 @@ const VALID_STATUSES = new Set([
 	"deferred",
 ]);
 const VALID_COVERAGE_MODES = new Set(["workspace", "allowlist"]);
+const VALID_EXECUTION_MODES = new Set(["normal", "exclusive"]);
+const MAX_DEFAULT_WORKSPACE_CONCURRENCY = 4;
 
 export function normalizeRelPath(value) {
 	return value.replace(/\\/g, "/");
@@ -41,6 +44,7 @@ export function parseCliOptions(args) {
 		tier: "unit",
 		workspaces: [],
 		excludeWorkspaces: [],
+		workspaceConcurrency: undefined,
 	};
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
@@ -67,9 +71,41 @@ export function parseCliOptions(args) {
 			index += 1;
 			continue;
 		}
+		if (
+			arg === "--workspace-concurrency" ||
+			arg.startsWith("--workspace-concurrency=")
+		) {
+			const inlineValue = arg.startsWith("--workspace-concurrency=")
+				? arg.slice("--workspace-concurrency=".length)
+				: undefined;
+			const value = inlineValue ?? args[index + 1];
+			if (!value || (!inlineValue && value.startsWith("--")))
+				throw new Error("--workspace-concurrency requires a positive integer");
+			options.workspaceConcurrency = parseWorkspaceConcurrency(value);
+			if (inlineValue === undefined) index += 1;
+			continue;
+		}
 		throw new Error(`Unknown option: ${arg}`);
 	}
 	return options;
+}
+
+export function parseWorkspaceConcurrency(value) {
+	if (!/^[1-9]\d*$/.test(String(value)))
+		throw new Error("--workspace-concurrency requires a positive integer");
+	const parsed = Number(value);
+	if (!Number.isSafeInteger(parsed))
+		throw new Error("--workspace-concurrency requires a positive integer");
+	return parsed;
+}
+
+export function defaultWorkspaceConcurrency(
+	availableParallelism = os.availableParallelism(),
+) {
+	const available = Number.isFinite(availableParallelism)
+		? Math.floor(availableParallelism)
+		: 1;
+	return Math.max(1, Math.min(MAX_DEFAULT_WORKSPACE_CONCURRENCY, available));
 }
 
 export function parseWorkspaceSelectorValue(value) {
@@ -281,6 +317,13 @@ export function validateManifest(manifestWorkspaces) {
 				throw new Error(`${workspace.cwd} ${tier} requires reason`);
 			if (isRunnableTier(config) && !config.command)
 				throw new Error(`${workspace.cwd} ${tier} requires command`);
+			if (
+				config.execution !== undefined &&
+				!VALID_EXECUTION_MODES.has(config.execution)
+			)
+				throw new Error(
+					`${workspace.cwd} ${tier} has invalid execution mode`,
+				);
 		}
 	}
 }
@@ -514,6 +557,105 @@ export function runCommand(command, args, options = {}) {
 	});
 }
 
+/**
+ * Runs independent tasks with a fixed upper bound while preserving result order.
+ * Workers pull the next task as soon as they finish, so one slow workspace does
+ * not hold an entire batch open.
+ */
+export async function mapWithConcurrency(items, concurrency, runItem) {
+	const limit = parseWorkspaceConcurrency(concurrency);
+	const results = new Array(items.length);
+	let nextIndex = 0;
+	const workers = Array.from(
+		{ length: Math.min(limit, items.length) },
+		async () => {
+			while (true) {
+				const index = nextIndex;
+				nextIndex += 1;
+				if (index >= items.length) return;
+				results[index] = await runItem(items[index], index);
+			}
+		},
+	);
+	await Promise.all(workers);
+	return results;
+}
+
+/**
+ * Exclusive runs form barriers around normal runs. This keeps a heavyweight
+ * workspace such as Desktop from multiplying its internal worker pool with the
+ * outer workspace concurrency.
+ */
+export async function runWithExclusiveBarriers(
+	runs,
+	concurrency,
+	runItem,
+) {
+	const results = [];
+	let normalSegment = [];
+	const flushNormalSegment = async () => {
+		if (normalSegment.length === 0) return;
+		results.push(
+			...(await mapWithConcurrency(normalSegment, concurrency, runItem)),
+		);
+		normalSegment = [];
+	};
+	for (const run of runs) {
+		if (run.tierConfig.execution !== "exclusive") {
+			normalSegment.push(run);
+			continue;
+		}
+		await flushNormalSegment();
+		results.push(await runItem(run));
+	}
+	await flushNormalSegment();
+	return results;
+}
+
+function formatElapsed(durationMs) {
+	if (durationMs < 1_000) return `${durationMs}ms`;
+	return `${(durationMs / 1_000).toFixed(1)}s`;
+}
+
+/**
+ * Buffers each child command and flushes it as one block on completion. Parallel
+ * workspaces remain observable without interleaving Vitest output line-by-line.
+ */
+export function createWorkspaceRunReporter({
+	stdout = process.stdout,
+	now = Date.now,
+} = {}) {
+	const startedAt = new Map();
+	return {
+		onRunStart(run) {
+			const key = `${run.workspace.cwd}\0${run.tier}`;
+			startedAt.set(key, now());
+			stdout.write(`START ${run.workspace.cwd} ${run.tier}\n`);
+		},
+		onCommandComplete({ run, stage, commandResult }) {
+			// Successful Vitest workspaces can contain thousands of per-file lines.
+			// The elapsed PASS line is sufficient; retain full output only when a
+			// command fails so diagnostics stay available without flooding CI logs.
+			if (commandResult.exitCode === 0 || !commandResult.output) return;
+			const output = commandResult.output.endsWith("\n")
+				? commandResult.output
+				: `${commandResult.output}\n`;
+			stdout.write(
+				`\n[${run.workspace.cwd} ${run.tier} ${stage}]\n${output}`,
+			);
+		},
+		onRunComplete(run, result) {
+			const key = `${run.workspace.cwd}\0${run.tier}`;
+			const durationMs = Math.max(0, now() - (startedAt.get(key) ?? now()));
+			startedAt.delete(key);
+			const status = result.exitCode === 0 ? "PASS" : `FAIL ${result.failure}`;
+			stdout.write(
+				`${status} ${run.workspace.cwd} ${run.tier} (${formatElapsed(durationMs)})\n`,
+			);
+		},
+	};
+}
+
 export function readAllFiles(root) {
 	const files = [];
 	function visit(absDir) {
@@ -542,6 +684,9 @@ export async function runPlannedTests({
 	workspaceCwds,
 	allFiles,
 	runCommandImpl = runCommand,
+	workspaceConcurrency,
+	reporter,
+	now = Date.now,
 }) {
 	const manifestWorkspaces = manifest.workspaces;
 	const actualWorkspaceCwds =
@@ -563,6 +708,8 @@ export async function runPlannedTests({
 	const discoveredFiles = allFiles ?? discoverTestFiles(readAllFiles(root));
 	const tiers = all ? listConfiguredTiers(manifestWorkspaces) : [tier];
 	const results = [];
+	const concurrency =
+		workspaceConcurrency ?? defaultWorkspaceConcurrency();
 	for (const currentTier of tiers) {
 		const runs = filterRunsByWorkspace(
 			planRuns(manifestWorkspaces, {
@@ -576,7 +723,12 @@ export async function runPlannedTests({
 				`No runnable test runs configured for tier ${currentTier}. ${describeTierStatus(manifestWorkspaces, currentTier)}`,
 			);
 		}
-		for (const run of runs) {
+		const tierResults = await runWithExclusiveBarriers(
+			runs,
+			concurrency,
+			async (run) => {
+			const startedAt = now();
+			reporter?.onRunStart?.(run);
 			const fileCheck = checkTestFiles(
 				run.workspace,
 				currentTier,
@@ -590,17 +742,26 @@ export async function runPlannedTests({
 				discoveredFiles,
 			);
 			const cwd = path.join(root, run.workspace.cwd);
-			let preflightFailed = false;
 			for (const preflight of run.tierConfig.preflight ?? []) {
 				const pnpmArgs = buildPreflightArgs(root, run.workspace, preflight);
 				const invocation = resolvePnpmInvocation(pnpmArgs);
 				const commandResult = await runCommandImpl(
 					invocation.command,
 					invocation.args,
-					{ cwd, shell: invocation.shell },
+					{
+						cwd,
+						shell: invocation.shell,
+						stdout: reporter ? null : undefined,
+						stderr: reporter ? null : undefined,
+					},
 				);
+				reporter?.onCommandComplete?.({
+					run,
+					stage: "preflight",
+					commandResult,
+				});
 				if (commandResult.exitCode !== 0) {
-					results.push({
+					const result = {
 						workspace: run.workspace.cwd,
 						tier: currentTier,
 						stage: "preflight",
@@ -613,12 +774,12 @@ export async function runPlannedTests({
 							exitCode: commandResult.exitCode,
 							output: commandResult.output,
 						}),
-					});
-					preflightFailed = true;
-					break;
+						durationMs: Math.max(0, now() - startedAt),
+					};
+					reporter?.onRunComplete?.(run, result);
+					return result;
 				}
 			}
-			if (preflightFailed) continue;
 			const pnpmArgs = buildPnpmArgs(
 				root,
 				run.workspace,
@@ -630,9 +791,19 @@ export async function runPlannedTests({
 			const commandResult = await runCommandImpl(
 				invocation.command,
 				invocation.args,
-				{ cwd, shell: invocation.shell },
+				{
+					cwd,
+					shell: invocation.shell,
+					stdout: reporter ? null : undefined,
+					stderr: reporter ? null : undefined,
+				},
 			);
-			results.push({
+			reporter?.onCommandComplete?.({
+				run,
+				stage: "test",
+				commandResult,
+			});
+			const result = {
 				workspace: run.workspace.cwd,
 				tier: currentTier,
 				stage: "test",
@@ -645,8 +816,13 @@ export async function runPlannedTests({
 					exitCode: commandResult.exitCode,
 					output: commandResult.output,
 				}),
-			});
-		}
+				durationMs: Math.max(0, now() - startedAt),
+			};
+			reporter?.onRunComplete?.(run, result);
+			return result;
+			},
+		);
+		results.push(...tierResults.filter(Boolean));
 	}
 	return results;
 }
@@ -656,7 +832,11 @@ export function printSummary(results, manifest) {
 	for (const result of results) {
 		const status = result.exitCode === 0 ? "PASS" : `FAIL ${result.failure}`;
 		const workspaceCwd = result.workspace?.cwd ?? result.workspace;
-		console.log(`${status} ${workspaceCwd} ${result.tier}`);
+		const elapsed =
+			Number.isFinite(result.durationMs)
+				? ` (${formatElapsed(result.durationMs)})`
+				: "";
+		console.log(`${status} ${workspaceCwd} ${result.tier}${elapsed}`);
 		if (result.command)
 			console.log(`  command: ${[result.command, ...(result.args ?? [])].join(" ")}`);
 	}
@@ -671,9 +851,13 @@ export function printSummary(results, manifest) {
 }
 
 async function main() {
-	const { all, tier, workspaces, excludeWorkspaces } = parseCliOptions(
-		process.argv.slice(2),
-	);
+	const {
+		all,
+		tier,
+		workspaces,
+		excludeWorkspaces,
+		workspaceConcurrency,
+	} = parseCliOptions(process.argv.slice(2));
 	const manifest = (await import("./test-workspaces.config.mjs")).default;
 	const results = await runPlannedTests({
 		root: ROOT,
@@ -682,6 +866,8 @@ async function main() {
 		all,
 		workspaces,
 		excludeWorkspaces,
+		workspaceConcurrency,
+		reporter: createWorkspaceRunReporter(),
 	});
 	printSummary(results, manifest);
 	if (results.some((result) => result.exitCode !== 0)) process.exitCode = 1;

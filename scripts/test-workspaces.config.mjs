@@ -1,5 +1,8 @@
-const unitVitestScript = { type: 'packageScript', script: 'test' };
 const vitestBin = (...args) => ({ type: 'packageBin', bin: 'vitest', args });
+// Workspace-level parallelism owns the global process budget. Keep ordinary
+// Vitest workspaces at one worker each so outer concurrency cannot multiply
+// every child process's default CPU-sized pool.
+const unitVitestCommand = (workers = 1) => vitestBin('run', `--maxWorkers=${workers}`);
 const noCollectableTestsReason = 'No collectable tests yet. Add tests and mark a tier required when this workspace gains testable logic.';
 const desktopDbInclude = [
   'src/main/localDb/**/__tests__/*.test.ts',
@@ -23,11 +26,17 @@ const noCollectableWorkspace = (name, cwd, reason = noCollectableTestsReason) =>
   tiers: {},
 });
 
-const requiredUnitWorkspace = (name, cwd) => ({
+const requiredUnitWorkspace = (name, cwd, { workers = 1, execution } = {}) => ({
   name,
   cwd,
   status: 'required',
-  tiers: { unit: { status: 'required', command: unitVitestScript } },
+  tiers: {
+    unit: {
+      status: 'required',
+      ...(execution ? { execution } : {}),
+      command: unitVitestCommand(workers),
+    },
+  },
 });
 
 export default {
@@ -39,8 +48,10 @@ export default {
       tiers: {
         unit: {
           status: 'required',
+          execution: 'exclusive',
           // Desktop unit tests spawn many Git/filesystem subprocesses; cap workers so
           // Windows does not exhaust process and file-lock budgets under full-suite load.
+          // It runs exclusively so these four workers never overlap outer workspace workers.
           command: vitestBin('run', '--maxWorkers=4'),
           exclude: [
             'src/main/localDb/**',
@@ -100,7 +111,9 @@ export default {
         },
       },
     },
-    requiredUnitWorkspace('mobile', 'apps/mobile'),
+    // Mobile has enough test files to become the critical path at one worker.
+    // Give it the full worker budget, but never overlap it with other workspaces.
+    requiredUnitWorkspace('mobile', 'apps/mobile', { workers: 4, execution: 'exclusive' }),
     requiredUnitWorkspace('@cindy/anthropic-compat-proxy', 'packages/anthropic-compat-proxy'),
     requiredUnitWorkspace('@cindy/anthropic-responses-bridge', 'packages/anthropic-responses-bridge'),
     requiredUnitWorkspace('@cindy/responses-chat-bridge', 'packages/responses-chat-bridge'),
@@ -128,7 +141,7 @@ export default {
       tiers: {
         unit: {
           status: 'required',
-          command: unitVitestScript,
+          command: unitVitestCommand(),
           include: ['src/__tests__/**/*.test.ts'],
         },
       },
