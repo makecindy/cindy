@@ -357,7 +357,7 @@ SECTION 2: npm packages (601 packages)
 - bplist-creator@0.1.0 — MIT — https://github.com/nearinfinity/node-bplist-creator
 - bplist-parser@0.3.1 — MIT — https://github.com/nearinfinity/node-bplist-parser
 - bplist-parser@0.3.2 — MIT — https://github.com/nearinfinity/node-bplist-parser
-- brace-expansion@5.0.7 — MIT — https://github.com/juliangruber/brace-expansion
+- brace-expansion@5.0.8 — MIT — https://github.com/juliangruber/brace-expansion
 - braces@3.0.3 — MIT — https://github.com/micromatch/braces
 - browserslist@4.28.6 — MIT — https://github.com/browserslist/browserslist
 - bser@2.1.1 — Apache-2.0 — https://github.com/facebook/watchman
@@ -2521,7 +2521,7 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN 
 OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-[50] Applies to: npm:brace-expansion@5.0.7
+[50] Applies to: npm:brace-expansion@5.0.8
 ------------------------------------------------------------------------------
 MIT License
 

@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-ios",
-  "documentNamespace": "https://cindy.app/spdx/mobile-ios/206246ae771fcc78ae8cfb6b1e5d6310d2ab83ee8c5ca58a541eba4b091ec6c1",
+  "documentNamespace": "https://cindy.app/spdx/mobile-ios/bcbee371f2714b4c4f18b156d42dd7bfd99ed8e2fd7e7a89d3dd3873c39324cf",
   "creationInfo": {
-    "created": "2026-07-25T09:00:18Z",
+    "created": "2026-07-26T02:38:39Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -3535,8 +3535,8 @@
     },
     {
       "name": "brace-expansion",
-      "SPDXID": "SPDXRef-Package-7beda3a9b7db41eb",
-      "versionInfo": "5.0.7",
+      "SPDXID": "SPDXRef-Package-0f66532ca9b9986b",
+      "versionInfo": "5.0.8",
       "downloadLocation": "https://github.com/juliangruber/brace-expansion",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -3546,7 +3546,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/brace-expansion@5.0.7"
+          "referenceLocator": "pkg:npm/brace-expansion@5.0.8"
         }
       ]
     },
@@ -11293,7 +11293,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-7beda3a9b7db41eb"
+      "relatedSpdxElement": "SPDXRef-Package-0f66532ca9b9986b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

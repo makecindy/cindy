@@ -5,7 +5,7 @@
   "name": "cindy-desktop-win",
   "documentNamespace": "https://cindy.app/spdx/desktop-win/a4ceee438b8b55f4ba8a27d4ec3b154cbe5badce74aeaeda93193b7a3499b1e7",
   "creationInfo": {
-    "created": "2026-07-25T09:00:18Z",
+    "created": "2026-07-26T02:38:39Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
