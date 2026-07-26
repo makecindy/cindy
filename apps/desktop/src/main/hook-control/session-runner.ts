@@ -157,10 +157,12 @@ async function resolveNewSessionConfig(
   const preferredProviderId = workdirProviderId ?? resolved.providerId;
 
   // 目录可用时始终把最终模型收敛到一个真实已连接、且确实提供它的来源。
-  // 目录读取失败才保留旧行为(草稿来源原样透传),避免临时目录故障阻断 hook。
+  // 目录读取失败才保留旧行为(**只**透传草稿来源, 不透传目录级来源 —— 后者未经
+  // 收窄校验, 降级窗口直接钉给会话会绕过连接态/供给校验; 数据不足不猜, 维持
+  // 加目录来源之前的降级语义, codex review)。
   const providerId = providers
     ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
-    : preferredProviderId;
+    : resolved.providerId;
   return { ...resolved, providerId };
 }
 

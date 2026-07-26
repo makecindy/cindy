@@ -11,8 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const tmp = vi.hoisted(() => ({ dir: '' }));
 
-vi.mock('electron', () => ({
-  app: { getPath: () => tmp.dir },
+// owner-scoped 路径打桩到临时目录(真实实现依赖 electron app 与登录态)。
+vi.mock('../../im/ownerScopedStorage.js', () => ({
+  ownerScopedImUserDataPath: (...parts: string[]) => path.join(tmp.dir, ...parts),
 }));
 
 import {

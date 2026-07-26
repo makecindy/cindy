@@ -153,17 +153,20 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     expect(screen.getByTestId('model-selector').getAttribute('data-sources-enabled')).toBe('true');
   });
 
-  it('分段行选择:(来源, 模型)分别落 applyProviderSource 与 model patch', () => {
+  // 双写串联(Greptile/codex review):model/effort 走远端 prefs patch,来源作为
+  // applyPatch 第三参在远端成功后落本地 —— 不再各自 fire-and-forget(分裂态风险)。
+  it('分段行选择:(模型, 来源)经 applyPatch 串联落库,不直接调 applyProviderSource', () => {
     const applyProviderSource = vi.fn();
     render(
       <WorkspacePrefsEditor alias="cindy" state={stateWith({ applyProviderSource })} />,
     );
     fireEvent.keyDown(screen.getByTestId('model-selector'));
-    expect(applyProviderSource).toHaveBeenCalledWith('cindy', 'anthropic');
     expect(applyPatch).toHaveBeenCalledWith(
       'cindy',
       expect.objectContaining({ model: 'claude-opus-5', agentKind: 'claude-code' }),
+      'anthropic',
     );
+    expect(applyProviderSource).not.toHaveBeenCalled();
   });
 
   it('选中模型落 model id,并随手写入 agent 配对', () => {

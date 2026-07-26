@@ -16,18 +16,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { app } from 'electron';
 
-export type HookProviderChannel = 'slack' | 'telegram';
+import type { HookWorkspaceProviderSourceEntry } from '../../shared/hookControlIpc.js';
+import { ownerScopedImUserDataPath } from '../im/ownerScopedStorage.js';
 
-export interface WorkspaceProviderSourceEntry {
-  channel: HookProviderChannel;
-  /** Slack multi-team 的归属 team;Telegram / 单绑定为 null。 */
-  teamId: string | null;
-  /** 目录别名(内置「对话」= chat)。 */
-  workspace: string;
-  providerId: string;
-}
+export type HookProviderChannel = HookWorkspaceProviderSourceEntry['channel'];
+/** 持久化条目形状 = IPC 契约形状(shared 单一来源, 防 main/renderer 漂移)。 */
+export type WorkspaceProviderSourceEntry = HookWorkspaceProviderSourceEntry;
 
 interface StoreFile {
   entries: WorkspaceProviderSourceEntry[];
@@ -35,8 +30,11 @@ interface StoreFile {
 
 const FILE_NAME = 'hook-workspace-provider-source.json';
 
+// owner-scoped(owners/<hash>/…):来源偏好属账号数据 —— 放 userData 根会让
+// 同机第二个账号消费第一个账号留下的订阅来源(Greptile/codex review 同点)。
+// 新文件无 legacy 迁移负担,直接落 scoped 路径。
 function filePath(): string {
-  return path.join(app.getPath('userData'), FILE_NAME);
+  return ownerScopedImUserDataPath(FILE_NAME);
 }
 
 function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
@@ -65,6 +63,7 @@ function readFileEntries(fp: string): WorkspaceProviderSourceEntry[] {
 }
 
 function writeFileEntries(fp: string, entries: WorkspaceProviderSourceEntry[]): void {
+  fs.mkdirSync(path.dirname(fp), { recursive: true });
   const tmp = `${fp}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ entries } satisfies StoreFile, null, 2), 'utf-8');
   fs.renameSync(tmp, fp);

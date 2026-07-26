@@ -45,6 +45,7 @@ import { ownerScopedUserDataPath } from '../appSessionState.js';
 import {
   HOOK_CONTROL_EVENT,
   HOOK_CONTROL_INVOKE,
+  HOOK_WORKSPACE_ALIAS_RE,
   type HookPrefsPatch,
   type HookPrefsView,
   type ProviderPrefsView,
@@ -712,13 +713,24 @@ export function registerHookControlIpc(): void {
       if (channel !== 'slack' && channel !== 'telegram') {
         throwIpcError('INVALID_PARAMS', 'channel must be slack or telegram');
       }
+      // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
+      // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。
       const workspace = requireString(p.workspace, 'workspace');
+      if (!HOOK_WORKSPACE_ALIAS_RE.test(workspace)) {
+        throwIpcError('INVALID_PARAMS', 'workspace must match the alias format');
+      }
       const teamId =
         p.teamId === undefined || p.teamId === null ? null : requireString(p.teamId, 'teamId');
+      if (teamId !== null && teamId.length > 64) {
+        throwIpcError('INVALID_PARAMS', 'teamId too long');
+      }
       const providerId =
         p.providerId === undefined || p.providerId === null
           ? null
           : requireString(p.providerId, 'providerId');
+      if (providerId !== null && providerId.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'providerId too long');
+      }
       return {
         entries: setWorkspaceProviderSource(channel, teamId, workspace, providerId),
       };

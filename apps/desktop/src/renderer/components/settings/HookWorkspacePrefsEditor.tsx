@@ -110,7 +110,12 @@ export interface HookWorkspacePrefsState {
   retry: (() => void) | null;
   /** 桌面新会话默认设置(解析「当前生效默认值」的数据源; 未就绪为 null)。 */
   imDefaults: ImDefaultsLike | null;
-  applyPatch: (workspace: string, patch: HookPrefsPatch) => void;
+  /** alsoProviderSource: 远端写成功后串联落本地来源(undefined = 不动来源)。 */
+  applyPatch: (
+    workspace: string,
+    patch: HookPrefsPatch,
+    alsoProviderSource?: string | null,
+  ) => void;
   /** (multi-team)可用绑定清单(未 displaced); 单绑定/老 server 时 ≤1 条。 */
   teams: Array<{ teamId: string; teamName: string | null }>;
   /** 当前偏好归属 team(teams 非空时必有值; 选中项失效自动回落首个)。 */
@@ -325,13 +330,19 @@ export function useHookWorkspacePrefs(
     [providerSources, provider, multiTeam, selectedTeamId],
   );
 
+  // latest-wins 守卫(Copilot review): 快速连选时, 较慢的旧回复不得覆盖较新的选择。
+  const providerSourceRevisionRef = useRef(0);
   const applyProviderSource = useCallback(
     (alias: string, providerId: string | null) => {
       const teamId = multiTeam ? selectedTeamId : null;
+      const revision = ++providerSourceRevisionRef.current;
       void window.electronAPI.hookControl
         .setWorkspaceProviderSource({ channel: provider, teamId, workspace: alias, providerId })
-        .then((res) => setProviderSources(res.entries))
+        .then((res) => {
+          if (revision === providerSourceRevisionRef.current) setProviderSources(res.entries);
+        })
         .catch((err: unknown) => {
+          if (revision !== providerSourceRevisionRef.current) return;
           toast.error(
             extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'),
           );
@@ -341,7 +352,12 @@ export function useHookWorkspacePrefs(
   );
 
   const applyPatch = useCallback(
-    (workspace: string, patch: HookPrefsPatch) => {
+    // alsoProviderSource(可选): 远端 model/effort 写**成功后**再落本地来源 ——
+    // 两个持久面串联而非并行(Greptile/codex review: 并行 fire-and-forget 会在
+    // 一半失败时留下「新来源配旧模型」的分裂态)。顺序选「先远端后本地」:远端
+    // 失败 → 整体失败, 来源不动, 状态与操作前一致;本地失败(概率远小)→ 旧来源
+    // 配新模型, 派发端 effectiveSourceIdForModel 收窄兜底, 行为等于改前语义。
+    (workspace: string, patch: HookPrefsPatch, alsoProviderSource?: string | null) => {
       // A server push, binding change, retry, or newer mutation must win over
       // this response. Otherwise a delayed set reply can roll the UI back to
       // an older provider snapshot and clear another mutation's pending state.
@@ -372,6 +388,9 @@ export function useHookWorkspacePrefs(
           fetchRevisionRef.current += 1;
           setPrefsView(nextPrefs);
           setLoadError(null);
+          if (alsoProviderSource !== undefined) {
+            applyProviderSource(workspace, alsoProviderSource);
+          }
         })
         .catch((err: unknown) => {
           if (revision !== fetchRevisionRef.current) return;
@@ -384,7 +403,7 @@ export function useHookWorkspacePrefs(
           if (mutationRevision === mutationRevisionRef.current) setPendingWs(null);
         });
     },
-    [fetchPrefs, t, multiTeam, provider, selectedTeamId],
+    [fetchPrefs, t, multiTeam, provider, selectedTeamId, applyProviderSource],
   );
 
   const bound = providerBindingConfirmed && activePrefsView?.bound === true;
@@ -560,9 +579,24 @@ export function WorkspacePrefsEditor({
             setFast: setProviderModelFast,
           }}
           currentProviderId={state.providerSourceFor(alias)}
-          onProviderChange={(providerId, modelId) => {
-            state.applyProviderSource(alias, providerId);
-            if (modelId) applyModel(modelId);
+          // 分段行原子选择:model/effort 走远端 prefs, 成功后来源落本地(串联,
+          // 见 applyPatch 的 alsoProviderSource 注释)。effort 用行上解析值(含
+          // hover 改过的全局预设记忆, codex review), 不足时 patch 已按模型校准。
+          onProviderChange={(providerId, modelId, rowEffort) => {
+            if (eff.agentKind.id === null) return;
+            const caps = toPrefsCaps(effAgentCaps);
+            if (modelId) {
+              const patch = patchForModelChange(eff.agentKind.id, modelId, prefs, caps);
+              if (
+                rowEffort &&
+                caps?.models.find((m) => m.id === modelId)?.efforts.includes(rowEffort)
+              ) {
+                patch.effort = rowEffort;
+              }
+              state.applyPatch(alias, patch, providerId);
+            } else {
+              state.applyProviderSource(alias, providerId);
+            }
           }}
           onModelChange={applyModel}
           onEffortChange={(next) => {
