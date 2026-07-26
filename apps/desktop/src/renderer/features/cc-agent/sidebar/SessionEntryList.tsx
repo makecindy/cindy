@@ -122,7 +122,7 @@ export function SessionEntryRows({
               key={entry.session.id}
               {...commonProps}
               variant="list"
-              isFirst={index === 0 || entries[index - 1]?.kind !== 'session'}
+              isFirst={index === 0}
               hideBottomDivider={nextHighlighted}
             />
           ) : (

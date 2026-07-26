@@ -12,6 +12,10 @@ const sidebarSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
   'utf8',
 );
+const filterHookSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useSidebarFilter.ts'),
+  'utf8',
+);
 
 describe('pinned project sidebar integration', () => {
   it('keeps pinned projects out of expanded Projects but available in the collapsed rail', () => {
@@ -24,10 +28,29 @@ describe('pinned project sidebar integration', () => {
     );
   });
 
+  it('keeps all-pinned projects available while omitting their pinned child rows', () => {
+    expect(sidebarSource).toContain(
+      'const groupsWithPinnedProjects = useProjectGroups(',
+    );
+    expect(sidebarSource).toContain(
+      'if (filter.projectsAsSet === null) return groupsWithPinnedProjects.projects;',
+    );
+    expect(sidebarSource).toContain(
+      'sessions: matchingSessions.filter((session) => session.pinnedAt == null)',
+    );
+  });
+
   it('exposes project pin toggling from the collapsed rail project menu', () => {
     expect(sidebarSource).toContain('pinnedProjectKeys={pinnedProjectKeys}');
     expect(sidebarSource).toContain('onToggleProjectPin={handleToggleProjectPin}');
     expect(sidebarSource).toContain('pinnedProjectKeys.has(menuTarget.projectKey)');
+  });
+
+  it('applies main-process pinned-order broadcasts to every mounted sidebar hook', () => {
+    expect(filterHookSource).toContain(
+      'window.electronAPI.sidebarSettingsOnPinnedOrderChanged((next) => {',
+    );
+    expect(filterHookSource).toContain('setManualPinnedOrderState((prev) =>');
   });
 
   it('omits sessions belonging to pinned projects from date groups', () => {

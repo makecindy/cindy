@@ -922,6 +922,13 @@ function ExpandedView({
   /* ---- Grouping & collapse ---- */
   const allGroups = useProjectGroups(sidebarSessions, projectAliases.aliases);
   const groups = useProjectGroups(activityFilteredSessions, projectAliases.aliases);
+  // 普通项目目录也需要保留「所有会话都已单独置顶」的项目身份，供用户继续
+  // 从 ProjectNode 菜单置顶整个项目；实际项目子行在渲染前仍会排除已置顶会话。
+  const groupsWithPinnedProjects = useProjectGroups(
+    activityFilteredSessions,
+    projectAliases.aliases,
+    true,
+  );
   // Project pinning is independent from conversation pinning. This catalogue
   // keeps pinned conversations inside their project solely for project identity
   // and project-level actions; the normal project tree above remains deduped.
@@ -967,7 +974,7 @@ function ExpandedView({
     if (isLoadingSessions) return; // 等首次加载完
     const targetDir = pendingFocus.workingDir;
     const targetKey = normalizeProjectKey(targetDir) ?? `local:${targetDir}`;
-    const exists = groups.projects.some((p) => p.projectKey === targetKey);
+    const exists = groupsWithPinnedProjects.projects.some((p) => p.projectKey === targetKey);
     if (exists) {
       collapse.expand(targetKey);
       // RAF 等 expand 触发的 re-render 完成 (project header DOM 在折叠态下已渲染,
@@ -988,7 +995,14 @@ function ExpandedView({
       toast.warning(t('ccAgent.sidebar.deepLink.projectNotFound'));
     }
     consumePendingProjectFocus();
-  }, [pendingFocus, groups.projects, collapse, isLoadingSessions, selectedMachineId, t]);
+  }, [
+    pendingFocus,
+    groupsWithPinnedProjects.projects,
+    collapse,
+    isLoadingSessions,
+    selectedMachineId,
+    t,
+  ]);
 
   /* ---- 自动展开：首条消息把 session 从未分类挪进 Project 时，
    *      若目标 Project 当前折叠，幂等展开它，避免新会话视觉上"消失"。
@@ -1031,10 +1045,10 @@ function ExpandedView({
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
   const visibleProjects = useMemo(() => {
-    if (filter.projectsAsSet === null) return groups.projects;
+    if (filter.projectsAsSet === null) return groupsWithPinnedProjects.projects;
     const allowed = filter.projectsAsSet;
-    return groups.projects.filter((p) => allowed.has(p.projectKey));
-  }, [groups.projects, filter.projectsAsSet]);
+    return groupsWithPinnedProjects.projects.filter((p) => allowed.has(p.projectKey));
+  }, [groupsWithPinnedProjects.projects, filter.projectsAsSet]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
   const vendorPredicate = useMemo(() => {
@@ -1152,11 +1166,16 @@ function ExpandedView({
     const unpinnedProjects = visibleProjects.filter(
       (project) => !pinnedProjectKeys.has(project.projectKey),
     );
-    const projects = vendorPredicate
-      ? unpinnedProjects
-          .map((p) => ({ ...p, sessions: p.sessions.filter(vendorPredicate) }))
-          .filter((p) => p.sessions.length > 0)
-      : unpinnedProjects;
+    const projects = unpinnedProjects.flatMap((project) => {
+      const matchingSessions = vendorPredicate
+        ? project.sessions.filter(vendorPredicate)
+        : project.sessions;
+      if (matchingSessions.length === 0) return [];
+      return [{
+        ...project,
+        sessions: matchingSessions.filter((session) => session.pinnedAt == null),
+      }];
+    });
     return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
   }, [
     visibleProjects,
@@ -1169,11 +1188,16 @@ function ExpandedView({
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
   const visibleRailProjectsWithVendor = useMemo(() => {
-    const projects = vendorPredicate
-      ? visibleProjects
-          .map((p) => ({ ...p, sessions: p.sessions.filter(vendorPredicate) }))
-          .filter((p) => p.sessions.length > 0)
-      : visibleProjects;
+    const projects = visibleProjects.flatMap((project) => {
+      const matchingSessions = vendorPredicate
+        ? project.sessions.filter(vendorPredicate)
+        : project.sessions;
+      if (matchingSessions.length === 0) return [];
+      return [{
+        ...project,
+        sessions: matchingSessions.filter((session) => session.pinnedAt == null),
+      }];
+    });
     return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
   }, [visibleProjects, vendorPredicate, filter.sortBy, filter.manualProjectOrder]);
 

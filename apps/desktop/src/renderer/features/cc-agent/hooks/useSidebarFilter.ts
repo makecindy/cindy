@@ -41,7 +41,7 @@
  *   不依赖 React 渲染。Hook 只做 `useState` + 持久化副作用。
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   loadStatus,
@@ -163,6 +163,18 @@ export function useSidebarFilter(): UseSidebarFilterReturn {
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => loadSortBy());
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() => loadManualProjectOrder());
   const [manualPinnedOrder, setManualPinnedOrderState] = useState<string[]>(() => loadManualPinnedOrder());
+
+  useEffect(
+    () =>
+      window.electronAPI.sidebarSettingsOnPinnedOrderChanged((next) => {
+        setManualPinnedOrderState((prev) =>
+          next.length === prev.length && next.every((id, index) => id === prev[index])
+            ? prev
+            : Array.from(next),
+        );
+      }),
+    [],
+  );
 
   const setStatus = useCallback((s: FilterStatus) => {
     setStatusState(s);
