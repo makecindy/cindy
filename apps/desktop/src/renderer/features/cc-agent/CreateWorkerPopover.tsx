@@ -343,19 +343,45 @@ export function CreateWorkerPopover({
       setModel(modelId);
       const available = activeModels.find((m) => m.id === modelId);
       if (!available) return;
+      // 档位表按选中来源自己的目录条目:activeModels 是首来源 wins 的拍平清单,
+      // 同 id 模型的 efforts/defaultEffort 跨来源可分叉,按拍平条目校验会保留/赋予
+      // 选中来源不支持的档位,提交后被 main 侧路由来源校验拒掉(codex review)。
+      // 未收窄出显式来源时取生效默认来源的条目;来源条目缺失或无档位元数据时
+      // 回落拍平条目(device-link 无本地目录,handleProviderChange 本就不接线)。
+      const effortSourceId =
+        narrowed ?? effectiveSourceIdForModel(providers, null, modelId, agent);
+      const effortSourceProvider = effortSourceId
+        ? connectedProvidersForAgent(providers, agent).find((p) => p.id === effortSourceId)
+        : undefined;
+      const sourceEntry = effortSourceProvider
+        ? getModel(effortSourceProvider, modelId, agent)
+        : undefined;
+      const effortMeta = sourceEntry?.efforts ? sourceEntry : available;
+      // 宽化为 string 数组做 includes:目录条目的 efforts 是 model-providers 包的
+      // 字面量联合,与本组件的 Effort(string)不同源,语义同为档位 id。
+      const validEfforts: readonly string[] = effortMeta.efforts;
       const remembered =
         reconciledEffort ??
         (providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
-      if (remembered && available.efforts.includes(remembered)) {
-        setEffort(remembered);
-      } else if (available.efforts.length > 0) {
+      let nextEffort: Effort | null = null;
+      if (remembered && validEfforts.includes(remembered)) {
+        nextEffort = remembered;
+      } else if (validEfforts.length > 0) {
         // 该模型无共享预设(如 workerCreationPrefs 早于预设 store 的老数据)时,对齐
         // 目标行显示的 defaultEffort(非活跃行的 effort 徽标 = 预设 ?? defaultEffort,
         // 见 ModelSelector 行级 effort 派生):旧 live 值恰好也被目标支持时保留它,
         // 会让创建参数与行上显示的档位不一致(codex review);与下方 Fast 的
         // 「无预设 = 对齐显示」同规则。钉/重选当前生效来源已在上方早退,live 值
         // 不受本分支影响。
-        setEffort(available.defaultEffort ?? available.efforts[available.efforts.length - 1]);
+        nextEffort = effortMeta.defaultEffort ?? effortMeta.efforts[effortMeta.efforts.length - 1];
+      }
+      if (nextEffort) setEffort(nextEffort);
+      // 真实选定 (来源, 模型) 要写 choice:更新该来源槽的 lastModel(composer 与
+      // 其它标准选择器的 resolveSourceSwitch 用它做切来源落点),否则本面板的显式
+      // 选择不进全局记忆,别处切到该来源仍恢复旧模型(codex review)。无档模型
+      // 跳过 —— store 的 lastModel 依附 effort 记录。
+      if (effortSourceId && nextEffort) {
+        setProviderModelChoice(agent, effortSourceId, modelId, nextEffort);
       }
       if (!providerFastSupported(narrowed, modelId)) {
         setFast(false);

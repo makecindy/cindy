@@ -271,6 +271,14 @@ type ResolveWorkerConfigResult =
       effort: string | null;
       fastMode: boolean;
       providerId: string | null;
+      /**
+       * 显式 effort 被拍平首见条目拒绝的**暂存**错误:拍平清单(首来源 wins,不含
+       * 连接态)不是档位权威 —— 实际路由来源(显式/缓存/默认解析)的条目可能支持
+       * 该档(如首见来源已断开且缺 xhigh,而生效默认来源提供,codex review)。由
+       * 调用方在解析出路由来源后裁决:有该来源元数据则按它重归一定论;没有(旧
+       * 组装方)才按本错误落地。
+       */
+      pendingEffortError?: string;
     }
   | {
       ok: false;
@@ -319,17 +327,8 @@ function resolveWorkerConfig(params: {
   lead: OrcaLeadSessionSnapshot;
   defaults: OrcaWorkerDefaultsSnapshot;
   availableModels: OrcaWorkerModelCapabilities[];
-  /**
-   * 显式来源对某 model 的 effort 元数据;返回 undefined(未显式选来源 / 来源无该
-   * 元数据)时按拍平清单条目归一。effort 档位是 per-(provider, model) 的,显式来源
-   * 的归一必须用它自己的条目,否则拍平首见条目会误拒该来源支持的档位(explicit
-   * 时归一直接 error 早退)或误放行它不支持的档位(codex review)。
-   */
-  explicitEffortMeta?: (
-    model: string,
-  ) => { efforts: readonly string[]; defaultEffort: string | null } | undefined;
 }): ResolveWorkerConfigResult {
-  const { input, lead, defaults, availableModels, explicitEffortMeta } = params;
+  const { input, lead, defaults, availableModels } = params;
   const model = input.model
     ?? defaults.model
     ?? (input.agent === lead.agentKind ? lead.model : input.agent === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6');
@@ -340,23 +339,18 @@ function resolveWorkerConfig(params: {
       message: `model "${model}" not available for ${input.agent}. valid: ${availableModels.map((candidate) => candidate.id).join(', ')}`,
     };
   }
-  const sourceEffortMeta = explicitEffortMeta?.(model);
   const normalizedEffort = normalizeResolvedEffort({
-    model: sourceEffortMeta
-      ? {
-          id: model,
-          efforts: sourceEffortMeta.efforts,
-          defaultEffort: sourceEffortMeta.defaultEffort,
-        }
-      : modelCapabilities,
+    model: modelCapabilities,
     effort: input.effort ?? defaults.effort ?? lead.effort,
     explicit: input.effort !== undefined,
   });
-  if (!normalizedEffort.ok) return normalizedEffort;
   return {
     ok: true,
     model,
-    effort: normalizedEffort.effort,
+    // 归一 !ok 只发生在 explicit 输入:此处不 error 早退,暂存给调用方按实际路由
+    // 来源的档位表裁决(见 pendingEffortError 注);其余字段照常解析。
+    effort: normalizedEffort.ok ? normalizedEffort.effort : null,
+    ...(normalizedEffort.ok ? {} : { pendingEffortError: normalizedEffort.message }),
     providerId: defaults.providerId !== undefined
       ? defaults.providerId
       : (input.agent === lead.agentKind ? lead.providerId : null),
@@ -505,18 +499,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const explicitSourceProvider = explicitSourceId === null
-      ? undefined
-      : agentProviders.find((provider) => provider.id === explicitSourceId);
-    const resolvedConfig = resolveWorkerConfig({
-      input: params,
-      lead,
-      defaults,
-      availableModels,
-      // 显式来源的 effort 归一必须按该来源自己的条目(codex review):explicit effort
-      // 被拍平首见条目误拒发生在归一内部的 error 早退,后面按路由来源的重归一救不了。
-      explicitEffortMeta: (model) => explicitSourceProvider?.effortMetaByModel?.[model],
-    });
+    const resolvedConfig = resolveWorkerConfig({ input: params, lead, defaults, availableModels });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
     }
@@ -575,11 +558,14 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         : (defaults.fastMode ?? !!lead.fastMode);
       resolved.fastMode = providerSupportsFast && requestedFast === true;
     }
-    // effort 按路由来源自己的条目**重归一**:resolveWorkerConfig 已按拍平首见条目
-    // 归一过,但自定义来源的同 id 模型 efforts/defaultEffort 可分叉 —— 面板行按
-    // 该来源元数据显示可选档位,创建却按首见条目得出 effort:null,或反向拒绝该行
-    // 支持的档位(codex review)。重归一用与 resolveWorkerConfig 相同的**原始输入**,
-    // 不能拿已归一的 resolved.effort 二次级联;无元数据(旧组装方)保留拍平归一结果。
+    // effort 按路由来源自己的条目**重归一定论**:resolveWorkerConfig 按拍平首见
+    // 条目归一只是初值(该条目不含连接态、同 id 模型档位表跨来源可分叉),显式
+    // 来源、defaults 缓存来源与默认解析来源统一在这里按权威档位表收口 —— 误放行
+    // (无档副本携带拍平档位)与误拒(路由来源支持而拍平缺档,explicit 输入已被
+    // 暂存为 pendingEffortError,不在归一处 error 早退)两个方向都在此裁决
+    // (codex review 两轮)。重归一用与 resolveWorkerConfig 相同的**原始输入**,
+    // 不拿已归一值二次级联;路由来源无元数据(旧组装方)时没有更权威的档位表,
+    // 按拍平结果落地 —— 含暂存的拒绝。
     const routeEffortMeta = routeProvider?.effortMetaByModel?.[resolved.model];
     if (routeEffortMeta) {
       const renormalized = normalizeResolvedEffort({
@@ -595,6 +581,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         return { ok: false, errorCode: 'INVALID_PARAMS', message: renormalized.message };
       }
       resolved.effort = renormalized.effort;
+    } else if (resolvedConfig.pendingEffortError) {
+      return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.pendingEffortError };
     }
     const budgetRouteProviderId = explicitSourceId !== null
       ? explicitSourceId

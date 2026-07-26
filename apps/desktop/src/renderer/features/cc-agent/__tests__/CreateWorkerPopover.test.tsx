@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __resetForTest as resetProviderModelMemoryForTest,
+  getProviderModelChoice,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelFast,
@@ -41,7 +42,15 @@ const mocks = vi.hoisted(() => ({
     name: string;
     connected: boolean;
     agents: string[];
-    models: Record<string, Array<{ id: string; supportsFastMode?: boolean }>>;
+    models: Record<
+      string,
+      Array<{
+        id: string;
+        supportsFastMode?: boolean;
+        efforts?: string[];
+        defaultEffort?: string | null;
+      }>
+    >;
   }>,
 }));
 
@@ -845,5 +854,99 @@ describe('CreateWorkerPopover', () => {
     const raw = JSON.parse(window.localStorage.getItem('xdt:providerModelMemory:v2') ?? '{}');
     expect(Object.keys(raw)).toContain('codex:openai');
     expect(Object.keys(raw)).not.toContain('codex:ghost-provider');
+  });
+
+  it('resolves effort from the selected provider catalog row, not the flattened union', async () => {
+    // gpt-5.5 的拍平条目(首来源 openai wins)默认 high,而 xd 自己的目录条目只有
+    // low 档:选 xd 行(无共享预设)必须落 xd 条目的 defaultEffort,不能按拍平条目
+    // 保留/赋予 xd 不支持的档位 —— 提交后会被 main 侧路由来源校验拒掉(codex review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' }],
+          'claude-code': [],
+        },
+      },
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: {
+          codex: [{ id: 'gpt-5.5', efforts: ['low'], defaultEffort: 'low' }],
+          'claude-code': [],
+        },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'xd', effort: 'low' }),
+      ),
+    );
+  });
+
+  it('persists the picked (source, model) into the provider choice slot', async () => {
+    // 选行是一次真实选定:必须写该来源槽的 lastModel(composer/其它标准选择器的
+    // resolveSourceSwitch 用它做切来源落点),否则本面板的显式选择不进全局记忆,
+    // 别处切到该来源仍恢复旧模型(codex review)。
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+      {
+        id: 'xd',
+        name: 'XD Gateway',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false },
+    ];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
+    );
+    fireEvent.click(screen.getByTestId('pick-xd-row-bare'));
+
+    expect(getProviderModelChoice('codex', 'xd')).toEqual({ model: 'gpt-5.5', effort: 'high' });
   });
 });

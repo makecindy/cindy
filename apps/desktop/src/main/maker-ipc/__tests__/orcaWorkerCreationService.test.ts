@@ -1393,6 +1393,60 @@ describe('buildNoProviderMessage', () => {
     });
   });
 
+  it('allows an explicit effort the flattened descriptor lacks when the route provider supports it', async () => {
+    // 拍平首见条目(可能来自已断开来源,不含连接态)缺 xhigh,而实际路由来源
+    // (未显式时的生效默认来源)支持:explicit effort 不得在首次归一处 error 早退,
+    // 暂存后由路由来源档位表裁决放行(codex review)。
+    const { service } = createDeps({
+      getAvailableModels: vi.fn((agent: AgentKind) => (
+        agent === 'codex'
+          ? [{ id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: false }]
+          : []
+      )),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: ['gpt-5.5'],
+          effortMetaByModel: {
+            'gpt-5.5': { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' },
+          },
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model: 'gpt-5.5', effort: 'xhigh' },
+    });
+  });
+
+  it('surfaces the flattened rejection when the route provider carries no effort metadata', async () => {
+    // 路由来源无 effort 元数据(旧组装方)时没有更权威的档位表:explicit 无效输入
+    // 的暂存拒绝按拍平条目落地,不静默吞掉派发 null(行为与重构前一致)。
+    const { service } = createDeps();
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      effort: 'ultra',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_PARAMS',
+    });
+  });
+
   it('renormalizes effort against the default route provider when no explicit source is set', async () => {
     // 未显式选来源时实际路由来源是 lead/defaults 解析出的 xd:其 gpt-5.5 条目只有
     // low 档,lead effort=medium 按拍平条目(四档)归一原样通过,必须再按路由来源
