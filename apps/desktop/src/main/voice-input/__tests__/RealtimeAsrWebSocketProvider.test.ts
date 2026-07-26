@@ -154,6 +154,48 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
       .toBe('XD LiteLLM realtime transcription failed.');
     expect(realtimeErrorMessage({ type: 'error', error: { message: 'upstream rejected session' } }, 'fallback'))
       .toBe('upstream rejected session');
+    expect(realtimeErrorMessage(
+      { type: 'error', error: { message: 'signed_url=https://example.test?token=secret' } },
+      'Custom realtime ASR failed.',
+      true,
+    )).toBe('Custom realtime ASR failed.');
+  });
+
+  it('redacts upstream application errors before custom startup rejects', async () => {
+    const server = new WebSocketServer({ port: 0 });
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+    server.on('connection', (socket) => {
+      socket.on('message', (data) => {
+        const message = JSON.parse(data.toString()) as { type?: string };
+        if (message.type === 'session.update') {
+          socket.send(JSON.stringify({
+            type: 'error',
+            error: { message: 'signed_url=https://example.test?token=secret' },
+          }));
+        }
+      });
+    });
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+        model: 'gpt-realtime-whisper',
+        providerKind: 'custom-realtime-asr',
+        errorFallbackMessage: 'Custom realtime ASR failed.',
+        redactUpstreamErrors: true,
+      });
+      provider.onEvent(() => {});
+
+      await expect(provider.start()).rejects.toThrow('Custom realtime ASR failed.');
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('builds provider-specific session update payloads', () => {
@@ -376,6 +418,8 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
         credentialCacheKey: 'test-key-revision',
         realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
         model: 'gpt-realtime-whisper',
+        errorFallbackMessage: 'Custom realtime ASR failed.',
+        redactUpstreamErrors: true,
       });
 
       await waitFor(() => serverSocket?.readyState === WebSocket.CLOSED);

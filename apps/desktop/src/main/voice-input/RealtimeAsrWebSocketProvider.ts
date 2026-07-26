@@ -26,6 +26,8 @@ export type RealtimeAsrWebSocketProviderOptions = {
   connectTimeoutMs?: number;
   missingCredentialMessage?: string;
   errorFallbackMessage?: string;
+  /** Replace upstream application error text with errorFallbackMessage. */
+  redactUpstreamErrors?: boolean;
 };
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
@@ -456,6 +458,7 @@ function createWarmRealtimeSession(
           rejectOnce(new Error(realtimeErrorMessage(
             event,
             options.errorFallbackMessage ?? 'OpenAI realtime transcription failed.',
+            options.redactUpstreamErrors,
           )));
         }
       };
@@ -615,6 +618,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly connectTimeoutMs: number;
   private readonly missingCredentialMessage: string;
   private readonly errorFallbackMessage: string;
+  private readonly redactUpstreamErrors: boolean;
   private socket?: WebSocket;
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
@@ -688,6 +692,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.missingCredentialMessage =
       options.missingCredentialMessage ?? 'Codex ChatGPT login is required for realtime voice input.';
     this.errorFallbackMessage = options.errorFallbackMessage ?? 'OpenAI realtime transcription failed.';
+    this.redactUpstreamErrors = options.redactUpstreamErrors === true;
     this.recorder = isVoiceInputRecordingEnabled()
       ? new VoiceInputSessionRecorder(makeRecorderSessionId())
       : null;
@@ -881,7 +886,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         resolve();
       };
       this.startReject = (error) => {
-        fail(error, false);
+        fail(error, true);
       };
       socket.once('error', onError);
       socket.once('unexpected-response', onUnexpectedResponse);
@@ -1171,22 +1176,29 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         break;
       case 'conversation.item.input_audio_transcription.failed':
         {
-          const message = realtimeErrorMessage(event, this.errorFallbackMessage);
+          const message = realtimeErrorMessage(
+            event,
+            this.errorFallbackMessage,
+            this.redactUpstreamErrors,
+          );
           this.callback({ type: 'error', message, at: Date.now() });
           this.resolveFlushWaiters();
         }
         break;
       case 'error':
         {
-          const message = realtimeErrorMessage(event, this.errorFallbackMessage);
-          if (this.isNonFatalServerVadFinishError(message)) {
+          const upstreamMessage = realtimeErrorMessage(event, this.errorFallbackMessage);
+          if (this.isNonFatalServerVadFinishError(upstreamMessage)) {
             log.debug('ignore non-fatal server-vad finish error', {
-              message,
+              message: this.redactUpstreamErrors ? this.errorFallbackMessage : upstreamMessage,
               aggregateChars: this.aggregateTranscript().length,
             });
             this.resolveFlushWaiters();
             break;
           }
+          const message = this.redactUpstreamErrors
+            ? this.errorFallbackMessage
+            : upstreamMessage;
           if (!this.sessionReady && this.startReject) {
             this.startReject(new Error(message));
           } else {
@@ -1532,7 +1544,12 @@ function clampPcm16(value: number): number {
   return value;
 }
 
-export function realtimeErrorMessage(event: Record<string, unknown>, fallbackMessage: string): string {
+export function realtimeErrorMessage(
+  event: Record<string, unknown>,
+  fallbackMessage: string,
+  redactUpstreamErrors = false,
+): string {
+  if (redactUpstreamErrors) return fallbackMessage;
   const error = event.error;
   if (isRecord(error) && typeof error.message === 'string') return error.message;
   return fallbackMessage;

@@ -674,6 +674,7 @@ function voiceInputConnectionTestConfigurationKey(
   selection: VoiceInputModelSelection,
 ): string {
   return JSON.stringify({
+    ownerIdentity: getActiveAppSession().dataOwnerId ?? 'local',
     serviceMode: selection.serviceMode,
     asrProvider: selection.asrProvider,
     asrProviderChain: selection.asrProviderChain,
@@ -1024,6 +1025,7 @@ function buildCustomRealtimeAsrProviderOptions(
     providerKind: 'custom-realtime-asr',
     missingCredentialMessage: profile.missingCredentialMessage,
     errorFallbackMessage: profile.errorFallbackMessage,
+    redactUpstreamErrors: true,
   };
 }
 
