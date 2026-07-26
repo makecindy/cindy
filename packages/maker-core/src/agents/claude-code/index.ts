@@ -194,6 +194,23 @@ function isReadOnlyClaudeTool(toolName: string): boolean {
 }
 
 /**
+ * 把 Claude SDK 的 MCP 工具名拆成 host 审批策略要的 { serverName, toolName }。
+ *
+ * SDK 命名格式固定为 `mcp__<server>__<tool>`: server 段自身可以含单下划线
+ * (`cindy_browser`), 分隔符是双下划线, 所以按 `__` 切分后首段即 server, 其余重新
+ * 拼回工具名(渐进式 server 只有 `list_tools` / `call_tool` 两个外层工具)。
+ * 非 MCP 的内置工具(Bash / Read / ...)返回 null, 由原有权限链处理。
+ */
+function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | null {
+  if (!toolName.startsWith('mcp__')) return null;
+  const [serverName, ...rest] = toolName.slice('mcp__'.length).split('__');
+  if (!serverName || rest.length === 0) return null;
+  const inner = rest.join('__');
+  if (!inner) return null;
+  return { serverName, toolName: inner };
+}
+
+/**
  * 把 maker-core 的 Effort clamp 到 Claude SDK 支持的档位 (ClaudeSdkEffort)。
  * Claude 没有 'minimal'(→ 'low') 与 'ultra'(→ 'max'; ultra 是 Codex GPT-5.6 专属档)。
  */
@@ -1042,6 +1059,48 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
 
       // ── 3. 其他工具 → permission kind ──
+      // 3a. MCP 工具先过 host 审批策略 —— 与 Codex 的 mcpServerElicitation 同一个
+      // deps.getMcpToolApprovalPolicy 真源。两端共用后, 同一个第一方 MCP 不会出现
+      // "Codex 静默执行 / Claude 每次调用都弹窗"的分叉(浏览器自动化这类高频 server
+      // 一次调研能攒出上百个权限请求)。
+      //   auto-approve      → 静默放行, 不打扰用户
+      //   prompt-each-time  → 照常弹窗, 但剥掉会话级 suggestion(不给"总是允许")
+      //   prompt / 未注入   → 完全维持原有权限链
+      // 策略抛错或返回非法值时按最保守的 prompt-each-time 处理(与 Codex 侧一致)。
+      const mcpTarget = parseMcpToolName(toolName);
+      let mcpApprovalPolicy: 'auto-approve' | 'prompt' | 'prompt-each-time' = 'prompt';
+      if (mcpTarget && this.deps.getMcpToolApprovalPolicy) {
+        try {
+          const policy = this.deps.getMcpToolApprovalPolicy({
+            serverName: mcpTarget.serverName,
+            toolName: mcpTarget.toolName,
+            toolParams: input,
+          });
+          if (policy === 'auto-approve' || policy === 'prompt' || policy === 'prompt-each-time') {
+            mcpApprovalPolicy = policy;
+          } else {
+            log.error('invalid MCP approval policy -> prompt each time', {
+              serverName: mcpTarget.serverName,
+              policy,
+            });
+            mcpApprovalPolicy = 'prompt-each-time';
+          }
+        } catch (error) {
+          log.error('MCP approval policy threw -> prompt each time', {
+            serverName: mcpTarget.serverName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          mcpApprovalPolicy = 'prompt-each-time';
+        }
+        if (mcpApprovalPolicy === 'auto-approve') {
+          log.debug('mcp tool auto-approved by host policy', {
+            serverName: mcpTarget.serverName,
+            toolName: mcpTarget.toolName,
+          });
+          return { behavior: 'allow', updatedInput: input };
+        }
+      }
+
       // 没接 resolver → fail-closed(安全拦截逻辑不许 fail-open)。
       // 正常流程里 Session 构造时**必定**注入 resolver(见 session.ts:
       // setInteractionResolver, 且 host 没接 listener 时该 resolver 自身返回 deny),
@@ -1063,7 +1122,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         title: options.title,
         displayName: options.displayName,
         description: options.description,
-        suggestions: this.normalizeSessionPermissionSuggestions(options.suggestions),
+        // prompt-each-time 的语义是"每次都要人过目", 因此不把会话级 suggestion 交给
+        // UI —— 否则用户点一次"总是允许"就把逐次确认的高风险 action 永久放行了。
+        suggestions: mcpApprovalPolicy === 'prompt-each-time'
+          ? undefined
+          : this.normalizeSessionPermissionSuggestions(options.suggestions),
         metadata: {
           ...(options.blockedPath ? { blockedPath: options.blockedPath } : {}),
           ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),

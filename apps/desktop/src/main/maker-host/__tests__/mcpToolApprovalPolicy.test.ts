@@ -38,6 +38,18 @@ describe('desktop Claude read-only allowlist', () => {
     first.push('Bash');
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('Bash');
   });
+
+  // allowedTools 只是同一份只读声明在 CLI 层的提前短路(省掉 auto 模式的远程分类器)。
+  // 两个出口必须来自同一张表, 否则会出现"静态白名单放行、动态策略却弹窗"的自相矛盾。
+  it('stays consistent with the shared approval policy', () => {
+    for (const tool of getDesktopClaudeReadOnlyAllowedTools()) {
+      const [serverName, ...rest] = tool.slice('mcp__'.length).split('__');
+      expect(
+        getDesktopMcpToolApprovalPolicy({ serverName, toolName: rest.join('__') }),
+        `${tool} should also be auto-approved by the shared policy`,
+      ).toBe('auto-approve');
+    }
+  });
 });
 
 describe('desktop MCP approval policy', () => {
@@ -84,5 +96,35 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh' })).toBe('prompt');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_future_tool' })).toBe('prompt');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'third_party' })).toBe('prompt');
+  });
+
+  it('auto-approves read-only discovery entries even on untrusted servers', () => {
+    // server 整体不可信, 但列工具清单 / 查连接状态没有副作用。
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'list_tools' }),
+    ).toBe('auto-approve');
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_list' }),
+    ).toBe('auto-approve');
+
+    // 同一个 server 的执行入口不跟着沾光。
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_ssh', toolName: 'call_tool' }),
+    ).toBe('prompt');
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy', toolName: 'ghost_call' }),
+    ).toBe('prompt');
+  });
+
+  it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {
+    // 回归锚点: cindy_browser 的真实动作全部走 call_tool。Claude 侧过去只静态放行
+    // list_tools, 于是每次 navigate / snapshot / click 都弹一次窗。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'navigate', url: 'https://example.com' } },
+      }),
+    ).toBe('auto-approve');
   });
 });

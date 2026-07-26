@@ -75,7 +75,13 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-/** Metadata Codex attaches to an MCP tool approval elicitation. */
+/**
+ * Metadata for an MCP tool approval decision.
+ *
+ * Codex fills it from the elicitation `_meta`; Claude fills it by splitting the
+ * SDK tool name (`mcp__<server>__<tool>`) and passing the tool input verbatim.
+ * Both therefore hand the host the same shape, so one policy answers for both.
+ */
 export interface McpToolApprovalContext {
   serverName: string;
   /** Top-level MCP tool name, for example `list_tools` or `call_tool`. */
@@ -258,10 +264,10 @@ export interface AgentDeps {
   makerMemory?: MakerMemoryManager;
 
   /**
-   * Host-side Codex MCP approval policy. `auto-approve` skips PermissionPrompt;
-   * `prompt` preserves Codex's normal approval UI and optional session grant;
-   * `prompt-each-time` always asks and never persists a server/tool grant.
-   * Claude SDK does not consume this hook.
+   * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
+   * skips the permission prompt; `prompt` preserves the normal approval UI and
+   * its optional session grant; `prompt-each-time` always asks and never
+   * persists a server/tool grant.
    *
    * 背景:
    *  - Codex CLI 对 raw `mcp_servers.*` 的 write 类 tool call 弹 user approval 是 known
@@ -270,9 +276,14 @@ export interface AgentDeps {
    *  - host 自家可信的 MCP server (e.g. lizi_*) 每次写都弹严重影响 UX, 这里给一个
    *    宿主策略短路。渐进式 server 还可利用 toolName/toolParams 区分 inner action,
    *    让查询保持无打扰而删除/外部写入逐次确认。
+   *  - 同一个第一方 MCP 在两个 agent 下必须给出同一个答案。历史上 Claude 只有一份
+   *    静态 allowedTools 白名单、不查这个 hook, 结果 `cindy_browser` 之类高频 server
+   *    的 `call_tool` 在 Codex 侧静默执行、在 Claude 侧每调用一次弹一次窗。
    *
-   * 实现位置: codex/index.ts mcpServerElicitation handler 在 dispatchInteraction 之前
-   * 查这里；auto-approve 直接 accept，prompt-each-time 禁掉 session persistence。
+   * 实现位置:
+   *  - codex/index.ts mcpServerElicitation handler 在 dispatchInteraction 之前查这里;
+   *  - claude-code/index.ts canUseTool 对 `mcp__<server>__<tool>` 形态的工具查这里。
+   * 两侧同义: auto-approve 直接放行, prompt-each-time 禁掉 session persistence。
    *
    * 缺省 / undefined → 走原 dispatchInteraction (弹 UI), 行为与改动前一致。
    */
