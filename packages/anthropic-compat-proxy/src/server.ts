@@ -706,7 +706,7 @@ function forward(
       upstreamRes.on('data', (chunk: Buffer) => chunks.push(chunk));
       upstreamRes.on('end', () => {
         const errBody = Buffer.concat(chunks);
-        // 先按 content-encoding 解压一次 —— 规则 match / errorType / body dump 都吃解压后的字节。
+        // 先按 content-encoding 解压一次 —— 规则 matches / errorType / body dump 都吃解压后的字节。
         // node:http 不自动解压; 上游若 gzip/br 压缩, 直接对压缩字节跑 regex 会漏判, 透明重试就不触发。
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
         const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));

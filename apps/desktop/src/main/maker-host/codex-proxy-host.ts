@@ -1081,7 +1081,7 @@ function numericHeader(headers: Readonly<Record<string, string>>, name: string):
 function isXaiUpstream(upstreamBase: string): boolean {
   try {
     const url = new URL(upstreamBase);
-    return url.protocol === 'https:' && url.host === 'api.x.ai';
+    return url.protocol === 'https:' && url.hostname === 'api.x.ai';
   } catch {
     return false;
   }

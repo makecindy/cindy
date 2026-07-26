@@ -25,6 +25,19 @@ const apiBase = normalizeBaseUrl(
 const appConfiguredApiBase = normalizeBaseUrl(process.env.EXPO_PUBLIC_XDT_API_BASE_URL);
 const toolEnv = resolveJavaRuntimeEnv(process.env);
 
+// 用 IIFE 构建正则——RegExp 对象切断 CodeQL 对 env 值的 taint 追踪链。
+// 必须在 scrubSecretsFromText 首次调用前初始化(干运行路径会用到)。
+const _secretScrubRe = (() => {
+  const pats = [];
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!value || value.length < 6) continue;
+    if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
+      pats.push(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    }
+  }
+  return pats.length > 0 ? new RegExp(pats.join('|'), 'g') : null;
+})();
+
 validatePlatform(platform);
 
 if (options.dryRun) {
@@ -209,18 +222,6 @@ function safeUrlForLog(value) {
     return '<invalid-url>';
   }
 }
-
-// 用 IIFE 构建正则——RegExp 对象切断 CodeQL 对 env 值的 taint 追踪链。
-const _secretScrubRe = (() => {
-  const pats = [];
-  for (const [name, value] of Object.entries(process.env)) {
-    if (!value || value.length < 6) continue;
-    if (/(password|passwd|secret|token|api[_-]?key|credential|private)/i.test(name)) {
-      pats.push(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    }
-  }
-  return pats.length > 0 ? new RegExp(pats.join('|'), 'g') : null;
-})();
 
 function scrubSecretsFromText(text) {
   if (text == null) return text;

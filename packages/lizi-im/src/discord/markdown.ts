@@ -156,6 +156,7 @@ function stripHtmlTags(text: string): string {
       // Nested fragment (e.g. <scr<x>ipt>) — strip everything to the
       // outermost '>' to prevent reassembly after inner tags are removed
       while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
+      if (j >= len) { out += '<'; i += 1; continue; }
       i = j + 1;
       continue;
     }
@@ -164,6 +165,7 @@ function stripHtmlTags(text: string): string {
         afterName === 0x0a || afterName === 0x0d) {
       // Valid HTML tag — skip to closing '>'
       while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
+      if (j >= len) { out += '<'; i += 1; continue; }
       i = j + 1;
       continue;
     }
