@@ -62,7 +62,7 @@ export function validateVoiceInputCustomAsrWebsocketUrl(value: string): string |
   const loopbackHost = parsedUrl.hostname === 'localhost'
     || parsedUrl.hostname === '::1'
     || parsedUrl.hostname === '[::1]'
-    || /^127(?:\.\d{1,3}){3}$/.test(parsedUrl.hostname);
+    || isLoopbackIpv4(parsedUrl.hostname);
   if (parsedUrl.protocol !== 'wss:' && !(parsedUrl.protocol === 'ws:' && loopbackHost)) {
     return 'customAsr.websocketUrl must use wss, or ws on a loopback host';
   }
@@ -80,6 +80,13 @@ export function validateVoiceInputCustomAsrWebsocketUrl(value: string): string |
     return 'customAsr.websocketUrl must not contain a fragment';
   }
   return null;
+}
+
+function isLoopbackIpv4(hostname: string): boolean {
+  const octets = hostname.split('.');
+  return octets.length === 4
+    && octets[0] === '127'
+    && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255);
 }
 
 export function validateVoiceInputCustomAsrConfig(
