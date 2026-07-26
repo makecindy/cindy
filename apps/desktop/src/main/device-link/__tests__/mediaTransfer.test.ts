@@ -231,19 +231,22 @@ describe('putBytesToOss — 传输栈回退', () => {
     expect(apiFetch).not.toHaveBeenCalledWith(DEL_PATH, expect.anything());
   });
 
-  it('两跳都失败 → 错误串带 host 与展开后的 cause,且不含 presign 签名', async () => {
+  it('两跳都失败 → 用户可见串只留可判因的 errno,host / 完整链路 / presign 签名都不外泄', async () => {
     wireSignedPresign();
     const undiciErr = new TypeError('fetch failed');
     undiciErr.cause = Object.assign(new Error('connect ETIMEDOUT 10.0.0.1:443'), {
       code: 'ETIMEDOUT',
     });
     undiciFetchMock.mockRejectedValue(undiciErr);
-    netFetchMock.mockRejectedValue(new Error('net::ERR_PROXY_CONNECTION_FAILED'));
+    netFetchMock.mockRejectedValue(new TypeError('net::ERR_PROXY_CONNECTION_FAILED'));
 
-    await expect(uploadLocalFile('/tmp/a.png')).rejects.toThrow(
-      /oss-cn-hangzhou\.example.*ETIMEDOUT.*ERR_PROXY_CONNECTION_FAILED/s,
-    );
     const message = await uploadLocalFile('/tmp/a.png').catch((err: Error) => err.message);
+
+    expect(message).toContain('ETIMEDOUT');
+    expect(message).toContain('net::ERR_PROXY_CONNECTION_FAILED');
+    // 这条会原样显示在手机预览页:host、地址族与完整 cause 链只进主进程日志。
+    expect(message).not.toContain('oss-cn-hangzhou.example');
+    expect(message).not.toContain('10.0.0.1');
     expect(message).not.toContain('SECRET-SIG');
     expect(message).not.toContain('AK-TEST');
   });
@@ -258,6 +261,20 @@ describe('putBytesToOss — 传输栈回退', () => {
     await uploadLocalFile('/tmp/b.png');
     expect(undiciFetchMock).toHaveBeenCalledTimes(1); // 第二次没再碰 undici
     expect(netFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('命中记忆的成功不续期,TTL 到点仍会重新探测 undici', async () => {
+    undiciFetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    netFetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
+    await uploadLocalFile('/tmp/a.png');
+    const firstStamp = __testing.electronNetPreferredHosts.get('oss.example');
+    expect(firstStamp).toBeTypeOf('number');
+
+    // 记忆有效期内再传若干次,时间戳必须保持首次回退那一刻。
+    await uploadLocalFile('/tmp/b.png');
+    await uploadLocalFile('/tmp/c.png');
+
+    expect(__testing.electronNetPreferredHosts.get('oss.example')).toBe(firstStamp);
   });
 
   it('记忆过期后回到 undici 主路径', async () => {
@@ -286,12 +303,13 @@ describe('putBytesToOss — 传输栈回退', () => {
     expect(__testing.electronNetPreferredHosts.has('oss.example')).toBe(false);
   });
 
-  it('流式 body 换栈时重新开流,摘要按重传的字节算', async () => {
+  it('流式 body 换栈时重新开流并关掉被放弃的那条,摘要按重传的字节算', async () => {
     const size = __testing.STREAM_THRESHOLD + 1;
     statMock.mockResolvedValue({ isFile: () => true, size });
     const chunk = Buffer.alloc(1024 * 1024, 0x62);
-    const makeSource = () =>
-      Readable.from(
+    const opened: Readable[] = [];
+    createReadStreamMock.mockImplementation(() => {
+      const source = Readable.from(
         (function* chunks() {
           for (let offset = 0; offset < __testing.STREAM_THRESHOLD; offset += chunk.length) {
             yield chunk;
@@ -299,7 +317,9 @@ describe('putBytesToOss — 传输栈回退', () => {
           yield Buffer.from([0x21]);
         })(),
       );
-    createReadStreamMock.mockImplementation(makeSource);
+      opened.push(source);
+      return source;
+    });
     undiciFetchMock.mockRejectedValue(new TypeError('fetch failed'));
     netFetchMock.mockImplementation(drainingPut);
 
@@ -307,8 +327,35 @@ describe('putBytesToOss — 传输栈回退', () => {
 
     // 两跳各开一次流:流只能消费一次,回退不重开就会传 0 字节还算出错误摘要。
     expect(createReadStreamMock).toHaveBeenCalledTimes(2);
+    // 被放弃的那条必须关掉,否则每次换栈上传都漏一个 fd。
+    expect(opened[0].destroyed).toBe(true);
     expect(r.size).toBe(size);
     expect(r.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('源流异步读盘失败 → 不换栈重试,原样抛源错误(不埋进两栈汇总里)', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    // 真实的 createReadStream 失败是异步 'error' 事件,不在调用点 throw。
+    createReadStreamMock.mockImplementation(
+      () =>
+        new Readable({
+          read() {
+            this.destroy(Object.assign(new Error('EIO: read failed'), { code: 'EIO' }));
+          },
+        }),
+    );
+    undiciFetchMock.mockImplementation(drainingPut);
+
+    await expect(uploadLocalFile('/tmp/broken.mp4')).rejects.toThrow('EIO: read failed');
+
+    expect(netFetchMock).not.toHaveBeenCalled();
+    expect(createReadStreamMock).toHaveBeenCalledTimes(1);
+    // 本地故障也要清掉已 presign 的对象。
+    expect(apiFetch).toHaveBeenCalledWith(
+      DEL_PATH,
+      expect.objectContaining({ method: 'DELETE', body: { key: KEY } }),
+    );
   });
 });
 
@@ -496,10 +543,12 @@ describe('integrity regression coverage', () => {
     const size = __testing.STREAM_THRESHOLD + 1;
     statMock.mockResolvedValue({ isFile: () => true, size });
     createReadStreamMock.mockImplementation(() => Readable.from([Buffer.alloc(1024, 0x62)]));
-    undiciFetchMock.mockRejectedValue(new Error('socket reset'));
-    netFetchMock.mockRejectedValue(new Error('socket reset'));
+    undiciFetchMock.mockRejectedValue(Object.assign(new Error('socket reset'), { code: 'ECONNRESET' }));
+    netFetchMock.mockRejectedValue(new TypeError('net::ERR_CONNECTION_RESET'));
 
-    await expect(uploadLocalFile('/tmp/interrupted.mp4')).rejects.toThrow('socket reset');
+    await expect(uploadLocalFile('/tmp/interrupted.mp4')).rejects.toThrow(
+      /ECONNRESET.*net::ERR_CONNECTION_RESET/,
+    );
     expect(apiFetch).toHaveBeenCalledWith(
       DEL_PATH,
       expect.objectContaining({ method: 'DELETE', body: { key: KEY } }),

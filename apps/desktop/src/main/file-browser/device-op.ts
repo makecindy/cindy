@@ -577,8 +577,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           })
           .catch((err) => {
             // message 而非 String(err):这条会原样显示在控制端(手机预览页)的失败
-            // 占位上,'Error: ' / 'TypeError: ' 前缀对用户没有意义。
-            const message = err instanceof Error ? err.message : String(err);
+            // 占位上,'Error: ' / 'TypeError: ' 前缀对用户没有意义。message 为空时
+            // 回落到错误名,别让控制端收到空串。
+            const message = err instanceof Error ? err.message || err.name : String(err);
             log.warn('exportFile upload failed', { transferId, error: message });
             setExportJobTerminal(transferId, { state: 'error', message, size: st.size, uploaded: 0 });
           });

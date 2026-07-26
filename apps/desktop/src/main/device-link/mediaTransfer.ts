@@ -138,6 +138,19 @@ type OssPutBody = ArrayBuffer | ReadableStream;
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
+ * 可重放的 PUT body 供给者。换传输栈重试必须重新构造 body(流只能消费一次),
+ * 同时要能分辨"这一跳失败是网络问题还是本地读盘问题",并释放上一跳的资源。
+ */
+interface OssPutBodySource {
+  /** 构造本跳的 body。抛错视为不可重试(源打不开,换栈无益)。 */
+  create(): OssPutBody;
+  /** 本跳是否因**本地源**出错而失败;返回原错误则不换栈重试。 */
+  localFailure?(): unknown;
+  /** 放弃本跳:关掉底层文件流,别让被丢弃的 body 攥着 fd 与缓冲。 */
+  dispose?(): void;
+}
+
+/**
  * presign URL 的 query 里带着可直接复用的上传签名,日志与回传给控制端的错误
  * 只能出现 host。
  */
@@ -147,6 +160,24 @@ function hostOf(url: string): string {
   } catch {
     return '<invalid-url>';
   }
+}
+
+/**
+ * 用户可见错误只带最必要的判因线索:cause 链上第一个 errno(ETIMEDOUT /
+ * ECONNREFUSED / 证书类),够反馈截图判因,又不把 host、地址族、完整链路
+ * 抖到控制端界面上——那些只进主进程日志。
+ */
+function failureHint(err: unknown): string {
+  for (let cur: unknown = err, depth = 0; cur instanceof Error && depth <= 4; depth += 1) {
+    const code = (cur as NodeJS.ErrnoException).code;
+    if (typeof code === 'string' && code) return code;
+    // Chromium 侧不带 errno,可判因的码在 message 里(net::ERR_PROXY_CONNECTION_FAILED 等)。
+    const chromiumCode = /net::ERR_[A-Z0-9_]+/.exec(cur.message);
+    if (chromiumCode) return chromiumCode[0];
+    cur = cur.cause;
+  }
+  if (err instanceof Error) return err.name === 'TypeError' ? 'NETWORK_ERROR' : err.name;
+  return 'UNKNOWN';
 }
 
 /**
@@ -207,12 +238,12 @@ function transportOrderFor(host: string): OssPutTransport[] {
  * 不可靠。换栈因此是安全的——若 `net.fetch` 剥掉该 header,签名不再匹配,OSS
  * 只会返回 403,绝不会静默把对象降级成 bucket 默认的公开可读。
  *
- * @param createBody 每次尝试重新构造 body:流式 body 只能消费一次,换栈重试
- *   必须重新开流(调用方据此重置进度与摘要)。
+ * 只有**网络层**失败才换栈:HTTP 应用层拒绝(签名/权限/配额)与本地源读盘失败
+ * 换栈都无益,原样抛给调用方,免得白传一遍还把原因掩盖成"两条栈都失败"。
  */
 async function putBytesToOss(
   putUrl: string,
-  createBody: () => OssPutBody,
+  bodySource: OssPutBodySource,
   contentType: string,
 ): Promise<void> {
   const host = hostOf(putUrl);
@@ -226,7 +257,7 @@ async function putBytesToOss(
   const attempt = async (impl: FetchLike): Promise<void> => {
     let body: OssPutBody;
     try {
-      body = createBody();
+      body = bodySource.create();
     } catch (err) {
       throw new NonRetriableOssPutError(err);
     }
@@ -242,20 +273,31 @@ async function putBytesToOss(
   };
 
   const failures: string[] = [];
+  const hints: string[] = [];
   for (const transport of transportOrderFor(host)) {
     try {
       await attempt(transport.impl);
     } catch (err) {
-      // 应用层拒绝与源文件读不了:换栈无益,原样抛给调用方(上层据此清理 OSS 对象)。
-      if (err instanceof NonRetriableOssPutError) throw err.inner;
+      if (err instanceof NonRetriableOssPutError) {
+        bodySource.dispose?.();
+        throw err.inner;
+      }
+      // 源文件读盘失败在 fetch 消费 body 时才浮出来,形态与网络失败一样;
+      // 不甄别就会白读一遍磁盘,还把真实原因埋进"两条栈都失败"的汇总里。
+      const localFailure = bodySource.localFailure?.();
+      bodySource.dispose?.();
+      if (localFailure !== undefined && localFailure !== null) throw localFailure;
       const detail = describeErrorChain(err);
       failures.push(`${transport.name}:${detail}`);
+      hints.push(failureHint(err));
       log.warn(`OSS PUT transport failed host=${host} via=${transport.name}: ${detail}`);
       continue;
     }
     if (transport.name === 'electron-net') {
-      electronNetPreferredHosts.set(host, Date.now());
+      // 只在"确实是从 undici 失败里救回来"时记时间戳。命中记忆直接成功的不刷新,
+      // 否则只要每 30 分钟内传一次文件,TTL 就永远到不了期,undici 再也不被探测。
       if (failures.length > 0) {
+        electronNetPreferredHosts.set(host, Date.now());
         log.info(`OSS PUT recovered via Electron net host=${host} (undici unusable: ${failures.join('; ')})`);
       }
     } else {
@@ -264,7 +306,8 @@ async function putBytesToOss(
     }
     return;
   }
-  throw new Error(`OSS 上传失败(${host}):${failures.join(';')}`);
+  // 用户可见串只留 errno;host 与完整 cause 链已进日志(见上面的 warn)。
+  throw new Error(`OSS 上传失败:${[...new Set(hints)].join(' / ')}`);
 }
 
 /**
@@ -305,8 +348,9 @@ export async function uploadLocalFile(
         throw new Error(`文件在上传前发生变化:预期 ${size} 字节,实际 ${buf.byteLength} 字节`);
       }
       sha256 = createHash('sha256').update(buf).digest('hex');
-      // Buffer body 可重放:回退重试直接复用同一份字节(fetch 不 transfer ArrayBuffer)。
-      await putBytesToOss(putUrl, () => exactArrayBuffer(buf), contentType);
+      // Buffer body 可重放:换栈重试直接复用同一份字节(fetch 不 transfer ArrayBuffer),
+      // 也没有需要释放的底层资源。
+      await putBytesToOss(putUrl, { create: () => exactArrayBuffer(buf) }, contentType);
       opts.onProgress?.(size);
     } else {
       // 大媒体:磁盘流式 PUT,避免整文件进内存;经计数 Transform 上报进度。
@@ -316,30 +360,53 @@ export async function uploadLocalFile(
       interface StreamAttempt {
         sent: number;
         sha256: string;
+        sourceError: unknown;
+        dispose(): void;
       }
       const attempts: StreamAttempt[] = [];
-      const createBody = (): ReadableStream => {
-        const current: StreamAttempt = { sent: 0, sha256: '' };
-        attempts.push(current);
-        const hasher = createHash('sha256');
-        const counter = new Transform({
-          transform(chunk: Buffer, _enc, cb) {
-            current.sent += chunk.length;
-            hasher.update(chunk);
-            // 只有当前这跳有资格上报进度(控制端看到的已传字节因此可能回退一次)。
-            if (attempts.at(-1) === current) opts.onProgress?.(current.sent);
-            cb(null, chunk);
-          },
-          flush(cb) {
-            current.sha256 = hasher.digest('hex');
-            cb();
-          },
-        });
-        return Readable.toWeb(
-          createReadStream(localPath).pipe(counter),
-        ) as unknown as ReadableStream;
+      const bodySource: OssPutBodySource = {
+        create(): ReadableStream {
+          const source = createReadStream(localPath);
+          const hasher = createHash('sha256');
+          const current: StreamAttempt = {
+            sent: 0,
+            sha256: '',
+            sourceError: null,
+            dispose() {
+              source.destroy();
+              counter.destroy();
+            },
+          };
+          const counter = new Transform({
+            transform(chunk: Buffer, _enc, cb) {
+              current.sent += chunk.length;
+              hasher.update(chunk);
+              // 只有当前这跳有资格上报进度(控制端看到的已传字节因此可能回退一次)。
+              if (attempts.at(-1) === current) opts.onProgress?.(current.sent);
+              cb(null, chunk);
+            },
+            flush(cb) {
+              current.sha256 = hasher.digest('hex');
+              cb();
+            },
+          });
+          // 读盘失败多半是异步 'error' 事件,到 putBytesToOss 手里只是一个
+          // "fetch 消费 body 时挂了",与网络失败长得一模一样——记下来供其甄别。
+          // 必须同时把错误推给下游:`pipe` 不转发 error,只记不推的话 counter
+          // 既不 end 也不 error,web body 就此挂住,PUT 会一直干等到超时。
+          source.on('error', (err) => {
+            current.sourceError = err;
+            counter.destroy(err);
+          });
+          attempts.push(current);
+          return Readable.toWeb(source.pipe(counter)) as unknown as ReadableStream;
+        },
+        localFailure: () => attempts.at(-1)?.sourceError ?? null,
+        // 被放弃的 body 不主动关掉的话,底层 createReadStream 会一直攥着 fd 与
+        // 已缓冲的数据,每次换栈上传都漏一个。
+        dispose: () => attempts.at(-1)?.dispose(),
       };
-      await putBytesToOss(putUrl, createBody, contentType);
+      await putBytesToOss(putUrl, bodySource, contentType);
       const uploadedAttempt = attempts.at(-1);
       if (!uploadedAttempt || uploadedAttempt.sent !== size) {
         // Cleanup is centralized below so transport and source-stream errors use the same path.
@@ -380,7 +447,7 @@ export async function uploadBuffer(
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
   const sha256 = createHash('sha256').update(bytes).digest('hex');
-  await putBytesToOss(putUrl, () => ab, contentType);
+  await putBytesToOss(putUrl, { create: () => ab }, contentType);
   log.debug(`uploaded(buffer) key=${key} size=${size} ct=${contentType} integrity=sha256`);
   return { key, size, contentType, sha256 };
 }
