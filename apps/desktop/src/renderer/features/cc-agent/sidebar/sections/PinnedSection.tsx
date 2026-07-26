@@ -192,7 +192,7 @@ export function PinnedSection({
 
   // 文字模式 SessionItem hover 时右侧浮层展示的"项目来源"标签(口径见
   // buildSessionSourceLabelMap),与时间排序视图同口径。card / list 模式视觉自成一体,
-  // 当前不注入。置顶视图传 slicedSessions。
+  // 当前不注入。置顶视图传 visibleSessions。
   const sourceLabelMap = useMemo(
     () =>
       buildSessionSourceLabelMap(visibleSessions, allKnownProjects, t('ccAgent.sidebar.dialogues')),

@@ -1166,6 +1166,17 @@ function ExpandedView({
     filter.manualProjectOrder,
   ]);
 
+  // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
+  // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
+  const visibleRailProjectsWithVendor = useMemo(() => {
+    const projects = vendorPredicate
+      ? visibleProjects
+          .map((p) => ({ ...p, sessions: p.sessions.filter(vendorPredicate) }))
+          .filter((p) => p.sessions.length > 0)
+      : visibleProjects;
+    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
+  }, [visibleProjects, vendorPredicate, filter.sortBy, filter.manualProjectOrder]);
+
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
    * 过滤 + manualPinnedOrder 应用后）段内的新顺序 id 列表。
@@ -1201,6 +1212,10 @@ function ExpandedView({
     return activityFilteredSessions.filter((s) => {
       if (s.pinnedAt != null) return false;
       if (vendorPredicate && !vendorPredicate(s)) return false;
+      if (s.workspaceKind !== 'dialogue') {
+        const pinnedProjectKey = projectIdentityKeyForSession(s);
+        if (pinnedProjectKey != null && pinnedProjectKeys.has(pinnedProjectKey)) return false;
+      }
       if (allowedProjects === null) return true;
       if (s.workspaceKind === 'dialogue') return false;
       const wd = normalizeWorkingDir(s.workingDir);
@@ -1208,7 +1223,7 @@ function ExpandedView({
       const key = projectIdentityKeyForSession(s);
       return key != null && allowedProjects.has(key);
     });
-  }, [activityFilteredSessions, vendorPredicate, filter.projectsAsSet]);
+  }, [activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]);
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);
@@ -2510,7 +2525,8 @@ function ExpandedView({
           行为(hover 操作钮 / 右键菜单 / 重命名 / 移动 / schedule 操作 / 折叠上限
           与「显示全部」),见 railPanelStore 头注。 */}
       <RailPanels
-        projects={visibleProjectsWithVendor}
+        projects={visibleRailProjectsWithVendor}
+        pinnedProjectKeys={pinnedProjectKeys}
         unclassified={railUnclassified}
         dialogues={railDialogues}
         activeSessionId={activeSessionId}
@@ -2529,6 +2545,7 @@ function ExpandedView({
         onScheduleAction={handleScheduleAction}
         onCreateDialogue={handleCreateDialogue}
         onCreateInProject={handleCreateInProject}
+        onToggleProjectPin={handleToggleProjectPin}
       />
       {deleteScheduleDialog}
     </>
@@ -2760,6 +2777,7 @@ function RailPanelShell({
 
 interface RailPanelsProps {
   projects: ProjectNode[];
+  pinnedProjectKeys: ReadonlySet<string>;
   /** 未分类(草稿等)会话——展开态 UnclassifiedSection 同源,面板内平铺在项目列表之上。 */
   unclassified: Session[];
   dialogues: Session[];
@@ -2785,6 +2803,8 @@ interface RailPanelsProps {
   /** 在此项目内新建(项目行右键菜单 + 三级面板头部)——展开态 ProjectNode
    *  的 newInDirectory 主操作同源 handler(内置远程写保护)。 */
   onCreateInProject: (project: ProjectNode) => void;
+  /** 折叠态项目菜单仍需提供置顶/取消置顶，避免置顶项目只能展开侧栏后管理。 */
+  onToggleProjectPin: (project: ProjectNode, currentlyPinned: boolean) => void;
 }
 
 /**
@@ -2798,6 +2818,7 @@ interface RailPanelsProps {
  */
 function RailPanels({
   projects,
+  pinnedProjectKeys,
   unclassified,
   dialogues,
   activeSessionId,
@@ -2816,6 +2837,7 @@ function RailPanels({
   onScheduleAction,
   onCreateDialogue,
   onCreateInProject,
+  onToggleProjectPin,
 }: RailPanelsProps) {
   const { t } = useTranslation();
   const panelState = useSyncExternalStore(railPanelStore.subscribe, railPanelStore.getSnapshot);
@@ -3352,20 +3374,40 @@ function RailPanels({
               : null;
             const menuTargetBlocked = menuTarget != null && isDeviceLinkWriteBlocked(menuTarget);
             return (
-              <DropdownMenuItem
-                disabled={menuTarget == null || menuTargetBlocked}
-                onSelect={() => {
-                  setProjectMenu(null);
-                  if (!menuTarget || menuTargetBlocked) return;
-                  railPanelStore.closeAll();
-                  onCreateInProject(menuTarget);
-                }}
-                className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
-              >
-                {menuTargetBlocked
-                  ? t('ccAgent.remoteSession.actionsUnavailable')
-                  : t('ccAgent.sidebar.projectAction.newInDirectory')}
-              </DropdownMenuItem>
+              <>
+                <DropdownMenuItem
+                  disabled={menuTarget == null}
+                  onSelect={() => {
+                    setProjectMenu(null);
+                    if (!menuTarget) return;
+                    onToggleProjectPin(
+                      menuTarget,
+                      pinnedProjectKeys.has(menuTarget.projectKey),
+                    );
+                  }}
+                  className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
+                >
+                  {t(
+                    menuTarget && pinnedProjectKeys.has(menuTarget.projectKey)
+                      ? 'ccAgent.sidebar.projectAction.unpin'
+                      : 'ccAgent.sidebar.projectAction.pin',
+                  )}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={menuTarget == null || menuTargetBlocked}
+                  onSelect={() => {
+                    setProjectMenu(null);
+                    if (!menuTarget || menuTargetBlocked) return;
+                    railPanelStore.closeAll();
+                    onCreateInProject(menuTarget);
+                  }}
+                  className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
+                >
+                  {menuTargetBlocked
+                    ? t('ccAgent.remoteSession.actionsUnavailable')
+                    : t('ccAgent.sidebar.projectAction.newInDirectory')}
+                </DropdownMenuItem>
+              </>
             );
           })()}
         </DropdownMenuContent>
