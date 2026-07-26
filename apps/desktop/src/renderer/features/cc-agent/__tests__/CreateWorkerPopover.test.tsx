@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { setProviderModelChoice, setProviderModelFast } from '@/state/providerModelMemory';
 import { CreateWorkerPopover } from '../CreateWorkerPopover';
 
 const mocks = vi.hoisted(() => ({
@@ -70,6 +71,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     modelId: string;
     currentProviderId?: string | null;
     onProviderChange?: (providerId: string | null, modelId?: string, effort?: string) => void;
+    reselectEmitsChange?: boolean;
     fastMode?: boolean;
     onFastModeChange?: (enabled: boolean) => void;
     modelMemory?: unknown;
@@ -80,6 +82,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       // fastMode/onFastModeChange 是行级配置列的 Fast 开关(替代外置 FastModeToggle)。
       data-sources-enabled={String(props.onProviderChange !== undefined)}
       data-current-provider={props.currentProviderId ?? ''}
+      data-reselect-emits={String(props.reselectEmitsChange === true)}
       data-fast-wired={String(props.onFastModeChange !== undefined)}
       data-memory-wired={String(props.modelMemory !== undefined)}
     >
@@ -88,6 +91,12 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         type="button"
         data-testid="pick-openai-row"
         onClick={() => props.onProviderChange?.('openai', 'gpt-5.5', 'medium')}
+      />
+      {/* 真组件选行只回传两参(见 ModelSelector.handleRowSelect),记忆恢复走全局预设。 */}
+      <button
+        type="button"
+        data-testid="pick-openai-row-bare"
+        onClick={() => props.onProviderChange?.('openai', 'gpt-5.5')}
       />
     </div>
   ),
@@ -354,9 +363,11 @@ describe('CreateWorkerPopover', () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.sourcesEnabled).toBe('true');
-    // Fast 收进面板行级配置列(外置开关已移除),模型级记忆与 composer 共用。
+    // Fast 收进面板行级配置列(本地 + codex),模型级记忆与 composer 共用;
+    // 点「解析出的生效默认来源」行必须能钉成显式偏好。
     expect(selector.dataset.fastWired).toBe('true');
     expect(selector.dataset.memoryWired).toBe('true');
+    expect(selector.dataset.reselectEmits).toBe('true');
   });
 
   it('keeps the degraded flat panel for device-link remote creation', async () => {
@@ -414,6 +425,79 @@ describe('CreateWorkerPopover', () => {
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+    );
+  });
+
+  it('restores remembered effort and Fast for the picked row when the panel omits them', async () => {
+    // 真组件选行只回传 (providerId, modelId);目标模型 hover 配置过的 effort/Fast
+    // 存在模型级全局预设里,选中后必须恢复,不能沿用上一个模型的值。
+    setProviderModelChoice('codex', 'openai', 'gpt-5.5', 'low');
+    setProviderModelFast('codex', 'openai', 'gpt-5.5', true);
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5', supportsFastMode: true }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      model('codex/gpt-5.5'),
+      { id: 'gpt-5.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high', supportsFastMode: true },
+    ];
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'codex/gpt-5.5' }, { id: 'gpt-5.5' }],
+      hasFastMode: true,
+    } as never;
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(await screen.findByTestId('pick-openai-row-bare'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-5.5',
+          providerId: 'openai',
+          effort: 'low',
+          fast: true,
+        }),
+      ),
+    );
+  });
+
+  it('drops Fast when the picked provider does not support it for the model', async () => {
+    // per-provider Fast 能力:同一 model id 在选中来源的条目上不支持 Fast 时,
+    // 不能沿用拍平并集的首来源能力继续提交 fast=true。
+    setProviderModelFast('codex', 'openai', 'gpt-5.5', true);
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [
+      { id: 'gpt-5.5', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: true },
+    ];
+    mocks.capabilitiesByAgent.codex = {
+      availableModels: [{ id: 'gpt-5.5' }],
+      hasFastMode: true,
+    } as never;
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    fireEvent.click(await screen.findByTestId('pick-openai-row-bare'));
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-5.5', providerId: 'openai', fast: undefined }),
+      ),
     );
   });
 });

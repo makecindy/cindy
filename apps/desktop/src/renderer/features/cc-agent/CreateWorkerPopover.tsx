@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
-import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  modelSupportsFastMode,
+  providerOffersModel,
+} from '@cindy/model-providers';
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
@@ -159,8 +163,24 @@ export function CreateWorkerPopover({
   ]);
   const currentModel = activeModels.find((m) => m.id === model);
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
+
+  // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
+  // CatalogModel),显式选了来源就按该来源自己的条目查;未显式(默认路由)/device-link
+  // 回落拍平并集值(与既有行为一致)。
+  const providerFastSupported = useCallback(
+    (candidate: string | null, modelId: string): boolean => {
+      if (!deviceId && candidate) {
+        const provider = connectedProvidersForAgent(providers, agent).find(
+          (p) => p.id === candidate,
+        );
+        return modelSupportsFastMode(provider, modelId, agent);
+      }
+      return !!activeModels.find((m) => m.id === modelId)?.supportsFastMode;
+    },
+    [activeModels, agent, deviceId, providers],
+  );
   const currentModelSupportsFast = Boolean(
-    agent === 'codex' && activeCaps?.hasFastMode && currentModel?.supportsFastMode,
+    agent === 'codex' && activeCaps?.hasFastMode && providerFastSupported(providerSource, model),
   );
   const noAvailableLocalModels =
     prefsRestored &&
@@ -268,26 +288,37 @@ export function CreateWorkerPopover({
     [activeModels, effort, narrowProviderSource],
   );
 
-  // 分段行原子选择 (来源, 模型, effort):与 composer 的 handleProviderChange 同语义。
-  // 面板回传的 reconciledEffort 已按模型级全局预设解析,模型不支持时仍按 efforts 校准。
+  // 分段行原子选择 (来源, 模型):与 composer 的 handleProviderChange 同语义。
+  // 面板选行只回传 (providerId, modelId) 两参,目标模型记忆的 effort/Fast 要在这里
+  // 主动从模型级全局预设恢复(codex review:否则用户在非选中行 hover 配置的
+  // effort/Fast 在选中该行后被丢弃);Fast 还要叠加该来源条目的 per-provider 能力。
   const handleProviderChange = useCallback(
     (providerId: string | null, modelId?: string, reconciledEffort?: Effort) => {
       const nextModel = modelId ?? model;
-      setProviderSource(narrowProviderSource(providerId, nextModel));
+      const narrowed = narrowProviderSource(providerId, nextModel);
+      setProviderSource(narrowed);
       if (!modelId) return;
       setModel(modelId);
       const available = activeModels.find((m) => m.id === modelId);
       if (!available) return;
-      if (reconciledEffort && available.efforts.includes(reconciledEffort)) {
-        setEffort(reconciledEffort);
+      const remembered =
+        reconciledEffort ??
+        (providerId ? getProviderModelEffort(agent, providerId, modelId) : undefined);
+      if (remembered && available.efforts.includes(remembered)) {
+        setEffort(remembered);
       } else if (available.efforts.length > 0 && !available.efforts.includes(effort)) {
         setEffort(available.defaultEffort ?? available.efforts[available.efforts.length - 1]);
       }
-      if (!available.supportsFastMode) {
+      if (!providerFastSupported(narrowed, modelId)) {
         setFast(false);
+      } else {
+        const rememberedFast = providerId
+          ? getProviderModelFast(agent, providerId, modelId)
+          : undefined;
+        if (rememberedFast !== undefined) setFast(rememberedFast);
       }
     },
-    [activeModels, effort, model, narrowProviderSource],
+    [activeModels, agent, effort, model, narrowProviderSource, providerFastSupported],
   );
 
   const updateEffort = setEffort;
@@ -472,6 +503,10 @@ export function CreateWorkerPopover({
               popoverSide="bottom"
               currentProviderId={deviceId ? undefined : providerSource}
               onProviderChange={deviceId ? undefined : handleProviderChange}
+              // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
+              // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
+              // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
+              reselectEmitsChange
               onNavigateToProviders={
                 deviceId
                   ? undefined
@@ -481,8 +516,13 @@ export function CreateWorkerPopover({
                     }
               }
               modelMemory={modelMemory}
-              fastMode={deviceId ? undefined : fast}
-              onFastModeChange={deviceId ? undefined : (enabled) => setFast(enabled)}
+              // worker 创建链的显式 Fast 派发目前仅 Codex(resolveWorkerConfig 只对
+              // codex 消费 input.fast):cc 不接线,面板就不显示 Fast 开关,避免
+              // 「开关能开、提交被丢」的名不副实(codex review)。
+              fastMode={deviceId || agent !== 'codex' ? undefined : fast}
+              onFastModeChange={
+                deviceId || agent !== 'codex' ? undefined : (enabled) => setFast(enabled)
+              }
             />
           </div>
           {noAvailableLocalModels ? (
