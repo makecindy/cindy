@@ -153,20 +153,35 @@ function stripHtmlTags(text: string): string {
       continue;
     }
     if (afterName === 0x3c /* < */) {
-      // Nested fragment (e.g. <scr<x>ipt>) — strip everything to the
-      // outermost '>' to prevent reassembly after inner tags are removed
+      // Nested fragment (e.g. <scr<x>ipt>) — strip to first '>' to
+      // prevent reassembly after inner tags are removed
       while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
       if (j >= len) { out += '<'; i += 1; continue; }
       i = j + 1;
       continue;
     }
-    if (afterName === 0x3e || afterName === 0x2f ||
-        afterName === 0x20 || afterName === 0x09 ||
+    if (afterName === 0x2f /* / */) {
+      // Self-closing only if '/' is immediately followed by '>' (e.g. <br/>)
+      if (j + 1 < len && text.charCodeAt(j + 1) === 0x3e) {
+        i = j + 2;
+      } else {
+        // Not self-closing (e.g. <owner/repo>) — preserve literally
+        out += '<';
+        i += 1;
+      }
+      continue;
+    }
+    if (afterName === 0x3e || afterName === 0x20 || afterName === 0x09 ||
         afterName === 0x0a || afterName === 0x0d) {
-      // Valid HTML tag — skip to closing '>'
-      while (j < len && text.charCodeAt(j) !== 0x3e) j += 1;
-      if (j >= len) { out += '<'; i += 1; continue; }
-      i = j + 1;
+      // Valid HTML tag — scan for '>', also stop at '<' to stay O(n)
+      while (j < len && text.charCodeAt(j) !== 0x3e && text.charCodeAt(j) !== 0x3c) j += 1;
+      if (j < len && text.charCodeAt(j) === 0x3e) {
+        i = j + 1;
+      } else {
+        // Hit another '<' or end-of-string — not a complete tag
+        out += '<';
+        i += 1;
+      }
       continue;
     }
     // Unknown char after name (not a tag) — emit '<' literally
