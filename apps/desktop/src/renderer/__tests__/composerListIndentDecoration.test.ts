@@ -81,9 +81,11 @@ describe('buildListIndentDecorations', () => {
     expect(cjkStyle).not.toContain('10、');
   });
 
-  it('skips tab-indented lines instead of guessing a proportional-font tab width', () => {
+  it('decorates tab-indented lines and leaves their final width to browser measurement', () => {
     const ed = makeEditor(['\t1. item']);
-    expect(buildListIndentDecorations(ed.state.doc).find()).toHaveLength(0);
+    const tabIndent = ed.view.dom.querySelector('.composer-list-tab-indent');
+    expect(tabIndent).not.toBeNull();
+    expect(tabIndent?.getAttribute('data-composer-list-prefix-length')).toBe('4');
   });
 
   it('decorates the full content of a single-line item', () => {
@@ -109,10 +111,42 @@ describe('buildListIndentDecorations', () => {
       Array.from(ed.view.dom.querySelectorAll('span.composer-list-long-run-body')).map(
         (node) => node.textContent,
       ),
-    ).toEqual([
-      '221241412423532235235325235212414',
-      'abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    ]);
+    ).toEqual(['221241412423532235235325235212414', 'abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']);
+  });
+
+  it('keeps ordinary prose as one wrapper when it contains a long token', () => {
+    const ed = makeEditor(['- review abcdefghijklmnop before sending']);
+    expect(ed.view.dom.querySelector('p.composer-list-block-indent')).not.toBeNull();
+    expect(ed.view.dom.querySelector('span.composer-list-long-run-body')).toBeNull();
+  });
+
+  it('keeps a recognized slash pill inside a single-line list wrapper', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        SlashCommandDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: '- /foo abcdefghijklmnop' }],
+          },
+        ],
+      },
+    });
+    setSlashCommandRoster(editor, [{ name: 'foo', description: 'test command' }]);
+    expect(editor.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe(
+      '- /foo abcdefghijklmnop',
+    );
+    expect(editor.view.dom.querySelector('span.slash-cmd-pill')?.textContent).toBe('/foo');
+    expect(editor.view.dom.querySelector('span.composer-list-long-run-body')).toBeNull();
   });
 
   it('decorates each list line independently across hardBreaks', () => {
@@ -155,9 +189,9 @@ describe('buildListIndentDecorations', () => {
       },
     });
     expect(buildListIndentDecorations(editor.state.doc).find()).toHaveLength(1);
-    expect(
-      editor.view.dom.querySelector('span.composer-list-prefix-indent')?.textContent,
-    ).toBe('- ');
+    expect(editor.view.dom.querySelector('span.composer-list-prefix-indent')?.textContent).toBe(
+      '- ',
+    );
     expect(
       editor.view.dom
         .querySelector('[data-test-atom]')
@@ -169,9 +203,7 @@ describe('buildListIndentDecorations', () => {
 describe('ComposerListIndentDecoration in a real editor', () => {
   it('renders the indent span into the DOM for list lines', () => {
     const ed = makeEditor(['1. hello']);
-    expect(ed.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe(
-      '1. hello',
-    );
+    expect(ed.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe('1. hello');
     expect(
       ed.view.dom
         .querySelector<HTMLElement>('p.composer-list-block-indent')
@@ -202,26 +234,18 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     });
     expect(editor.view.dom.querySelectorAll('p.composer-list-block-indent')).toHaveLength(1);
     expect(editor.view.dom.querySelectorAll('span.composer-list-line-indent')).toHaveLength(0);
-    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).not.toHaveLength(0);
+    expect(editor.view.dom.querySelectorAll('.composer-list-cjk-font')).toHaveLength(1);
   });
 
-  it('uses prefix-only fallback for CJK punctuation in hardBreak-separated list lines', () => {
+  it('keeps the full hanging wrapper for CJK punctuation in hardBreak-separated list lines', () => {
     const ed = makeEditor(['- 中文，内容', '2. plain']);
-    expect(
-      Array.from(ed.view.dom.querySelectorAll('span.composer-list-prefix-indent')).map(
-        (node) => node.textContent,
-      ),
-    ).toEqual(['- ']);
-    expect(indentSpans(ed)).toEqual(['2. plain']);
+    expect(indentSpans(ed)).toEqual(['- 中文，内容', '2. plain']);
+    expect(ed.view.dom.querySelector('.composer-list-cjk-font')).not.toBeNull();
   });
 
   it('keeps hanging indent when CJK punctuation belongs only to the list marker', () => {
     const ed = makeEditor(['intro', '1、中文正文会在输入框边界自然换行']);
-    expect(
-      Array.from(ed.view.dom.querySelectorAll('span.composer-list-prefix-indent')).map(
-        (node) => node.textContent,
-      ),
-    ).toEqual([]);
+    expect(ed.view.dom.querySelectorAll('span.composer-list-prefix-indent')).toHaveLength(0);
     expect(indentSpans(ed)).toEqual(['1、中文正文会在输入框边界自然换行']);
   });
 
@@ -251,9 +275,9 @@ describe('ComposerListIndentDecoration in a real editor', () => {
       },
     });
     setSlashCommandRoster(editor, [{ name: 'foo', description: 'test command' }]);
-    expect(
-      editor.view.dom.querySelector('span.composer-list-prefix-indent')?.textContent,
-    ).toBe('- ');
+    expect(editor.view.dom.querySelector('span.composer-list-prefix-indent')?.textContent).toBe(
+      '- ',
+    );
     expect(editor.view.dom.querySelector('span.slash-cmd-pill')?.textContent).toBe('/foo');
     expect(indentSpans(editor)).toEqual(['2. plain']);
   });
@@ -313,7 +337,9 @@ describe('wiring contract', () => {
       resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
       'utf8',
     );
-    expect(src).toContain("import { ComposerListIndentDecoration } from './ComposerListIndentDecoration';");
+    expect(src).toContain(
+      "import { ComposerListIndentDecoration } from './ComposerListIndentDecoration';",
+    );
     expect(src).toMatch(/CjkPunctDecoration,\s*\n\s*ComposerListIndentDecoration,/);
   });
 
@@ -321,19 +347,24 @@ describe('wiring contract', () => {
     const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
     expect(css).toContain('.ProseMirror .composer-list-block-indent');
     expect(css).toContain('.ProseMirror .composer-list-prefix-indent');
-    expect(css).toContain('.ProseMirror span.composer-list-line-indent');
+    expect(css).toContain('.ProseMirror .composer-list-line-indent');
     expect(css).toContain('display: inline-block;');
     expect(css).toContain('width: 100%;');
     expect(css).toContain('padding-left: calc(1em + var(--composer-list-hang, 1.25em));');
     expect(css).toContain('text-indent: var(--composer-list-hang-negative, -1.25em);');
     expect(css).toContain('overflow-wrap: anywhere;');
-    expect(css).toContain('.ProseMirror .composer-list-long-run-indent');
-    expect(css).toContain('word-break: break-all;');
     expect(css).toContain('.ProseMirror .composer-list-long-run-marker');
     expect(css).toContain('.ProseMirror .composer-list-long-run-body');
+    expect(css).toContain('.ProseMirror .composer-list-tab-indent');
+    expect(css).toContain('tab-size: 8;');
+    expect(css).toContain('.ProseMirror .composer-list-line-indent.voice-input-draft-replaced');
     expect(css).toContain('white-space: nowrap;');
+    const longRunBodyRule = css.match(
+      /\.ProseMirror \.composer-list-long-run-body \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(longRunBodyRule).toContain('word-break: break-all;');
     const regularIndentRule = css.match(
-      /\.ProseMirror span\.composer-list-line-indent \{([\s\S]*?)\n\}/,
+      /\.ProseMirror \.composer-list-line-indent \{([\s\S]*?)\n\}/,
     )?.[1];
     expect(regularIndentRule).not.toContain('word-break: break-all;');
   });

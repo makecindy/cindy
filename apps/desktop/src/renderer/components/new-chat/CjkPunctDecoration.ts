@@ -39,6 +39,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { EditorState, Transaction } from '@tiptap/pm/state';
 import type { Node as PMNode } from '@tiptap/pm/model';
+import { matchListPrefix } from '@/lib/composerListContinuation';
 
 const PLUGIN_KEY = new PluginKey<DecorationSet>('cjkPunctDecoration');
 
@@ -50,6 +51,47 @@ const PLUGIN_KEY = new PluginKey<DecorationSet>('cjkPunctDecoration');
  * 不包括 ASCII 标点,因为它们 script 已经是 Latin,不会触发 itemization 错乱。
  */
 const CJK_PUNCT_REGEX = /[\u3000-\u303f\uff00-\uffef]/g;
+
+type ListLineRange = { from: number; to: number };
+
+function listLineRanges(doc: PMNode): ListLineRange[] {
+  const ranges: ListLineRange[] = [];
+  doc.descendants((block, blockPos) => {
+    if (!block.isTextblock) return true;
+    const contentBase = blockPos + 1;
+    let lineText = '';
+    let lineStart = 0;
+    let lineEnd = 0;
+    const flush = () => {
+      if (matchListPrefix(lineText)) {
+        ranges.push({
+          from: contentBase + lineStart,
+          to: contentBase + lineEnd,
+        });
+      }
+    };
+    block.nodesBetween(0, block.content.size, (node, pos) => {
+      if (node.type.name === 'hardBreak') {
+        lineEnd = pos;
+        flush();
+        lineText = '';
+        lineStart = pos + node.nodeSize;
+        lineEnd = lineStart;
+      } else if (node.isText) {
+        lineText += node.text ?? '';
+        lineEnd = pos + node.nodeSize;
+      } else {
+        lineText += '\uFFFC';
+        lineEnd = pos + node.nodeSize;
+      }
+      return false;
+    });
+    lineEnd = block.content.size;
+    flush();
+    return false;
+  });
+  return ranges;
+}
 
 /**
  * 显式 CJK 字体栈。
@@ -80,6 +122,7 @@ const CJK_FONT_STACK =
  */
 function buildDecorations(doc: PMNode): DecorationSet {
   const decorations: Decoration[] = [];
+  const listRanges = listLineRanges(doc);
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return;
@@ -89,6 +132,13 @@ function buildDecorations(doc: PMNode): DecorationSet {
     while ((m = CJK_PUNCT_REGEX.exec(text)) !== null) {
       const from = pos + m.index;
       const to = from + m[0].length;
+      if (listRanges.some((range) => from >= range.from && to <= range.to)) {
+        // ComposerListIndentDecoration owns the wrapping container for list
+        // rows. An overlapping inline font decoration would split that
+        // container at every punctuation boundary; list rows opt into the
+        // same CJK font stack through `.composer-list-cjk-font` instead.
+        continue;
+      }
       decorations.push(
         Decoration.inline(from, to, {
           // inline style 的优先级比 .ProseMirror 的 css 规则高, 强制覆盖
