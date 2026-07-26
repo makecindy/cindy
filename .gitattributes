@@ -14,9 +14,10 @@ apps/desktop/native/sqlite-vec/**/*.dll filter=lfs diff=lfs merge=lfs -text
 apps/desktop/native/sqlite-vec/**/*.so filter=lfs diff=lfs merge=lfs -text
 # claude / codex / ripgrep CLI 二进制不再进 git/LFS——按需从上游下载
 # （见 scripts/ensure-agent-binaries.mjs；版本 pin 在 tools/<kind>/latest.json）。
-# Android platform-tools 二进制—— 走 Git LFS
-apps/android-platform-tools-bin/**/*.exe filter=lfs diff=lfs merge=lfs -text
-apps/android-platform-tools-bin/**/*.dll filter=lfs diff=lfs merge=lfs -text
+# Android platform-tools 二进制(adb.exe / AdbWin*.dll)不再进 git/LFS——Windows
+# 打包前按 source.properties 的 pin 版本从上游下载并校验 sha256
+# （见 apps/desktop/scripts/ensure-android-platform-tools.mjs）；路径已在
+# .gitignore 中排除。同目录的 NOTICE.txt 与 source.properties 是文本、照常入仓。
 # cindy-updater.exe 不再进 git/LFS——Windows 打包的 prePackage 每次都从
 # apps/desktop/cindy-updater/ 现场 cargo build 并覆盖 resources/ 下的产物
 # （见 forge.config.ts buildCindyUpdater）；路径已在 .gitignore 中排除。

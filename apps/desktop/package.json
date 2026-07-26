@@ -18,6 +18,7 @@
     "dev:inspect": "pnpm dev:winsetup && cross-env OPEN_DEVTOOLS=1 node scripts/dev-remote-env.mjs electron-forge start --inspect-electron --",
     "package": "electron-forge package",
     "release:package": "node scripts/package-desktop.mjs",
+    "install:android-platform-tools": "node scripts/ensure-android-platform-tools.mjs",
     "build": "electron-forge make",
     "db:check": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",

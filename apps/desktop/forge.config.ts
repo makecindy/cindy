@@ -788,10 +788,37 @@ function validateAndroidPlatformToolsSource(srcDir: string, targetPlatform: stri
   assertRealAndroidPlatformTool(path.join(srcDir, 'adb'));
 }
 
+/**
+ * Windows 打包前把 Android platform-tools 的三个二进制按 pin 版本就位。
+ *
+ * 它们(6.5MB)不入仓:公开仓每次 clone 与每次 CI checkout(ci.yml 的 lfs: true)都会
+ * 把 LFS 对象下一遍,免费带宽额度耗尽后 clone 与 CI 会一起硬失败。脚本幂等 ——
+ * 已就位且 sha256 匹配时直接跳过、不碰网络;无外网的打包机见脚本内的离线出路。
+ */
+function ensureAndroidPlatformToolsBinaries(key: string): void {
+  const script = path.join(__dirname, 'scripts', 'ensure-android-platform-tools.mjs');
+  const r = spawnSync(process.execPath, [script, `--platform-key=${key}`], { stdio: 'inherit' });
+  if (r.error) {
+    throw new Error(`[forge] failed to invoke ${script}: ${r.error.message}`);
+  }
+  if (r.status !== 0) {
+    throw new Error(
+      `[forge] Android platform-tools ${key} 未能就位(exit ${r.status})——见上方脚本输出的离线出路。`,
+    );
+  }
+}
+
 function stageAndroidPlatformTools(targetPlatform: string, targetArch: string): void {
   const key = targetPlatformKey(targetPlatform, targetArch);
   const srcDir = path.join(__dirname, '..', 'android-platform-tools-bin', key);
   const destDir = path.join(__dirname, 'resources', 'tools', 'android-platform-tools', key);
+
+  // win32 的二进制不入仓,先按 pin 版本下载/校验。注意不能靠 srcDir 是否存在来判断
+  // 二进制在不在 —— 同目录的 NOTICE.txt 与 source.properties 是有意入仓的文本
+  // (许可清单与版本 pin 都读它们),所以目录一直存在。
+  if (targetPlatform === 'win32') {
+    ensureAndroidPlatformToolsBinaries(key);
+  }
 
   if (!fs.existsSync(srcDir)) {
     fs.rmSync(destDir, { recursive: true, force: true });

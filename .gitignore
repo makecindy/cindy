@@ -47,6 +47,13 @@ apps/desktop/resources/cindy-updater.exe
 apps/claude-code-bin/
 apps/codex-bin/
 apps/ripgrep-bin/
+# Android platform-tools 的二进制同理：Windows 打包前按 source.properties 的 pin
+# 版本下载并校验 sha256（apps/desktop/scripts/ensure-android-platform-tools.mjs）。
+# 只忽略二进制——同目录的 NOTICE.txt（许可清单要读）与 source.properties（版本
+# 事实源）是文本，必须继续入仓。
+apps/android-platform-tools-bin/**/*.exe
+apps/android-platform-tools-bin/**/*.dll
+apps/android-platform-tools-bin/*/adb
 tools/claude/updates/
 tools/codex/updates/
 tools/ripgrep/updates/

@@ -62,7 +62,7 @@ Ready out of the box, never boxed in — start with
 | `apps/desktop` | Electron desktop client |
 | `apps/mobile` | Expo / React Native mobile client |
 | `packages/*` | Shared client capabilities (auth, device-link, agent orchestration, model providers, …) |
-| `apps/*-bin` | Tool binaries shipped with the desktop app; only android-platform-tools is committed (via Git LFS) — claude-code, codex, and ripgrep are downloaded per platform by `pnpm install` and never checked in |
+| `apps/*-bin` | Tool binaries shipped with the desktop app; none are committed — claude-code, codex, and ripgrep are downloaded per platform by `pnpm install`, and the Android platform-tools binaries are fetched (pinned version, sha256-verified) before Windows packaging |
 | `cindy-protocol/` | Wire protocol shared with the server (git submodule) |
 
 **Not in this repo:** the backend service lives in a separate
