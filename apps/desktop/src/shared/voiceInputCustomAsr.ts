@@ -87,7 +87,7 @@ export function validateVoiceInputCustomAsrWebsocketUrl(value: string): string |
     !ALLOWED_CUSTOM_ASR_QUERY_KEYS.has(key.toLowerCase())
   ));
   if (containsDisallowedQuery) {
-    return 'customAsr.websocketUrl must not contain credentials in query parameters';
+    return 'customAsr.websocketUrl contains unsupported query parameters; only documented routing parameters are allowed';
   }
   if (parsedUrl.hash) {
     return 'customAsr.websocketUrl must not contain a fragment';

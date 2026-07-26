@@ -279,7 +279,7 @@ describe('VoiceInputModelSelection', () => {
       model: 'gpt-realtime-whisper',
     })).toEqual({
       ok: false,
-      error: 'customAsr.websocketUrl must not contain credentials in query parameters',
+      error: 'customAsr.websocketUrl contains unsupported query parameters; only documented routing parameters are allowed',
     });
     expect(validateVoiceInputCustomAsrConfig({
       protocol: 'openai-realtime',

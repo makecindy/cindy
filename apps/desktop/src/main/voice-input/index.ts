@@ -1790,9 +1790,10 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:get-readiness', async (): Promise<VoiceInputReadiness> =>
-    refreshVoiceInputReadinessCache('ipc'),
-  );
+  ipcMain.handle('voice-input:get-readiness', async (event): Promise<VoiceInputReadiness> => {
+    assertTrustedAppRendererEvent(event);
+    return refreshVoiceInputReadinessCache('ipc');
+  });
 
   ipcMain.handle(
     VOICE_INPUT_TEST_CONNECTION_CHANNEL,

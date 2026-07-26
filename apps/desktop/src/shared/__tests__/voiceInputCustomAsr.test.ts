@@ -7,7 +7,7 @@ describe('custom ASR WebSocket URL validation', () => {
     'rejects credential query parameter %s',
     (key) => {
       expect(validateVoiceInputCustomAsrWebsocketUrl(`wss://asr.example.test/stream?${key}=secret`))
-        .toContain('must not contain credentials');
+        .toContain('unsupported query parameters');
     },
   );
 
@@ -20,10 +20,10 @@ describe('custom ASR WebSocket URL validation', () => {
   it('rejects unknown and signed URL query parameters', () => {
     expect(validateVoiceInputCustomAsrWebsocketUrl(
       'wss://asr.example.test/stream?X-Goog-Signature=secret',
-    )).toContain('must not contain credentials');
+    )).toContain('unsupported query parameters');
     expect(validateVoiceInputCustomAsrWebsocketUrl(
       'wss://asr.example.test/stream?custom-routing=value',
-    )).toContain('must not contain credentials');
+    )).toContain('unsupported query parameters');
   });
 
   it('allows loopback ws IPv6 literals', () => {

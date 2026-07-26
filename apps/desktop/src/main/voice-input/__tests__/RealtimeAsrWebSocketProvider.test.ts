@@ -310,6 +310,43 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
   });
 
+  it('redacts custom handshake details while preserving the HTTP status for classification', async () => {
+    const server = new WebSocketServer({
+      port: 0,
+      verifyClient(_info, done) {
+        done(false, 401, 'token=upstream-secret');
+      },
+    });
+    let provider: RealtimeAsrWebSocketProvider | undefined;
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      provider = new RealtimeAsrWebSocketProvider({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+        model: 'gpt-realtime-whisper',
+        providerKind: 'custom-realtime-asr',
+        errorFallbackMessage: 'Custom realtime ASR failed.',
+        redactUpstreamErrors: true,
+      });
+      provider.onEvent(() => {});
+
+      const error = await provider.start().then(
+        () => null,
+        (startError: unknown) => startError,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('Custom realtime ASR failed. (HTTP 401)');
+      expect((error as Error).message).not.toContain('upstream-secret');
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('does not reuse a prewarmed socket across credential cache identities', async () => {
     const server = new WebSocketServer({ port: 0 });
     const authorizations: Array<string | undefined> = [];

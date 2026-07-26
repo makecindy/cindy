@@ -702,6 +702,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         model: this.model,
         sourceLanguage: this.sourceLanguage,
         startedAtIso: new Date().toISOString(),
+        redactSensitiveWs: this.redactUpstreamErrors,
       });
       log.info('voice input session recording enabled', {
         sessionId: this.recorder.sessionId,
@@ -869,6 +870,11 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
         response.resume();
         const statusCode = response.statusCode ?? 'unknown';
+        if (this.redactUpstreamErrors) {
+          const statusSuffix = typeof statusCode === 'number' ? ` (HTTP ${statusCode})` : '';
+          fail(new Error(`${this.errorFallbackMessage}${statusSuffix}`), true);
+          return;
+        }
         const statusMessage = response.statusMessage ? ` ${response.statusMessage}` : '';
         // Include the dialed host/path + gateway trace id: a handshake 404
         // against a gateway missing the ASR passthrough route is otherwise
