@@ -220,6 +220,8 @@ describe('SubagentModelSection standard panel contract', () => {
     render(<SubagentModelSection />);
     const selector = await screen.findByTestId('model-selector');
     expect(selector.dataset.disabled).toBe('true');
+    // loading 中 providers 空不算「零来源」:CTA 不得提前接线(copilot review)。
+    expect(selector.dataset.connectCta).toBe('false');
   });
 
   it('flags a connected provider that dropped the stored model as disconnected', async () => {

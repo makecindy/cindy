@@ -171,9 +171,13 @@ export function SubagentModelSection() {
                 sourceDisconnected={sourceDisconnected}
                 // 零已连接来源的空态 CTA / 列表底部「连接来源」:开了供应商分段就必须
                 // 给恢复动作,否则空态是死卡(codex review);与 composer 同跳转。
-                // 仅零来源时接线,见 hasAnyClaudeSource 注。
+                // 仅「目录就绪且零来源」时接线:loading 中 providers 为空是数据没到,
+                // 提前接线会与「目录未就绪整行禁用」的交互冲突/闪烁(copilot review);
+                // 有来源时不接线以保留 stale 诊断,见 hasAnyClaudeSource 注。
                 onNavigateToProviders={
-                  hasAnyClaudeSource ? undefined : () => navigate('/settings?tab=providers')
+                  providersLoading || hasAnyClaudeSource
+                    ? undefined
+                    : () => navigate('/settings?tab=providers')
                 }
                 // 存储来源断开时面板高亮的是**解析出的回退来源**,点它必须照常回调,
                 // 才能把显示与存储重新对齐(codex review);纯同值重选在下方去重跳过。
