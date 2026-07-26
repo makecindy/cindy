@@ -156,6 +156,7 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
+          response.resume();
           finish({ ok: false, detail: `http-${response.statusCode}` });
           return;
         }
