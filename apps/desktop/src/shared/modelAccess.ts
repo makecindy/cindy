@@ -108,8 +108,9 @@ export interface ModelGroupTieredPricing {
 
 /**
  * model-access-server 从 AIGateway /model-groups 白名单透传的价格字段。
- * 字段名和单位保持 Gateway 原样（per token）；Desktop 在构建 quote 时才转
- * per-million-token，并按构建区域赋予币种。
+ * 字段名和数值保持 Gateway 原样（per token）；Desktop 在构建 quote 时才转
+ * per-million-token。币种以条目声明的 currency 为准，未声明按 Gateway 原生
+ * USD——绝不按构建区域改标或折算。
  */
 export interface ModelGroupPricing {
   costDiscount?: number;
@@ -152,6 +153,14 @@ export interface ModelGroupPricing {
 
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
+  /**
+   * 本条目价格字段的计费币种声明(透传 Gateway)。缺省表示 Gateway 原生口径
+   * USD;客户端不得按构建区域改标或折算——单位永远跟随下发数据。
+   * 注意:本地记账账本是单币种的,只有**每个**条目都显式声明同一非 USD 币种
+   * 时目录才整体切换;与目录币种冲突的声明条目不出报价(费用退回 SDK 实报
+   * USD 兜底),见 modelPriceQuote.resolveGatewayCatalogCurrency。
+   */
+  currency?: 'USD' | 'CNY';
   /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
   agents?: ('claude-code' | 'codex')[];
   name?: string;
@@ -162,7 +171,7 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
-  /** Fast(加速档)支持;缺省按 true 处理(开了没效果无害,但不能没有)。 */
+  /** Fast(加速档)支持;缺省按 false 处理(上游未声明时不猜测能力)。 */
   supportsFastMode?: boolean;
   /** 是否默认出现在模型选择器;缺省按 true(默认可见)。 */
   defaultEnabled?: boolean;

@@ -15,6 +15,16 @@ import {
   resolveVoiceInputRefinerProviderKindAlias,
   type VoiceInputRefinerProviderKind,
 } from '../../shared/voiceInputRefinerProfiles.js';
+import {
+  validateVoiceInputCustomAsrConfig,
+  type VoiceInputCustomAsrConfig,
+} from '../../shared/voiceInputCustomAsr.js';
+
+export {
+  validateVoiceInputCustomAsrConfig,
+  type VoiceInputCustomAsrConfig,
+  type VoiceInputCustomAsrProtocol,
+} from '../../shared/voiceInputCustomAsr.js';
 
 const EMPTY_REFINER_DEFAULT_CHAIN: readonly VoiceInputRefinerProviderKind[] = [];
 
@@ -47,6 +57,17 @@ export function effectiveVoiceInputServiceMode(
   return canUseCindyAccountServices ? configuredMode : 'byok';
 }
 
+export function voiceInputAsrChainForServiceMode(
+  selection: Pick<
+    VoiceInputModelSelectionValues,
+    'serviceMode' | 'asrProvider' | 'asrProviderChain' | 'asrProviderChainSource'
+  >,
+): VoiceInputProviderKind[] {
+  return selection.serviceMode === 'byok' && selection.asrProviderChainSource === 'default'
+    ? [selection.asrProvider]
+    : [...selection.asrProviderChain];
+}
+
 export type VoiceInputModelSelectionValues = {
   serviceMode: VoiceInputServiceMode;
   /** True when serviceMode came from an explicit file/env override (vs the product default). */
@@ -61,6 +82,9 @@ export type VoiceInputModelSelectionValues = {
    * comma separated) when present, otherwise from the built-in default chain.
    */
   asrProviderChain: VoiceInputProviderKind[];
+  asrProviderChainSource: VoiceInputProviderChainSource;
+  /** User-owned realtime ASR transport metadata. The API key is never stored here. */
+  customAsr?: VoiceInputCustomAsrConfig;
   /** Effective refiner fallback chain; same resolution rules as asrProviderChain. */
   refinerProviderChain: VoiceInputRefinerProviderKind[];
   refinerProviderChainSource: VoiceInputProviderChainSource;
@@ -73,6 +97,7 @@ export type VoiceInputModelSelection = VoiceInputModelSelectionValues & {
 export type VoiceInputModelSelectionPatch = {
   serviceMode?: VoiceInputServiceMode | null;
   asrProvider?: VoiceInputProviderKind | null;
+  customAsr?: VoiceInputCustomAsrConfig | null;
   refinerProvider?: VoiceInputRefinerProviderKind | null;
   refinerModel?: string | null;
   /**
@@ -84,7 +109,7 @@ export type VoiceInputModelSelectionPatch = {
 };
 
 export type VoiceInputModelSelectionWarning = {
-  field: 'serviceMode' | 'asrProvider' | 'refinerProvider' | 'asrProviderChain' | 'refinerProviderChain';
+  field: 'serviceMode' | 'asrProvider' | 'refinerProvider' | 'asrProviderChain' | 'refinerProviderChain' | 'customAsr';
   value: string;
   fallback: string;
 };
@@ -104,6 +129,7 @@ type RawVoiceInputModelSelectionFile = {
   refinerModel?: unknown;
   asrProviderChain?: unknown;
   refinerProviderChain?: unknown;
+  customAsr?: unknown;
 };
 
 let cachedConfig: VoiceInputModelSelection | null = null;
@@ -144,6 +170,7 @@ export function resolveVoiceInputModelSelectionValues(
     defaultChain: DEFAULT_VOICE_INPUT_ASR_PROVIDER_CHAIN,
     resolveAlias: resolveVoiceInputProviderKindAlias,
   });
+  const customAsr = resolveVoiceInputCustomAsrConfig(raw?.customAsr);
   const refinerChain = resolveProviderChain({
     field: 'refinerProviderChain',
     rawEntries: readConfigStringList(raw, 'utilityModelProviderChain')
@@ -166,6 +193,8 @@ export function resolveVoiceInputModelSelectionValues(
       refinerProvider: refinerProvider.value,
       refinerModel,
       asrProviderChain: asrChain.value,
+      asrProviderChainSource: asrChain.source,
+      ...(customAsr.value ? { customAsr: customAsr.value } : {}),
       refinerProviderChain: refinerChain.value,
       refinerProviderChainSource: refinerChain.source,
     },
@@ -174,6 +203,7 @@ export function resolveVoiceInputModelSelectionValues(
       ...(asrProvider.warning ? [asrProvider.warning] : []),
       ...(refinerProvider.warning ? [refinerProvider.warning] : []),
       ...asrChain.warnings,
+      ...(customAsr.warning ? [customAsr.warning] : []),
       ...refinerChain.warnings,
     ],
   };
@@ -254,6 +284,7 @@ export function setVoiceInputModelSelection(patch: VoiceInputModelSelectionPatch
   const next: RawVoiceInputModelSelectionFile = { ...current };
   if ('serviceMode' in patch) next.serviceMode = patch.serviceMode ?? '';
   if ('asrProvider' in patch) next.asrProvider = patch.asrProvider ?? '';
+  if ('customAsr' in patch) next.customAsr = patch.customAsr ?? undefined;
   if ('refinerProvider' in patch) next.refinerProvider = patch.refinerProvider ?? '';
   if ('refinerModel' in patch) next.refinerModel = patch.refinerModel?.trim() ?? '';
   if ('refinerProviderChain' in patch) next.refinerProviderChain = patch.refinerProviderChain ?? [];
@@ -262,6 +293,7 @@ export function setVoiceInputModelSelection(patch: VoiceInputModelSelectionPatch
     path: configPath,
     serviceMode: next.serviceMode,
     asrProvider: next.asrProvider,
+    customAsrConfigured: Boolean(next.customAsr),
     refinerProvider: next.refinerProvider,
     refinerModel: next.refinerModel,
     refinerProviderChain: next.refinerProviderChain,
@@ -276,6 +308,8 @@ export function voiceInputModelSelectionSignature(config: VoiceInputModelSelecti
     refinerProvider: config.refinerProvider,
     refinerModel: config.refinerModel ?? '',
     asrProviderChain: config.asrProviderChain,
+    asrProviderChainSource: config.asrProviderChainSource,
+    customAsr: config.customAsr ?? null,
     refinerProviderChain: config.refinerProviderChain,
     refinerProviderChainSource: config.refinerProviderChainSource,
   });
@@ -415,6 +449,21 @@ function defaultRuntimeConfigFile(): RawVoiceInputModelSelectionFile {
     refinerModel: '',
     asrProviderChain: [],
     refinerProviderChain: [],
+  };
+}
+
+function resolveVoiceInputCustomAsrConfig(
+  value: unknown,
+): { value?: VoiceInputCustomAsrConfig; warning?: VoiceInputModelSelectionWarning } {
+  if (value === undefined || value === null) return {};
+  const validated = validateVoiceInputCustomAsrConfig(value);
+  if (validated.ok) return { value: validated.value };
+  return {
+    warning: {
+      field: 'customAsr',
+      value: '<invalid>',
+      fallback: '<unset>',
+    },
   };
 }
 

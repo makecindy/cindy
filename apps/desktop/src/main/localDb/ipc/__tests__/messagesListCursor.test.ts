@@ -633,13 +633,13 @@ describe('readPriorUserRoundCost', () => {
 
     await expect(readPriorUserRoundCost('s1', 'target')).resolves.toEqual({
       money: {
-        amount: expect.closeTo(18.934191 * 6.7, 10),
-        currency: 'CNY',
+        amount: expect.closeTo(18.934191, 10),
+        currency: 'USD',
         approximate: true,
         kind: 'actual-cost',
-        estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+        estimateReasons: ['subscription-value'],
       },
-      costUsd: 0,
+      costUsd: 18.934191,
       hasEstimatedValue: true,
     });
   });
@@ -672,13 +672,12 @@ describe('readPriorUserRoundCost', () => {
 
     await expect(readPriorUserRoundCost('s1', 'target')).resolves.toEqual({
       money: {
-        amount: 3.35,
-        currency: 'CNY',
-        approximate: true,
+        amount: 0.5,
+        currency: 'USD',
+        approximate: false,
         kind: 'actual-cost',
-        estimateReasons: ['fixed-fx', 'legacy-usd'],
       },
-      costUsd: 0,
+      costUsd: 0.5,
       hasEstimatedValue: false,
     });
   });

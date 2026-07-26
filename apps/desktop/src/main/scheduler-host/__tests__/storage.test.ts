@@ -302,18 +302,17 @@ describe('scheduleRunToCamel / scheduleRunCreateToRow', () => {
     expect(back).toEqual({
       ...original,
       costMoney: {
-        amount: 2.814,
-        currency: 'CNY',
-        approximate: true,
+        amount: 0.42,
+        currency: 'USD',
+        approximate: false,
         kind: 'actual-cost',
-        estimateReasons: ['fixed-fx', 'legacy-usd'],
       },
       estimatedValueMoney: {
-        amount: expect.closeTo(1.273, 10),
-        currency: 'CNY',
+        amount: 0.19,
+        currency: 'USD',
         approximate: true,
         kind: 'value-estimate',
-        estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+        estimateReasons: ['legacy-usd', 'subscription-value'],
       },
     });
   });

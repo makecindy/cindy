@@ -83,11 +83,8 @@ import {
 import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import {
-  gatewayCurrencyForRegion,
-  regionalAmountFromUsdReference,
-  zeroRegionalMoney,
+  zeroUsageMoney,
   type ModelPriceQuote,
   type RegionalMoney,
 } from '../../../shared/regionalMoney';
@@ -97,7 +94,7 @@ const TODAY = '2026-06-11';
 function actual(amount: number, approximate = false): RegionalMoney {
   return {
     amount,
-    currency: gatewayCurrencyForRegion(CURRENT_CINDY_REGION),
+    currency: 'USD',
     approximate,
     kind: 'actual-cost',
     ...(approximate ? { estimateReasons: ['legacy-usd'] } : {}),
@@ -238,10 +235,7 @@ describe('billing model keys', () => {
 
 describe('readUsageHistoryWith', () => {
   it('aggregates actual money and subscription value without double counting', async () => {
-    const estimateAmount = regionalAmountFromUsdReference(
-      2,
-      CURRENT_CINDY_REGION,
-    );
+    const estimateAmount = 2;
     const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
         { day: '2026-06-10', money: actual(3) },
@@ -310,7 +304,7 @@ describe('readUsageHistoryWith', () => {
   });
 
   it('uses provider-scoped Anthropic reference pricing for Claude subscription rows', async () => {
-    const expected = regionalAmountFromUsdReference(5, CURRENT_CINDY_REGION);
+    const expected = 5;
     const result = await readUsageHistoryWith(makeDeps({
       getModelUsageSince: async () => [
         modelRow(
@@ -402,7 +396,7 @@ describe('production cache and empty payload', () => {
         ),
       );
       expect(raw).toMatchObject({
-        version: 2,
+        version: 3,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {
@@ -413,13 +407,11 @@ describe('production cache and empty payload', () => {
     });
   });
 
-  it('returns region-correct structured zero money on fallback', () => {
+  it('returns structured USD zero money on fallback', () => {
     const empty = emptyUsageHistoryPayload();
-    expect(empty.totals.today).toEqual(
-      zeroRegionalMoney(CURRENT_CINDY_REGION),
-    );
+    expect(empty.totals.today).toEqual(zeroUsageMoney());
     expect(empty.totals.last30DaysEstimatedValue).toEqual(
-      zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'),
+      zeroUsageMoney('value-estimate'),
     );
   });
 });

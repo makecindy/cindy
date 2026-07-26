@@ -291,7 +291,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain('? await getModelPricing()');
     expect(codexDoneSource).toContain(": await getModelPricingForModel('xd', pricingModel)");
-    expect(codexDoneSource).toContain('regionalizeModelPriceQuote(price, CURRENT_CINDY_REGION)');
+    expect(codexDoneSource).toContain('price ?? undefined');
     expect(codexDoneSource).toContain('if (!isSubscriptionValue && money)');
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
@@ -336,7 +336,6 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain('const { turnMoney, perModel } = resolveClaudeTurnCostSinks(');
     expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
     expect(claudeDoneSource).toContain('billingRoute,');
-    expect(claudeDoneSource).toContain('region: CURRENT_CINDY_REGION');
     expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
     expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
     expect(claudeDoneSource).toContain('money: m.money,');

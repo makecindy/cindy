@@ -31,19 +31,18 @@ import {
   type ModelPricingMap,
 } from './modelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   getModelPriceQuote,
-  regionalizeModelPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import {
   addCompatibleRegionalMoney,
+  DEFAULT_USAGE_CURRENCY,
   normalizeRegionalMoney,
-  regionalAmountFromUsdReference,
-  regionalCurrencyForRegion,
+  USD_TO_CNY_FIXED_RATE,
   type ModelPriceQuote,
+  type MoneyCurrency,
   type RegionalMoney,
-  zeroRegionalMoney,
+  zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
 
 const log = createLogger('usageHistory');
@@ -59,7 +58,8 @@ const ANOMALY_MIN_ACTIVE_DAYS = 3;
 const MODEL_WINDOW_DAYS = 30;
 /** 等价格表的最长预算 (ms) — 缓存命中时是同步快返, 只有冷启动网络 fetch 会触及。 */
 const PRICING_WAIT_BUDGET_MS = 200;
-const DISK_CACHE_VERSION = 2;
+// v3: 币种语义改为跟随来源(默认 USD),旧缓存里 CN 构建的金额带错标 CNY,整体作废。
+const DISK_CACHE_VERSION = 3;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -356,17 +356,12 @@ function getSubscriptionValuePriceFor(
   pricing: ModelPricingMap | null,
 ): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
-    const quote =
+    return (
       getSubscriptionDirectValuePrice(model) ??
-      getCodexSubscriptionValuePrice(model, pricing);
-    return quote
-      ? regionalizeModelPriceQuote(quote, CURRENT_CINDY_REGION)
-      : undefined;
+      getCodexSubscriptionValuePrice(model, pricing)
+    );
   }
-  const quote = getModelPriceQuote(pricing, 'anthropic', model);
-  return quote
-    ? regionalizeModelPriceQuote(quote, CURRENT_CINDY_REGION)
-    : undefined;
+  return getModelPriceQuote(pricing, 'anthropic', model);
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -492,20 +487,38 @@ export async function readUsageHistoryWith(
   const todayKey = deps.todayKey();
 
   const allDays = await deps.getAllSpendDays();
+  // 阈值启发式(异常检测)使用的日金额表必须与账本币种同单位:币种切换过渡
+  // 期的异币种历史日不进表(按 0 计),避免拿一种币种的阈值去比另一种的数值。
+  const ledgerCurrency =
+    allDays.find((row) => row.day === todayKey)?.money.currency ??
+    allDays[allDays.length - 1]?.money.currency ??
+    DEFAULT_USAGE_CURRENCY;
   const spendByDay = new Map(
-    allDays.map((row) => [row.day, row.money.amount]),
+    allDays
+      .filter((row) => row.money.currency === ledgerCurrency)
+      .map((row) => [row.day, row.money.amount]),
   );
-  const zeroActual = () => zeroRegionalMoney(CURRENT_CINDY_REGION);
-  const zeroEstimate = () =>
-    zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate');
+  // 零值也用账本币种:无消费日的 today/空聚合不能把展示单位翻回默认币种。
+  const zeroActual = (): RegionalMoney => ({
+    amount: 0,
+    currency: ledgerCurrency,
+    approximate: false,
+    kind: 'actual-cost',
+  });
+  const zeroEstimate = (): RegionalMoney => ({
+    amount: 0,
+    currency: ledgerCurrency,
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['subscription-value'],
+  });
+  // 聚合偏好账本币种(今天/最新行的币种):默认 USD 偏好会在币种切换过渡期
+  // 把当前币种的日金额整段挤掉(窗口里残留任意旧 USD 行即触发)。
   const addOrZero = (
     values: RegionalMoney[],
     kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
   ): RegionalMoney =>
-    addCompatibleRegionalMoney(
-      values,
-      regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-    ) ??
+    addCompatibleRegionalMoney(values, ledgerCurrency) ??
     (kind === 'actual-cost' ? zeroActual() : zeroEstimate());
 
   const heatmapCutoff = shiftDayKey(todayKey, -(windowDays - 1));
@@ -587,10 +600,7 @@ export async function readUsageHistoryWith(
     if (row.money.amount > 0) {
       agg.money =
         agg.money.amount > 0
-          ? (addCompatibleRegionalMoney(
-              [agg.money, row.money],
-              regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-            ) ?? row.money)
+          ? (addCompatibleRegionalMoney([agg.money, row.money], ledgerCurrency) ?? row.money)
           : row.money;
     }
     agg.inputTokens += row.inputTokens;
@@ -645,16 +655,21 @@ export async function readUsageHistoryWith(
     return tokens(b) - tokens(a);
   });
 
-  const activeDayMin = regionalAmountFromUsdReference(
-    ACTIVE_DAY_MIN_USD,
-    CURRENT_CINDY_REGION,
-  );
-  const anomalyMinToday = regionalAmountFromUsdReference(
+  // 活跃日/异常阈值常量是 USD 口径;历史 CNY 行(或来源真声明 CNY 的账本)按
+  // 固定汇率把阈值折到该行币种再比较。仅阈值启发式用,不产生任何展示金额。
+  const heuristicThreshold = (base: number, currency: MoneyCurrency): number =>
+    currency === 'CNY' ? base * USD_TO_CNY_FIXED_RATE : base;
+  const activeDayMin = heuristicThreshold(ACTIVE_DAY_MIN_USD, ledgerCurrency);
+  const anomalyMinToday = heuristicThreshold(
     ANOMALY_MIN_TODAY_USD,
-    CURRENT_CINDY_REGION,
+    ledgerCurrency,
   );
   const activeDays = allDays
-    .filter((row) => row.money.amount >= activeDayMin)
+    .filter(
+      (row) =>
+        row.money.amount >=
+        heuristicThreshold(ACTIVE_DAY_MIN_USD, row.money.currency),
+    )
     .map((row) => row.day);
   const last30Cutoff = shiftDayKey(todayKey, -(MODEL_WINDOW_DAYS - 1));
   const last30ActualByDay = new Map<string, RegionalMoney>();
@@ -677,11 +692,14 @@ export async function readUsageHistoryWith(
   );
   const last30WithEstimatedValue =
     last30EstimatedValue.amount > 0
-      ? (addCompatibleRegionalMoney(
-          [last30, last30EstimatedValue],
-          regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-        ) ?? last30)
+      ? (addCompatibleRegionalMoney([last30, last30EstimatedValue], ledgerCurrency) ?? last30)
       : last30;
+  // 与合计口径一致:估算若因币种不兼容被聚合弃掉,就不能再单独外露非零值,
+  // 否则 UI 会声称「总额已含订阅估算」而实际未含。
+  const exposedLast30EstimatedValue =
+    last30EstimatedValue.currency === last30WithEstimatedValue.currency
+      ? last30EstimatedValue
+      : zeroEstimate();
   const anomalyRaw = computeAnomaly(spendByDay, todayKey, {
     activeDayMin,
     anomalyMinToday,
@@ -707,7 +725,7 @@ export async function readUsageHistoryWith(
       today,
       last30Days: last30,
       last30DaysWithEstimatedValue: last30WithEstimatedValue,
-      last30DaysEstimatedValue: last30EstimatedValue,
+      last30DaysEstimatedValue: exposedLast30EstimatedValue,
       todayTokens,
       last30DaysTokens,
     },
@@ -718,7 +736,7 @@ export async function readUsageHistoryWith(
           ? null
           : {
               amount: anomalyRaw.trailing7DayAvg,
-              currency: today.currency,
+              currency: ledgerCurrency,
               approximate: trailing7Approximate,
               kind: 'actual-cost',
               ...(trailing7Approximate
@@ -768,15 +786,10 @@ export function emptyUsageHistoryPayload(): UsageHistoryPayload {
     models: [],
     streak: { current: 0, longest: 0 },
     totals: {
-      today: zeroRegionalMoney(CURRENT_CINDY_REGION),
-      last30Days: zeroRegionalMoney(CURRENT_CINDY_REGION),
-      last30DaysWithEstimatedValue: zeroRegionalMoney(
-        CURRENT_CINDY_REGION,
-      ),
-      last30DaysEstimatedValue: zeroRegionalMoney(
-        CURRENT_CINDY_REGION,
-        'value-estimate',
-      ),
+      today: zeroUsageMoney(),
+      last30Days: zeroUsageMoney(),
+      last30DaysWithEstimatedValue: zeroUsageMoney(),
+      last30DaysEstimatedValue: zeroUsageMoney('value-estimate'),
       todayTokens: 0,
       last30DaysTokens: 0,
     },

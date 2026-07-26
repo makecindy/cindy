@@ -1,16 +1,17 @@
 import { sql } from 'drizzle-orm';
 
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   addRegionalMoney,
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalCurrencyForRegion,
-  regionalizeLegacyUsd,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { dailyModelUsage } from './schema.js';
 import { localDayKey } from './dailySpend.js';
 import { getDbClient } from './client/current.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('localDb/dailyModelUsage');
 
 export interface DailyModelUsageDelta {
   agentKind: 'claude-code' | 'codex';
@@ -42,9 +43,6 @@ export async function incrementDailyModelUsage(
   ts: number = Date.now(),
 ): Promise<void> {
   const money = delta.money ? normalizeRegionalMoney(delta.money) : undefined;
-  if (money && money.currency !== regionalCurrencyForRegion(CURRENT_CINDY_REGION)) {
-    throw new Error('daily model usage currency mismatch');
-  }
   const inputTokens = sanitizeTokens(delta.inputTokensDelta);
   const outputTokens = sanitizeTokens(delta.outputTokensDelta);
   const cacheReadTokens = sanitizeTokens(delta.cacheReadTokensDelta);
@@ -62,22 +60,12 @@ export async function incrementDailyModelUsage(
   const day = localDayKey(ts);
   const model = delta.model || 'unknown';
   const db = getDbClient().drizzle;
-  const existing = await db
-    .select({ costCurrency: dailyModelUsage.costCurrency })
-    .from(dailyModelUsage)
-    .where(
-      sql`${dailyModelUsage.day} = ${day}
-        AND ${dailyModelUsage.agentKind} = ${delta.agentKind}
-        AND ${dailyModelUsage.model} = ${model}`,
-    )
-    .get();
-  if (
-    money &&
-    existing?.costCurrency &&
-    existing.costCurrency !== money.currency
-  ) {
-    throw new Error('daily model usage row has conflicting currency');
-  }
+  // 单币种行:币种守卫必须在同一条 upsert 里用 CASE 表达 —— 先查再写有
+  // TOCTOU 窗口,并发首写会把不同币种的裸数字加进同一行。冲突时原子地只弃
+  // 金额,token 增量照记(throw 会连本轮 token 统计一起丢,损失更大)。
+  const sameCurrency = money
+    ? sql`(${dailyModelUsage.costCurrency} IS NULL OR ${dailyModelUsage.costCurrency} = ${money.currency})`
+    : sql`0`;
   await db
     .insert(dailyModelUsage)
     .values({
@@ -100,9 +88,9 @@ export async function incrementDailyModelUsage(
         dailyModelUsage.model,
       ],
       set: {
-        costAmount: sql`${dailyModelUsage.costAmount} + ${money?.amount ?? 0}`,
-        ...(money ? { costCurrency: money.currency } : {}),
-        costIsApproximate: sql`${dailyModelUsage.costIsApproximate} OR ${money?.approximate ? 1 : 0}`,
+        costAmount: sql`CASE WHEN ${sameCurrency} THEN ${dailyModelUsage.costAmount} + ${money?.amount ?? 0} ELSE ${dailyModelUsage.costAmount} END`,
+        costCurrency: sql`CASE WHEN ${sameCurrency} THEN ${money?.currency ?? null} ELSE ${dailyModelUsage.costCurrency} END`,
+        costIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${dailyModelUsage.costIsApproximate} OR ${money?.approximate ? 1 : 0}) ELSE ${dailyModelUsage.costIsApproximate} END`,
         inputTokens: sql`${dailyModelUsage.inputTokens} + ${inputTokens}`,
         outputTokens: sql`${dailyModelUsage.outputTokens} + ${outputTokens}`,
         cacheReadTokens: sql`${dailyModelUsage.cacheReadTokens} + ${cacheReadTokens}`,
@@ -111,6 +99,23 @@ export async function incrementDailyModelUsage(
       },
     })
     .run();
+  if (money) {
+    const row = await db
+      .select({ costCurrency: dailyModelUsage.costCurrency })
+      .from(dailyModelUsage)
+      .where(
+        sql`${dailyModelUsage.day} = ${day}
+          AND ${dailyModelUsage.agentKind} = ${delta.agentKind}
+          AND ${dailyModelUsage.model} = ${model}`,
+      )
+      .get();
+    if (row?.costCurrency && row.costCurrency !== money.currency) {
+      log.warn(
+        `daily model usage currency conflict on ${day}/${delta.agentKind}/${model}: ` +
+          `keeping ${row.costCurrency}, dropped ${money.currency} amount`,
+      );
+    }
+  }
 }
 
 export async function getModelUsageSince(
@@ -134,7 +139,7 @@ export async function getModelUsageSince(
     .where(sql`${dailyModelUsage.day} >= ${sinceDayKey}`)
     .all();
   return rows.map((row) => {
-    const legacy = regionalizeLegacyUsd(row.costUsd, CURRENT_CINDY_REGION);
+    const legacy = legacyUsdMoney(row.costUsd);
     const current =
       row.costCurrency && row.costAmount > 0
         ? normalizeRegionalMoney({

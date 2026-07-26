@@ -6,8 +6,7 @@ import { registerMakerStatusHandlers } from '../statusHandlers';
 import { registerMakerUsageHandlers } from '../usageHandlers';
 import { CodexRateLimitResetRejectedError } from '../../usage/codexRateLimitReset';
 import { IpcHarness } from './helpers/ipcHarness';
-import { zeroRegionalMoney } from '../../../shared/regionalMoney';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { zeroUsageMoney } from '../../../shared/regionalMoney';
 
 function createMakerStub(methods: Partial<Maker>): Maker {
   return methods as Maker;
@@ -329,13 +328,10 @@ describe('maker usage IPC handlers', () => {
     models: [],
     streak: { current: 0, longest: 0 },
     totals: {
-      today: zeroRegionalMoney(CURRENT_CINDY_REGION),
-      last30Days: zeroRegionalMoney(CURRENT_CINDY_REGION),
-      last30DaysWithEstimatedValue: zeroRegionalMoney(CURRENT_CINDY_REGION),
-      last30DaysEstimatedValue: zeroRegionalMoney(
-        CURRENT_CINDY_REGION,
-        'value-estimate',
-      ),
+      today: zeroUsageMoney(),
+      last30Days: zeroUsageMoney(),
+      last30DaysWithEstimatedValue: zeroUsageMoney(),
+      last30DaysEstimatedValue: zeroUsageMoney('value-estimate'),
       todayTokens: 0,
       last30DaysTokens: 0,
     },

@@ -147,7 +147,12 @@ import {
   type UserInput,
 } from './app-server/protocol.js';
 
-type CodexEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+type CodexEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+
+const CODEX_MINIMAL_EFFORT_MODELS = new Set([
+  'bytedance-seed/seed-2.1-pro',
+  'z-ai/glm-5.2',
+]);
 
 /**
  * item.type → chip status 文案 (对齐 claude-code 6 类). null = 该 item 不触发 chip 切换
@@ -178,14 +183,14 @@ function statusTextForItem(item: { type?: string; command?: string; tool?: strin
 }
 
 /**
- * maker Effort → Codex GPT 可透传档。
+ * maker Effort → Codex app-server 可透传档。
  *
- * 只把 'minimal' 收敛到 'low'(Codex 无 minimal 档); max / ultra 直接透传,
- * 不再静默降级为 xhigh(issue #352)。某模型是否真支持 max/ultra 由目录 efforts
- * 与 UI/reconcile 门控保证——只有声明支持的模型才会走到这里传 max/ultra。
+ * Seed 2.1 Pro 与 GLM-5.2 的官方档位包含 minimal，原样下发；其他模型继续
+ * 把 minimal 收敛到 low。max / ultra 直接透传，不再静默降级为 xhigh(issue #352)。
+ * 某模型是否真支持某档位由目录 efforts 与 UI/reconcile 门控保证。
  */
-function clampEffortForCodex(e: Effort): CodexEffort {
-  if (e === 'minimal') return 'low';
+function clampEffortForCodex(model: string, e: Effort): CodexEffort {
+  if (e === 'minimal' && !CODEX_MINIMAL_EFFORT_MODELS.has(model)) return 'low';
   return e;
 }
 
@@ -2256,7 +2261,7 @@ export class CodexAgent extends BaseAgent {
           mode: 'plan',
           settings: {
             model: mutableModel,
-            reasoning_effort: clampEffortForCodex(mutableEffort),
+            reasoning_effort: clampEffortForCodex(mutableModel, mutableEffort),
             developer_instructions: null,
           },
         };
@@ -2267,7 +2272,7 @@ export class CodexAgent extends BaseAgent {
           mode: 'default',
           settings: {
             model: mutableModel,
-            reasoning_effort: clampEffortForCodex(mutableEffort),
+            reasoning_effort: clampEffortForCodex(mutableModel, mutableEffort),
             developer_instructions: developerInstructions,
           },
         };
@@ -4053,7 +4058,7 @@ export class CodexAgent extends BaseAgent {
           threadId,
           input: turnInput,
           ...turnWorkspaceConfig,
-          effort: clampEffortForCodex(mutableEffort),
+          effort: clampEffortForCodex(mutableModel, mutableEffort),
           // 强制 reasoning summary='auto' — 不依赖用户 ~/.codex/config.toml 写没写
           // model_reasoning_summary, 让 thinking 文本在所有用户机器上一致流式出。
           // (v2.rs:5801-5803 turn/start 的 summary 会 override server config)
@@ -4391,7 +4396,7 @@ export class CodexAgent extends BaseAgent {
 
       async setEffort(newEffort: Effort) {
         if (newEffort === mutableEffort) return; // 去重: 值没变不重推
-        const clamped = clampEffortForCodex(newEffort);
+        const clamped = clampEffortForCodex(mutableModel, newEffort);
         log.debug('setEffort', { from: mutableEffort, to: newEffort, clamped });
         mutableEffort = newEffort;
         // thread 已启动 → 立即经 thread/settings/update 生效; 未启动由首个 turn/start

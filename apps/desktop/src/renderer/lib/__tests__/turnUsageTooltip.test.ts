@@ -69,7 +69,7 @@ describe('buildTurnUsageTooltipLines — 按模型成本明细', () => {
         (l) =>
           l.startsWith('usageDetails.modelCostLine') &&
           l.includes('Opus 4.8') &&
-          l.includes('¥6.30'),
+          l.includes('$0.94'),
       ),
     ).toBe(true);
     expect(
@@ -77,7 +77,7 @@ describe('buildTurnUsageTooltipLines — 按模型成本明细', () => {
         (l) =>
           l.startsWith('usageDetails.modelCostLine') &&
           l.includes('Haiku 4.5') &&
-          l.includes('¥5.36'),
+          l.includes('$0.80'),
       ),
     ).toBe(true);
     expect(out.some((l) => l.startsWith('usageDetails.modelLine'))).toBe(false);
@@ -152,21 +152,19 @@ describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
       {
         model: 'claude-opus-4-8',
         money: {
-          amount: expect.closeTo(6.298, 10),
-          currency: 'CNY',
-          approximate: true,
+          amount: expect.closeTo(0.94, 10),
+          currency: 'USD',
+          approximate: false,
           kind: 'actual-cost',
-          estimateReasons: ['fixed-fx', 'legacy-usd'],
         },
       },
       {
         model: 'claude-haiku-4-5',
         money: {
-          amount: expect.closeTo(5.36, 10),
-          currency: 'CNY',
-          approximate: true,
+          amount: expect.closeTo(0.8, 10),
+          currency: 'USD',
+          approximate: false,
           kind: 'actual-cost',
-          estimateReasons: ['fixed-fx', 'legacy-usd'],
         },
       },
     ]);
@@ -185,11 +183,10 @@ describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
       {
         model: 'claude-opus-4-8',
         money: {
-          amount: expect.closeTo(6.03, 10),
-          currency: 'CNY',
-          approximate: true,
+          amount: expect.closeTo(0.9, 10),
+          currency: 'USD',
+          approximate: false,
           kind: 'actual-cost',
-          estimateReasons: ['fixed-fx', 'legacy-usd'],
         },
       },
     ]);

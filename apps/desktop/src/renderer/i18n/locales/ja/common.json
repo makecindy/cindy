@@ -715,21 +715,37 @@
       },
       "serviceSource": {
         "label": "音声サービス",
-        "hint": "既定では Cindy 提供の音声サービスを使用します。自分のキーとモデルに切り替えることもできます。",
-        "localHint": "ローカルモードでは Cindy アカウントサービスを使用しません。自分のキーとモデルを設定してください。",
+        "hint": "既定では Cindy 音声サービスを使用します。リアルタイム ASR 対応サービスと専用の音声認証情報に切り替えることもできます。",
+        "localHint": "ローカルモードでは Cindy アカウントサービスを使用しません。リアルタイム ASR 対応サービスと専用の音声認証情報を設定してください。",
         "ariaLabel": "音声サービスソースの選択",
         "options": {
           "cindy": "Cindy 公式サービス",
-          "byok": "カスタム（自分のキー）"
+          "byok": "カスタム音声サービス"
         },
         "optionDescriptions": {
           "cindy": "Cindy のログイン情報を使用し、キーの設定は不要です",
-          "byok": "自分のキーとモデルを使用し、費用は自分のアカウントに計上されます"
+          "byok": "ASR 対応サービスと専用の音声認証情報を使用します"
         },
         "asr": {
           "label": "認識モデル",
           "hint": "音声をテキストに変換する ASR モデル。",
           "ariaLabel": "音声認識モデルの選択"
+        },
+        "connectionTest": {
+          "action": "接続をテスト",
+          "testing": "テスト中",
+          "testingStatus": "選択したリアルタイム ASR サービスに接続しています…",
+          "success": "接続に成功しました。選択したリアルタイム ASR ルートを利用できます。",
+          "saveBeforeTest": "接続をテストする前に、カスタム ASR の変更を保存してください。",
+          "failure": {
+            "credentialsMissing": "必要な認証情報がありません。先に設定を完了してください。",
+            "authenticationFailed": "認証に失敗しました。このサービスの認証情報を確認してください。",
+            "routeUnavailable": "AI ゲートウェイがこのリアルタイム ASR ルートをサポートしていないか、有効にしていません。",
+            "timeout": "接続がタイムアウトしました。ネットワークとサービスの状態を確認して再試行してください。",
+            "network": "サービスに接続できません。ネットワーク、アドレス、証明書の設定を確認してください。",
+            "serviceError": "サービスとのハンドシェイクに失敗しました。後でもう一度試すか、サービス設定を確認してください。",
+            "unsupportedProvider": "この認識モデルでは接続テストを利用できません。"
+          }
         },
         "refiner": {
           "label": "整えモデル",
@@ -743,15 +759,52 @@
           "none": "フォールバックなし",
           "noneDescription": "メインモデルが失敗した場合は元の認識テキストを保持"
         },
+        "customAsr": {
+          "optionLabel": "カスタムリアルタイム ASR",
+          "optionDescription": "専用の音声認識 WebSocket と API キーを使用",
+          "notice": "ASR 対応サービスが提供する完全な WebSocket URL を入力してください。Cindy はチャットモデルの URL を再利用せず、音声用パスも追加しません。",
+          "protocol": {
+            "label": "リアルタイムプロトコル",
+            "hint": "ASR サービスが実装しているメッセージ形式を選択します。",
+            "ariaLabel": "カスタムリアルタイム ASR プロトコル",
+            "openai": "OpenAI 文字起こし",
+            "qwen": "Qwen リアルタイム ASR"
+          },
+          "websocketUrl": {
+            "label": "WebSocket URL",
+            "hint": "完全な wss:// URL。ローカルのループバックサービスでは ws:// も使用できます。",
+            "placeholder": "wss://asr.example.com/v1/realtime",
+            "invalid": "認証情報を含まない有効な wss:// URL を入力してください。ws:// はローカルのループバックサービスだけで使用できます。"
+          },
+          "model": {
+            "label": "ASR モデル",
+            "hint": "サービスが受け付ける音声認識モデル ID を入力します。",
+            "placeholder": "音声認識モデル ID"
+          },
+          "apiKey": {
+            "label": "ASR API キー",
+            "hint": "システム暗号化でローカルに保存し、この音声サービスだけに使用します。",
+            "savedHint": "キーはローカルに保存されています。空欄のままなら変更しません。",
+            "endpointChangedHint": "接続先のオリジンが変更されました。新しいキーを入力するか、保存済みのキーを削除してから保存してください。",
+            "placeholder": "ASR API キーを入力",
+            "savedPlaceholder": "キーは保存済みです。新しい値で置き換えられます",
+            "clear": "キーを削除"
+          },
+          "save": "音声サービスを保存"
+        },
         "credential": {
-          "gatewayKey": "AI ゲートウェイキーを使用",
+          "gatewayKey": "AI ゲートウェイが選択したリアルタイム ASR ルートに対応している必要があります",
           "codexLogin": "Codex ログインを使用",
-          "elevenlabsKey": "ElevenLabs キーを使用（環境変数）"
+          "elevenlabsKey": "ElevenLabs キーを使用（環境変数）",
+          "codexRealtimeUnsupported": "利用不可：Codex ログインは OpenAI API Realtime の認証情報ではありません"
         },
         "credentialError": {
           "gatewayMissing": "利用可能な AI ゲートウェイキーが見つからないため、このモデルは使用できません。",
           "codexMissing": "Codex にログインしていないため、このモデルは使用できません。",
-          "elevenlabsMissing": "ElevenLabs キー（環境変数）が未設定のため、このモデルは使用できません。"
+          "elevenlabsMissing": "ElevenLabs キー（環境変数）が未設定のため、このモデルは使用できません。",
+          "customAsrConfigMissing": "音声入力を開始する前に、リアルタイム ASR サービスの設定をすべて入力して保存してください。",
+          "customAsrKeyMissing": "カスタムリアルタイム ASR サービスの API キーを入力して保存してください。",
+          "codexRealtimeUnsupported": "Codex ログインはリアルタイム音声認識には使用できません。対応する ASR サービスを選択してください。"
         },
         "manageProviders": "モデルプロバイダーを開く",
         "reset": "既定に戻す"
@@ -2044,6 +2097,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "モデル",
+        "effortLabel": "推論強度",
         "permissionLabel": "権限モード",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",

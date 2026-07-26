@@ -3,12 +3,10 @@
  * message. Stored in messages.agent_meta so old DB schema stays unchanged.
  */
 
-import { CURRENT_CINDY_REGION } from './brandRegion.js';
 import {
   addCompatibleRegionalMoney,
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalCurrencyForRegion,
-  regionalizeLegacyUsd,
   type RegionalMoney,
 } from './regionalMoney.js';
 
@@ -89,7 +87,7 @@ function sanitizePerModelCost(
     const structured = normalizeRegionalMoney(item.money);
     const legacy =
       typeof item.costUsd === 'number' && Number.isFinite(item.costUsd) && item.costUsd > 0
-        ? regionalizeLegacyUsd(item.costUsd, CURRENT_CINDY_REGION)
+        ? legacyUsdMoney(item.costUsd)
         : undefined;
     const money = structured ?? legacy;
     if (!model || !money || money.amount <= 0) continue;
@@ -97,10 +95,7 @@ function sanitizePerModelCost(
     byModel.set(
       model,
       current
-        ? (addCompatibleRegionalMoney(
-            [current, money],
-            regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-          ) ?? money)
+        ? (addCompatibleRegionalMoney([current, money]) ?? money)
         : money,
     );
   }

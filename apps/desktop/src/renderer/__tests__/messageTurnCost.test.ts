@@ -50,8 +50,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { formatTurnCostUsd } from '@/lib/usageFormat';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
-import { regionalizeLegacyUsd } from '../../shared/regionalMoney';
+import { legacyUsdMoney } from '../../shared/regionalMoney';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
@@ -124,8 +123,7 @@ function serverMessage(over: Partial<Message>): Message {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const legacyMoney = (amountUsd: number) =>
-  regionalizeLegacyUsd(amountUsd, CURRENT_CINDY_REGION);
+const legacyMoney = (amountUsd: number) => legacyUsdMoney(amountUsd);
 const DETAILS = buildTurnUsageDetails({
   inputTokens: 1200,
   outputTokens: 300,

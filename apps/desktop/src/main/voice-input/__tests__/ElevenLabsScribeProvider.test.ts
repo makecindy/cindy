@@ -38,6 +38,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
       const index = sockets.length;
       sockets.push(socket);
       messageCounts[index] = 0;
+      socket.send(JSON.stringify({ message_type: 'session_started' }));
       socket.on('message', () => {
         messageCounts[index] += 1;
       });
@@ -95,6 +96,7 @@ describe('ElevenLabsScribeProvider helpers', () => {
     let provider: ElevenLabsScribeProvider | undefined;
     server.on('connection', (socket) => {
       sockets.push(socket);
+      socket.send(JSON.stringify({ message_type: 'session_started' }));
     });
 
     try {
@@ -186,6 +188,35 @@ describe('ElevenLabsScribeProvider helpers', () => {
       provider.onEvent(() => {});
 
       await expect(provider.start()).rejects.toThrow('ElevenLabs Scribe handshake failed: HTTP 403 Forbidden');
+    } finally {
+      await provider?.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('waits for application authentication and rejects an auth error after the websocket opens', async () => {
+    const server = new WebSocketServer({ port: 0 });
+    let provider: ElevenLabsScribeProvider | undefined;
+    server.on('connection', (socket) => {
+      socket.send(JSON.stringify({ message_type: 'auth_error', error: 'Invalid API key' }));
+    });
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      const events: Array<{ type: string }> = [];
+      provider = new ElevenLabsScribeProvider({
+        proxyApiKey: 'invalid-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        connectTimeoutMs: 2_000,
+      });
+      provider.onEvent((event) => events.push(event));
+
+      await expect(provider.start()).rejects.toThrow('Invalid API key');
+      expect(events.some((event) => event.type === 'connected')).toBe(false);
+      expect(events.some((event) => event.type === 'error')).toBe(true);
     } finally {
       await provider?.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -1085,12 +1085,23 @@
         "group": "china",
         "contextWindow": 256000,
         "efforts": [
+          "minimal",
           "low",
           "medium",
           "high"
         ],
-        "defaultEffort": "high",
-        "supportsFastMode": true
+        "defaultEffort": "minimal",
+        "supportsFastMode": false,
+        "perAgent": {
+          "claude-code": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "defaultEffort": "low"
+          }
+        }
       },
       "qwen/qwen3.8-max-preview": {
         "agents": [
@@ -1102,11 +1113,11 @@
         "contextWindow": 983616,
         "efforts": [
           "low",
-          "medium",
-          "high"
+          "high",
+          "xhigh"
         ],
-        "defaultEffort": "high",
-        "supportsFastMode": true
+        "defaultEffort": "xhigh",
+        "supportsFastMode": false
       },
       "qwen/qwen3.7-max": {
         "agents": [
@@ -1157,12 +1168,22 @@
         "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
         "contextWindow": 1000000,
         "efforts": [
+          "minimal",
           "high",
           "max"
         ],
-        "defaultEffort": "high",
+        "defaultEffort": "max",
         "sortOrder": 43,
-        "supportsFastMode": false
+        "supportsFastMode": false,
+        "perAgent": {
+          "claude-code": {
+            "efforts": [
+              "high",
+              "max"
+            ],
+            "defaultEffort": "max"
+          }
+        }
       },
       "deepseek/deepseek-v4-pro": {
         "agents": [
@@ -1227,16 +1248,22 @@
         "sortOrder": 103,
         "defaultEnabled": false
       },
-      "moonshot/kimi-k3": {
+      "moonshotai/kimi-k3": {
         "agents": [
           "claude-code",
           "codex"
         ],
         "name": "Kimi K3",
         "group": "china",
-        "description": "Moonshot Kimi K3 agentic coding model; 1M context; thinking is provider-managed",
         "contextWindow": 1000000,
-        "sortOrder": 41
+        "efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultEffort": "max",
+        "sortOrder": 41,
+        "supportsFastMode": false
       },
       "qwen/qwen3.6-plus": {
         "agents": [

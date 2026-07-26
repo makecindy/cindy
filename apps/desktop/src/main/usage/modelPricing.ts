@@ -32,7 +32,10 @@ export type {
 } from '../../shared/regionalMoney.js';
 
 const log = createLogger('modelPricing');
-const DISK_CACHE_VERSION = 3;
+// v4: 币种语义从「按构建区域标注」改为「跟随来源(默认 USD)」——旧缓存里
+// CN 构建的 quote 带错标 CNY,必须整体作废,否则升级后到下一次 /models 同步
+// 前仍会用旧币种折算单轮费用。
+const DISK_CACHE_VERSION = 4;
 const DISK_CACHE_FILE = 'model-pricing.json';
 
 export const MODEL_PRICING_CHANGED_CHANNEL = 'usage:model-pricing-changed';
@@ -221,7 +224,7 @@ export function replaceGatewayModelPricing(
   models: readonly ModelAccessGatewayModel[],
 ): ModelPricingCatalog {
   const scope = currentScope();
-  const pricing = gatewayPricingCatalog(models, CURRENT_CINDY_REGION);
+  const pricing = gatewayPricingCatalog(models);
   cache = pricing;
   cacheScope = scope;
   cacheAt = Date.now();

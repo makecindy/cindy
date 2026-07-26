@@ -13,12 +13,10 @@ import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotCon
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
-  regionalCurrencyForRegion,
-  regionalizeUsd,
+  usdMoney,
   USD_TO_CNY_FIXED_RATE,
   type MoneyEstimateReason,
   type RegionalMoney,
@@ -87,12 +85,7 @@ function correctStaleUsdEstimate(
 
 function legacyEstimateMoney(costUsd: number): RegionalMoney | null {
   if (!Number.isFinite(costUsd) || costUsd <= 0) return null;
-  return regionalizeUsd(
-    costUsd,
-    CURRENT_CINDY_REGION,
-    'legacy-usd',
-    'value-estimate',
-  );
+  return usdMoney(costUsd, 'value-estimate', 'legacy-usd');
 }
 
 function estimateFromChatMessage(message: ChatMessage): { clientId: string; money: RegionalMoney } | null {
@@ -215,10 +208,7 @@ export function resolveEstimatedValueTurnCostEntry(
 function sumCosts(costs: Map<string, RegionalMoney>): RegionalMoney | null {
   const values = [...costs.values()];
   if (values.length === 0) return null;
-  const total = addCompatibleRegionalMoney(
-    values,
-    regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-  );
+  const total = addCompatibleRegionalMoney(values);
   if (!total) return null;
   return total.amount > 0 ? total : null;
 }

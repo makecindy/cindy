@@ -20,7 +20,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import type { ReactNode } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { createPortal } from 'react-dom';
-import { Archive, ChevronRight, CirclePlus, Folder, Plug, Timer, Trash2, X } from 'lucide-react';
+import { Archive, ChevronRight, CirclePlus, Folder, Plug, SquarePen, Timer, Trash2, X } from 'lucide-react';
 import { useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -132,7 +132,11 @@ import {
   SIDEBAR_RAIL_ICON_BUTTON_CLASS,
 } from '@/components/sidebar/SidebarIconButton';
 import { RailNav, remoteLampOf } from './sidebar/RailNav';
-import { panelHasEditingFocus, railPanelStore } from './sidebar/railPanelStore';
+import {
+  panelHasBlockingOverlay,
+  panelHasEditingFocus,
+  railPanelStore,
+} from './sidebar/railPanelStore';
 import { SessionEntryList } from './sidebar/SessionEntryList';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -2383,6 +2387,8 @@ function ExpandedView({
         onMoveSession={handleMoveSession}
         projectOptions={projectPickerOptions}
         onScheduleAction={handleScheduleAction}
+        onCreateDialogue={handleCreateDialogue}
+        onCreateInProject={handleCreateInProject}
       />
       {deleteScheduleDialog}
     </>
@@ -2634,6 +2640,11 @@ interface RailPanelsProps {
   onMoveSession: Parameters<typeof SessionEntryList>[0]['onMoveSession'];
   projectOptions: Parameters<typeof SessionEntryList>[0]['projectOptions'];
   onScheduleAction: Parameters<typeof SessionEntryList>[0]['onScheduleAction'];
+  /** 新建对话(对话面板头部 SquarePen)——展开态 DialogueSection 段头同源 handler。 */
+  onCreateDialogue: () => void;
+  /** 在此项目内新建(项目行右键菜单 + 三级面板头部)——展开态 ProjectNode
+   *  的 newInDirectory 主操作同源 handler(内置远程写保护)。 */
+  onCreateInProject: (project: ProjectNode) => void;
 }
 
 /**
@@ -2663,15 +2674,35 @@ function RailPanels({
   onMoveSession,
   projectOptions,
   onScheduleAction,
+  onCreateDialogue,
+  onCreateInProject,
 }: RailPanelsProps) {
   const { t } = useTranslation();
   const panelState = useSyncExternalStore(railPanelStore.subscribe, railPanelStore.getSnapshot);
+  // 项目行右键菜单(「在此项目内新建」)——controlled DropdownMenu + 不可见
+  // trigger 跟坐标(Automations 菜单同款模式)。
+  const [projectMenu, setProjectMenu] = useState<{
+    x: number;
+    y: number;
+    projectKey: string;
+  } | null>(null);
+  // 菜单关闭后把焦点还给唤起它的项目行:Radix 默认还焦到 trigger,但这里的
+  // trigger 是零尺寸 aria-hidden span,不接管会让焦点掉到 document、打断
+  // Shift+F10 之后的键盘导航(DESIGN.md §14.2 焦点回归契约;codex review)。
+  const projectMenuAnchorRef = useRef<HTMLElement | null>(null);
+  // 面板经 closeAll 路径(⌘B 隐藏/侧栏展开/触发器消失)关闭时不会走菜单的
+  // onOpenChange —— openSection 离开 projects 就同步清掉菜单状态,否则组件常驻
+  // (只是 return null),下次打开面板旧菜单会按旧坐标复现并引用旧项目(review)。
+  // 与下方 showAllProjects 的复位同构。
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   // 项目列表「显示全部」:面板关闭后复位(与 ProjectsSection 的段收起复位同语义)。
   const [showAllProjects, setShowAllProjects] = useState(false);
   useEffect(() => {
-    if (panelState.openSection !== 'projects') setShowAllProjects(false);
+    if (panelState.openSection !== 'projects') {
+      setShowAllProjects(false);
+      setProjectMenu(null);
+    }
   }, [panelState.openSection]);
 
   // 生命周期清理(review P1「Portal 面板跨视图残留」):
@@ -2697,6 +2728,60 @@ function RailPanels({
       dialogueSessionIds: dialogues.map((sess) => sess.id),
     });
   }, [projects, unclassified, dialogues]);
+
+  // 键盘打开(popover 焦点契约,DESIGN.md §14.2):焦点移入一级面板的首个
+  // 可聚焦元素(对话面板=头部新建钮/项目面板=首行),Tab 不再穿越 portal 间隔
+  // 的无关控件(codex review);关闭时还焦到触发瓷砖,键盘导航可继续。
+  // 还焦前必须查**可见性**而非仅 isConnected:折叠/展开两视图常驻挂载,
+  // 侧栏展开或 ⌘B 隐藏后 rail 瓷砖仍 connected 但 opacity-0 + pointer-events
+  // -none,把焦点还给不可见元素会让键盘用户失联(codex review)。
+  const focusIfVisible = (el: HTMLElement | null): void => {
+    if (!el?.isConnected) return;
+    if (
+      typeof el.checkVisibility === 'function' &&
+      !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+    )
+      return;
+    el.focus();
+  };
+  const focusFirstIn = (selector: string): void => {
+    document
+      .querySelector(selector)
+      ?.querySelector<HTMLElement>('button, [role="menuitem"], [tabindex]:not([tabindex="-1"])')
+      ?.focus();
+  };
+  const keyboardFocusReturnRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!panelState.openedViaKeyboard || !panelState.openSection) return;
+    keyboardFocusReturnRef.current = panelState.anchorEl;
+    const raf = requestAnimationFrame(() => focusFirstIn('[data-rail-panel-level="1"]'));
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelState.openedViaKeyboard, panelState.openSection]);
+  useEffect(() => {
+    if (panelState.openSection !== null) return;
+    const returnTo = keyboardFocusReturnRef.current;
+    keyboardFocusReturnRef.current = null;
+    focusIfVisible(returnTo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelState.openSection]);
+  // 项目三级面板的同款契约(codex review:一级 effect 只观察 openSection,
+  // 覆盖不到 openProjectKey):键盘展开 → 焦点入三级首个可聚焦;收起 → 还焦
+  // 到展开它的项目行。
+  const keyboardProjectReturnRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!panelState.projectOpenedViaKeyboard || !panelState.openProjectKey) return;
+    const raf = requestAnimationFrame(() => focusFirstIn('[data-rail-panel-level="2"]'));
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelState.projectOpenedViaKeyboard, panelState.openProjectKey]);
+  useEffect(() => {
+    if (panelState.openProjectKey !== null) return;
+    const returnTo = keyboardProjectReturnRef.current;
+    keyboardProjectReturnRef.current = null;
+    focusIfVisible(returnTo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelState.openProjectKey]);
 
   // 触发瓷砖可见性监测:⌘B 完全隐藏(aside w-0)、rail 滚出等任何"触发器
   // 消失"路径,即刻收面板——不依赖指针再动(review P1「键盘隐藏仍会残留」)。
@@ -2737,6 +2822,18 @@ function RailPanels({
       if (e.key !== 'Escape') return;
       // 行内重命名编辑中:Esc 归编辑器(取消编辑),不整面板收掉。
       if (panelHasEditingFocus()) return;
+      // 有浮层挂载时:这一记 Esc 归浮层(Radix 自己会 dismiss),不能同帧把
+      // 面板也收掉——否则触发行被卸载,还焦逻辑失效、焦点掉到 document
+      // (codex review)。两路判定:菜单/子菜单看 popper 存在性(React 卸载
+      // 发生在本事件处理之后,此刻必命中);ConfirmDialog 等弹窗看模态信号
+      // (panelHasBlockingOverlay,copilot review)——不能按 role 全量匹配,
+      // 否则 FindInPageBar 的常驻非模态 role="dialog" 会让 Esc 永远收不掉
+      // 面板(#505 同款教训)。
+      if (
+        document.querySelector('[data-radix-popper-content-wrapper]') ||
+        panelHasBlockingOverlay()
+      )
+        return;
       railPanelStore.closeAll();
     };
     const onDown = (e: MouseEvent) => {
@@ -2853,13 +2950,40 @@ function RailPanels({
     onScheduleAction,
   } as const;
 
-  const panelHead = (title: string, count: number) => (
+  const panelHead = (title: string, count: number, action?: ReactNode) => (
     <div className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-1.5">
       <span className="min-w-0 flex-1 truncate text-[12.5px] font-extrabold text-foreground">{title}</span>
       <span className="shrink-0 text-[10px] text-[var(--text-tertiary)]">
         {t('ccAgent.sidebar.railNavCount', { count })}
       </span>
+      {action}
     </div>
+  );
+
+  /** 面板头部的新建按钮(展开态段头 SquarePen 同款配色);创建动作导航去
+   *  新建页,面板随之收起。disabled = 远程写保护(与展开态 ProjectAction
+   *  同语义置灰,不收面板不丢上下文,codex review)。 */
+  const panelHeadCreateButton = (label: string, onCreate: () => void, disabled = false) => (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={() => {
+        railPanelStore.closeAll();
+        onCreate();
+      }}
+      className={cn(
+        'flex h-6 w-6 shrink-0 items-center justify-center self-center rounded-md -my-1',
+        'text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]',
+        // globals.css 移除了 Chromium 默认 outline,键盘可达按钮必须自带
+        // token 化 focus 环(DESIGN.md §10;codex review)。
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        'disabled:opacity-40 disabled:hover:text-[var(--text-tertiary)]',
+      )}
+    >
+      <SquarePen size={14} strokeWidth={2} />
+    </button>
   );
 
   if (!panelState.openSection || !panelState.anchor) return null;
@@ -2880,7 +3004,11 @@ function RailPanels({
       >
         {panelState.openSection === 'dialogues' && (
           <>
-            {panelHead(t('ccAgent.sidebar.railNav.dialogues'), dialogues.length)}
+            {panelHead(
+              t('ccAgent.sidebar.railNav.dialogues'),
+              dialogues.length,
+              panelHeadCreateButton(t('ccAgent.sidebar.newDialogue'), onCreateDialogue),
+            )}
             <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
               <SessionEntryList
                 sessions={dialogues}
@@ -2923,7 +3051,27 @@ function RailPanels({
                     // 同一条 openProject 路径,否则三级面板只有鼠标能打开(codex review)。
                     onClick={(e) => {
                       const rect = e.currentTarget.getBoundingClientRect();
-                      railPanelStore.openProject(p.projectKey, { right: rect.right, top: rect.top });
+                      // 键盘激活(detail===0)按 popover 契约展开三级并记录还焦行。
+                      const viaKeyboard = e.detail === 0;
+                      if (viaKeyboard) keyboardProjectReturnRef.current = e.currentTarget;
+                      railPanelStore.openProject(
+                        p.projectKey,
+                        { right: rect.right, top: rect.top },
+                        viaKeyboard,
+                      );
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      projectMenuAnchorRef.current = e.currentTarget;
+                      // 键盘唤起(Shift+F10/Menu 键)时浏览器报 clientX/Y=0,
+                      // 菜单会飘到视口左上角——退回行矩形定位(codex review)。
+                      const keyboardInvoked = e.clientX === 0 && e.clientY === 0;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setProjectMenu({
+                        x: keyboardInvoked ? rect.left + 12 : e.clientX,
+                        y: keyboardInvoked ? rect.bottom - 2 : e.clientY,
+                        projectKey: p.projectKey,
+                      });
                     }}
                     onMouseLeave={() => railPanelStore.scheduleProjectClose()}
                     className={cn(
@@ -2992,7 +3140,17 @@ function RailPanels({
             railPanelStore.scheduleClose();
           }}
         >
-          {panelHead(projectDisplayLabelWithMachine(openProject), openProject.sessions.length)}
+          {panelHead(
+            projectDisplayLabelWithMachine(openProject),
+            openProject.sessions.length,
+            panelHeadCreateButton(
+              isDeviceLinkWriteBlocked(openProject)
+                ? t('ccAgent.remoteSession.actionsUnavailable')
+                : t('ccAgent.sidebar.projectAction.newInDirectory'),
+              () => onCreateInProject(openProject),
+              isDeviceLinkWriteBlocked(openProject),
+            ),
+          )}
           <div className="max-h-[420px] overflow-y-auto [scrollbar-width:thin]">
             {/* key 按项目:hover 直切另一项目时列表组件被复用,内部「显示全部」
                 状态会泄漏给下一个项目、绕过折叠上限(codex review)——换 key 强制
@@ -3007,6 +3165,71 @@ function RailPanels({
           </div>
         </RailPanelShell>
       )}
+
+      {/* 项目行右键菜单 —— Automations 菜单同款「controlled + 坐标 trigger」;
+          Radix 浮层在保活白名单内,阻断性浮层守卫保证面板不被 hover 宽限收掉。 */}
+      <DropdownMenu
+        open={projectMenu !== null}
+        onOpenChange={(open) => {
+          if (!open) setProjectMenu(null);
+        }}
+      >
+        <DropdownMenuTrigger asChild>
+          <span
+            aria-hidden
+            style={{
+              position: 'fixed',
+              left: projectMenu?.x ?? 0,
+              top: projectMenu?.y ?? 0,
+              width: 0,
+              height: 0,
+              pointerEvents: 'none',
+            }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          sideOffset={2}
+          onCloseAutoFocus={(e) => {
+            // 还焦到唤起菜单的项目行(而非零尺寸 trigger span)。行已被卸载
+            // (面板关闭)时不抢焦点。
+            e.preventDefault();
+            const anchor = projectMenuAnchorRef.current;
+            if (anchor?.isConnected) anchor.focus();
+          }}
+          className={cn(
+            'min-w-[180px] rounded-xl p-1 overflow-hidden',
+            'bg-[var(--cmd-palette-bg)]',
+            'border border-[var(--cmd-palette-border)]',
+            'shadow-[var(--shadow-menu)]',
+          )}
+        >
+          {(() => {
+            // 远程写保护项目:菜单项与展开态同语义禁用(codex review),不触发
+            // closeAll 丢上下文。
+            const menuTarget = projectMenu
+              ? projects.find((x) => x.projectKey === projectMenu.projectKey) ?? null
+              : null;
+            const menuTargetBlocked = menuTarget != null && isDeviceLinkWriteBlocked(menuTarget);
+            return (
+              <DropdownMenuItem
+                disabled={menuTarget == null || menuTargetBlocked}
+                onSelect={() => {
+                  setProjectMenu(null);
+                  if (!menuTarget || menuTargetBlocked) return;
+                  railPanelStore.closeAll();
+                  onCreateInProject(menuTarget);
+                }}
+                className="cursor-pointer text-sm text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]"
+              >
+                {menuTargetBlocked
+                  ? t('ccAgent.remoteSession.actionsUnavailable')
+                  : t('ccAgent.sidebar.projectAction.newInDirectory')}
+              </DropdownMenuItem>
+            );
+          })()}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   );
 }

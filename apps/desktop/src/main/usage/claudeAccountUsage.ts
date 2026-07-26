@@ -54,7 +54,8 @@ export const USAGE_CLAUDE_ACCOUNT_CHANGED = 'usage:claude-account-changed';
 export interface ClaudeAccountUsageSnapshot {
   /**
    * 当前周期(网关部署为 30d / 月度) 跨所有客户端 + 所有 API key 的累计花费,
-   * 来自 Gateway user.spend，数值保持部署区域原生金额。不只本机本壳。
+   * 来自 Gateway user.spend，数值保持 Gateway 原值(原生 USD 口径,展示层经
+   * gatewayMoney 标注单位,不按构建区域改标)。不只本机本壳。
    */
   spend: number;
   /** 周期内预算上限，保持 Gateway 原值 (来自 user.max_budget)。 */

@@ -15,10 +15,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import {
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalizeLegacyUsd,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
 
@@ -54,10 +53,7 @@ export function useTodaySpend(): TodaySpendData {
         const money =
           normalizeRegionalMoney(res.money) ??
           (typeof res.costUsd === 'number'
-            ? regionalizeLegacyUsd(
-                res.costUsd,
-                CURRENT_CINDY_REGION,
-              )
+            ? legacyUsdMoney(res.costUsd)
             : null);
         setData((prev) => ({
           day: res.day,
@@ -90,10 +86,7 @@ export function useTodaySpend(): TodaySpendData {
         const money =
           normalizeRegionalMoney(res.money) ??
           (typeof res.costUsd === 'number'
-            ? regionalizeLegacyUsd(
-                res.costUsd,
-                CURRENT_CINDY_REGION,
-              )
+            ? legacyUsdMoney(res.costUsd)
             : null);
         setData((prev) => ({
           day: res.day,

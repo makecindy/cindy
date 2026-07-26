@@ -412,6 +412,7 @@ import {
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
 import { resolveOwnerScopedSecretStorageKey } from './secrets/providerSecretStore.js';
+import { isRendererAccessibleSafeStorageKey } from '../shared/providerSecrets.js';
 import {
   readCompactionPct,
   readCompactionState,
@@ -3115,6 +3116,8 @@ const registerIpcHandlers = () => {
 
   // safeStorage IPC handlers
   const isValidKey = (key: string): boolean => /^[a-zA-Z0-9_-]+$/.test(key);
+  const isValidRendererKey = (key: string): boolean =>
+    isValidKey(key) && isRendererAccessibleSafeStorageKey(key);
   const resolveSafeStorageFilepath = (key: string): string | null => {
     const scopedKey = resolveOwnerScopedSecretStorageKey(key);
     return scopedKey
@@ -3176,9 +3179,10 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     'safe-storage-store',
-    async (_event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
+    async (event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
       try {
-        if (!isValidKey(key)) return false;
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) return false;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
@@ -3224,9 +3228,10 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle(
     'safe-storage-read',
-    async (_event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
+    async (event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
       try {
-        if (!isValidKey(key)) return null;
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) return null;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return null;
         if (!safeStorage.isEncryptionAvailable()) return null;
@@ -3244,11 +3249,12 @@ const registerIpcHandlers = () => {
   ipcMain.handle(
     'safe-storage-remove',
     async (
-      _event: Electron.IpcMainInvokeEvent,
+      event: Electron.IpcMainInvokeEvent,
       key: string,
     ): Promise<{ success: boolean; error?: string }> => {
       try {
-        if (!isValidKey(key)) {
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) {
           return { success: false, error: 'invalid key' };
         }
         const filepath = resolveSafeStorageFilepath(key);

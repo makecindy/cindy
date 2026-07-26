@@ -47,6 +47,7 @@ import {
   ghostSecretHintStorageKey,
   deriveGhostSecretTail,
   GHOST_SECRET_TAIL_MIN_VALUE_CHARS,
+  isRendererAccessibleSafeStorageKey,
   PROVIDER_SECRET_IDS,
 } from '../../../shared/providerSecrets';
 
@@ -75,12 +76,20 @@ describe('providerSecrets registry', () => {
     expect(providerSecretStorageKey('mivo')).toBe('mivo_api_key');
     expect(providerSecretStorageKey('brave')).toBe('brave_search_api_key');
     expect(providerSecretStorageKey('tavily')).toBe('tavily_api_key');
+    expect(providerSecretStorageKey('voice-asr')).toBe('voice_input_asr_api_key');
   });
 
   it('lists all registered provider ids', () => {
     expect(PROVIDER_SECRET_IDS).toEqual(
-      expect.arrayContaining(['xd', 'mivo', 'brave', 'tavily']),
+      expect.arrayContaining(['xd', 'mivo', 'brave', 'tavily', 'voice-asr']),
     );
+  });
+
+  it('keeps the voice ASR key behind its dedicated main-only IPC boundary', () => {
+    expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('voice-asr'))).toBe(false);
+    expect(isRendererAccessibleSafeStorageKey('VOICE_INPUT_ASR_API_KEY')).toBe(false);
+    expect(isRendererAccessibleSafeStorageKey(providerSecretStorageKey('xd'))).toBe(true);
+    expect(isRendererAccessibleSafeStorageKey(customMcpSecretStorageKey('example'))).toBe(true);
   });
 
   it('动态键名构造前校验片段字符集,路径逃逸类 id 直接抛错', () => {

@@ -53,6 +53,8 @@ vi.mock('@/components/ui/switch', () => ({
 vi.mock('../HookWorkspacePrefsEditor', () => ({
   useHookWorkspacePrefs: () => ({
     prefsFor: vi.fn(),
+    providerSourceFor: vi.fn(() => null),
+    applyProviderSource: vi.fn(),
     editable: false,
     pendingWs: null,
     hint: null,

@@ -34,11 +34,10 @@ import { useAuth } from '@/contexts/AuthContext';
 import { UsageDailyBars } from './UsageDailyBars';
 import { UsageHeatmap } from './UsageHeatmap';
 import { USAGE_TOP_MODELS, usageModelKey } from './usagePalette';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import {
   gatewayMoney,
   type RegionalMoney,
-  zeroRegionalMoney,
+  zeroUsageMoney,
 } from '../../../shared/regionalMoney';
 
 const COLLAPSED_STORAGE_KEY = 'homeUsageDashboard.collapsed';
@@ -49,7 +48,7 @@ const ACCOUNT_LOCAL_TODAY_MATCH_EPSILON = 0.01;
 const UNKNOWN_VALUE = '—';
 const TOKEN_DISTRIBUTION_TOP_MODELS = 5;
 
-const zeroMoney = () => zeroRegionalMoney(CURRENT_CINDY_REGION);
+const zeroMoney = () => zeroUsageMoney();
 
 type TokenDistributionInput = {
   model: string;
@@ -93,10 +92,7 @@ function createEmptyUsageHistoryPayload(): UsageHistoryPayload {
       today: zeroMoney(),
       last30Days: zeroMoney(),
       last30DaysWithEstimatedValue: zeroMoney(),
-      last30DaysEstimatedValue: zeroRegionalMoney(
-        CURRENT_CINDY_REGION,
-        'value-estimate',
-      ),
+      last30DaysEstimatedValue: zeroUsageMoney('value-estimate'),
       todayTokens: 0,
       last30DaysTokens: 0,
     },
@@ -192,7 +188,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
 
   const accountTodayMoney =
     typeof claudeQuota?.todaySpend === 'number'
-      ? gatewayMoney(claudeQuota.todaySpend, CURRENT_CINDY_REGION)
+      ? gatewayMoney(claudeQuota.todaySpend)
       : null;
   const hasAccountTodaySpend = accountTodayMoney !== null;
 
@@ -205,7 +201,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
   const softDailyLimitMoney =
     softDailyLimit === null
       ? null
-      : gatewayMoney(softDailyLimit, CURRENT_CINDY_REGION);
+      : gatewayMoney(softDailyLimit);
   const todayValue = !hasSpendValue
     ? UNKNOWN_VALUE
     : softDailyLimitMoney
@@ -356,7 +352,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
           <StatCell
             value={
               hasMonthly
-                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION))}`
+                ? `${formatCompactMoney(gatewayMoney(claudeQuota.spend))} / ${formatCompactMoney(gatewayMoney(claudeQuota.maxBudget))}`
                 : `${UNKNOWN_VALUE} / ${UNKNOWN_VALUE}`
             }
             label={t('usageDashboard.monthly')}

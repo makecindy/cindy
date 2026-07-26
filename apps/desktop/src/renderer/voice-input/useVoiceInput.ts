@@ -59,6 +59,7 @@ import { resolveVoiceInputStartGuards } from './startGuards';
 import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { isVoiceInputServiceConnectionError } from './overlayErrors';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning';
@@ -370,6 +371,12 @@ export function useVoiceInput(
   const formatVoiceInputError = useCallback((message: string, code?: VoiceInputErrorCode): string => {
     if (code === 'empty_transcript') return t('voiceInputOverlay.emptyTranscript');
     return message;
+  }, [t]);
+
+  const formatVoiceInputStartError = useCallback((message: string): string => {
+    return isVoiceInputServiceConnectionError(message)
+      ? t('voiceInputOverlay.asrServiceUnavailable')
+      : message;
   }, [t]);
 
   const appendAudioChunk = useCallback((chunk: PcmChunk) => {
@@ -1189,7 +1196,18 @@ export function useVoiceInput(
       return;
     }
     if (!guards.readiness.ok) {
-      const readinessError = guards.readiness.error ?? 'Voice input is not configured.';
+      let readinessError = guards.readiness.error ?? 'Voice input is not configured.';
+      switch (guards.readiness.failureReason) {
+        case 'custom-asr-config-missing':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing');
+          break;
+        case 'custom-asr-key-missing':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing');
+          break;
+        case 'codex-realtime-unsupported':
+          readinessError = t('settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported');
+          break;
+      }
       const authErrorReason = guards.readiness.authErrorReason;
       if (guards.readiness.auth === 'codex' && authErrorReason && isCodexSessionExpiredError(authErrorReason)) {
         promptCodexSessionExpired(authErrorReason);
@@ -1314,7 +1332,7 @@ export function useVoiceInput(
       insertionRangeRef.current = null;
       setVoiceState('error');
       promptCodexSessionExpired(result.authErrorReason ?? result.error);
-      reportVoiceInputError(result.error);
+      reportVoiceInputError(formatVoiceInputStartError(result.error));
       restoreEditorFocusAfterVoiceInput();
       return;
     }
@@ -1345,6 +1363,7 @@ export function useVoiceInput(
     createStartReadyState,
     disabled,
     failActiveRecording,
+    formatVoiceInputStartError,
     formatMicrophoneFallbackMessage,
     formatMicrophoneStartError,
     invalidateStartAttempt,
@@ -1357,6 +1376,7 @@ export function useVoiceInput(
     restoreSystemAudioForRecording,
     setVoiceState,
     stopEngine,
+    t,
     voiceInputSettings.language,
     voiceInputSettings.microphoneDeviceId,
     voiceInputSettings.fastActivationEnabled,
@@ -1440,7 +1460,7 @@ export function useVoiceInput(
           resolveStopCompletion();
           setVoiceState('error');
           promptCodexSessionExpired(startResult.authErrorReason ?? startResult.error);
-          reportVoiceInputError(startResult.error);
+          reportVoiceInputError(formatVoiceInputStartError(startResult.error));
           restoreEditorFocusAfterVoiceInput();
           throw new Error(startResult.error);
         }
@@ -1504,7 +1524,7 @@ export function useVoiceInput(
       setVoiceState('done');
       restoreEditorFocusAfterVoiceInput();
     }
-  }, [commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
+  }, [commitUsageStats, dismissInlineError, drainAndStopEngine, drainQueuedAudioToMain, formatVoiceInputStartError, invalidateStartAttempt, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioAndNotifyEndCue, setVoiceState, waitForBusyCompletion, waitForStartReadyWhileStopping]);
 
   const stopWithGate = useCallback(async (options?: VoiceInputStopOptions) => {
     if (stopInFlightPromiseRef.current) return stopInFlightPromiseRef.current;

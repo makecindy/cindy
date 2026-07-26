@@ -32,6 +32,10 @@ import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionC
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
+  VOICE_INPUT_TEST_CONNECTION_CHANNEL,
+  type VoiceInputConnectionTestResult,
+} from '../shared/voiceInputConnectionTest';
+import {
   type ApplicationMenuCommand,
   isApplicationMenuCommand,
 } from '../shared/applicationMenuCommands';
@@ -155,12 +159,14 @@ type VoiceInputSettingsUpdateResult =
   | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' };
 type VoiceInputReadinessWire = {
   ok: boolean;
+  serviceMode: 'cindy' | 'byok';
   provider: VoiceInputProviderKind;
   providerModel: string;
   auth: 'api-key' | 'codex';
   settingsTab: 'api-keys' | 'connections' | 'providers';
   error?: string;
   authErrorReason?: string;
+  failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
 };
 type VoiceInputModelSelectionWire = {
   serviceMode: 'cindy' | 'byok';
@@ -168,6 +174,15 @@ type VoiceInputModelSelectionWire = {
   asrProvider: VoiceInputProviderKind;
   refinerProvider: VoiceInputRefinerProviderKind;
   refinerModel?: string;
+  asrProviderChain: VoiceInputProviderKind[];
+  asrProviderChainSource: 'default' | 'configured';
+  customAsr?: {
+    protocol: 'openai-realtime' | 'qwen-realtime';
+    websocketUrl: string;
+    model: string;
+  };
+  refinerProviderChain: VoiceInputRefinerProviderKind[];
+  refinerProviderChainSource: 'default' | 'configured';
   configPath: string;
 };
 type VoiceInputModelSelectionResultWire = {
@@ -185,12 +200,20 @@ type VoiceInputModelSelectionResultWire = {
     auth: 'api-key' | 'codex';
   }>;
   readiness: VoiceInputReadinessWire;
+  customAsrApiKeyConfigured: boolean;
 };
 type VoiceInputModelSelectionPatchWire = {
   serviceMode?: 'cindy' | 'byok' | null;
   asrProvider?: string | null;
   refinerProvider?: string | null;
   refinerModel?: string | null;
+  customAsr?: {
+    protocol: 'openai-realtime' | 'qwen-realtime';
+    websocketUrl: string;
+    model: string;
+  } | null;
+  customAsrApiKey?: string | null;
+  refinerProviderChain?: string[] | null;
 };
 type DiscordBotSessionAuthCheckWire = {
   ok: boolean;
@@ -404,6 +427,10 @@ const fanOutHookControlStatus = createIpcFanOut('maker:hook-control:status-chang
 const fanOutHookControlPrefs = createIpcFanOut('maker:hook-control:prefs-changed');
 const fanOutHookControlProviderPrefs = createIpcFanOut(
   'maker:hook-control:provider-prefs-changed',
+);
+// 目录模型来源偏好全量推送(本地写入后广播, 多窗口设置页同步)。
+const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
+  'maker:hook-control:workspace-provider-source-changed',
 );
 
 // ─── Maker Core 一阶段重构（新链路）── 与 cc-agent:* / codex:* 双轨并行 ─────
@@ -960,6 +987,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:mute-system-audio'),
     restoreSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
       ipcRenderer.invoke('voice-input:restore-system-audio'),
+    testConnection: (): Promise<VoiceInputConnectionTestResult> =>
+      ipcRenderer.invoke(VOICE_INPUT_TEST_CONNECTION_CHANNEL),
     getReadiness: (): Promise<VoiceInputReadinessWire> => ipcRenderer.invoke('voice-input:get-readiness'),
     getReadinessCached: (): VoiceInputReadinessWire | null =>
       ipcRenderer.sendSync('voice-input:get-readiness-cached'),
@@ -3120,8 +3149,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: Record<string, string | null>,
     ): Promise<{ prefs: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { workspace, patch }),
+    // 工作目录模型来源偏好(纯本地, 不经 WS; providerId=null 清除条目)
+    getWorkspaceProviderSources: (): Promise<{ entries: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:workspace-provider-source-get'),
+    setWorkspaceProviderSource: (payload: {
+      channel: 'slack' | 'telegram';
+      teamId: string | null;
+      workspace: string;
+      providerId: string | null;
+    }): Promise<{ entries: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:workspace-provider-source-set', payload),
     onPrefsChanged: fanOutHookControlPrefs,
     onProviderPrefsChanged: fanOutHookControlProviderPrefs,
+    onWorkspaceProviderSourcesChanged: fanOutHookControlWorkspaceProviderSource,
     onStatusChanged: fanOutHookControlStatus,
   },
 

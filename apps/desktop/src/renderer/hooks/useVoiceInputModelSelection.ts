@@ -24,11 +24,18 @@ export function useVoiceInputModelSelection(): {
   asrProfiles: ModelSelectionResult['asrProfiles'];
   refinerProfiles: ModelSelectionResult['refinerProfiles'];
   readiness: ModelSelectionResult['readiness'] | null;
+  customAsrApiKeyConfigured: boolean;
   saving: boolean;
   setServiceMode: (mode: VoiceInputServiceModeData) => Promise<void>;
   setAsrProvider: (provider: string) => Promise<void>;
   setRefinerProvider: (provider: string) => Promise<void>;
   setRefinerFallbackProvider: (provider: string) => Promise<void>;
+  saveCustomAsr: (config: {
+    protocol: 'openai-realtime' | 'qwen-realtime';
+    websocketUrl: string;
+    model: string;
+  }, apiKey?: string) => Promise<boolean>;
+  clearCustomAsrApiKey: () => Promise<void>;
   resetToDefault: () => Promise<void>;
   refresh: () => Promise<void>;
 } {
@@ -64,12 +71,14 @@ export function useVoiceInputModelSelection(): {
     try {
       const next = await window.electronAPI.voiceInput.setModelSelection(patch);
       if (mountedRef.current) setResult(next);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.warn('voice input model selection save failed', { message });
       toast.error(t('settings.voiceInput.saveFailed', { message }));
       // Re-sync so the UI never renders an optimistic value main rejected.
       await refresh();
+      return false;
     } finally {
       if (mountedRef.current) setSaving(false);
     }
@@ -96,10 +105,30 @@ export function useVoiceInputModelSelection(): {
     await applyPatch({ refinerProviderChain: provider ? [provider] : null });
   }, [applyPatch]);
 
+  const saveCustomAsr = useCallback(async (
+    config: {
+      protocol: 'openai-realtime' | 'qwen-realtime';
+      websocketUrl: string;
+      model: string;
+    },
+    apiKey?: string,
+  ) => {
+    return applyPatch({
+      customAsr: config,
+      ...(apiKey?.trim() ? { customAsrApiKey: apiKey } : {}),
+    });
+  }, [applyPatch]);
+
+  const clearCustomAsrApiKey = useCallback(async () => {
+    await applyPatch({ customAsrApiKey: null });
+  }, [applyPatch]);
+
   const resetToDefault = useCallback(async () => {
     await applyPatch({
       serviceMode: null,
       asrProvider: null,
+      customAsr: null,
+      customAsrApiKey: null,
       refinerProvider: null,
       refinerModel: null,
       refinerProviderChain: null,
@@ -112,11 +141,14 @@ export function useVoiceInputModelSelection(): {
     asrProfiles: result?.asrProfiles ?? [],
     refinerProfiles: result?.refinerProfiles ?? [],
     readiness: result?.readiness ?? null,
+    customAsrApiKeyConfigured: result?.customAsrApiKeyConfigured ?? false,
     saving,
     setServiceMode,
     setAsrProvider,
     setRefinerProvider,
     setRefinerFallbackProvider,
+    saveCustomAsr,
+    clearCustomAsrApiKey,
     resetToDefault,
     refresh,
   };

@@ -101,6 +101,8 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
   private pongTimeoutTimer?: ReturnType<typeof setTimeout>;
   private recoveryPromise?: Promise<void>;
   private stopRequested = false;
+  private startResolve?: () => void;
+  private startReject?: (error: Error) => void;
 
   constructor(options: VolcengineSaucAsrProviderOptions) {
     this.proxyApiKey = options.proxyApiKey;
@@ -151,6 +153,8 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         socket.off('error', onError);
         socket.off('close', onClose);
         socket.off('unexpected-response', onUnexpectedResponse);
+        this.startResolve = undefined;
+        this.startReject = undefined;
       };
       const fail = (error: Error, terminateSocket: boolean): void => {
         if (settled) return;
@@ -178,19 +182,12 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
       }, this.connectTimeoutMs);
       const onOpen = (): void => {
         if (settled) return;
-        settled = true;
-        cleanup();
         if (this.stopRequested) {
-          socket.close();
-          reject(new Error('Volcengine SAUC ASR connection opened after stop.'));
+          fail(new Error('Volcengine SAUC ASR connection opened after stop.'), true);
           return;
         }
-        this.connected = true;
-        this.started = true;
         this.startKeepAlive();
         this.sendInitialRequest();
-        this.callback({ type: 'connected', at: Date.now() });
-        resolve();
       };
       const onError = (error: Error): void => {
         fail(error, false);
@@ -210,6 +207,18 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         fail(new Error(
           `Volcengine SAUC ASR handshake failed: HTTP ${statusCode}${statusMessage} (${target}${traceId ? `, ${traceId}` : ''})`,
         ), true);
+      };
+      this.startResolve = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        this.connected = true;
+        this.started = true;
+        this.callback({ type: 'connected', at: Date.now() });
+        resolve();
+      };
+      this.startReject = (error) => {
+        fail(error, true);
       };
       socket.once('open', onOpen);
       socket.once('error', onError);
@@ -286,6 +295,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.stopRequested = true;
     this.started = false;
     this.connected = false;
+    this.startReject?.(new Error('Volcengine SAUC stopped before the protocol was ready.'));
     this.pendingFinalAudioChunk = undefined;
     this.clearUnconfirmedAudio();
     this.sessionTranscriptPrefix = '';
@@ -313,6 +323,8 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.clearUnconfirmedAudio();
     this.finalRequested = false;
     this.stableEmitted = false;
+    this.startResolve = undefined;
+    this.startReject = undefined;
     this.resolveFlushWaiters();
   }
 
@@ -446,18 +458,21 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
       const messageText = error instanceof Error ? error.message : String(error);
       log.warn('failed to decode volcengine sauc message', { error: messageText });
       this.callback({ type: 'error', message: this.errorFallbackMessage, at: Date.now() });
+      this.startReject?.(new Error(this.errorFallbackMessage));
       this.resolveFlushWaiters();
       return;
     }
     if (message.messageType === MESSAGE_TYPE_SERVER_ERROR) {
       const errorMessage = extractErrorMessage(message.payload) ?? message.payloadText ?? this.errorFallbackMessage;
       this.callback({ type: 'error', message: errorMessage, at: Date.now() });
+      this.startReject?.(new Error(errorMessage));
       this.resolveFlushWaiters();
       return;
     }
     if (message.messageType !== MESSAGE_TYPE_FULL_SERVER_RESPONSE && message.messageType !== MESSAGE_TYPE_SERVER_ACK) {
       return;
     }
+    this.startResolve?.();
 
     const rawTranscript = extractTranscript(message.payload);
     const transcript = mergeRecoveredTranscript(this.sessionTranscriptPrefix, rawTranscript);

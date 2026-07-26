@@ -9,7 +9,7 @@
  * PermissionSelector 上;effort 没有独立控件(并进模型 trigger);禁用态整行同步。
  */
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspacePrefsEditor, type HookWorkspacePrefsState } from '../HookWorkspacePrefsEditor';
@@ -66,6 +66,8 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       // 未知模型的 trigger 文案由调用方给出;这里回放它对一个不存在的 id 的结果。
       data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
       onClick={() => props.onModelChange('gpt-5.5')}
+      // 分段行点击(供应商, 模型)原子选择 —— 回放 onProviderChange 的行为锁触发器。
+      onKeyDown={() => props.onProviderChange?.('anthropic', 'claude-opus-5')}
     />
   ),
 }));
@@ -100,6 +102,8 @@ function stateWith(overrides: Partial<HookWorkspacePrefsState> = {}): HookWorksp
       agentKind: 'claude-code',
       permissionMode: 'bypassPermissions',
     }),
+    providerSourceFor: () => null,
+    applyProviderSource: vi.fn(),
     editable: true,
     pendingWs: null,
     hint: null,
@@ -141,14 +145,28 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     expect(permission.getAttribute('data-trigger-variant')).toBe('field');
   });
 
-  it('模型选择器不开供应商分段(偏好表无 providerId,分段会造成选 A 落 B)', () => {
+  // 2026-07 用户定稿基准反转:全软件一个模型选择面板,处处同行为 —— 供应商分段
+  // **必须开**。旧的「选 A 落 B」根因(选了来源没地方存)已由本地
+  // workspaceProviderSourceStore 消除:来源落本地,model 照旧走 server prefs。
+  it('模型选择器开供应商分段(composer 同款全功能形态)', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith()} />);
+    expect(screen.getByTestId('model-selector').getAttribute('data-sources-enabled')).toBe('true');
+  });
 
-    // 开分段会按 (供应商, 模型) 列多行,但只能落一个 model id,来源仍由派发侧按
-    // nativeDefaultSourceId 解析(claude-code 一律优先 'xd')—— 用户点「订阅版
-    // Opus 5」当场被重映射成「Cindy AI 的 Opus 5」(2026-07 用户实测)。
-    // 等偏好表支持 providerId 再开;在那之前这个断言必须是 false。
-    expect(screen.getByTestId('model-selector').getAttribute('data-sources-enabled')).toBe('false');
+  // 双写串联(Greptile/codex review):model/effort 走远端 prefs patch,来源作为
+  // applyPatch 第三参在远端成功后落本地 —— 不再各自 fire-and-forget(分裂态风险)。
+  it('分段行选择:(模型, 来源)经 applyPatch 串联落库,不直接调 applyProviderSource', () => {
+    const applyProviderSource = vi.fn();
+    render(
+      <WorkspacePrefsEditor alias="cindy" state={stateWith({ applyProviderSource })} />,
+    );
+    fireEvent.keyDown(screen.getByTestId('model-selector'));
+    expect(applyPatch).toHaveBeenCalledWith(
+      'cindy',
+      expect.objectContaining({ model: 'claude-opus-5', agentKind: 'claude-code' }),
+      'anthropic',
+    );
+    expect(applyProviderSource).not.toHaveBeenCalled();
   });
 
   it('选中模型落 model id,并随手写入 agent 配对', () => {

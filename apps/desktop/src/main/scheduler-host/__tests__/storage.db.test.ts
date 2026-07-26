@@ -19,34 +19,33 @@ import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
-    amount: expect.closeTo(amountUsd * 6.7, 10),
-    currency: 'CNY' as const,
-    approximate: true,
+    amount: expect.closeTo(amountUsd, 10),
+    currency: 'USD' as const,
+    approximate: false,
     kind: 'actual-cost' as const,
-    estimateReasons: ['fixed-fx', 'legacy-usd'] as const,
   };
 }
 
 function estimatedMoneyFromLegacyUsd(amountUsd: number) {
   return {
-    amount: expect.closeTo(amountUsd * 6.7, 10),
-    currency: 'CNY' as const,
+    amount: expect.closeTo(amountUsd, 10),
+    currency: 'USD' as const,
     approximate: true,
     kind: 'value-estimate' as const,
-    estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'] as const,
+    estimateReasons: ['subscription-value'] as const,
   };
 }
 
 const ZERO_ACTUAL_MONEY = {
   amount: 0,
-  currency: 'CNY' as const,
+  currency: 'USD' as const,
   approximate: false,
   kind: 'actual-cost' as const,
 };
 
 const ZERO_ESTIMATED_MONEY = {
   amount: 0,
-  currency: 'CNY' as const,
+  currency: 'USD' as const,
   approximate: true,
   kind: 'value-estimate' as const,
   estimateReasons: ['subscription-value'] as const,
@@ -369,10 +368,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(summaries.get('sch-a')).toMatchObject({
         totalMoney: actualMoneyFromLegacyUsd(0.4),
         totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+        totalCostUsd: expect.closeTo(0.4, 10),
+        totalEstimatedValueUsd: 0,
       });
       expect(summaries.get('sch-b')).toMatchObject({
         totalMoney: actualMoneyFromLegacyUsd(0.2),
         totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+        totalCostUsd: expect.closeTo(0.2, 10),
+        totalEstimatedValueUsd: 0,
       });
       expect(await harness.storage.listRuns('sch-a')).toEqual([
         expect.objectContaining({
@@ -698,12 +701,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: actualMoneyFromLegacyUsd(0.75),
           totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(9.99),
+          totalCostUsd: expect.closeTo(0.75, 10),
+          totalEstimatedValueUsd: expect.closeTo(9.99, 10),
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-bound',
               totalMoney: actualMoneyFromLegacyUsd(0.75),
               totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(9.99),
+              totalCostUsd: expect.closeTo(0.75, 10),
+              totalEstimatedValueUsd: expect.closeTo(9.99, 10),
             },
           ],
         },
@@ -744,12 +751,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: ZERO_ACTUAL_MONEY,
           totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(0.29),
+          totalCostUsd: 0,
+          totalEstimatedValueUsd: expect.closeTo(0.29, 10),
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-subscription',
               totalMoney: ZERO_ACTUAL_MONEY,
               totalEstimatedValueMoney: estimatedMoneyFromLegacyUsd(0.29),
+              totalCostUsd: 0,
+              totalEstimatedValueUsd: expect.closeTo(0.29, 10),
             },
           ],
         },
@@ -790,12 +801,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: actualMoneyFromLegacyUsd(0.42),
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: expect.closeTo(0.42, 10),
+          totalEstimatedValueUsd: 0,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-api',
               totalMoney: actualMoneyFromLegacyUsd(0.42),
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: expect.closeTo(0.42, 10),
+              totalEstimatedValueUsd: 0,
             },
           ],
         },
@@ -830,12 +845,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: actualMoneyFromLegacyUsd(0.42),
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: expect.closeTo(0.42, 10),
+          totalEstimatedValueUsd: 0,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-direct',
               totalMoney: actualMoneyFromLegacyUsd(0.42),
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: expect.closeTo(0.42, 10),
+              totalEstimatedValueUsd: 0,
             },
           ],
         },
@@ -925,12 +944,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: actualMoneyFromLegacyUsd(0.6),
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: expect.closeTo(0.6, 10),
+          totalEstimatedValueUsd: 0,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-mixed-ledger',
               totalMoney: actualMoneyFromLegacyUsd(0.6),
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: expect.closeTo(0.6, 10),
+              totalEstimatedValueUsd: 0,
             },
           ],
         },
@@ -963,11 +986,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       await recordScheduleRunCostDirect({
         runId: 'run-direct-only-snapshot',
         money: {
-          amount: 4.02,
-          currency: 'CNY',
-          approximate: true,
+          amount: 0.6,
+          currency: 'USD',
+          approximate: false,
           kind: 'actual-cost',
-          estimateReasons: ['fixed-fx'],
         },
       });
       harness.db.run(sql`
@@ -991,12 +1013,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: actualMoneyFromLegacyUsd(1),
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: expect.closeTo(1, 10),
+          totalEstimatedValueUsd: 0,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-direct-only',
               totalMoney: actualMoneyFromLegacyUsd(1),
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: expect.closeTo(1, 10),
+              totalEstimatedValueUsd: 0,
             },
           ],
         },
@@ -1031,6 +1057,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: ZERO_ACTUAL_MONEY,
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: 0,
+          totalEstimatedValueUsd: 0,
           hasUnavailableCost: true,
           sessionCount: 1,
           sessions: [
@@ -1038,6 +1066,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
               sessionId: 'sess-unavailable',
               totalMoney: ZERO_ACTUAL_MONEY,
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: 0,
+              totalEstimatedValueUsd: 0,
             },
           ],
         },
@@ -1066,6 +1096,8 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: ZERO_ACTUAL_MONEY,
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: 0,
+          totalEstimatedValueUsd: 0,
           sessionCount: 0,
           sessions: [],
         },
@@ -1098,7 +1130,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         VALUES
           ('mixed-user', 'mixed-user', 'sess-legacy', 'user', '{}', '{"origin":{"kind":"scheduler","scheduleId":"sch-mixed","scheduleName":"legacy task"}}', 40),
           ('mixed-assistant', 'mixed-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCostUsd":1.25}', 50),
-          ('structured-assistant', 'structured-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCost":{"amount":5,"currency":"CNY","approximate":false,"kind":"actual-cost"}}', 52),
+          ('structured-assistant', 'structured-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCost":{"amount":5,"currency":"USD","approximate":false,"kind":"actual-cost"}}', 52),
           ('manual-user', 'manual-user', 'sess-legacy', 'user', '{}', NULL, 55),
           ('manual-assistant', 'manual-assistant', 'sess-legacy', 'assistant', '{}', '{"turnCostUsd":2}', 60)
       `);
@@ -1108,18 +1140,22 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: {
             ...actualMoneyFromLegacyUsd(2.25),
-            amount: expect.closeTo(2.25 * 6.7 + 5, 10),
+            amount: expect.closeTo(2.25 + 5, 10),
           },
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: expect.closeTo(2.25 + 5, 10),
+          totalEstimatedValueUsd: 0,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-legacy',
               totalMoney: {
                 ...actualMoneyFromLegacyUsd(2.25),
-                amount: expect.closeTo(2.25 * 6.7 + 5, 10),
+                amount: expect.closeTo(2.25 + 5, 10),
               },
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: expect.closeTo(2.25 + 5, 10),
+              totalEstimatedValueUsd: 0,
             },
           ],
         },
@@ -1159,12 +1195,16 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           scheduleId: schedule.id,
           totalMoney: actualMoneyFromLegacyUsd(1.5),
           totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+          totalCostUsd: expect.closeTo(1.5, 10),
+          totalEstimatedValueUsd: 0,
           sessionCount: 1,
           sessions: [
             {
               sessionId: 'sess-unlinked',
               totalMoney: actualMoneyFromLegacyUsd(1.5),
               totalEstimatedValueMoney: ZERO_ESTIMATED_MONEY,
+              totalCostUsd: expect.closeTo(1.5, 10),
+              totalEstimatedValueUsd: 0,
             },
           ],
         },

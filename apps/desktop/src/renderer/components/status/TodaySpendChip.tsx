@@ -76,7 +76,6 @@ import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLi
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { gatewayMoney, type RegionalMoney } from '../../../shared/regionalMoney';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 import {
@@ -152,8 +151,8 @@ function computeMetricSlots(
     // monthly 永远跟 cycle 一起拿到; daily 走单独 endpoint 可能拉不到 (todaySpend=null) → 隐藏
     slots.monthly = {
       label: t('todaySpend.monthlyLimitLabel', {
-        spend: formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION)),
-        limit: formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION)),
+        spend: formatCompactMoney(gatewayMoney(claudeQuota.spend)),
+        limit: formatCompactMoney(gatewayMoney(claudeQuota.maxBudget)),
       }),
       available: true,
     };
@@ -162,9 +161,9 @@ function computeMetricSlots(
       slots.daily = {
         label: t('todaySpend.dailyLimitLabel', {
           spend: formatCompactMoney(
-            gatewayMoney(claudeQuota.todaySpend, CURRENT_CINDY_REGION),
+            gatewayMoney(claudeQuota.todaySpend),
           ),
-          limit: formatCompactMoney(gatewayMoney(softLimit, CURRENT_CINDY_REGION)),
+          limit: formatCompactMoney(gatewayMoney(softLimit)),
         }),
         available: true,
       };

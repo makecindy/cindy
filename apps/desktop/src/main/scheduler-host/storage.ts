@@ -30,15 +30,14 @@ import {
   scheduleRunCreateToRow,
   scheduleRunPatchToRow,
 } from '../localDb/mapper';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   addRegionalMoney,
   asValueEstimateMoney,
+  DEFAULT_USAGE_CURRENCY,
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalCurrencyForRegion,
-  regionalizeLegacyUsd,
   type RegionalMoney,
-  zeroRegionalMoney,
+  zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
@@ -80,6 +79,25 @@ export interface ScheduleSessionCostSummary {
 interface ScheduleMoneyValues {
   costValues: RegionalMoney[];
   estimatedValueValues: RegionalMoney[];
+  /** 最新一笔金额的币种(按时间戳取最大)——汇总聚合的偏好币种。 */
+  latestCurrency?: RegionalMoney['currency'];
+  latestCurrencyAt?: number;
+}
+
+/**
+ * 记录「当前账本币种」:跨币种切换的 schedule 汇总必须偏好最新片段的币种,
+ * 静态 USD 偏好会让任意历史 USD 片段把切换后的新币种 run 整段挤出汇总。
+ */
+function noteLatestCurrency(
+  values: ScheduleMoneyValues,
+  money: RegionalMoney | null | undefined,
+  at: number,
+): void {
+  if (!money || money.amount <= 0) return;
+  if (values.latestCurrencyAt === undefined || at >= values.latestCurrencyAt) {
+    values.latestCurrencyAt = at;
+    values.latestCurrency = money.currency;
+  }
 }
 
 interface ScheduleTurnCostState extends ScheduleMoneyValues {
@@ -104,11 +122,22 @@ function emptyScheduleTurnCostState(): ScheduleTurnCostState {
   };
 }
 
+/**
+ * 与 shared addCompatibleRegionalMoney 同语义的本地版(带显式 preferred 参数
+ * 的调用点较多故保留):preferred 币种没有任何值时回退第一个 actual-cost 值
+ * 的币种——全 CNY(来源真声明)账本绝不能被 USD 偏好清零。
+ */
 function addCompatibleRegionalMoney(
   values: readonly RegionalMoney[],
-  currency: RegionalMoney['currency'] = regionalCurrencyForRegion(CURRENT_CINDY_REGION),
+  currency: RegionalMoney['currency'] = DEFAULT_USAGE_CURRENCY,
 ): RegionalMoney | null {
-  const compatible = values.filter((value) => value.currency === currency);
+  if (values.length === 0) return null;
+  const actualValues = values.filter((value) => value.kind === 'actual-cost');
+  const candidates = actualValues.length > 0 ? actualValues : values;
+  const effective =
+    candidates.find((value) => value.currency === currency)?.currency ??
+    candidates[0].currency;
+  const compatible = values.filter((value) => value.currency === effective);
   return compatible.length > 0 ? addRegionalMoney(compatible) : null;
 }
 
@@ -224,7 +253,7 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
       typeof parsed.turnCostUsd === 'number' &&
       Number.isFinite(parsed.turnCostUsd) &&
       parsed.turnCostUsd > 0
-        ? regionalizeLegacyUsd(parsed.turnCostUsd, CURRENT_CINDY_REGION)
+        ? legacyUsdMoney(parsed.turnCostUsd)
         : undefined;
     const money = structured ?? legacy;
     if (!money || money.amount <= 0) {
@@ -526,12 +555,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
             addCompatibleRegionalMoney(
               costValues,
               run.costMoney?.currency,
-            ) ?? zeroRegionalMoney(CURRENT_CINDY_REGION),
+            ) ?? zeroUsageMoney(),
           estimatedValueMoney:
             addCompatibleRegionalMoney(
               estimatedValues,
               run.estimatedValueMoney?.currency,
-            ) ?? zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'),
+            ) ?? zeroUsageMoney('value-estimate'),
           costAttribution: 'exact',
         };
       }
@@ -542,10 +571,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         ...run,
         costMoney:
           addCompatibleRegionalMoney(persisted.costValues) ??
-          zeroRegionalMoney(CURRENT_CINDY_REGION),
+          zeroUsageMoney(),
         estimatedValueMoney:
           addCompatibleRegionalMoney(persisted.estimatedValues) ??
-          zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'),
+          zeroUsageMoney('value-estimate'),
         costAttribution: 'exact',
       };
     });
@@ -778,6 +807,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (turnCost.estimatedValueMoney) {
         entry.estimatedValueValues.push(turnCost.estimatedValueMoney);
       }
+      noteLatestCurrency(entry, turnCost.costMoney, row.createdAt);
+      noteLatestCurrency(entry, turnCost.estimatedValueMoney, row.createdAt);
       const sessionCost = entry.sessionCosts.get(row.sessionId) ?? emptyScheduleMoneyValues();
       if (turnCost.costMoney) {
         sessionCost.costValues.push(turnCost.costMoney);
@@ -785,6 +816,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (turnCost.estimatedValueMoney) {
         sessionCost.estimatedValueValues.push(turnCost.estimatedValueMoney);
       }
+      noteLatestCurrency(sessionCost, turnCost.costMoney, row.createdAt);
+      noteLatestCurrency(sessionCost, turnCost.estimatedValueMoney, row.createdAt);
       entry.sessionCosts.set(row.sessionId, sessionCost);
       bySchedule.set(attributedScheduleId, entry);
     }
@@ -797,11 +830,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       sessionId: string | undefined,
       costMoney: RegionalMoney | null,
       estimatedValueMoney: RegionalMoney | null,
+      at: number,
     ): void => {
       if (costMoney && costMoney.amount > 0) entry.costValues.push(costMoney);
       if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
         entry.estimatedValueValues.push(estimatedValueMoney);
       }
+      noteLatestCurrency(entry, costMoney, at);
+      noteLatestCurrency(entry, estimatedValueMoney, at);
       if (!sessionId) return;
       entry.sessionIds.add(sessionId);
       const sessionCost = entry.sessionCosts.get(sessionId) ?? emptyScheduleMoneyValues();
@@ -809,6 +845,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       if (estimatedValueMoney && estimatedValueMoney.amount > 0) {
         sessionCost.estimatedValueValues.push(estimatedValueMoney);
       }
+      noteLatestCurrency(sessionCost, costMoney, at);
+      noteLatestCurrency(sessionCost, estimatedValueMoney, at);
       entry.sessionCosts.set(sessionId, sessionCost);
     };
     const remainingMoney = (
@@ -832,7 +870,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         if (messageCostRunIds.has(run.id)) continue;
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
         entry.hasUnavailableCost = true;
-        appendRunMoney(entry, run.sessionId, null, null);
+        appendRunMoney(entry, run.sessionId, null, null, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -842,7 +880,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         !messageCostRunIds.has(run.id)
       ) {
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, null, null);
+        appendRunMoney(entry, run.sessionId, null, null, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -860,7 +898,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
                 messageCost?.estimatedValueValues ?? [],
               );
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
-        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney);
+        appendRunMoney(entry, run.sessionId, costMoney, estimatedValueMoney, run.firedAt);
         bySchedule.set(run.scheduleId, entry);
         continue;
       }
@@ -873,6 +911,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         run.sessionId,
         run.costMoney ?? null,
         run.estimatedValueMoney ?? null,
+        run.firedAt,
       );
       bySchedule.set(run.scheduleId, entry);
     }
@@ -885,7 +924,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       entry.sessionIds.add(session.id);
       const cost = Number(session.totalCostUsd ?? 0);
       if (Number.isFinite(cost) && cost > 0) {
-        const projectedLegacyCost = regionalizeLegacyUsd(cost, CURRENT_CINDY_REGION);
+        const projectedLegacyCost = legacyUsdMoney(cost);
         const alreadyCountedMessageCost = legacyMessageCostBySessionId.get(session.id) ?? 0;
         const legacyCost = Math.max(0, projectedLegacyCost.amount - alreadyCountedMessageCost);
         const legacyMoney: RegionalMoney = {
@@ -894,10 +933,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         };
         if (legacyCost > 0) {
           entry.costValues.push(legacyMoney);
+          noteLatestCurrency(entry, legacyMoney, 0);
         }
         const sessionCost = entry.sessionCosts.get(session.id) ?? emptyScheduleMoneyValues();
         if (legacyCost > 0) {
           sessionCost.costValues.push(legacyMoney);
+          noteLatestCurrency(sessionCost, legacyMoney, 0);
         }
         entry.sessionCosts.set(session.id, sessionCost);
       }
@@ -906,11 +947,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
     return [...bySchedule.entries()].map(([scheduleId, summary]) => {
       const totalMoney =
-        addCompatibleRegionalMoney(summary.costValues) ??
-        zeroRegionalMoney(CURRENT_CINDY_REGION);
+        addCompatibleRegionalMoney(summary.costValues, summary.latestCurrency) ??
+        zeroUsageMoney();
       const totalEstimatedValueMoney =
-        addCompatibleRegionalMoney(summary.estimatedValueValues) ??
-        zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate');
+        addCompatibleRegionalMoney(
+          summary.estimatedValueValues,
+          summary.latestCurrency,
+        ) ?? zeroUsageMoney('value-estimate');
       return {
         scheduleId,
         totalMoney,
@@ -925,11 +968,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         sessionCount: summary.sessionIds.size,
         sessions: [...summary.sessionCosts.entries()].map(([sessionId, costs]) => {
           const money =
-            addCompatibleRegionalMoney(costs.costValues) ??
-            zeroRegionalMoney(CURRENT_CINDY_REGION);
+            addCompatibleRegionalMoney(costs.costValues, costs.latestCurrency) ??
+            zeroUsageMoney();
           const estimatedMoney =
-            addCompatibleRegionalMoney(costs.estimatedValueValues) ??
-            zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate');
+            addCompatibleRegionalMoney(
+              costs.estimatedValueValues,
+              costs.latestCurrency,
+            ) ?? zeroUsageMoney('value-estimate');
           return {
             sessionId,
             totalMoney: money,

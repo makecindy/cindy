@@ -10,8 +10,14 @@ vi.mock('electron', () => ({
 import {
   effectiveVoiceInputServiceMode,
   resolveVoiceInputModelSelectionValues,
+  validateVoiceInputCustomAsrConfig,
+  voiceInputAsrChainForServiceMode,
   voiceInputModelSelectionSignature,
 } from '../VoiceInputModelSelection.js';
+import {
+  canReuseVoiceInputCustomAsrCredential,
+  resolveVoiceInputCustomAsrWebsocketUrl,
+} from '../../../shared/voiceInputCustomAsr.js';
 
 describe('VoiceInputModelSelection', () => {
   describe('serviceMode', () => {
@@ -92,6 +98,7 @@ describe('VoiceInputModelSelection', () => {
         'litellm-volcengine-sauc-asr',
         'litellm-qwen3-asr-flash-realtime',
       ],
+      asrProviderChainSource: 'default',
       // BYOK refiner fallback is explicit opt-in: no configured chain means
       // the selected primary runs alone.
       refinerProviderChain: ['litellm-qwen3.6-plus'],
@@ -143,6 +150,7 @@ describe('VoiceInputModelSelection', () => {
         'litellm-qwen3-asr-flash-realtime',
         'litellm-gpt-realtime-whisper',
       ],
+      asrProviderChainSource: 'default',
       refinerProviderChain: ['codex-gpt-5.4-mini'],
       refinerProviderChainSource: 'default',
     });
@@ -201,6 +209,111 @@ describe('VoiceInputModelSelection', () => {
     // BYOK refiner fallback is explicit opt-in (product decision 2026-07-23):
     // without a configured chain there is no built-in default tail.
     expect(result.values.refinerProviderChain).toEqual(['codex-gpt-5.4-mini']);
+  });
+
+  it('keeps managed ASR failover but makes BYOK fallback explicit opt-in', () => {
+    const managed = resolveVoiceInputModelSelectionValues({ serviceMode: 'cindy' }).values;
+    const byok = resolveVoiceInputModelSelectionValues({ serviceMode: 'byok' }).values;
+    expect(voiceInputAsrChainForServiceMode(managed)).toEqual([
+      'litellm-volcengine-sauc-asr',
+      'litellm-qwen3-asr-flash-realtime',
+      'litellm-gpt-realtime-whisper',
+    ]);
+    expect(voiceInputAsrChainForServiceMode(byok)).toEqual([
+      'litellm-volcengine-sauc-asr',
+    ]);
+
+    const explicitByok = resolveVoiceInputModelSelectionValues({
+      serviceMode: 'byok',
+      asrProvider: 'custom-realtime-asr',
+      asrProviderChain: ['litellm-qwen3-asr-flash-realtime'],
+    }).values;
+    expect(voiceInputAsrChainForServiceMode(explicitByok)).toEqual([
+      'custom-realtime-asr',
+      'litellm-qwen3-asr-flash-realtime',
+    ]);
+  });
+
+  it('validates custom realtime ASR metadata without accepting insecure remote ws URLs', () => {
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'openai-realtime',
+      websocketUrl: 'wss://asr.example.com/v1/realtime?intent=transcription',
+      model: 'gpt-realtime-whisper',
+    })).toEqual({
+      ok: true,
+      value: {
+        protocol: 'openai-realtime',
+        websocketUrl: 'wss://asr.example.com/v1/realtime?intent=transcription',
+        model: 'gpt-realtime-whisper',
+      },
+    });
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'qwen-realtime',
+      websocketUrl: 'ws://127.0.0.1:8080/asr',
+      model: 'qwen3-asr-flash-realtime',
+    }).ok).toBe(true);
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'openai-realtime',
+      websocketUrl: 'ws://[::1]:8080/asr',
+      model: 'gpt-realtime-whisper',
+    }).ok).toBe(true);
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'openai-realtime',
+      websocketUrl: 'ws://asr.example.com/realtime',
+      model: 'gpt-realtime-whisper',
+    })).toEqual({
+      ok: false,
+      error: 'customAsr.websocketUrl must use wss, or ws on a loopback host',
+    });
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'openai-realtime',
+      websocketUrl: 'wss://secret@example.com/realtime',
+      model: 'gpt-realtime-whisper',
+    })).toEqual({
+      ok: false,
+      error: 'customAsr.websocketUrl must not contain credentials',
+    });
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'openai-realtime',
+      websocketUrl: 'wss://asr.example.com/realtime?api_key=secret',
+      model: 'gpt-realtime-whisper',
+    })).toEqual({
+      ok: false,
+      error: 'customAsr.websocketUrl contains unsupported query parameters; only documented routing parameters are allowed',
+    });
+    expect(validateVoiceInputCustomAsrConfig({
+      protocol: 'openai-realtime',
+      websocketUrl: 'wss://asr.example.com/realtime?token=secret',
+      model: 'gpt-realtime-whisper',
+    }).ok).toBe(false);
+  });
+
+  it('binds saved credentials to an endpoint origin and routes Qwen models in the URL', () => {
+    expect(canReuseVoiceInputCustomAsrCredential(
+      'wss://asr.example.com/v1/realtime',
+      'wss://asr.example.com/v2/realtime?intent=transcription',
+    )).toBe(true);
+    expect(canReuseVoiceInputCustomAsrCredential(
+      'wss://asr.example.com/v1/realtime',
+      'wss://other.example.com/v1/realtime',
+    )).toBe(false);
+    expect(canReuseVoiceInputCustomAsrCredential(
+      undefined,
+      'wss://asr.example.com/v1/realtime',
+    )).toBe(false);
+
+    expect(resolveVoiceInputCustomAsrWebsocketUrl({
+      protocol: 'qwen-realtime',
+      websocketUrl: 'wss://asr.example.com/realtime?tenant=one&model=stale',
+      model: 'qwen3-asr-flash-realtime',
+    })).toBe(
+      'wss://asr.example.com/realtime?tenant=one&model=qwen3-asr-flash-realtime',
+    );
+    expect(resolveVoiceInputCustomAsrWebsocketUrl({
+      protocol: 'openai-realtime',
+      websocketUrl: 'wss://asr.example.com/realtime?intent=transcription',
+      model: 'gpt-realtime-whisper',
+    })).toBe('wss://asr.example.com/realtime?intent=transcription');
   });
 
   it('uses explicit chain config as the fallback tail, keeping the selected primary as head', () => {

@@ -9,6 +9,7 @@ describe('voice input overlay error classification', () => {
     expect(isVoiceInputServiceConnectionError('WebSocket connection timed out')).toBe(true);
     expect(isVoiceInputServiceConnectionError('fetch failed')).toBe(true);
     expect(isVoiceInputServiceConnectionError('network socket disconnected before secure TLS connection was established')).toBe(true);
+    expect(isVoiceInputServiceConnectionError('unable to verify the first certificate')).toBe(true);
   });
 
   it('does not classify ordinary user-facing errors as service connection errors', () => {

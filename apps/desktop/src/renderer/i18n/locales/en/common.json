@@ -715,21 +715,37 @@
       },
       "serviceSource": {
         "label": "Voice service",
-        "hint": "Uses the Cindy voice service by default; switch to your own key and models if you prefer.",
-        "localHint": "Local mode does not use Cindy account services; configure your own key and models.",
+        "hint": "Uses the Cindy voice service by default. You can instead connect a realtime ASR service with separate voice credentials.",
+        "localHint": "Local mode does not use Cindy account services; connect a realtime ASR service with separate voice credentials.",
         "ariaLabel": "Voice service source",
         "options": {
           "cindy": "Cindy official service",
-          "byok": "Custom (your own key)"
+          "byok": "Custom voice service"
         },
         "optionDescriptions": {
           "cindy": "Uses your Cindy sign-in, no keys to configure",
-          "byok": "Uses your own keys and models, billed to your account"
+          "byok": "Uses an ASR-capable service and its own voice credentials"
         },
         "asr": {
           "label": "Recognition model",
           "hint": "ASR model used for speech-to-text.",
           "ariaLabel": "Speech recognition model"
+        },
+        "connectionTest": {
+          "action": "Test connection",
+          "testing": "Testing",
+          "testingStatus": "Connecting to the selected realtime ASR service…",
+          "success": "Connected. The selected realtime ASR route is available.",
+          "saveBeforeTest": "Save the custom ASR changes before testing the connection.",
+          "failure": {
+            "credentialsMissing": "Required credentials are missing. Complete the setup first.",
+            "authenticationFailed": "Authentication failed. Check the credentials for this service.",
+            "routeUnavailable": "The AI gateway does not support or has not enabled this realtime ASR route.",
+            "timeout": "Connection timed out. Check the network and service status, then try again.",
+            "network": "Could not connect. Check the network, address, and certificate settings.",
+            "serviceError": "The service handshake failed. Try again later or check the service setup.",
+            "unsupportedProvider": "Connection testing is not supported for this recognition model."
+          }
         },
         "refiner": {
           "label": "Refinement model",
@@ -743,15 +759,52 @@
           "none": "No fallback",
           "noneDescription": "Keep the raw transcript when the primary model fails"
         },
+        "customAsr": {
+          "optionLabel": "Custom realtime ASR",
+          "optionDescription": "Uses a dedicated speech-recognition WebSocket and API key",
+          "notice": "Enter the complete WebSocket address from an ASR-capable service. Cindy will not reuse or append paths to your chat model endpoint.",
+          "protocol": {
+            "label": "Realtime protocol",
+            "hint": "Choose the message format implemented by the ASR service.",
+            "ariaLabel": "Custom realtime ASR protocol",
+            "openai": "OpenAI transcription",
+            "qwen": "Qwen realtime ASR"
+          },
+          "websocketUrl": {
+            "label": "WebSocket URL",
+            "hint": "A complete wss:// URL. Local loopback services may use ws://.",
+            "placeholder": "wss://asr.example.com/v1/realtime",
+            "invalid": "Enter a valid wss:// URL without embedded credentials. Only local loopback services may use ws://."
+          },
+          "model": {
+            "label": "ASR model",
+            "hint": "The exact speech-recognition model accepted by this service.",
+            "placeholder": "Speech-recognition model ID"
+          },
+          "apiKey": {
+            "label": "ASR API key",
+            "hint": "Stored locally with system encryption and used only for this voice service.",
+            "savedHint": "A key is stored locally. Leave this field blank to keep it.",
+            "endpointChangedHint": "The service origin changed. Enter a new key, or remove the saved key before saving.",
+            "placeholder": "Enter the ASR API key",
+            "savedPlaceholder": "Key saved — enter a new value to replace it",
+            "clear": "Remove key"
+          },
+          "save": "Save voice service"
+        },
         "credential": {
-          "gatewayKey": "Uses your AI gateway key",
+          "gatewayKey": "Requires your AI gateway to support this realtime ASR route",
           "codexLogin": "Uses your Codex sign-in",
-          "elevenlabsKey": "Uses your ElevenLabs key (environment variable)"
+          "elevenlabsKey": "Uses your ElevenLabs key (environment variable)",
+          "codexRealtimeUnsupported": "Unavailable: Codex sign-in is not an OpenAI API Realtime credential"
         },
         "credentialError": {
           "gatewayMissing": "No AI gateway key found; this model is unavailable.",
           "codexMissing": "Codex is not signed in; this model is unavailable.",
-          "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable."
+          "elevenlabsMissing": "No ElevenLabs key configured (environment variable); this model is unavailable.",
+          "customAsrConfigMissing": "Complete and save the realtime ASR service settings before starting voice input.",
+          "customAsrKeyMissing": "Add and save an API key for the custom realtime ASR service.",
+          "codexRealtimeUnsupported": "Codex sign-in cannot be used for realtime speech recognition. Choose a supported ASR service."
         },
         "manageProviders": "Open model providers",
         "reset": "Reset to default"
@@ -2045,6 +2098,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "Model",
+        "effortLabel": "Reasoning effort",
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",

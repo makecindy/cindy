@@ -715,21 +715,37 @@
       },
       "serviceSource": {
         "label": "语音服务",
-        "hint": "默认使用 Cindy 提供的语音服务；也可以切换为自己的 Key 与模型。",
-        "localHint": "本地模式不使用 Cindy 账号服务；请配置自己的 Key 与模型。",
+        "hint": "默认使用 Cindy 语音服务；也可以连接支持实时 ASR 的服务，并使用独立的语音凭证。",
+        "localHint": "本地模式不使用 Cindy 账号服务；请连接支持实时 ASR 的服务并配置独立语音凭证。",
         "ariaLabel": "语音服务来源选择",
         "options": {
           "cindy": "Cindy 官方服务",
-          "byok": "自定义（用自己的 Key）"
+          "byok": "自定义语音服务"
         },
         "optionDescriptions": {
           "cindy": "使用 Cindy 账号登录态，无需配置任何密钥",
-          "byok": "使用你自己的密钥与模型，费用计入你的账户"
+          "byok": "使用具备 ASR 能力的服务及其独立语音凭证"
         },
         "asr": {
           "label": "识别模型",
           "hint": "语音转文字使用的 ASR 模型。",
           "ariaLabel": "语音识别模型选择"
+        },
+        "connectionTest": {
+          "action": "测试连接",
+          "testing": "测试中",
+          "testingStatus": "正在连接所选实时 ASR 服务…",
+          "success": "连接成功，所选实时 ASR 路由可用。",
+          "saveBeforeTest": "请先保存自定义 ASR 的修改，再测试连接。",
+          "failure": {
+            "credentialsMissing": "缺少所需凭证，请先完成配置。",
+            "authenticationFailed": "鉴权失败，请检查当前服务的凭证。",
+            "routeUnavailable": "AI 网关不支持或未启用所选实时 ASR 路由。",
+            "timeout": "连接超时，请检查网络和服务状态后重试。",
+            "network": "无法连接服务，请检查网络、地址和证书配置。",
+            "serviceError": "服务握手失败，请稍后重试或检查服务配置。",
+            "unsupportedProvider": "当前识别模型不支持连接测试。"
+          }
         },
         "refiner": {
           "label": "润色模型",
@@ -743,15 +759,52 @@
           "none": "不使用备选",
           "noneDescription": "主模型失败时直接保留原始识别文本"
         },
+        "customAsr": {
+          "optionLabel": "自定义实时 ASR",
+          "optionDescription": "使用独立的语音识别 WebSocket 和 API Key",
+          "notice": "请填写 ASR 服务提供的完整 WebSocket 地址。Cindy 不会复用对话模型地址，也不会自动拼接语音路径。",
+          "protocol": {
+            "label": "实时协议",
+            "hint": "请选择 ASR 服务实际实现的消息格式。",
+            "ariaLabel": "自定义实时 ASR 协议",
+            "openai": "OpenAI 转写协议",
+            "qwen": "Qwen 实时 ASR"
+          },
+          "websocketUrl": {
+            "label": "WebSocket 地址",
+            "hint": "填写完整的 wss:// 地址；本机回环服务可以使用 ws://。",
+            "placeholder": "wss://asr.example.com/v1/realtime",
+            "invalid": "请输入不包含凭证的有效 wss:// 地址；只有本机回环服务可以使用 ws://。"
+          },
+          "model": {
+            "label": "ASR 模型",
+            "hint": "填写该服务实际接受的语音识别模型 ID。",
+            "placeholder": "语音识别模型 ID"
+          },
+          "apiKey": {
+            "label": "ASR API Key",
+            "hint": "使用系统加密保存在本机，仅供这个语音服务使用。",
+            "savedHint": "本机已保存 Key；留空可保持不变。",
+            "endpointChangedHint": "服务地址已切换到新的来源。请填写新的 Key，或先移除已保存的 Key。",
+            "placeholder": "输入 ASR API Key",
+            "savedPlaceholder": "Key 已保存；输入新值可替换",
+            "clear": "移除 Key"
+          },
+          "save": "保存语音服务"
+        },
         "credential": {
-          "gatewayKey": "使用 AI 网关 Key",
+          "gatewayKey": "需要 AI 网关支持所选实时 ASR 路由",
           "codexLogin": "使用 Codex 登录",
-          "elevenlabsKey": "使用 ElevenLabs Key（环境变量）"
+          "elevenlabsKey": "使用 ElevenLabs Key（环境变量）",
+          "codexRealtimeUnsupported": "不可用：Codex 登录不是 OpenAI API Realtime 凭证"
         },
         "credentialError": {
           "gatewayMissing": "未找到可用的 AI 网关 Key，当前模型无法使用。",
           "codexMissing": "Codex 未登录，当前模型无法使用。",
-          "elevenlabsMissing": "未配置 ElevenLabs Key（环境变量），当前模型无法使用。"
+          "elevenlabsMissing": "未配置 ElevenLabs Key（环境变量），当前模型无法使用。",
+          "customAsrConfigMissing": "请先完整填写并保存实时 ASR 服务配置，再开始语音输入。",
+          "customAsrKeyMissing": "请为自定义实时 ASR 服务填写并保存 API Key。",
+          "codexRealtimeUnsupported": "Codex 登录不能用于实时语音识别，请选择受支持的 ASR 服务。"
         },
         "manageProviders": "前往模型供应商",
         "reset": "恢复默认"
@@ -2044,6 +2097,7 @@
       "prefs": {
         "agentLabel": "Agent",
         "modelLabel": "模型",
+        "effortLabel": "推理强度",
         "permissionLabel": "权限模式",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",

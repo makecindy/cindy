@@ -33,10 +33,9 @@ import { AgentMark } from './AgentMark';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { formatDuration, formatRunTimestamp, formatStartedAgo } from '../lib/formatters';
 import { formatTurnCostMoney } from '@/lib/usageFormat';
-import { CURRENT_CINDY_REGION } from '../../../../shared/brandRegion';
 import {
-  regionalizeLegacyUsd,
-  regionalizeUsd,
+  legacyUsdMoney,
+  usdMoney,
 } from '../../../../shared/regionalMoney';
 import { isUnreadScheduleRun } from '../lib/runUnread';
 import { markScheduleRunReadAndSync } from '../lib/scheduleRunReadSync';
@@ -171,18 +170,10 @@ export function RunHistoryCard({
           ? (() => {
           const costMoney =
             run.costMoney ??
-            regionalizeLegacyUsd(
-              run.costUsd ?? 0,
-              CURRENT_CINDY_REGION,
-            );
+            legacyUsdMoney(run.costUsd ?? 0);
           const valueMoney =
             run.estimatedValueMoney ??
-            regionalizeUsd(
-              run.estimatedValueUsd ?? 0,
-              CURRENT_CINDY_REGION,
-              'legacy-usd',
-              'value-estimate',
-            );
+            usdMoney(run.estimatedValueUsd ?? 0, 'value-estimate', 'legacy-usd');
           return [
           costMoney.amount > 0
             ? t('scheduler.runs.runCost', { cost: formatTurnCostMoney(costMoney) })

@@ -108,6 +108,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
       const index = sockets.length;
       sockets.push(socket);
       messageCounts[index] = 0;
+      socket.send(serverAckPacket());
       socket.on('message', () => {
         messageCounts[index] += 1;
       });
@@ -164,6 +165,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     server.on('connection', (socket, request) => {
       sockets.push(socket);
       authorizations.push(request.headers.authorization);
+      socket.send(serverAckPacket());
     });
 
     try {
@@ -196,10 +198,54 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     }
   });
 
+  it('waits for a provider protocol response before reporting connected', async () => {
+    const server = new WebSocketServer({ port: 0 });
+    const sockets: WebSocket[] = [];
+    let provider: VolcengineSaucAsrProvider | undefined;
+    server.on('connection', (socket) => {
+      sockets.push(socket);
+    });
+
+    try {
+      await waitFor(() => server.address() !== null);
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+
+      const events: string[] = [];
+      provider = new VolcengineSaucAsrProvider({
+        proxyApiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        endpointPath: '/volcengine/api/v3/sauc/bigmodel_async',
+        resourceId: 'volc.test',
+        connectTimeoutMs: 1_000,
+      });
+      provider.onEvent((event) => events.push(event.type));
+
+      const started = provider.start();
+      await waitFor(() => sockets.length === 1);
+      await expect(Promise.race([
+        started.then(() => 'resolved'),
+        sleep(30).then(() => 'pending'),
+      ])).resolves.toBe('pending');
+      expect(events).not.toContain('connected');
+
+      sockets[0].send(serverAckPacket());
+      await expect(started).resolves.toBeUndefined();
+      expect(events).toContain('connected');
+    } finally {
+      await provider?.stop();
+      for (const socket of sockets) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('does not open a managed socket when stopped during session allocation', async () => {
     const server = new WebSocketServer({ port: 0 });
     const sockets: WebSocket[] = [];
-    server.on('connection', (socket) => sockets.push(socket));
+    server.on('connection', (socket) => {
+      sockets.push(socket);
+      socket.send(serverAckPacket());
+    });
     let allocationStarted = false;
     let releaseAllocation: ((value: { websocketUrl: string; authorizationToken: string }) => void) | undefined;
     const connectionProvider = vi.fn(() => new Promise<{ websocketUrl: string; authorizationToken: string }>((resolve) => {
@@ -240,6 +286,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     let provider: VolcengineSaucAsrProvider | undefined;
     server.on('connection', (socket) => {
       sockets.push(socket);
+      socket.send(serverAckPacket());
     });
 
     try {
@@ -293,6 +340,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     let provider: VolcengineSaucAsrProvider | undefined;
     server.on('connection', (socket) => {
       sockets.push(socket);
+      socket.send(serverAckPacket());
     });
 
     try {
@@ -344,6 +392,7 @@ describe('VolcengineSaucAsrProvider protocol helpers', () => {
     let provider: VolcengineSaucAsrProvider | undefined;
     server.on('connection', (socket) => {
       sockets.push(socket);
+      socket.send(serverAckPacket());
     });
 
     try {
@@ -431,6 +480,10 @@ function serverTranscriptPacket(text: string, isFinal: boolean, flags = 0x0): Bu
     size,
     payload,
   ]);
+}
+
+function serverAckPacket(): Buffer {
+  return Buffer.from([0x11, 0xb0, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00]);
 }
 
 function makePcmChunk(): ArrayBuffer {

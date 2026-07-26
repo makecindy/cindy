@@ -77,6 +77,7 @@ import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
+import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirror.js';
 import {
@@ -114,6 +115,7 @@ async function resolveNewSessionConfig(
   },
   log: { warn(msg: string): void },
   sourceIm?: string | null,
+  workspaceCtx?: { alias: string | undefined; teamId: string | null },
 ): Promise<ResolvedHookSessionConfig> {
   let providers: ProviderView[] | null = null;
   try {
@@ -145,10 +147,21 @@ async function resolveNewSessionConfig(
     overrides,
   );
 
+  // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
+  const channel =
+    sourceIm === 'telegram' ? ('telegram' as const) : sourceIm === 'slack' ? ('slack' as const) : null;
+  const workdirProviderId =
+    channel !== null && workspaceCtx?.alias
+      ? getWorkspaceProviderSource(channel, workspaceCtx.teamId, workspaceCtx.alias)
+      : null;
+  const preferredProviderId = workdirProviderId ?? resolved.providerId;
+
   // 目录可用时始终把最终模型收敛到一个真实已连接、且确实提供它的来源。
-  // 目录读取失败才保留旧行为(草稿来源原样透传),避免临时目录故障阻断 hook。
+  // 目录读取失败才保留旧行为(**只**透传草稿来源, 不透传目录级来源 —— 后者未经
+  // 收窄校验, 降级窗口直接钉给会话会绕过连接态/供给校验; 数据不足不猜, 维持
+  // 加目录来源之前的降级语义, codex review)。
   const providerId = providers
-    ? effectiveSourceIdForModel(providers, resolved.providerId, resolved.model, resolved.agentKind)
+    ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
     : resolved.providerId;
   return { ...resolved, providerId };
 }
@@ -350,6 +363,7 @@ export function createMakerHookSessionRunner(deps: {
             },
             log,
             req.source?.im,
+            { alias: req.workspaceAlias, teamId: req.source?.teamId ?? null },
           )
         : null;
       let workingDir = req.workingDir;

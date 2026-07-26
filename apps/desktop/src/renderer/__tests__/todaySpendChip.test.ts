@@ -150,12 +150,12 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).not.toContain('todaySpend.codex.creditsShort');
   });
 
-  it('formats gateway quota amounts with the build-region currency', () => {
+  it('formats gateway quota amounts with the gateway-native currency', () => {
     expect(source).toContain(
-      'formatCompactMoney(gatewayMoney(claudeQuota.spend, CURRENT_CINDY_REGION))',
+      'formatCompactMoney(gatewayMoney(claudeQuota.spend))',
     );
     expect(source).toContain(
-      'formatCompactMoney(gatewayMoney(claudeQuota.maxBudget, CURRENT_CINDY_REGION))',
+      'formatCompactMoney(gatewayMoney(claudeQuota.maxBudget))',
     );
     expect(source).not.toContain('formatCompactUsd(claudeQuota.');
   });

@@ -19,7 +19,7 @@ const heatmapSource = readFileSync(
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
     expect(source).toMatch(
-      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend, CURRENT_CINDY_REGION\)\s+: null;/,
+      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend\)\s+: null;/,
     );
     expect(source).toContain('const hasAccountTodaySpend = accountTodayMoney !== null;');
     expect(source).toContain('const layoutHistory = history ?? emptyLayoutHistory;');
@@ -60,13 +60,9 @@ describe('HomeUsageDashboard source contract', () => {
     expect(source).not.toContain('history.days.length === 0 && history.models.length === 0');
   });
 
-  it('uses the build-region currency for empty chart cells', () => {
-    expect(heatmapSource).toContain(
-      'regionalCurrencyForRegion(CURRENT_CINDY_REGION)',
-    );
-    expect(dailyBarsSource).toContain(
-      'regionalCurrencyForRegion(CURRENT_CINDY_REGION)',
-    );
+  it('uses the default usage currency for empty chart cells', () => {
+    expect(heatmapSource).toContain('DEFAULT_USAGE_CURRENCY');
+    expect(dailyBarsSource).toContain('DEFAULT_USAGE_CURRENCY');
     expect(heatmapSource).not.toContain("money.currency ?? 'USD'");
     expect(dailyBarsSource).not.toContain("money.currency ?? 'USD'");
   });

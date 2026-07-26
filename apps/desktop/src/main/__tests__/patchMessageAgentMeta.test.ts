@@ -158,11 +158,11 @@ describe('extractEstimatedSessionValueEntries', () => {
     const legacyEstimatedEntry = (clientId: string, costUsd: number) => ({
       clientId,
       money: {
-        amount: expect.closeTo(costUsd * 6.7),
-        currency: 'CNY',
+        amount: expect.closeTo(costUsd),
+        currency: 'USD',
         approximate: true,
         kind: 'value-estimate',
-        estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+        estimateReasons: ['legacy-usd', 'subscription-value'],
       },
       costUsd: expect.closeTo(costUsd),
     });

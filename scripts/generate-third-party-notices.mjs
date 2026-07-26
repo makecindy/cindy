@@ -242,16 +242,39 @@ function matchesPackageConstraint(values, actual) {
 }
 
 function matchesTarget(pkgJson, target) {
-  if (!target) return true;
   return (
     matchesPackageConstraint(pkgJson.os, target.os) &&
     matchesPackageConstraint(pkgJson.cpu, target.cpu) &&
+    // libc 只对 linux 有意义，非 linux 目标可以省略这一轴（desktop-win / desktop-macos
+    // 与移动端的 target 就没带），省略时由 matchesPackageConstraint() 按「未声明约束一律
+    // 放行」处理；SUPPORTED_TARGETS 叉乘出来的 target 则各轴齐全，os 不是 linux 时也带
+    // libc，那种情况下这一轴只会挡掉声明了 libc 约束的包，而声明该约束的包都把 os 限定
+    // 在 linux，早已被上面的 os 轴挡掉。
     matchesPackageConstraint(pkgJson.libc, target.libc)
   );
 }
 
-/** BFS 遍历给定入口的生产依赖闭包。workspace 内部包穿透但不收录。 */
-function collectClosure(entryDirs, target = null) {
+/**
+ * BFS 遍历给定入口的生产依赖闭包。workspace 内部包穿透但不收录。
+ *
+ * `target` 必填且强制校验：本函数判断一个平台可选依赖是否存在，只看 `node_modules` 里
+ * 有没有对应目录，所以缺了 target 就等于把「本机恰好装了哪些架构」写进产物。这里刻意
+ * 不提供「不过滤」的默认值——宁可让调用点直接报错，也不给出一条能静默恢复机器相关
+ * 行为的路径。
+ */
+function collectClosure(entryDirs, target) {
+  // 只有 linux 分 glibc / musl，所以 libc 只在 linux 目标上必填：缺了它
+  // matchesPackageConstraint() 会因为「未声明约束一律放行」把 glibc 与 musl 变体同时收进
+  // 闭包，产物重新随本机装了哪个变体漂移——正是本函数要挡掉的那种机器相关行为。
+  const requiredAxes =
+    target?.os === "linux" ? ["os", "cpu", "libc"] : ["os", "cpu"];
+  for (const axis of requiredAxes) {
+    if (typeof target?.[axis] !== "string" || target[axis].length === 0) {
+      throw new Error(
+        `collectClosure() requires an explicit target.${axis}: license notices would otherwise depend on the generating machine`,
+      );
+    }
+  }
   const collected = new Map(); // key: name@version
   const visitedDirs = new Set();
   const missing = new Set();
@@ -389,11 +412,11 @@ function mergeClosures(...closures) {
 /**
  * 由根 package.json 的 `pnpm.supportedArchitectures` 叉乘出的目标平台集合。
  *
- * 覆盖「本仓声明支持的全部架构」而非单一发行产物的闭包必须逐个 target 收集再合并，
- * 不能省掉 target 让 matchesTarget() 一律放行：collectClosure() 判断一个平台可选依赖
- * 是否存在只看 `node_modules` 里有没有对应目录，而实际装出来的集合可能超出
- * supportedArchitectures 的声明（例如 libc 只声明 glibc 时仍装进 musl 变体），产物
- * 内容就会随生成机器漂移。这里不假设包管理器只安装声明过的架构。
+ * 覆盖「本仓声明支持的全部架构」而非单一发行产物的闭包必须逐个 target 收集再合并：
+ * collectClosure() 判断一个平台可选依赖是否存在只看 `node_modules` 里有没有对应目录，
+ * 而实际装出来的集合可能超出 supportedArchitectures 的声明（例如 libc 只声明 glibc 时
+ * 仍装进 musl 变体），产物内容就会随生成机器漂移。这里不假设包管理器只安装声明过的
+ * 架构。
  */
 function readSupportedTargets() {
   const declared = readJson(path.join(REPO_ROOT, "package.json")).pnpm

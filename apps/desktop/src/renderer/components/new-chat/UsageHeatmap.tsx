@@ -13,15 +13,14 @@ import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens, formatMoney } from '@/lib/usageFormat';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import {
-  regionalCurrencyForRegion,
+  DEFAULT_USAGE_CURRENCY,
   type RegionalMoney,
 } from '../../../shared/regionalMoney';
 
 const CELL_PX = 12;
 const GAP_PX = 3;
-const EMPTY_MONEY_CURRENCY = regionalCurrencyForRegion(CURRENT_CINDY_REGION);
+const EMPTY_MONEY_CURRENCY = DEFAULT_USAGE_CURRENCY;
 /** 非零值分桶的 color-mix 浓度阶梯 (level 1..4)。 */
 const LEVEL_MIX = [0.22, 0.42, 0.68, 1];
 

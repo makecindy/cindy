@@ -34,14 +34,12 @@ import {
 } from '../../../shared/interruptedTurn.js';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/codexSubscriptionValue.js';
 import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion.js';
 import {
   addCompatibleRegionalMoney,
   asValueEstimateMoney,
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalCurrencyForRegion,
-  regionalizeLegacyUsd,
-  regionalizeUsd,
+  usdMoney,
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import { capReferenceMessageRows } from './history.js';
@@ -350,10 +348,7 @@ export function registerMessageIpc(): void {
       );
     const entries = extractEstimatedSessionValueEntries(rows);
     const totalValueMoney =
-      addCompatibleRegionalMoney(
-        entries.map((entry) => entry.money),
-        regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-      );
+      addCompatibleRegionalMoney(entries.map((entry) => entry.money));
     const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
     return {
       totalValueMoney,
@@ -1101,7 +1096,7 @@ export function extractEstimatedSessionValueEntries(
     const costUsd = recomputed ?? meta.turnCostUsd;
     entries.push({
       clientId: row.clientId,
-      money: regionalizeUsd(costUsd, CURRENT_CINDY_REGION, 'legacy-usd', 'value-estimate'),
+      money: usdMoney(costUsd, 'value-estimate', 'legacy-usd'),
       costUsd,
     });
   }
@@ -1257,7 +1252,7 @@ export async function readPriorUserRoundCost(
       typeof meta?.turnCostUsd === 'number' &&
       Number.isFinite(meta.turnCostUsd) &&
       meta.turnCostUsd > 0
-        ? regionalizeLegacyUsd(meta.turnCostUsd, CURRENT_CINDY_REGION)
+        ? legacyUsdMoney(meta.turnCostUsd)
         : undefined;
     const rawSegment = structured ?? legacy;
     const isEstimate = rawSegment?.kind === 'value-estimate' || meta?.turnCostIsEstimate === true;
@@ -1266,10 +1261,7 @@ export async function readPriorUserRoundCost(
     values.push(segment);
     if (isEstimate) estimatedCurrencies.add(segment.currency);
   }
-  const money = addCompatibleRegionalMoney(
-    values,
-    regionalCurrencyForRegion(CURRENT_CINDY_REGION),
-  );
+  const money = addCompatibleRegionalMoney(values);
   const hasEstimatedValue =
     money !== null && estimatedCurrencies.has(money.currency);
   return {
@@ -1351,7 +1343,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     hasEstimatedValue ||= meta?.turnCostIsEstimate === true;
     if (legacyClientIds.has(row.clientId)) {
       totalsByClientId.set(row.clientId, {
-        money: regionalizeLegacyUsd(costUsd, CURRENT_CINDY_REGION),
+        money: legacyUsdMoney(costUsd),
         costUsd,
         hasEstimatedValue,
       });

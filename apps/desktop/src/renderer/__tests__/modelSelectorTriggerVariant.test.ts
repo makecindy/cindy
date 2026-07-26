@@ -129,41 +129,43 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({
   flashScrollbar: vi.fn(),
 }));
 
+const agentCapabilitiesRef = vi.hoisted(() => {
+  const DEFAULT_CAPABILITIES = {
+    availableModels: [
+      {
+        id: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        description: 'Most capable for ambitious work',
+        contextWindow: 200000,
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultEffort: 'high',
+        effortDisplayNames: {
+          xhigh: 'X-High',
+        },
+      },
+      {
+        id: 'claude-sonnet-4-6',
+        displayName: 'Sonnet 4.6',
+        contextWindow: 200000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+      },
+      {
+        id: 'claude-haiku-4-5',
+        displayName: 'Haiku 4.5',
+        description: 'Fastest for quick answers',
+        contextWindow: 200000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ],
+    effortLevels: [{ id: 'xhigh', displayName: 'X-High' }],
+    hasFastMode: false,
+  };
+  return { DEFAULT_CAPABILITIES, capabilities: DEFAULT_CAPABILITIES as unknown };
+});
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({
-    capabilities: {
-      availableModels: [
-        {
-          id: 'claude-opus-4-8',
-          displayName: 'Opus 4.8',
-          description: 'Most capable for ambitious work',
-          contextWindow: 200000,
-          efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-          defaultEffort: 'high',
-          effortDisplayNames: {
-            xhigh: 'X-High',
-          },
-        },
-        {
-          id: 'claude-sonnet-4-6',
-          displayName: 'Sonnet 4.6',
-          contextWindow: 200000,
-          efforts: ['low', 'medium', 'high'],
-          defaultEffort: 'medium',
-        },
-        {
-          id: 'claude-haiku-4-5',
-          displayName: 'Haiku 4.5',
-          description: 'Fastest for quick answers',
-          contextWindow: 200000,
-          efforts: [],
-          defaultEffort: null,
-        },
-      ],
-      effortLevels: [{ id: 'xhigh', displayName: 'X-High' }],
-      hasFastMode: false,
-    },
-  }),
+  useAgentCapabilities: () => ({ capabilities: agentCapabilitiesRef.capabilities }),
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -258,6 +260,20 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
   useDeviceProviders: () => ({ providers: deviceProvidersRef.providers, loading: false }),
 }));
 
+interface VisibleModelFixture {
+  id: string;
+  displayName: string;
+  description?: string;
+  contextWindow: number;
+  efforts: string[];
+  defaultEffort: string | null;
+  effortDisplayNames?: Record<string, string>;
+  supportsFastMode?: boolean;
+}
+
+const visibleModelsRef = vi.hoisted(() => ({
+  models: null as VisibleModelFixture[] | null,
+}));
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: (name: string) => name.slice(0, 1).toUpperCase(),
   // #245 新增:ModelSelector 渲染路径直接调用;fixture providers 无 routing,按不过滤透传。
@@ -265,8 +281,9 @@ vi.mock('@/lib/providerModels', () => ({
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) =>
     agentKind ?? 'claude-code',
-  selectVisibleModels: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) =>
-    [
+  selectVisibleModels: ({ agentKind }: { agentKind: 'claude-code' | 'codex' | null }) => {
+    if (visibleModelsRef.models) return visibleModelsRef.models;
+    return [
       {
         id: 'claude-opus-4-8',
         displayName: 'Opus 4.8',
@@ -304,7 +321,8 @@ vi.mock('@/lib/providerModels', () => ({
       if (agentKind === 'claude-code') return model.id.startsWith('claude-');
       if (agentKind === 'codex') return model.id.startsWith('gpt-');
       return true;
-    }),
+    });
+  },
 }));
 
 const modelVisibilityRef = vi.hoisted(
@@ -647,6 +665,164 @@ describe('ModelSelector trigger variants', () => {
       'Max',
     );
   });
+
+  it.each([
+    {
+      agentKind: 'claude-code' as const,
+      vendorKey: 'cc' as const,
+      currentModel: {
+        id: 'claude-opus-4-8',
+        displayName: 'Opus 4.8',
+        contextWindow: 200000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+        supportsFastMode: false,
+      },
+      seedEfforts: ['low', 'medium', 'high'],
+      seedDefaultEffort: 'low',
+      seedLabel: 'Low',
+      glmEfforts: ['high', 'max'],
+    },
+    {
+      agentKind: 'codex' as const,
+      vendorKey: 'codex' as const,
+      currentModel: {
+        id: 'gpt-5.5',
+        displayName: 'GPT-5.5',
+        contextWindow: 400000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+        supportsFastMode: false,
+      },
+      seedEfforts: ['minimal', 'low', 'medium', 'high'],
+      seedDefaultEffort: 'minimal',
+      seedLabel: 'Minimal',
+      glmEfforts: ['minimal', 'high', 'max'],
+    },
+  ])(
+    'renders the corrected XD effort defaults without Fast markers for $agentKind',
+    ({ agentKind, vendorKey, currentModel, seedEfforts, seedDefaultEffort, seedLabel, glmEfforts }) => {
+      const targetModels: VisibleModelFixture[] = [
+        {
+          id: 'bytedance-seed/seed-2.1-pro',
+          displayName: 'Seed 2.1 Pro',
+          contextWindow: 256000,
+          efforts: seedEfforts,
+          defaultEffort: seedDefaultEffort,
+          supportsFastMode: false,
+        },
+        {
+          id: 'moonshotai/kimi-k3',
+          displayName: 'Kimi K3',
+          contextWindow: 1000000,
+          efforts: ['low', 'high', 'max'],
+          defaultEffort: 'max',
+          supportsFastMode: false,
+        },
+        {
+          id: 'qwen/qwen3.8-max-preview',
+          displayName: 'Qwen 3.8 Max Preview',
+          contextWindow: 983616,
+          efforts: ['low', 'high', 'xhigh'],
+          defaultEffort: 'xhigh',
+          supportsFastMode: false,
+        },
+        {
+          id: 'z-ai/glm-5.2',
+          displayName: 'GLM-5.2',
+          contextWindow: 1000000,
+          efforts: glmEfforts,
+          defaultEffort: 'max',
+          supportsFastMode: false,
+        },
+        {
+          id: 'deepseek/deepseek-v4-pro',
+          displayName: 'DeepSeek V4 Pro',
+          contextWindow: 1048576,
+          efforts: ['high', 'max'],
+          defaultEffort: 'high',
+          supportsFastMode: false,
+        },
+        {
+          id: 'deepseek/deepseek-v4-flash',
+          displayName: 'DeepSeek V4 Flash',
+          contextWindow: 1048576,
+          efforts: ['high', 'max'],
+          defaultEffort: 'high',
+          supportsFastMode: false,
+        },
+      ];
+      const originalCapabilities = agentCapabilitiesRef.capabilities;
+      visibleModelsRef.models = [currentModel, ...targetModels];
+      agentCapabilitiesRef.capabilities = {
+        availableModels: visibleModelsRef.models,
+        effortLevels: [
+          { id: 'minimal', displayName: 'Minimal' },
+          { id: 'low', displayName: 'Low' },
+          { id: 'medium', displayName: 'Medium' },
+          { id: 'high', displayName: 'High' },
+          { id: 'xhigh', displayName: 'X-High' },
+          { id: 'max', displayName: 'Max' },
+        ],
+        hasFastMode: true,
+      };
+      providersRef.providers = [
+        {
+          id: 'xd',
+          name: 'Cindy',
+          connected: true,
+          agents: [agentKind],
+          routing: { [agentKind]: {} },
+          models: {
+            [agentKind]: visibleModelsRef.models.map((model) => ({
+              ...model,
+              name: model.displayName,
+            })),
+          },
+        },
+      ];
+      const modelMemory = {
+        getEffort: vi.fn(),
+        setEffort: vi.fn(),
+        // Even a stale persisted Fast=true must not render when the model capability is false.
+        getFast: vi.fn(() => true),
+        setFast: vi.fn(),
+      };
+
+      try {
+        render(
+          React.createElement(ModelSelectorContent, {
+            modelId: currentModel.id,
+            effort: 'high',
+            fastMode: false,
+            onModelChange: vi.fn(),
+            onEffortChange: vi.fn(),
+            onFastModeChange: vi.fn(),
+            vendorKey,
+            currentProviderId: 'xd',
+            onProviderChange: vi.fn(),
+            modelMemory,
+          }),
+        );
+
+        expect(screen.getByRole('option', { name: /Seed 2\.1 Pro/ }).textContent).toContain(
+          seedLabel,
+        );
+        expect(screen.getByRole('option', { name: /Kimi K3/ }).textContent).toContain('Max');
+        expect(screen.getByRole('option', { name: /Qwen 3\.8 Max Preview/ }).textContent).toContain(
+          '超高',
+        );
+        expect(screen.getByRole('option', { name: /GLM-5\.2/ }).textContent).toContain('Max');
+        expect(screen.getByRole('option', { name: /DeepSeek V4 Pro/ }).textContent).toContain('High');
+        expect(screen.getByRole('option', { name: /DeepSeek V4 Flash/ }).textContent).toContain('High');
+        expect(screen.queryByLabelText('newChat.modelSelector.meta.fastBadge')).toBeNull();
+      } finally {
+        visibleModelsRef.models = null;
+        agentCapabilitiesRef.capabilities = originalCapabilities;
+        providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      }
+    },
+  );
 
   it('renders an active fallback option without model effort metadata', () => {
     render(

@@ -54,7 +54,6 @@ vi.mock('../../secrets/providerSecretStore', () => ({
 }));
 
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
-import { gatewayCurrencyForRegion } from '../../../shared/regionalMoney';
 import {
   __resetModelPricingCacheForTesting,
   clearGatewayModelPricing,
@@ -133,7 +132,7 @@ describe('gateway model pricing projection', () => {
         'claude-sonnet-4': {
           providerId: 'xd',
           modelId: 'claude-sonnet-4',
-          currency: gatewayCurrencyForRegion(CURRENT_CINDY_REGION),
+          currency: 'USD',
           source: 'gateway',
           approximate: false,
           inputPerMtok: 3,
@@ -144,7 +143,7 @@ describe('gateway model pricing projection', () => {
         'codex/gpt-5.5': {
           providerId: 'xd',
           modelId: 'codex/gpt-5.5',
-          currency: gatewayCurrencyForRegion(CURRENT_CINDY_REGION),
+          currency: 'USD',
           source: 'gateway',
           approximate: false,
           inputPerMtok: 0.3,
@@ -239,7 +238,7 @@ describe('pricing cache lifecycle', () => {
     await vi.waitFor(async () => {
       const raw = JSON.parse(await readFile(userDataPath('cache', 'model-pricing.json'), 'utf8'));
       expect(raw).toMatchObject({
-        version: 3,
+        version: 4,
         scope: expectedScope(),
         pricing,
       });
@@ -256,7 +255,7 @@ describe('pricing cache lifecycle', () => {
     await writeFile(
       userDataPath('cache', 'model-pricing.json'),
       JSON.stringify({
-        version: 3,
+        version: 4,
         scope: expectedScope(),
         fetchedAt: Date.now(),
         pricing: {
@@ -264,7 +263,7 @@ describe('pricing cache lifecycle', () => {
             secret: {
               providerId: 'xd',
               modelId: 'secret',
-              currency: gatewayCurrencyForRegion(CURRENT_CINDY_REGION),
+              currency: 'USD',
               source: 'gateway',
               approximate: false,
               inputPerMtok: 1,
@@ -311,7 +310,7 @@ describe('pricing cache lifecycle', () => {
     await writeFile(
       userDataPath('cache', 'model-pricing.json'),
       JSON.stringify({
-        version: 3,
+        version: 4,
         scope: expectedScope(),
         fetchedAt: Date.now(),
         pricing: {

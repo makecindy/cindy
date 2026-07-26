@@ -25,12 +25,10 @@ import { sessions } from './localDb/schema';
 import { getDbClient } from './localDb/client/current';
 import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
-import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   addRegionalMoney,
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalCurrencyForRegion,
-  regionalizeLegacyUsd,
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
 
@@ -82,29 +80,17 @@ export async function recordSessionTurnSpend(
   if (!sessionId) return;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return;
-  if (normalized.currency !== regionalCurrencyForRegion(CURRENT_CINDY_REGION)) {
-    log.warn('recordSessionTurnSpend rejected currency mismatch');
-    return;
-  }
   try {
     const db = getDbClient().drizzle;
-    const existing = await db
-      .select({ totalCostCurrency: sessions.totalCostCurrency })
-      .from(sessions)
-      .where(sql`${sessions.id} = ${sessionId}`)
-      .get();
-    if (
-      existing?.totalCostCurrency &&
-      existing.totalCostCurrency !== normalized.currency
-    ) {
-      log.warn('recordSessionTurnSpend rejected persisted currency mismatch');
-      return;
-    }
+    // 单币种累计列:币种守卫必须在同一条 UPDATE 里用 CASE 表达 —— 先查再写
+    // 有 TOCTOU 窗口,并发首写会把不同币种的裸数字加进同一列。冲突段原子地
+    // 弃掉(列保持原币种),下方回读后 warn 留痕。
+    const sameCurrency = sql`(${sessions.totalCostCurrency} IS NULL OR ${sessions.totalCostCurrency} = ${normalized.currency})`;
     await db.update(sessions)
       .set({
-        totalCostAmount: sql`${sessions.totalCostAmount} + ${normalized.amount}`,
-        totalCostCurrency: normalized.currency,
-        totalCostIsApproximate: sql`${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}`,
+        totalCostAmount: sql`CASE WHEN ${sameCurrency} THEN ${sessions.totalCostAmount} + ${normalized.amount} ELSE ${sessions.totalCostAmount} END`,
+        totalCostCurrency: sql`CASE WHEN ${sameCurrency} THEN ${normalized.currency} ELSE ${sessions.totalCostCurrency} END`,
+        totalCostIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}) ELSE ${sessions.totalCostIsApproximate} END`,
       })
       .where(sql`${sessions.id} = ${sessionId}`)
       .run();
@@ -118,10 +104,13 @@ export async function recordSessionTurnSpend(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    const legacy = regionalizeLegacyUsd(
-      row?.totalCostUsd ?? 0,
-      CURRENT_CINDY_REGION,
-    );
+    if (
+      row?.totalCostCurrency &&
+      row.totalCostCurrency !== normalized.currency
+    ) {
+      log.warn('recordSessionTurnSpend dropped a conflicting-currency segment');
+    }
+    const legacy = legacyUsdMoney(row?.totalCostUsd ?? 0);
     const current = normalizeRegionalMoney({
       amount: row?.totalCostAmount ?? 0,
       currency: row?.totalCostCurrency ?? normalized.currency,

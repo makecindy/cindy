@@ -82,6 +82,11 @@ export interface HookRunRequest {
    * 落侧边栏「对话」分组而非按目录聚成项目。仅 isNew 时有意义。
    */
   workspaceKind?: 'dialogue';
+  /**
+   * 本次派发的目录别名(内置「对话」= chat)—— runner 据此查本地的目录模型
+   * 来源偏好(workspaceProviderSourceStore)。缺省 = 老 server 未带 workspace。
+   */
+  workspaceAlias?: string;
   title: string | null;
   prompt: string;
   /** 本次派发携带的入站附件(base64); 无则省略。runner 解码落盘后喂给 agent。 */
@@ -699,6 +704,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         effort,
         permissionMode,
         ...(isChat ? { workspaceKind: 'dialogue' as const } : {}),
+        ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
         title: buildHookSessionTitle(
           providerName,
           payload.prompt,

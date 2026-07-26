@@ -8,9 +8,10 @@
  * 定稿: 这里曾私搭一套裸下拉, 露出 'claude-code' 原始 id、自己拼一遍可选模型
  * 清单、effort 直接显示未经 i18n 的 low/medium/high):
  *   - agent   -> VendorSegmentedSwitcher(品牌分段 pill, 与首页新建对话同一个)
- *   - 模型    -> ModelSelector 的 field trigger(单栏 flat, 不开供应商分段 —— 偏好表
- *                没有 providerId 字段, 分段会造成「选 A 落 B」, 详见组件内注释);
- *                可选清单、骨折版区分、effort 档位与显示名全部由它内部给出
+ *   - 模型    -> ModelSelector 的 field trigger, **composer 同款全功能形态**(供应商
+ *                分段/订阅来源/推理强度全开; 2026-07 用户定稿基准: 全软件一个模型
+ *                选择面板, 处处同行为, 差异只有样式)。来源落本地
+ *                workspaceProviderSourceStore, model/effort 照旧走 server prefs
  *   - 权限    -> PermissionSelector 的 field trigger
  * 思考强度不再是独立控件 —— 它并进模型 trigger 显示成「模型名 · 档位」, 与
  * 隔壁 ImDefaultSettingsSection(IM 新会话默认)和会话输入框成一套。
@@ -48,10 +49,18 @@ import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import type { MakerVendor } from '@/lib/ccAgent.types';
+import {
+  getProviderModelEffort,
+  setProviderModelChoice,
+  setProviderModelEffort,
+  getProviderModelFast,
+  setProviderModelFast,
+} from '@/state/providerModelMemory';
 import type {
   HookPrefsPatch,
   HookPrefsView,
   HookWorkspacePrefs,
+  HookWorkspaceProviderSourceEntry,
   ProviderPrefsView,
   SlackHookView,
 } from '../../../shared/hookControlIpc';
@@ -59,6 +68,7 @@ import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import {
   AGENT_KINDS,
   HOOK_DEFAULT_PERMISSION_MODE,
+  isKnownAgent,
   patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
@@ -87,6 +97,10 @@ function toPrefsCaps(caps: AgentCapabilities | null): PrefsAgentCaps | null {
 export interface HookWorkspacePrefsState {
   /** 按别名查该目录偏好(无行返回全 null 缺省; multi-team 下按选中 team 过滤)。 */
   prefsFor: (alias: string) => HookWorkspacePrefs;
+  /** 该目录的模型来源偏好(纯本地; null = 未设置, 跟随默认路由)。 */
+  providerSourceFor: (alias: string) => string | null;
+  /** 写/清该目录的模型来源偏好(providerId = null 清除)。 */
+  applyProviderSource: (alias: string, providerId: string | null) => void;
   /** 是否可编辑(已连接 + 已绑定 + 快照可用)。 */
   editable: boolean;
   /** 写入在途的目录别名(该卡片下拉禁用)。 */
@@ -97,7 +111,12 @@ export interface HookWorkspacePrefsState {
   retry: (() => void) | null;
   /** 桌面新会话默认设置(解析「当前生效默认值」的数据源; 未就绪为 null)。 */
   imDefaults: ImDefaultsLike | null;
-  applyPatch: (workspace: string, patch: HookPrefsPatch) => void;
+  /** alsoProviderSource: 远端写成功后串联落本地来源(undefined = 不动来源)。 */
+  applyPatch: (
+    workspace: string,
+    patch: HookPrefsPatch,
+    alsoProviderSource?: string | null,
+  ) => void;
   /** (multi-team)可用绑定清单(未 displaced); 单绑定/老 server 时 ≤1 条。 */
   teams: Array<{ teamId: string; teamName: string | null }>;
   /** 当前偏好归属 team(teams 非空时必有值; 选中项失效自动回落首个)。 */
@@ -127,6 +146,10 @@ export function useHookWorkspacePrefs(
   const [loadError, setLoadError] = useState<'unavailable' | null>(null);
   const [pendingWs, setPendingWs] = useState<string | null>(null);
   const [imDefaults, setImDefaults] = useState<ImDefaultsLike | null>(null);
+  // 目录模型来源偏好(纯本地文件, 不经 WS): 全量条目一次拉取, 写后用返回值刷新。
+  const [providerSources, setProviderSources] = useState<HookWorkspaceProviderSourceEntry[]>([]);
+  // latest-wins 守卫(Copilot review): 快速连选/跨窗口广播时, 较慢的旧回复不得覆盖新状态。
+  const providerSourceRevisionRef = useRef(0);
   const telegramBindingId =
     provider === 'telegram' && hook?.telegram.binding?.state === 'confirmed'
       ? hook.telegram.binding.bindingId
@@ -228,11 +251,31 @@ export function useHookWorkspacePrefs(
         if (active) setImDefaults({ agentKind: state.agentKind, agents: state.agents });
       })
       .catch(() => {});
+    // 初次拉取同样受 latest-wins 守卫(Copilot review): 回复未归时若已收到其它
+    // 窗口的写入广播(revision 已前进), 旧快照不得回滚新状态。
+    const initialSourcesRevision = providerSourceRevisionRef.current;
+    void window.electronAPI.hookControl
+      .getWorkspaceProviderSources()
+      .then((res) => {
+        if (active && providerSourceRevisionRef.current === initialSourcesRevision) {
+          setProviderSources(res.entries);
+        }
+      })
+      .catch(() => {});
+    // 多窗口同步(codex review): 会话副窗也能开设置页, 其它窗口写入时以广播的
+    // 全量条目为准刷新(与 prefs.state 的 latest-wins 快照语义一致)。
+    const offProviderSources = window.electronAPI.hookControl.onWorkspaceProviderSourcesChanged(
+      (entries) => {
+        providerSourceRevisionRef.current += 1;
+        setProviderSources(entries);
+      },
+    );
     return () => {
       active = false;
       fetchRevisionRef.current += 1;
       mutationRevisionRef.current += 1;
       offPrefs();
+      offProviderSources();
     };
   }, [fetchPrefs, provider]);
 
@@ -291,8 +334,45 @@ export function useHookWorkspacePrefs(
     [activePrefsView, multiTeam, selectedTeamId],
   );
 
+  // 目录来源偏好: teamId 精确匹配优先、null 行兜底 —— 与 prefsFor 同语义。
+  const providerSourceFor = useCallback(
+    (alias: string): string | null => {
+      const teamId = multiTeam ? selectedTeamId : null;
+      const match = (want: string | null) =>
+        providerSources.find(
+          (e) => e.channel === provider && e.teamId === want && e.workspace === alias,
+        )?.providerId ?? null;
+      return match(teamId) ?? (teamId !== null ? match(null) : null);
+    },
+    [providerSources, provider, multiTeam, selectedTeamId],
+  );
+
+  const applyProviderSource = useCallback(
+    (alias: string, providerId: string | null) => {
+      const teamId = multiTeam ? selectedTeamId : null;
+      const revision = ++providerSourceRevisionRef.current;
+      void window.electronAPI.hookControl
+        .setWorkspaceProviderSource({ channel: provider, teamId, workspace: alias, providerId })
+        .then((res) => {
+          if (revision === providerSourceRevisionRef.current) setProviderSources(res.entries);
+        })
+        .catch((err: unknown) => {
+          if (revision !== providerSourceRevisionRef.current) return;
+          toast.error(
+            extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'),
+          );
+        });
+    },
+    [provider, multiTeam, selectedTeamId, t],
+  );
+
   const applyPatch = useCallback(
-    (workspace: string, patch: HookPrefsPatch) => {
+    // alsoProviderSource(可选): 远端 model/effort 写**成功后**再落本地来源 ——
+    // 两个持久面串联而非并行(Greptile/codex review: 并行 fire-and-forget 会在
+    // 一半失败时留下「新来源配旧模型」的分裂态)。顺序选「先远端后本地」:远端
+    // 失败 → 整体失败, 来源不动, 状态与操作前一致;本地失败(概率远小)→ 旧来源
+    // 配新模型, 派发端 effectiveSourceIdForModel 收窄兜底, 行为等于改前语义。
+    (workspace: string, patch: HookPrefsPatch, alsoProviderSource?: string | null) => {
       // A server push, binding change, retry, or newer mutation must win over
       // this response. Otherwise a delayed set reply can roll the UI back to
       // an older provider snapshot and clear another mutation's pending state.
@@ -309,6 +389,13 @@ export function useHookWorkspacePrefs(
             );
       void request
         .then((res) => {
+          // 来源落地在快照守卫**之前**(codex review): invoke 成功 = 远端已确认
+          // 本次 (model, effort) 写入 —— 这一事实不因「更新的快照先到」而失效;
+          // 守卫只管下方 UI 快照是否回填,若来源也被守卫跳过(prefs 回执经广播
+          // 先到的正常时序), 会留下「新模型 + 旧来源」的持久分裂。
+          if (alsoProviderSource !== undefined) {
+            applyProviderSource(workspace, alsoProviderSource);
+          }
           if (revision !== fetchRevisionRef.current) return;
           const nextPrefs: HookPrefsView | ProviderPrefsView = res.prefs;
           if (
@@ -335,7 +422,7 @@ export function useHookWorkspacePrefs(
           if (mutationRevision === mutationRevisionRef.current) setPendingWs(null);
         });
     },
-    [fetchPrefs, t, multiTeam, provider, selectedTeamId],
+    [fetchPrefs, t, multiTeam, provider, selectedTeamId, applyProviderSource],
   );
 
   const bound = providerBindingConfirmed && activePrefsView?.bound === true;
@@ -354,6 +441,8 @@ export function useHookWorkspacePrefs(
 
   return {
     prefsFor,
+    providerSourceFor,
+    applyProviderSource,
     editable: connected && bound && loadError === null,
     pendingWs,
     hint,
@@ -471,23 +560,13 @@ export function WorkspacePrefsEditor({
           }}
         />
       </PrefsField>
-      {/* 模型 + 思考强度同一个控件: trigger 显示「模型名 · 档位」, 展开后行内改档。
-
-          **刻意不开供应商分段**(不传 currentProviderId / onProviderChange), 即单栏
-          flat 列表 —— 这是不做「兑现不了的承诺」, 不是偷懒:
-          IM hook 的偏好表(server 侧)只有 model id 字段, **没有 providerId**。开分段
-          会按 (供应商, 模型) 列出多行, 但选完只能落一个 model id, 来源仍由派发侧按
-          nativeDefaultSourceId 解析 —— claude-code 一律优先 'xd'(见
-          model-providers/registry.ts:84)。结果就是用户点「订阅版 Opus 5」, 当场被
-          重映射成「Cindy AI 的 Opus 5」, 订阅额度根本用不上却以为选中了
-          (2026-07 用户实测: 选 A 落 B)。列多行让人以为能选、选完静默改掉, 比列表短
-          恶劣得多。
-          等偏好表支持 providerId 后再开分段, 届时同步去掉本段说明。
-
-          同理不传 modelMemory: flat 行没有 providerId 上下文, ModelSelector 的
-          canConfigure 对非选中行要求 editingProviderId 非空, 传了也是死代码。
-          非选中行看不到档位菜单 —— 先点中模型再 hover 改档, 与改造前「改当前生效
-          模型的档位」功能等价。 */}
+      {/* 模型 + 思考强度同一个控件, **composer 同款全功能标准面板**(2026-07 用户
+          定稿基准: 全软件一个模型选择面板, 处处同行为, 差异只有样式):供应商分段、
+          订阅来源、推理强度全开。来源(providerId)是纯客户端维度, 落本地
+          workspaceProviderSourceStore; model/effort 照旧走 server prefs 通道
+          (Slack /model 卡展示不受影响)。派发侧按 (来源, 模型) 经
+          effectiveSourceIdForModel 收窄, 来源断开/不提供该模型时自动回落,
+          不会拼出不可能路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
         <ModelSelector
           modelId={eff.model.id ?? ''}
@@ -510,6 +589,40 @@ export function WorkspacePrefsEditor({
           // 既看不到自己存的是什么、也无从判断为何 bot 用的不是它。与本组件接管前
           // (PrefsSelect 的 modelLabel 回落裸 id)行为一致; 派发侧另有回落并记日志。
           unknownModelLabel={(id) => id}
+          // 非选中行 hover 配置(推理强度/Fast)与 composer 共用同一份模型级全局预设。
+          modelMemory={{
+            getEffort: getProviderModelEffort,
+            setEffort: setProviderModelEffort,
+            setChoice: setProviderModelChoice,
+            getFast: getProviderModelFast,
+            setFast: setProviderModelFast,
+          }}
+          currentProviderId={state.providerSourceFor(alias)}
+          // 分段行原子选择:model/effort 走远端 prefs, 成功后来源落本地(串联,
+          // 见 applyPatch 的 alsoProviderSource 注释)。effort 取该 (来源, 模型) 的
+          // 全局预设记忆(用户 hover 非选中行改过的档位, codex review;ModelSelector
+          // 的 onProviderChange 只回传 provider+model 两参, 记忆值需自取), 该模型
+          // 支持时进 patch, 否则维持 patchForModelChange 的模型默认校准。
+          onProviderChange={(providerId, modelId) => {
+            if (eff.agentKind.id === null) return;
+            const caps = toPrefsCaps(effAgentCaps);
+            if (modelId) {
+              const patch = patchForModelChange(eff.agentKind.id, modelId, prefs, caps);
+              const remembered =
+                providerId && isKnownAgent(eff.agentKind.id)
+                  ? getProviderModelEffort(eff.agentKind.id, providerId, modelId)
+                  : undefined;
+              if (
+                remembered &&
+                caps?.models.find((m) => m.id === modelId)?.efforts.includes(remembered)
+              ) {
+                patch.effort = remembered;
+              }
+              state.applyPatch(alias, patch, providerId);
+            } else {
+              state.applyProviderSource(alias, providerId);
+            }
+          }}
           onModelChange={applyModel}
           onEffortChange={(next) => {
             if (next !== prefs.effort) state.applyPatch(alias, { effort: next });

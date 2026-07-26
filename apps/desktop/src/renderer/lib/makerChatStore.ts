@@ -87,10 +87,9 @@ import {
 } from '@/lib/issueConfirmPayload';
 import { resolveStaleCodexSubscriptionValueEstimate } from '../../shared/codexSubscriptionValue';
 import { normalizeTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import {
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalizeLegacyUsd,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
 import type { PersistedSessionReferenceMetadata } from '../../shared/sessionReferenceMetadata';
@@ -3945,14 +3944,14 @@ function initGlobalListeners(): void {
     const turnMoney =
       normalizedTurnMoney ??
       (legacyTurnCostUsd !== undefined
-        ? regionalizeLegacyUsd(legacyTurnCostUsd, CURRENT_CINDY_REGION)
+        ? legacyUsdMoney(legacyTurnCostUsd)
         : undefined);
     if (!turnMoney || !(turnMoney.amount > 0)) return;
     const { sessionId, clientId } = p;
     const userTurnMoney =
       normalizeRegionalMoney(p.userTurnMoney) ??
       (typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
-        ? regionalizeLegacyUsd(p.userTurnCostUsd, CURRENT_CINDY_REGION)
+        ? legacyUsdMoney(p.userTurnCostUsd)
         : undefined);
     const userTurnCostUsd =
       typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
@@ -4074,10 +4073,7 @@ function initGlobalListeners(): void {
             (typeof p?.totalCostUsd === 'number' &&
             Number.isFinite(p.totalCostUsd) &&
             p.totalCostUsd >= 0
-              ? regionalizeLegacyUsd(
-                  p.totalCostUsd,
-                  CURRENT_CINDY_REGION,
-                )
+              ? legacyUsdMoney(p.totalCostUsd)
               : undefined);
           if (push.deviceId && p?.sessionId && totalMoney) {
             remoteProjectsStore.applyPatch(push.deviceId, p.sessionId, {
@@ -8590,7 +8586,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       m.role === 'assistant'
         ? normalizedTurnMoney ??
           (legacyTurnCostUsd !== undefined
-            ? regionalizeLegacyUsd(legacyTurnCostUsd, CURRENT_CINDY_REGION)
+            ? legacyUsdMoney(legacyTurnCostUsd)
             : undefined)
         : undefined;
     return {
@@ -8623,10 +8619,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
               normalizeRegionalMoney(agentMeta.userTurnCost) ??
               (typeof agentMeta.userTurnCostUsd === 'number' &&
               agentMeta.userTurnCostUsd > 0
-                ? regionalizeLegacyUsd(
-                    agentMeta.userTurnCostUsd,
-                    CURRENT_CINDY_REGION,
-                  )
+                ? legacyUsdMoney(agentMeta.userTurnCostUsd)
                 : undefined);
             return {
               turnMoney: persistedTurnMoney,
@@ -8742,7 +8735,7 @@ function projectLegacyUserTurnCosts(
       (typeof meta.userTurnCostUsd !== 'number' || !(meta.userTurnCostUsd > 0))
     ) {
       projected.set(message.clientId, {
-        userTurnMoney: regionalizeLegacyUsd(costUsd, CURRENT_CINDY_REGION),
+        userTurnMoney: legacyUsdMoney(costUsd),
         userTurnCostUsd: costUsd,
         userTurnCostIsEstimate: hasEstimatedValue,
       });

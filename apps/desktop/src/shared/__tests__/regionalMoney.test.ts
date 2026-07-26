@@ -4,62 +4,68 @@ import {
   addCompatibleRegionalMoney,
   addRegionalMoney,
   asValueEstimateMoney,
+  DEFAULT_USAGE_CURRENCY,
+  gatewayCurrency,
   gatewayMoney,
-  regionalizeLegacyUsd,
-  regionalizeUsd,
+  legacyUsdMoney,
+  usdMoney,
+  type RegionalMoney,
 } from '../regionalMoney.js';
 
+const cnyActual = (amount: number): RegionalMoney => ({
+  amount,
+  currency: 'CNY',
+  approximate: false,
+  kind: 'actual-cost',
+});
+
 describe('regional money', () => {
-  it('keeps Gateway values exact and assigns the build-region currency', () => {
-    expect(gatewayMoney(3, 'cn')).toEqual({
-      amount: 3,
-      currency: 'CNY',
-      approximate: false,
-      kind: 'actual-cost',
-    });
-    expect(gatewayMoney(3, 'global')).toEqual({
+  it('keeps Gateway values exact in the gateway-native USD unit by default', () => {
+    expect(gatewayMoney(3)).toEqual({
       amount: 3,
       currency: 'USD',
       approximate: false,
       kind: 'actual-cost',
     });
+    expect(DEFAULT_USAGE_CURRENCY).toBe('USD');
   });
 
-  it('converts non-Gateway USD to CN at the fixed 6.7 rate and marks it approximate', () => {
-    expect(regionalizeUsd(3, 'cn', 'fixed-fx')).toEqual({
-      amount: 20.1,
+  it('honors a server-declared gateway currency instead of any build-region guess', () => {
+    expect(gatewayCurrency()).toBe('USD');
+    expect(gatewayCurrency(null)).toBe('USD');
+    expect(gatewayCurrency('CNY')).toBe('CNY');
+    expect(gatewayMoney(3, 'actual-cost', 'CNY')).toEqual({
+      amount: 3,
       currency: 'CNY',
-      approximate: true,
+      approximate: false,
       kind: 'actual-cost',
-      estimateReasons: ['fixed-fx'],
+    });
+  });
+
+  it('never converts USD amounts — the unit travels with the data', () => {
+    expect(usdMoney(3)).toEqual({
+      amount: 3,
+      currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
+    });
+    expect(legacyUsdMoney(1)).toEqual({
+      amount: 1,
+      currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
     });
   });
 
   it('keeps actual zero exact while preserving value-estimate semantics', () => {
-    expect(regionalizeLegacyUsd(0, 'cn')).toEqual({
+    expect(legacyUsdMoney(0)).toEqual({
       amount: 0,
-      currency: 'CNY',
-      approximate: false,
-      kind: 'actual-cost',
-    });
-    expect(regionalizeUsd(0, 'cn', 'subscription-value', 'value-estimate')).toEqual({
-      amount: 0,
-      currency: 'CNY',
-      approximate: true,
-      kind: 'value-estimate',
-      estimateReasons: ['subscription-value'],
-    });
-  });
-
-  it('keeps global USD facts exact but marks subscription values as estimates', () => {
-    expect(regionalizeUsd(3, 'global', 'reference-price')).toEqual({
-      amount: 3,
       currency: 'USD',
       approximate: false,
       kind: 'actual-cost',
     });
-    expect(regionalizeUsd(3, 'global', 'subscription-value', 'value-estimate')).toEqual({
-      amount: 3,
+    expect(usdMoney(0, 'value-estimate', 'subscription-value')).toEqual({
+      amount: 0,
       currency: 'USD',
       approximate: true,
       kind: 'value-estimate',
@@ -67,65 +73,68 @@ describe('regional money', () => {
     });
   });
 
-  it('preserves legacy USD as a fact and only marks CN conversion approximate', () => {
-    expect(regionalizeLegacyUsd(1, 'global')).toMatchObject({
-      amount: 1,
+  it('marks subscription values as estimates and records the reason chain', () => {
+    expect(usdMoney(3, 'value-estimate', 'legacy-usd')).toEqual({
+      amount: 3,
       currency: 'USD',
-      approximate: false,
-    });
-    expect(regionalizeLegacyUsd(1, 'cn')).toMatchObject({
-      amount: 6.7,
-      currency: 'CNY',
       approximate: true,
-      estimateReasons: expect.arrayContaining(['fixed-fx', 'legacy-usd']),
+      kind: 'value-estimate',
+      estimateReasons: ['legacy-usd', 'subscription-value'],
     });
   });
 
   it('propagates approximation and reasons while adding same-currency values', () => {
-    const total = addRegionalMoney([gatewayMoney(3, 'cn'), regionalizeLegacyUsd(1, 'cn')]);
+    const total = addRegionalMoney([
+      gatewayMoney(3),
+      usdMoney(1, 'value-estimate', 'legacy-usd'),
+    ]);
     expect(total).toMatchObject({
-      amount: 9.7,
-      currency: 'CNY',
+      amount: 4,
+      currency: 'USD',
       approximate: true,
       kind: 'actual-cost',
-      estimateReasons: expect.arrayContaining(['fixed-fx', 'legacy-usd']),
+      estimateReasons: expect.arrayContaining(['legacy-usd', 'subscription-value']),
     });
   });
 
   it('rejects mixed currencies instead of silently combining them', () => {
-    expect(() => addRegionalMoney([gatewayMoney(1, 'cn'), gatewayMoney(1, 'global')])).toThrow(
+    expect(() => addRegionalMoney([cnyActual(1), gatewayMoney(1)])).toThrow(
       /different currencies/,
     );
   });
 
   it('keeps actual cost when an incompatible estimate is present on read', () => {
-    const total = addCompatibleRegionalMoney(
-      [
-        gatewayMoney(3, 'cn'),
-        regionalizeUsd(2, 'global', 'subscription-value', 'value-estimate'),
-      ],
-      'USD',
-    );
-
-    expect(total).toEqual(gatewayMoney(3, 'cn'));
-  });
-
-  it('prefers the current regional currency for mixed historical actual costs', () => {
-    const total = addCompatibleRegionalMoney(
-      [gatewayMoney(3, 'cn'), gatewayMoney(2, 'global')],
-      'USD',
-    );
-
-    expect(total).toEqual(gatewayMoney(2, 'global'));
-  });
-
-  it('marks subscription value without changing amount or currency', () => {
-    expect(asValueEstimateMoney(regionalizeLegacyUsd(1, 'cn'))).toEqual({
-      amount: 6.7,
+    const staleCnyEstimate: RegionalMoney = {
+      amount: 2,
       currency: 'CNY',
       approximate: true,
       kind: 'value-estimate',
-      estimateReasons: ['fixed-fx', 'legacy-usd', 'subscription-value'],
+      estimateReasons: ['subscription-value'],
+    };
+    const total = addCompatibleRegionalMoney([gatewayMoney(3), staleCnyEstimate]);
+
+    expect(total).toEqual(gatewayMoney(3));
+  });
+
+  it('prefers the default usage currency for mixed historical actual costs', () => {
+    const total = addCompatibleRegionalMoney([cnyActual(3), gatewayMoney(2)]);
+
+    expect(total).toEqual(gatewayMoney(2));
+  });
+
+  it('falls back to the first actual currency when nothing matches the preference', () => {
+    const total = addCompatibleRegionalMoney([cnyActual(3), cnyActual(2)]);
+
+    expect(total).toEqual(cnyActual(5));
+  });
+
+  it('marks subscription value without changing amount or currency', () => {
+    expect(asValueEstimateMoney(legacyUsdMoney(1))).toEqual({
+      amount: 1,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['subscription-value'],
     });
   });
 });

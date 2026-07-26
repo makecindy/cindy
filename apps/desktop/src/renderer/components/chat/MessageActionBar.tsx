@@ -54,9 +54,8 @@ import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
 import { formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import {
-  regionalizeLegacyUsd,
+  legacyUsdMoney,
   type RegionalMoney,
 } from '../../../shared/regionalMoney';
 
@@ -309,12 +308,12 @@ export function MessageActionBar({
   const effectiveTurnMoney =
     turnMoney ??
     (typeof turnCostUsd === 'number' && turnCostUsd > 0
-      ? regionalizeLegacyUsd(turnCostUsd, CURRENT_CINDY_REGION)
+      ? legacyUsdMoney(turnCostUsd)
       : undefined);
   const effectiveUserTurnMoney =
     userTurnMoney ??
     (typeof userTurnCostUsd === 'number' && userTurnCostUsd > 0
-      ? regionalizeLegacyUsd(userTurnCostUsd, CURRENT_CINDY_REGION)
+      ? legacyUsdMoney(userTurnCostUsd)
       : undefined);
   const displayedMoney = effectiveUserTurnMoney ?? effectiveTurnMoney;
   const displayedCostIsEstimate = effectiveUserTurnMoney

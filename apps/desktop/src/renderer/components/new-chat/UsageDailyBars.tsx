@@ -20,9 +20,8 @@ import {
 } from '@/lib/usageFormat';
 import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
 import { usageModelKey, usageRankColor, usageRankOf } from './usagePalette';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import {
-  regionalCurrencyForRegion,
+  DEFAULT_USAGE_CURRENCY,
   type MoneyCurrency,
   type MoneyKind,
   type RegionalMoney,
@@ -77,10 +76,25 @@ export function UsageDailyBars({
   todayKey: string;
 }): React.JSX.Element {
   const { t } = useTranslation();
+  // chart currency 取窗口内**最近一个有金额的日子**的币种:取首行会在币种切换
+  // 过渡期选中旧币种(或 token-only 日合成的零额 USD),把当前币种的柱子全部
+  // 归零;金额为 0 的行不参与选取。
+  const latestPositiveCurrency = (
+    rows: ReadonlyArray<{ day: string; money: RegionalMoney }>,
+  ): MoneyCurrency | undefined => {
+    let best: { day: string; currency: MoneyCurrency } | undefined;
+    for (const row of rows) {
+      if (row.money.amount <= 0) continue;
+      if (!best || row.day > best.day) {
+        best = { day: row.day, currency: row.money.currency };
+      }
+    }
+    return best?.currency;
+  };
   const currency: MoneyCurrency =
-    days[0]?.money.currency ??
-    modelDaily[0]?.money.currency ??
-    regionalCurrencyForRegion(CURRENT_CINDY_REGION);
+    latestPositiveCurrency(days) ??
+    latestPositiveCurrency(modelDaily) ??
+    DEFAULT_USAGE_CURRENCY;
   const money = (
     amount: number,
     approximate: boolean,
@@ -102,6 +116,10 @@ export function UsageDailyBars({
 
   const bars = useMemo(() => {
     const byDay = new Map(days.map((d) => [d.day, d]));
+    // 图表是单币种口径:与 chart currency 不同币种的金额不参与求和(裸数字
+    // 跨币种相加会产生错标总额),该行 token 仍照常进 tooltip 明细。
+    const amountIn = (m: RegionalMoney): number =>
+      m.currency === currency ? m.amount : 0;
     // 按天聚出分段: 同 rank (含"其它"档) 合并金额与 token。
     // 无价格的 codex 行 (amountUsd=0) 也收进来 — 画不了分段 (无金额占比),
     // 但 tooltip 里要按 token 露出, 不能让它在明细里消失。
@@ -116,20 +134,18 @@ export function UsageDailyBars({
       }
       const seg = daySegs.get(rank);
       if (seg) {
-        seg.amount += row.money.amount;
-        seg.apiAmount += row.apiMoney.amount;
-        seg.subscriptionEstimateAmount +=
-          row.subscriptionEstimateMoney.amount;
+        seg.amount += amountIn(row.money);
+        seg.apiAmount += amountIn(row.apiMoney);
+        seg.subscriptionEstimateAmount += amountIn(row.subscriptionEstimateMoney);
         seg.tokens += row.tokens;
         if (rank < colorOrder.length) seg.label = row.model;
       } else {
         daySegs.set(rank, {
           rank,
           label: rank < colorOrder.length ? row.model : t('usageDashboard.othersLegend'),
-          amount: row.money.amount,
-          apiAmount: row.apiMoney.amount,
-          subscriptionEstimateAmount:
-            row.subscriptionEstimateMoney.amount,
+          amount: amountIn(row.money),
+          apiAmount: amountIn(row.apiMoney),
+          subscriptionEstimateAmount: amountIn(row.subscriptionEstimateMoney),
           tokens: row.tokens,
         });
       }
@@ -140,7 +156,7 @@ export function UsageDailyBars({
       const day = shiftDayKeyLocal(todayKey, -i);
       const row = byDay.get(day);
       const segments = [...(segsByDay.get(day)?.values() ?? [])].sort((a, b) => a.rank - b.rank);
-      const actualAmount = row?.money.amount ?? 0;
+      const actualAmount = row ? amountIn(row.money) : 0;
       const segSum = segments.reduce((a, s) => a + s.amount, 0);
       const subscriptionEstimateSum = segments.reduce(
         (a, s) => a + s.subscriptionEstimateAmount,

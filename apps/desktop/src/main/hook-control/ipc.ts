@@ -28,6 +28,10 @@ import { getModelVisibilityOverride } from '../maker-host/model-visibility-mirro
 import { WorktreeManager } from '../worktree/index.js';
 import { prepareHandoffWorktree } from '../maker-ipc/handoffWorktree.js';
 import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import {
+  listWorkspaceProviderSources,
+  setWorkspaceProviderSource,
+} from './workspaceProviderSourceStore.js';
 import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
@@ -41,6 +45,8 @@ import { ownerScopedUserDataPath } from '../appSessionState.js';
 import {
   HOOK_CONTROL_EVENT,
   HOOK_CONTROL_INVOKE,
+  HOOK_WORKSPACE_ALIAS_RE,
+  HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES,
   type HookPrefsPatch,
   type HookPrefsView,
   type ProviderPrefsView,
@@ -693,6 +699,74 @@ export function registerHookControlIpc(): void {
       throwHookPrefsError(err);
     }
   });
+
+  // 工作目录模型来源偏好: 纯本地文件, 不经 WS(来源是纯客户端维度, server 零感知)。
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.WORKSPACE_PROVIDER_SOURCE_GET,
+    async () => ({ entries: listWorkspaceProviderSources() }),
+  );
+
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.WORKSPACE_PROVIDER_SOURCE_SET,
+    async (_e, payload) => {
+      const p = requireObject(payload);
+      const channel = requireString(p.channel, 'channel');
+      if (channel !== 'slack' && channel !== 'telegram') {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack or telegram');
+      }
+      // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
+      // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。
+      const workspace = requireString(p.workspace, 'workspace');
+      if (!HOOK_WORKSPACE_ALIAS_RE.test(workspace)) {
+        throwIpcError('INVALID_PARAMS', 'workspace must match the alias format');
+      }
+      const teamId =
+        p.teamId === undefined || p.teamId === null ? null : requireString(p.teamId, 'teamId');
+      if (teamId !== null && teamId.length > 64) {
+        throwIpcError('INVALID_PARAMS', 'teamId too long');
+      }
+      const providerId =
+        p.providerId === undefined || p.providerId === null
+          ? null
+          : requireString(p.providerId, 'providerId');
+      if (providerId !== null && providerId.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'providerId too long');
+      }
+      // 条目总量上限(codex review): 键合法性校验挡不住海量唯一 teamId 的无限
+      // 追加 —— 新增(非替换/删除)且已达上限时拒绝。按精确键判新增(不能用
+      // getWorkspaceProviderSource, 它的 teamId null 兜底会把新 team 误判为已存在)。
+      const existing = listWorkspaceProviderSources();
+      const isReplace = existing.some(
+        (e) => e.channel === channel && e.teamId === teamId && e.workspace === workspace,
+      );
+      if (
+        providerId !== null &&
+        !isReplace &&
+        existing.length >= HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES
+      ) {
+        throwIpcError('INVALID_PARAMS', 'too many workspace provider source entries');
+      }
+      // fs 异常在 IPC 边界翻译(codex review): 只读盘/满盘/rename 失败的原始
+      // 异常含 owner-scoped 绝对路径, 不得未脱敏穿透给 renderer;统一走
+      // throwIpcError 协议给稳定错误码, 细节留 main 日志。
+      let entries: ReturnType<typeof setWorkspaceProviderSource>;
+      try {
+        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId);
+      } catch (err) {
+        log.warn(
+          `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throwIpcError('INTERNAL', 'failed to persist workspace provider source');
+      }
+      // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && isAppContentWindow(w)) {
+          w.webContents.send(HOOK_CONTROL_EVENT.WORKSPACE_PROVIDER_SOURCE_CHANGED, entries);
+        }
+      }
+      return { entries };
+    },
+  );
 
   // Account teardown is orchestrated before its DB closes. This listener is a
   // fail-closed backstop for signed-out/local sessions; activation waits for

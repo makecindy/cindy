@@ -10,10 +10,9 @@
  */
 
 import { useEffect, useState } from 'react';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import {
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalizeLegacyUsd,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
 
@@ -25,7 +24,7 @@ export function useSessionSpend(
   const initial =
     normalizeRegionalMoney(initialMoney) ??
     (typeof initialCostUsd === 'number'
-      ? regionalizeLegacyUsd(initialCostUsd, CURRENT_CINDY_REGION)
+      ? legacyUsdMoney(initialCostUsd)
       : null);
   const [money, setMoney] = useState<RegionalMoney | null>(
     initial,
@@ -36,7 +35,7 @@ export function useSessionSpend(
     setMoney(
       normalizeRegionalMoney(initialMoney) ??
         (typeof initialCostUsd === 'number'
-          ? regionalizeLegacyUsd(initialCostUsd, CURRENT_CINDY_REGION)
+          ? legacyUsdMoney(initialCostUsd)
           : null),
     );
   }, [sessionId, initialMoney, initialCostUsd]);
@@ -48,10 +47,7 @@ export function useSessionSpend(
         setMoney(
           normalizeRegionalMoney(res.totalMoney) ??
             (typeof res.totalCostUsd === 'number'
-              ? regionalizeLegacyUsd(
-                  res.totalCostUsd,
-                  CURRENT_CINDY_REGION,
-                )
+              ? legacyUsdMoney(res.totalCostUsd)
               : null),
         );
       }

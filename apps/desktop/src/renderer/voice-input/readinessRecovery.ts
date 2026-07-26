@@ -5,13 +5,17 @@ export type VoiceInputReadinessRecovery = {
     | 'voiceInputOverlay.cindyServiceUnavailable'
     | 'settings.voiceInput.serviceSource.credentialError.codexMissing'
     | 'settings.voiceInput.serviceSource.credentialError.elevenlabsMissing'
-    | 'settings.voiceInput.serviceSource.credentialError.gatewayMissing';
+    | 'settings.voiceInput.serviceSource.credentialError.gatewayMissing'
+    | 'settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing'
+    | 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing'
+    | 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported';
   settingsTab: VoiceInputRecoverySettingsTab;
 };
 
 type VoiceInputReadinessLike = {
   auth: 'api-key' | 'codex';
   provider: string;
+  failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
 };
 
 /**
@@ -26,6 +30,24 @@ export function resolveVoiceInputReadinessRecovery(
   if (serviceMode === 'cindy') {
     return {
       messageKey: 'voiceInputOverlay.cindyServiceUnavailable',
+      settingsTab: 'voice-input',
+    };
+  }
+  if (readiness.failureReason === 'custom-asr-config-missing') {
+    return {
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.customAsrConfigMissing',
+      settingsTab: 'voice-input',
+    };
+  }
+  if (readiness.failureReason === 'custom-asr-key-missing') {
+    return {
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.customAsrKeyMissing',
+      settingsTab: 'voice-input',
+    };
+  }
+  if (readiness.failureReason === 'codex-realtime-unsupported') {
+    return {
+      messageKey: 'settings.voiceInput.serviceSource.credentialError.codexRealtimeUnsupported',
       settingsTab: 'voice-input',
     };
   }

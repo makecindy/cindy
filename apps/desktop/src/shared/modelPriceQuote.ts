@@ -1,13 +1,11 @@
-import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
-
 import { getClaudeSubscriptionValueFallbackPrice } from './claudeSubscriptionValue.js';
 import { CODEX_SUBSCRIPTION_VALUE_PRICING } from './codexSubscriptionValue.js';
 import type { ModelAccessGatewayModel } from './modelAccess.js';
 import {
-  gatewayCurrencyForRegion,
-  USD_TO_CNY_FIXED_RATE,
+  GATEWAY_NATIVE_CURRENCY,
   type ModelPriceQuote,
   type ModelPricingCatalog,
+  type MoneyCurrency,
 } from './regionalMoney.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
 
@@ -51,9 +49,36 @@ function applyCodexBudgetDiscount(quote: ModelPriceQuote): ModelPriceQuote {
   };
 }
 
+function declaredCurrency(
+  model: ModelAccessGatewayModel,
+): MoneyCurrency | undefined {
+  return model.currency === 'USD' || model.currency === 'CNY'
+    ? model.currency
+    : undefined;
+}
+
+/**
+ * 目录级币种:本地记账账本(daily / session / schedule)都是单币种,逐条目
+ * 混用币种会造成同端多币种金额被聚合层丢弃。规则:
+ *   - 未声明条目恒为 Gateway 原生 USD(契约缺省),绝不被其它条目的声明改标;
+ *   - 只有当**每个**条目都显式声明同一非 USD 币种时,目录才整体切换;
+ *   - 与目录币种冲突的声明条目由 gatewayPricingCatalog 丢弃报价(退回 SDK
+ *     实报 USD 兜底),而不是改标币种——错标单位正是本模块要杜绝的事。
+ */
+export function resolveGatewayCatalogCurrency(
+  models: readonly ModelAccessGatewayModel[],
+): MoneyCurrency {
+  if (models.length === 0) return GATEWAY_NATIVE_CURRENCY;
+  const first = declaredCurrency(models[0]);
+  if (!first || first === GATEWAY_NATIVE_CURRENCY) return GATEWAY_NATIVE_CURRENCY;
+  return models.every((model) => declaredCurrency(model) === first)
+    ? first
+    : GATEWAY_NATIVE_CURRENCY;
+}
+
 export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
-  region: CindyRegion,
+  currency: MoneyCurrency = GATEWAY_NATIVE_CURRENCY,
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -73,10 +98,11 @@ export function gatewayModelPriceQuote(
   }
   // quote 是用量估算用的标准价;costDiscount 只在 effectiveGatewayModelCost 侧应用到
   // cost,UI 展示价一致时取 cost(见 modelPriceFormat),不再并排展示标准价。
+  // 币种由 resolveGatewayCatalogCurrency 目录级统一解析后传入;不按构建区域改标。
   return applyCodexBudgetDiscount({
     providerId: 'xd',
     modelId,
-    currency: gatewayCurrencyForRegion(region),
+    currency,
     source: 'gateway',
     approximate: false,
     inputPerMtok,
@@ -88,11 +114,15 @@ export function gatewayModelPriceQuote(
 
 export function gatewayPricingCatalog(
   models: readonly ModelAccessGatewayModel[],
-  region: CindyRegion,
 ): ModelPricingCatalog {
+  const currency = resolveGatewayCatalogCurrency(models);
   const xd: Record<string, ModelPriceQuote> = {};
   for (const model of models) {
-    const quote = gatewayModelPriceQuote(model, region);
+    // 声明与目录币种冲突的条目不出报价:宁可让该模型的单轮费用退回 SDK
+    // 实报 USD 兜底,也不给它标一个和价格数值不匹配的单位。
+    const declared = declaredCurrency(model);
+    if (declared && declared !== currency) continue;
+    const quote = gatewayModelPriceQuote(model, currency);
     if (quote) xd[quote.modelId] = quote;
   }
   return Object.keys(xd).length > 0 ? { xd } : {};
@@ -189,28 +219,3 @@ export function subscriptionDirectPriceQuote(
   return undefined;
 }
 
-export function regionalizeModelPriceQuote(
-  quote: ModelPriceQuote,
-  region: CindyRegion,
-): ModelPriceQuote {
-  if (region === 'global' || quote.currency === 'CNY') return quote;
-  return {
-    ...quote,
-    currency: 'CNY',
-    approximate: true,
-    inputPerMtok: quote.inputPerMtok * USD_TO_CNY_FIXED_RATE,
-    outputPerMtok: quote.outputPerMtok * USD_TO_CNY_FIXED_RATE,
-    ...(quote.cacheReadPerMtok !== undefined
-      ? {
-          cacheReadPerMtok:
-            quote.cacheReadPerMtok * USD_TO_CNY_FIXED_RATE,
-        }
-      : {}),
-    ...(quote.cacheCreatePerMtok !== undefined
-      ? {
-          cacheCreatePerMtok:
-            quote.cacheCreatePerMtok * USD_TO_CNY_FIXED_RATE,
-        }
-      : {}),
-  };
-}

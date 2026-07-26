@@ -40,4 +40,19 @@ describe('safe storage Codex restart invariants', () => {
     expect(prepare).toBeLessThan(unlink);
     expect(unlink).toBeLessThan(finalize);
   });
+
+  it('gates generic store, read, and remove through the Renderer key allowlist', () => {
+    const src = source();
+    for (const [channel, nextChannel] of [
+      ["'safe-storage-store'", "'safe-storage-read'"],
+      ["'safe-storage-read'", "'safe-storage-remove'"],
+      ["'safe-storage-remove'", '// ── Auth IPC handlers'],
+    ] as const) {
+      const start = src.indexOf(channel);
+      const end = src.indexOf(nextChannel, start + channel.length);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      expect(src.slice(start, end)).toContain('isValidRendererKey(key)');
+    }
+  });
 });

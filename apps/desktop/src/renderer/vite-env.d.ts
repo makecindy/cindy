@@ -15,6 +15,8 @@ type AnalyticsSettingsPayload = import('../shared/analyticsSettings').AnalyticsS
 type RsbWindowCommand = import('../shared/rightSidebarWindow').RsbWindowCommand;
 type VoiceInputPowerStatePayload =
   import('../shared/voiceInputPowerIpc').VoiceInputPowerStatePayload;
+type VoiceInputConnectionTestResult =
+  import('../shared/voiceInputConnectionTest').VoiceInputConnectionTestResult;
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
@@ -183,6 +185,13 @@ type VoiceInputModelSelectionResultData = {
     serviceMode: VoiceInputServiceModeData;
     serviceModeConfigured: boolean;
     asrProvider: VoiceInputProviderKindData;
+    asrProviderChain: VoiceInputProviderKindData[];
+    asrProviderChainSource: 'default' | 'configured';
+    customAsr?: {
+      protocol: 'openai-realtime' | 'qwen-realtime';
+      websocketUrl: string;
+      model: string;
+    };
     refinerProvider: VoiceInputRefinerProviderKindData;
     refinerModel?: string;
     /** Effective refiner chain, head first; length 1 = no fallback (BYOK default). */
@@ -209,7 +218,9 @@ type VoiceInputModelSelectionResultData = {
     auth: 'api-key' | 'codex';
     settingsTab: 'api-keys' | 'connections' | 'providers';
     error?: string;
+    failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
   };
+  customAsrApiKeyConfigured: boolean;
 };
 type LocalThemeOpenDirResult = import('../shared/local-themes').LocalThemeOpenDirResult;
 type LocalThemesResult = import('../shared/local-themes').LocalThemesResult;
@@ -1261,9 +1272,12 @@ interface ElectronAPI {
     openInputMonitoringSettings: () => Promise<VoiceInputGlobalResult>;
     muteSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
     restoreSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
+    testConnection: () => Promise<VoiceInputConnectionTestResult>;
     getReadiness: () => Promise<{
       ok: boolean;
+      serviceMode: VoiceInputServiceModeData;
       provider:
+        | 'custom-realtime-asr'
         | 'elevenlabs-scribe-realtime'
         | 'openai-realtime-whisper'
         | 'litellm-gpt-realtime-whisper'
@@ -1275,11 +1289,14 @@ interface ElectronAPI {
       settingsTab: 'api-keys' | 'connections' | 'providers';
       error?: string;
       authErrorReason?: string;
+      failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
     }>;
     getReadinessCached: () =>
       | {
           ok: boolean;
+          serviceMode: VoiceInputServiceModeData;
           provider:
+            | 'custom-realtime-asr'
             | 'elevenlabs-scribe-realtime'
             | 'openai-realtime-whisper'
             | 'litellm-gpt-realtime-whisper'
@@ -1291,6 +1308,7 @@ interface ElectronAPI {
           settingsTab: 'api-keys' | 'connections' | 'providers';
           error?: string;
           authErrorReason?: string;
+          failureReason?: 'custom-asr-config-missing' | 'custom-asr-key-missing' | 'codex-realtime-unsupported';
         }
       | null;
     getModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
@@ -1299,6 +1317,12 @@ interface ElectronAPI {
       asrProvider?: string | null;
       refinerProvider?: string | null;
       refinerModel?: string | null;
+      customAsr?: {
+        protocol: 'openai-realtime' | 'qwen-realtime';
+        websocketUrl: string;
+        model: string;
+      } | null;
+      customAsrApiKey?: string | null;
       /** BYOK fallback tail; null clears the override (primary runs alone). */
       refinerProviderChain?: string[] | null;
     }) => Promise<VoiceInputModelSelectionResultData>;
@@ -2890,6 +2914,22 @@ interface ElectronAPI {
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
+    getWorkspaceProviderSources: () => Promise<{
+      entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
+    }>;
+    setWorkspaceProviderSource: (payload: {
+      channel: 'slack' | 'telegram';
+      teamId: string | null;
+      workspace: string;
+      providerId: string | null;
+    }) => Promise<{
+      entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
+    }>;
+    onWorkspaceProviderSourcesChanged: (
+      listener: (
+        entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[],
+      ) => void,
+    ) => () => void;
     onPrefsChanged: (
       cb: (view: import('../shared/hookControlIpc').HookPrefsView) => void,
     ) => () => void;

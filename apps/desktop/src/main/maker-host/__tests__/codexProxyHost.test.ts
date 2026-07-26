@@ -663,7 +663,7 @@ describe('codex proxy host', () => {
   });
 
   it.each([
-    'moonshot/kimi-k3',
+    'moonshotai/kimi-k3',
     'deepseek/deepseek-v4-pro',
     'deepseek/deepseek-v4-flash',
   ])('normalizes strict gateway history for model %s', async (model) => {
@@ -738,7 +738,7 @@ describe('codex proxy host', () => {
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
     let current: unknown = {
-      model: 'moonshot/kimi-k3',
+      model: 'moonshotai/kimi-k3',
       parallel_tool_calls: true,
       input: [
         { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },
@@ -760,7 +760,7 @@ describe('codex proxy host', () => {
     }
 
     expect(current).toEqual({
-      model: 'moonshot/kimi-k3',
+      model: 'moonshotai/kimi-k3',
       parallel_tool_calls: true,
       input: [
         { type: 'function_call', name: 'exec_command', call_id: 'call_1', arguments: '{"cmd":"pwd"}' },

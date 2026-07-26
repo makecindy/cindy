@@ -18,12 +18,16 @@ export type RealtimeAsrWebSocketProviderOptions = {
   model?: string;
   realtimeUrl?: string;
   extraHeaders?: Record<string, string>;
+  /** Non-secret identity used to prevent warm-socket reuse across credentials. */
+  credentialCacheKey?: string;
   pcmSampleRate?: number;
   protocolProfile?: VoiceInputRealtimeProtocolProfile;
   providerKind?: string;
   connectTimeoutMs?: number;
   missingCredentialMessage?: string;
   errorFallbackMessage?: string;
+  /** Replace upstream application error text with errorFallbackMessage. */
+  redactUpstreamErrors?: boolean;
 };
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
@@ -69,6 +73,7 @@ const log = createLogger('voice-input:realtime-asr-websocket');
 type WarmRealtimeSession = {
   socket: WebSocket;
   connectionKey: string;
+  credentialCacheKey: string;
   model: string;
   languageCode: string | undefined;
   pcmSampleRate: number;
@@ -93,6 +98,7 @@ type TakenWarmRealtimeSession = {
 };
 
 let warmRealtimeSession: WarmRealtimeSession | null = null;
+let warmRealtimeSessionGeneration = 0;
 // Same-key in-flight dedup: a second prewarm for the SAME (model, language)
 // returned the same in-flight promise immediately. Kept for callers that
 // want fast same-config short-circuit before the chain serializer below.
@@ -104,6 +110,13 @@ const inFlightWarmPrewarms = new Map<string, Promise<void>>();
 // world after its turn — if a previously queued prewarm already settled a
 // matching warm session, the later link returns without creating another.
 let warmPrewarmChain: Promise<void> = Promise.resolve();
+
+export function invalidatePrewarmedRealtimeAsrWebSocketSession(): void {
+  warmRealtimeSessionGeneration += 1;
+  inFlightWarmPrewarms.clear();
+  warmRealtimeSession?.close();
+  warmRealtimeSession = null;
+}
 
 type RealtimeConnectionConfig = {
   realtimeUrl: string;
@@ -150,17 +163,19 @@ function realtimeHeaders(accessToken: string, extraHeaders: Record<string, strin
 
 function warmConfigKey(
   connectionKey: string,
+  credentialCacheKey: string,
   model: string,
   languageCode: string | undefined,
   pcmSampleRate: number,
   protocolProfile: VoiceInputRealtimeProtocolProfile,
 ): string {
-  return `${connectionKey}::${model}::${languageCode ?? ''}::pcm-${pcmSampleRate}::${protocolProfile}`;
+  return `${connectionKey}::credential-${credentialCacheKey}::${model}::${languageCode ?? ''}::pcm-${pcmSampleRate}::${protocolProfile}`;
 }
 
 function isExistingWarmMatch(
   existing: WarmRealtimeSession | null,
   connectionKey: string,
+  credentialCacheKey: string,
   model: string,
   languageCode: string | undefined,
   pcmSampleRate: number,
@@ -168,6 +183,7 @@ function isExistingWarmMatch(
 ): boolean {
   if (!existing) return false;
   if (existing.connectionKey !== connectionKey) return false;
+  if (existing.credentialCacheKey !== credentialCacheKey) return false;
   if (existing.model !== model) return false;
   if (existing.languageCode !== languageCode) return false;
   if (existing.pcmSampleRate !== pcmSampleRate) return false;
@@ -178,18 +194,28 @@ function isExistingWarmMatch(
 }
 
 export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocketProviderOptions): Promise<void> {
+  const generation = warmRealtimeSessionGeneration;
   const model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
   const sourceLanguage = options.sourceLanguage ?? 'auto';
   const languageCode = openAiLanguageCode(sourceLanguage);
   const pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
   const protocolProfile = options.protocolProfile ?? 'openai-transcription-manual';
+  const credentialCacheKey = options.credentialCacheKey ?? '';
   const connection = resolveRealtimeConnectionConfig(options);
-  const configKey = warmConfigKey(connection.connectionKey, model, languageCode, pcmSampleRate, protocolProfile);
+  const configKey = warmConfigKey(
+    connection.connectionKey,
+    credentialCacheKey,
+    model,
+    languageCode,
+    pcmSampleRate,
+    protocolProfile,
+  );
 
   // Fast-path 1: an existing warm session already matches.
   if (isExistingWarmMatch(
     warmRealtimeSession,
     connection.connectionKey,
+    credentialCacheKey,
     model,
     languageCode,
     pcmSampleRate,
@@ -208,11 +234,13 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
   // Queue on the global chain so any different-key prewarm finishes (and
   // potentially supersedes our need) before we create another socket.
   const next = warmPrewarmChain.then(async () => {
+    if (generation !== warmRealtimeSessionGeneration) return;
     // Re-check after the wait — a prior queued prewarm may have created
     // exactly the warm session we wanted, in which case we're done.
     if (isExistingWarmMatch(
       warmRealtimeSession,
       connection.connectionKey,
+      credentialCacheKey,
       model,
       languageCode,
       pcmSampleRate,
@@ -224,7 +252,17 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
     // ours. createWarmRealtimeSession returns a promise that settles when
     // session.updated arrives; awaiting here keeps the chain serialized.
     warmRealtimeSession?.close();
-    await createWarmRealtimeSession(options, connection, model, sourceLanguage, languageCode, pcmSampleRate, protocolProfile);
+    await createWarmRealtimeSession(
+      options,
+      connection,
+      generation,
+      credentialCacheKey,
+      model,
+      sourceLanguage,
+      languageCode,
+      pcmSampleRate,
+      protocolProfile,
+    );
   });
   warmPrewarmChain = next.catch(() => undefined);
   inFlightWarmPrewarms.set(configKey, next);
@@ -238,6 +276,7 @@ export function prewarmRealtimeAsrWebSocketSession(options: RealtimeAsrWebSocket
 
 function takeWarmRealtimeSession(
   connectionKey: string,
+  credentialCacheKey: string,
   model: string,
   sourceLanguage: string,
   pcmSampleRate: number,
@@ -247,6 +286,10 @@ function takeWarmRealtimeSession(
   if (!warm) return null;
   if (!warm.ready || warm.socket.readyState !== WebSocket.OPEN) return null;
   if (warm.connectionKey !== connectionKey) {
+    warm.close();
+    return null;
+  }
+  if (warm.credentialCacheKey !== credentialCacheKey) {
     warm.close();
     return null;
   }
@@ -275,6 +318,8 @@ function takeWarmRealtimeSession(
 function createWarmRealtimeSession(
   options: RealtimeAsrWebSocketProviderOptions,
   connection: RealtimeConnectionConfig,
+  generation: number,
+  credentialCacheKey: string,
   model: string,
   sourceLanguage: string,
   languageCode: string | undefined,
@@ -289,6 +334,7 @@ function createWarmRealtimeSession(
   const readyPromise: Promise<void> = (async (): Promise<void> => {
     const accessToken = await options.accessTokenProvider();
     if (!accessToken) return;
+    if (generation !== warmRealtimeSessionGeneration) return;
 
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(connection.realtimeUrl, {
@@ -321,9 +367,23 @@ function createWarmRealtimeSession(
         cleanup();
       };
       const close = (): void => {
-        cleanup();
+        if (!settled) {
+          settled = true;
+          if (warmRealtimeSession?.socket === socket) warmRealtimeSession = null;
+          clearKeepAlive();
+          clearTimeout(timer);
+          socket.off('open', onOpen);
+          socket.off('message', onMessage);
+          socket.off('pong', onPong);
+          reject(new Error('prewarm realtime session invalidated'));
+        } else {
+          clearKeepAlive();
+          clearTimeout(timer);
+        }
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close();
+        } else {
+          cleanup();
         }
       };
       const rejectOnce = (error: Error): void => {
@@ -331,6 +391,12 @@ function createWarmRealtimeSession(
         settled = true;
         if (warmRealtimeSession?.socket === socket) warmRealtimeSession = null;
         cleanup();
+        // A readiness failure can happen after the upgrade succeeds. Do not
+        // leave that unauthenticated/idle socket alive after its promise has
+        // rejected; it can otherwise linger until the upstream closes it.
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.terminate();
+        }
         reject(error);
       };
       const resolveOnce = (): void => {
@@ -392,6 +458,7 @@ function createWarmRealtimeSession(
           rejectOnce(new Error(realtimeErrorMessage(
             event,
             options.errorFallbackMessage ?? 'OpenAI realtime transcription failed.',
+            options.redactUpstreamErrors,
           )));
         }
       };
@@ -410,9 +477,20 @@ function createWarmRealtimeSession(
         rejectOnce(error);
       };
 
-      warmRealtimeSession = {
+      if (generation !== warmRealtimeSessionGeneration) {
+        settled = true;
+        cleanup();
+        socket.on('error', () => undefined);
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+        resolve();
+        return;
+      }
+      const nextWarmSession: WarmRealtimeSession = {
         socket,
         connectionKey: connection.connectionKey,
+        credentialCacheKey,
         model,
         languageCode,
         pcmSampleRate,
@@ -428,6 +506,11 @@ function createWarmRealtimeSession(
       socket.on('pong', onPong);
       socket.on('close', onClose);
       socket.on('error', onError);
+      if (generation !== warmRealtimeSessionGeneration) {
+        close();
+        return;
+      }
+      warmRealtimeSession = nextWarmSession;
     });
   })().catch((error) => {
     log.debug('prewarm realtime session unavailable', {
@@ -528,12 +611,14 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private activeRealtimeUrl: string;
   private readonly extraHeaders: Record<string, string>;
   private readonly connectionKey: string;
+  private readonly credentialCacheKey: string;
   private readonly pcmSampleRate: number;
   private readonly protocolProfile: VoiceInputRealtimeProtocolProfile;
   private readonly providerKind: string;
   private readonly connectTimeoutMs: number;
   private readonly missingCredentialMessage: string;
   private readonly errorFallbackMessage: string;
+  private readonly redactUpstreamErrors: boolean;
   private socket?: WebSocket;
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
@@ -602,10 +687,12 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.activeRealtimeUrl = connection.realtimeUrl;
     this.extraHeaders = connection.extraHeaders;
     this.connectionKey = connection.connectionKey;
+    this.credentialCacheKey = options.credentialCacheKey ?? '';
     this.providerKind = options.providerKind ?? 'openai-realtime-whisper';
     this.missingCredentialMessage =
       options.missingCredentialMessage ?? 'Codex ChatGPT login is required for realtime voice input.';
     this.errorFallbackMessage = options.errorFallbackMessage ?? 'OpenAI realtime transcription failed.';
+    this.redactUpstreamErrors = options.redactUpstreamErrors === true;
     this.recorder = isVoiceInputRecordingEnabled()
       ? new VoiceInputSessionRecorder(makeRecorderSessionId())
       : null;
@@ -615,6 +702,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         model: this.model,
         sourceLanguage: this.sourceLanguage,
         startedAtIso: new Date().toISOString(),
+        redactSensitiveWs: this.redactUpstreamErrors,
       });
       log.info('voice input session recording enabled', {
         sessionId: this.recorder.sessionId,
@@ -640,6 +728,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
 
     const warm = dynamicConnection ? null : takeWarmRealtimeSession(
       this.connectionKey,
+      this.credentialCacheKey,
       this.model,
       this.sourceLanguage,
       this.pcmSampleRate,
@@ -781,6 +870,11 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
         response.resume();
         const statusCode = response.statusCode ?? 'unknown';
+        if (this.redactUpstreamErrors) {
+          const statusSuffix = typeof statusCode === 'number' ? ` (HTTP ${statusCode})` : '';
+          fail(new Error(`${this.errorFallbackMessage}${statusSuffix}`), true);
+          return;
+        }
         const statusMessage = response.statusMessage ? ` ${response.statusMessage}` : '';
         // Include the dialed host/path + gateway trace id: a handshake 404
         // against a gateway missing the ASR passthrough route is otherwise
@@ -798,7 +892,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         resolve();
       };
       this.startReject = (error) => {
-        fail(error, false);
+        fail(error, true);
       };
       socket.once('error', onError);
       socket.once('unexpected-response', onUnexpectedResponse);
@@ -1088,22 +1182,29 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         break;
       case 'conversation.item.input_audio_transcription.failed':
         {
-          const message = realtimeErrorMessage(event, this.errorFallbackMessage);
+          const message = realtimeErrorMessage(
+            event,
+            this.errorFallbackMessage,
+            this.redactUpstreamErrors,
+          );
           this.callback({ type: 'error', message, at: Date.now() });
           this.resolveFlushWaiters();
         }
         break;
       case 'error':
         {
-          const message = realtimeErrorMessage(event, this.errorFallbackMessage);
-          if (this.isNonFatalServerVadFinishError(message)) {
+          const upstreamMessage = realtimeErrorMessage(event, this.errorFallbackMessage);
+          if (this.isNonFatalServerVadFinishError(upstreamMessage)) {
             log.debug('ignore non-fatal server-vad finish error', {
-              message,
+              message: this.redactUpstreamErrors ? this.errorFallbackMessage : upstreamMessage,
               aggregateChars: this.aggregateTranscript().length,
             });
             this.resolveFlushWaiters();
             break;
           }
+          const message = this.redactUpstreamErrors
+            ? this.errorFallbackMessage
+            : upstreamMessage;
           if (!this.sessionReady && this.startReject) {
             this.startReject(new Error(message));
           } else {
@@ -1449,7 +1550,12 @@ function clampPcm16(value: number): number {
   return value;
 }
 
-export function realtimeErrorMessage(event: Record<string, unknown>, fallbackMessage: string): string {
+export function realtimeErrorMessage(
+  event: Record<string, unknown>,
+  fallbackMessage: string,
+  redactUpstreamErrors = false,
+): string {
+  if (redactUpstreamErrors) return fallbackMessage;
   const error = event.error;
   if (isRecord(error) && typeof error.message === 'string') return error.message;
   return fallbackMessage;

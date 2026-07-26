@@ -98,16 +98,37 @@ test("mobile notices exclude build-time platform binaries but keep their JS pack
   }
 });
 
-// 闭包必须按显式目标平台收集：collectClosure() 判断可选依赖是否存在只看
-// node_modules 里有没有目录，省掉 target 会让产物随生成机器的安装集合漂移。
-test("every dependency closure is collected against an explicit target", () => {
+// 闭包必须按显式目标平台收集：collectClosure() 判断可选依赖是否存在只看 node_modules
+// 里有没有目录，省掉 target 就会让产物随生成机器的安装集合漂移。
+//
+// 这里守的是那一处强制校验本身，而不是去枚举调用点。枚举的写法（无论正则还是括号扫描）
+// 都能被换一种调用形式绕过，且在本文件上会实打实误报——生成器的错误消息与注释里都出现
+// 了 `collectClosure(`，而源码含带引号的正则字面量，使得零依赖的字符串跳过无法可靠实现。
+// 强制校验则覆盖全部调用形式：`licenses:generate` 是产物的唯一生成途径，缺 target 的调用
+// 必然在生成时抛错，产物不可能带着机器相关的内容进仓库。
+test("collectClosure() refuses to run without an explicit target", () => {
   const source = read("scripts/generate-third-party-notices.mjs");
-  const untargeted = [...source.matchAll(/collectClosure\(\s*\[[^\]]*\]\s*\)/g)];
-  assert.deepEqual(
-    untargeted.map((match) => match[0]),
-    [],
-    "collectClosure() 调用缺少目标平台参数，产物会随本机安装的平台可选包漂移",
+  const signature = source.match(/function collectClosure\(([^)]*)\)/)?.[1];
+  assert.ok(signature, "找不到 collectClosure 定义，守卫已失效");
+  assert.doesNotMatch(
+    signature,
+    /=/,
+    "target 不得有默认值：默认值会让缺 target 的调用静默恢复成机器相关行为",
   );
+  assert.match(source, /requires an explicit target/);
+  // linux 目标必须连 libc 一起强制：只有 linux 分 glibc / musl，缺了这一轴
+  // matchesPackageConstraint() 会把两种变体同时放行，产物又随本机装了哪个变体漂移。
+  assert.match(
+    source,
+    /os === "linux"\s*\?\s*\["os", "cpu", "libc"\]/,
+    "linux 目标未强制 libc：glibc 与 musl 变体会同时进闭包",
+  );
+  // matchesTarget() 不得再有「target 为空则一律放行」的分支，那是漂移的根源。
+  const matchesTarget = source.match(
+    /function matchesTarget\([^)]*\)\s*\{[\s\S]*?\n\}/,
+  )?.[0];
+  assert.ok(matchesTarget, "找不到 matchesTarget 定义，守卫已失效");
+  assert.doesNotMatch(matchesTarget, /return true/);
 });
 
 test("commercial distributions do not resolve forbidden Sustainable Use dependencies", () => {

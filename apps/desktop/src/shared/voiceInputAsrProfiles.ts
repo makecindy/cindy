@@ -64,6 +64,7 @@ export const LITELLM_VOLCENGINE_SAUC_ASR_ENDPOINT_PATH = '/volcengine/api/v3/sau
 export const LITELLM_VOLCENGINE_SAUC_ASR_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 export const LITELLM_VOLCENGINE_SAUC_ASR_PCM_SAMPLE_RATE = 16_000;
 export const LITELLM_TRANSCRIPTION_MODEL = 'elevenlabs/scribe_v2';
+export const CUSTOM_REALTIME_ASR_DISPLAY_MODEL = 'Custom realtime ASR';
 
 export const DEFAULT_VOICE_INPUT_PROVIDER_KIND = 'litellm-volcengine-sauc-asr';
 
@@ -84,6 +85,20 @@ export const DEFAULT_VOICE_INPUT_ASR_PROVIDER_CHAIN = [
 // to the profile. Only add provider code when the upstream WebSocket protocol
 // is not covered by an existing `protocolProfile`.
 export const VOICE_INPUT_ASR_PROFILES = {
+  'custom-realtime-asr': {
+    id: 'custom-realtime-asr',
+    model: CUSTOM_REALTIME_ASR_DISPLAY_MODEL,
+    auth: 'api-key',
+    settingsTab: 'providers',
+    mode: 'realtime-websocket',
+    realtime: {
+      pcmSampleRate: 24_000,
+      protocolProfile: 'openai-transcription-manual',
+      prewarmable: true,
+    },
+    missingCredentialMessage: 'Configure the realtime ASR WebSocket URL, model, protocol, and API key.',
+    errorFallbackMessage: 'Custom realtime speech recognition failed.',
+  },
   'elevenlabs-scribe-realtime': {
     id: 'elevenlabs-scribe-realtime',
     model: SCRIBE_REALTIME_MODEL,
@@ -225,6 +240,9 @@ const VOICE_INPUT_PROVIDER_ALIASES: Record<string, VoiceInputProviderKind> = {
   'scribe-realtime': 'elevenlabs-scribe-realtime',
   scribe_v2_realtime: 'elevenlabs-scribe-realtime',
   'elevenlabs-scribe-realtime': 'elevenlabs-scribe-realtime',
+  custom: 'custom-realtime-asr',
+  'custom-realtime': 'custom-realtime-asr',
+  'custom-realtime-asr': 'custom-realtime-asr',
 };
 
 export function resolveVoiceInputProviderKindAlias(value: string): VoiceInputProviderKind | null {

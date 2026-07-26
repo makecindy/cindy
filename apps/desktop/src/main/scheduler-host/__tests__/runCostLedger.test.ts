@@ -36,14 +36,14 @@ function structuredMeta(
 }
 
 describe('computeScheduleRunCostDeltas', () => {
-  it('旧 USD 真实费用按当前 CN 区域投影后累计到对应 run', () => {
+  it('旧 USD 真实费用保持 USD 原值累计到对应 run', () => {
     expect(computeScheduleRunCostDeltas({}, meta('run-1', 0.42))).toEqual([
       {
         runId: 'run-1',
-        costAmountDelta: 2.814,
+        costAmountDelta: 0.42,
         estimatedValueAmountDelta: 0,
-        currency: 'CNY',
-        approximate: true,
+        currency: 'USD',
+        approximate: false,
       },
     ]);
   });
@@ -57,28 +57,28 @@ describe('computeScheduleRunCostDeltas', () => {
     const [delta] = computeScheduleRunCostDeltas(meta('run-1', 0.42, true), meta('run-1', 0.4));
     expect(delta).toMatchObject({
       runId: 'run-1',
-      currency: 'CNY',
-      approximate: true,
+      currency: 'USD',
+      approximate: false,
     });
-    expect(delta.costAmountDelta).toBeCloseTo(2.68);
-    expect(delta.estimatedValueAmountDelta).toBeCloseTo(-2.814);
+    expect(delta.costAmountDelta).toBeCloseTo(0.4);
+    expect(delta.estimatedValueAmountDelta).toBeCloseTo(-0.42);
   });
 
   it('归因 runId 修正时从旧 run 扣除并写入新 run', () => {
     expect(computeScheduleRunCostDeltas(meta('run-old', 0.42), meta('run-new', 0.42))).toEqual([
       {
         runId: 'run-old',
-        costAmountDelta: -2.814,
+        costAmountDelta: -0.42,
         estimatedValueAmountDelta: 0,
-        currency: 'CNY',
+        currency: 'USD',
         approximate: false,
       },
       {
         runId: 'run-new',
-        costAmountDelta: 2.814,
+        costAmountDelta: 0.42,
         estimatedValueAmountDelta: 0,
-        currency: 'CNY',
-        approximate: true,
+        currency: 'USD',
+        approximate: false,
       },
     ]);
   });

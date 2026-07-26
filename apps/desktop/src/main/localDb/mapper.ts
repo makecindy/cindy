@@ -41,13 +41,12 @@ import type {
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   addRegionalMoney,
+  legacyUsdMoney,
   normalizeRegionalMoney,
-  regionalizeLegacyUsd,
-  regionalizeUsd,
-  zeroRegionalMoney,
+  usdMoney,
+  zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
 
 type SessionRow = typeof sessions.$inferSelect;
@@ -126,7 +125,7 @@ export function extractMessagePreview(
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
   const legacyMoney =
-    row.totalCostUsd > 0 ? regionalizeLegacyUsd(row.totalCostUsd, CURRENT_CINDY_REGION) : undefined;
+    row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -141,7 +140,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
       ? legacyMoney.currency === currentMoney.currency
         ? addRegionalMoney([legacyMoney, currentMoney])
         : currentMoney
-      : (currentMoney ?? legacyMoney ?? zeroRegionalMoney(CURRENT_CINDY_REGION));
+      : (currentMoney ?? legacyMoney ?? zeroUsageMoney());
   // 旧字段兼容投影,与 totalMoney 同一 combine 语义:结构化累计仍是 USD 时并入,
   // 否则(CNY 无法表达进 USD 字段)保持冻结历史值。只消费 totalCostUsd 的读方
   // (device-link v1 / 手机端)在全量 reseed 后才不会丢本构建新增的 USD 花费。
@@ -698,7 +697,7 @@ export function projectAutomationConsentToRow(
 /** ScheduleRun 行 → 内存对象。 */
 export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
   const legacyCost =
-    row.costUsd > 0 ? regionalizeLegacyUsd(row.costUsd, CURRENT_CINDY_REGION) : undefined;
+    row.costUsd > 0 ? legacyUsdMoney(row.costUsd) : undefined;
   const currentCost =
     row.costCurrency && row.costAmount > 0
       ? normalizeRegionalMoney({
@@ -713,10 +712,10 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
       ? legacyCost.currency === currentCost.currency
         ? addRegionalMoney([legacyCost, currentCost])
         : currentCost
-      : (currentCost ?? legacyCost ?? zeroRegionalMoney(CURRENT_CINDY_REGION));
+      : (currentCost ?? legacyCost ?? zeroUsageMoney());
   const legacyEstimate =
     row.estimatedValueUsd > 0
-      ? regionalizeUsd(row.estimatedValueUsd, CURRENT_CINDY_REGION, 'legacy-usd', 'value-estimate')
+      ? usdMoney(row.estimatedValueUsd, 'value-estimate', 'legacy-usd')
       : undefined;
   const currentEstimate =
     row.costCurrency && row.estimatedValueAmount > 0
@@ -735,7 +734,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
         : currentEstimate
       : (currentEstimate ??
         legacyEstimate ??
-        zeroRegionalMoney(CURRENT_CINDY_REGION, 'value-estimate'));
+        zeroUsageMoney('value-estimate'));
   return {
     id: row.id,
     scheduleId: row.scheduleId,
