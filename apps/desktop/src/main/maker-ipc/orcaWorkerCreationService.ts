@@ -501,8 +501,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     // 共用内核自防调用方漏归一),维持既有解析,包括「显式 model 不等于显式来源」的
     // 强制默认路由与 requiresExplicitRoute 唯一来源救援。
     const explicitSourceId =
-      typeof params.providerId === 'string' && params.providerId.length > 0
-        ? params.providerId
+      typeof params.providerId === 'string' && params.providerId.trim().length > 0
+        ? params.providerId.trim()
         : null;
     const resolved = {
       ...resolvedConfig,

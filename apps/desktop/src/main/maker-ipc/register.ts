@@ -5168,9 +5168,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       model: typeof body.model === 'string' ? body.model : undefined,
       effort: typeof body.effort === 'string' ? body.effort as OrcaWorkerEffort : undefined,
       fast: typeof body.fast === 'boolean' ? body.fast : undefined,
-      // 只认非空 string 为显式来源;其余(null/缺省/异型)一律按「未显式」处理。
-      providerId: typeof body.providerId === 'string' && body.providerId.length > 0
-        ? body.providerId
+      // 只认非空(trim 后)string 为显式来源;其余(null/空白/缺省/异型)一律按「未显式」处理。
+      providerId: typeof body.providerId === 'string' && body.providerId.trim().length > 0
+        ? body.providerId.trim()
         : undefined,
     });
   });
@@ -5312,9 +5312,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       model,
       effort: typeof b.effort === 'string' ? b.effort as OrcaWorkerEffort : undefined,
       fast: typeof b.fast === 'boolean' ? b.fast : undefined,
-      // 只认非空 string 为显式来源;其余(null/缺省/异型)一律按「未显式」处理。
-      providerId: typeof b.providerId === 'string' && b.providerId.length > 0
-        ? b.providerId
+      // 只认非空(trim 后)string 为显式来源;其余(null/空白/缺省/异型)一律按「未显式」处理。
+      providerId: typeof b.providerId === 'string' && b.providerId.trim().length > 0
+        ? b.providerId.trim()
         : undefined,
       label: label.value,
       initialTask: typeof b.initialTask === 'string' && b.initialTask.length > 0 ? b.initialTask : undefined,
