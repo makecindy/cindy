@@ -491,10 +491,14 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const cachedProviderFallback = cachedProviderFallbackId === null
       ? undefined
       : agentProviders.find((provider) => provider.id === cachedProviderFallbackId);
-    // 标准面板显式选定的来源(string)直接生效,由下方精确 preflight 把关「已连接且
-    // 提供该模型」;null/undefined 维持既有解析,包括「显式 model 不等于显式来源」的
+    // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
+    // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
+    // 共用内核自防调用方漏归一),维持既有解析,包括「显式 model 不等于显式来源」的
     // 强制默认路由与 requiresExplicitRoute 唯一来源救援。
-    const explicitSourceId = typeof params.providerId === 'string' ? params.providerId : null;
+    const explicitSourceId =
+      typeof params.providerId === 'string' && params.providerId.length > 0
+        ? params.providerId
+        : null;
     const resolved = {
       ...resolvedConfig,
       // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。

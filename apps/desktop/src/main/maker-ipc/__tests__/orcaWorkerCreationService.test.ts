@@ -1238,6 +1238,23 @@ describe('buildNoProviderMessage', () => {
     }));
   });
 
+  it('treats an empty-string providerId as not-explicit and keeps the forced default route', async () => {
+    const { service } = createDeps();
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+      model: 'gpt-5.5',
+      providerId: '',
+    })).resolves.toMatchObject({
+      ok: true,
+      // 与「显式 model 未显式来源」同语义:providerId 强制默认路由,不进显式 preflight。
+      resolved: { providerId: null, model: 'gpt-5.5' },
+    });
+  });
+
   it('rejects an explicit provider that does not offer the requested model', async () => {
     const { deps, service } = createDeps({
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
