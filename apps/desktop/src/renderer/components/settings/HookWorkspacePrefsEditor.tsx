@@ -68,6 +68,7 @@ import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
 import {
   AGENT_KINDS,
   HOOK_DEFAULT_PERMISSION_MODE,
+  isKnownAgent,
   patchForAgentChange,
   patchForModelChange,
   resolveEffectiveRow,
@@ -147,6 +148,8 @@ export function useHookWorkspacePrefs(
   const [imDefaults, setImDefaults] = useState<ImDefaultsLike | null>(null);
   // 目录模型来源偏好(纯本地文件, 不经 WS): 全量条目一次拉取, 写后用返回值刷新。
   const [providerSources, setProviderSources] = useState<HookWorkspaceProviderSourceEntry[]>([]);
+  // latest-wins 守卫(Copilot review): 快速连选/跨窗口广播时, 较慢的旧回复不得覆盖新状态。
+  const providerSourceRevisionRef = useRef(0);
   const telegramBindingId =
     provider === 'telegram' && hook?.telegram.binding?.state === 'confirmed'
       ? hook.telegram.binding.bindingId
@@ -254,11 +257,20 @@ export function useHookWorkspacePrefs(
         if (active) setProviderSources(res.entries);
       })
       .catch(() => {});
+    // 多窗口同步(codex review): 会话副窗也能开设置页, 其它窗口写入时以广播的
+    // 全量条目为准刷新(与 prefs.state 的 latest-wins 快照语义一致)。
+    const offProviderSources = window.electronAPI.hookControl.onWorkspaceProviderSourcesChanged(
+      (entries) => {
+        providerSourceRevisionRef.current += 1;
+        setProviderSources(entries);
+      },
+    );
     return () => {
       active = false;
       fetchRevisionRef.current += 1;
       mutationRevisionRef.current += 1;
       offPrefs();
+      offProviderSources();
     };
   }, [fetchPrefs, provider]);
 
@@ -330,8 +342,6 @@ export function useHookWorkspacePrefs(
     [providerSources, provider, multiTeam, selectedTeamId],
   );
 
-  // latest-wins 守卫(Copilot review): 快速连选时, 较慢的旧回复不得覆盖较新的选择。
-  const providerSourceRevisionRef = useRef(0);
   const applyProviderSource = useCallback(
     (alias: string, providerId: string | null) => {
       const teamId = multiTeam ? selectedTeamId : null;
@@ -580,18 +590,24 @@ export function WorkspacePrefsEditor({
           }}
           currentProviderId={state.providerSourceFor(alias)}
           // 分段行原子选择:model/effort 走远端 prefs, 成功后来源落本地(串联,
-          // 见 applyPatch 的 alsoProviderSource 注释)。effort 用行上解析值(含
-          // hover 改过的全局预设记忆, codex review), 不足时 patch 已按模型校准。
-          onProviderChange={(providerId, modelId, rowEffort) => {
+          // 见 applyPatch 的 alsoProviderSource 注释)。effort 取该 (来源, 模型) 的
+          // 全局预设记忆(用户 hover 非选中行改过的档位, codex review;ModelSelector
+          // 的 onProviderChange 只回传 provider+model 两参, 记忆值需自取), 该模型
+          // 支持时进 patch, 否则维持 patchForModelChange 的模型默认校准。
+          onProviderChange={(providerId, modelId) => {
             if (eff.agentKind.id === null) return;
             const caps = toPrefsCaps(effAgentCaps);
             if (modelId) {
               const patch = patchForModelChange(eff.agentKind.id, modelId, prefs, caps);
+              const remembered =
+                providerId && isKnownAgent(eff.agentKind.id)
+                  ? getProviderModelEffort(eff.agentKind.id, providerId, modelId)
+                  : undefined;
               if (
-                rowEffort &&
-                caps?.models.find((m) => m.id === modelId)?.efforts.includes(rowEffort)
+                remembered &&
+                caps?.models.find((m) => m.id === modelId)?.efforts.includes(remembered)
               ) {
-                patch.effort = rowEffort;
+                patch.effort = remembered;
               }
               state.applyPatch(alias, patch, providerId);
             } else {

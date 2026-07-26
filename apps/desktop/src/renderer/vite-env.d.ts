@@ -2901,6 +2901,11 @@ interface ElectronAPI {
     }) => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
+    onWorkspaceProviderSourcesChanged: (
+      listener: (
+        entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[],
+      ) => void,
+    ) => () => void;
     onPrefsChanged: (
       cb: (view: import('../shared/hookControlIpc').HookPrefsView) => void,
     ) => () => void;

@@ -99,6 +99,7 @@ describe('useHookWorkspacePrefs provider isolation', () => {
         setWorkspacePrefs: vi.fn(),
         getWorkspaceProviderSources: vi.fn(async () => ({ entries: [] })),
         setWorkspaceProviderSource: vi.fn(async () => ({ entries: [] })),
+        onWorkspaceProviderSourcesChanged: vi.fn(() => () => {}),
       },
       maker: {
         imDefaultSettingsGet: vi.fn(async () => ({ agentKind: 'codex', agents: {} })),

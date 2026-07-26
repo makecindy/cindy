@@ -74,7 +74,13 @@ export const HOOK_CONTROL_EVENT = {
   PREFS_CHANGED: 'maker:hook-control:prefs-changed',
   /** provider-neutral 偏好快照推送（本版由 Telegram 消费）。 */
   PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
+  /** 目录模型来源偏好全量推送(本地写入后广播全窗口, 多窗口设置页同步)。 */
+  WORKSPACE_PROVIDER_SOURCE_CHANGED: 'maker:hook-control:workspace-provider-source-changed',
 } as const;
+
+/** 目录来源偏好条目总量上限(渠道×目录×team 现实规模远小于此;防被攻破的
+ * renderer 用海量唯一 teamId 无限追加撑爆本地文件)。 */
+export const HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES = 256;
 
 /** Cindy relay 当前支持的客户端 provider。 */
 export type HookProvider = 'slack' | 'telegram';

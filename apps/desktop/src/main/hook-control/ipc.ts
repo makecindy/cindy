@@ -46,6 +46,7 @@ import {
   HOOK_CONTROL_EVENT,
   HOOK_CONTROL_INVOKE,
   HOOK_WORKSPACE_ALIAS_RE,
+  HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES,
   type HookPrefsPatch,
   type HookPrefsView,
   type ProviderPrefsView,
@@ -731,9 +732,28 @@ export function registerHookControlIpc(): void {
       if (providerId !== null && providerId.length > 128) {
         throwIpcError('INVALID_PARAMS', 'providerId too long');
       }
-      return {
-        entries: setWorkspaceProviderSource(channel, teamId, workspace, providerId),
-      };
+      // 条目总量上限(codex review): 键合法性校验挡不住海量唯一 teamId 的无限
+      // 追加 —— 新增(非替换/删除)且已达上限时拒绝。按精确键判新增(不能用
+      // getWorkspaceProviderSource, 它的 teamId null 兜底会把新 team 误判为已存在)。
+      const existing = listWorkspaceProviderSources();
+      const isReplace = existing.some(
+        (e) => e.channel === channel && e.teamId === teamId && e.workspace === workspace,
+      );
+      if (
+        providerId !== null &&
+        !isReplace &&
+        existing.length >= HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES
+      ) {
+        throwIpcError('INVALID_PARAMS', 'too many workspace provider source entries');
+      }
+      const entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId);
+      // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && isAppContentWindow(w)) {
+          w.webContents.send(HOOK_CONTROL_EVENT.WORKSPACE_PROVIDER_SOURCE_CHANGED, entries);
+        }
+      }
+      return { entries };
     },
   );
 
