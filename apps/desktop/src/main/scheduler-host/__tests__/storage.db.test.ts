@@ -475,7 +475,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
-  it('claimDueFire: 经 DbClient drizzleProxy(worker RPC)也能拿到 changes 完成 CAS', async () => {
+  it('claimDueFire*: 经 DbClient drizzleProxy(worker RPC)也能完成 CAS / 原子 run 插入', async () => {
     // 回归测试 — 防退化:主进程生产链路的 db 是 drizzleProxy,不是直连
     // better-sqlite3 drizzle。代理对隐式 await 的写操作丢弃 { changes },
     // claimDueFire 曾因此每次认领都 throw"driver did not report changes count",
@@ -485,7 +485,10 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const due = 1_700_000_060_000;
     try {
       for (const statement of SCHEDULER_DDL) await client.exec(statement);
-      const storage = new DrizzleScheduleStorage(() => client.drizzle as SchedulerDrizzleDb);
+      const storage = new DrizzleScheduleStorage(
+        () => client.drizzle as SchedulerDrizzleDb,
+        () => client,
+      );
       await storage.insert(baseSchedule({ id: 'sch-proxy', nextFireAt: due }));
 
       // 期望值不匹配 → 判负返回 null(而不是 throw)
@@ -498,6 +501,33 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
       // 二次认领 → 判负
       expect(await storage.claimDueFire('sch-proxy', due)).toBeNull();
+
+      await storage.insert(baseSchedule({ id: 'sch-proxy-run', nextFireAt: due }));
+      const firedAt = due + 123;
+      const claimedWithRun = await storage.claimDueFireAndInsertRun('sch-proxy-run', due, {
+        id: 'run-proxy',
+        scheduleId: 'sch-proxy-run',
+        firedAt,
+        status: 'running',
+        heartbeatAt: firedAt,
+        costAttribution: 'unavailable',
+      });
+      expect(claimedWithRun?.id).toBe('sch-proxy-run');
+      expect(claimedWithRun?.nextFireAt).toBeUndefined();
+      expect(claimedWithRun?.lastFiredAt).toBe(firedAt);
+      expect(await storage.hasRunningRuns('sch-proxy-run', { firedAt })).toBe(true);
+      expect(await storage.listRuns('sch-proxy-run')).toEqual([
+        expect.objectContaining({ id: 'run-proxy', status: 'running', firedAt }),
+      ]);
+      await expect(
+        storage.claimDueFireAndInsertRun('sch-proxy-run', due, {
+          id: 'run-proxy-duplicate',
+          scheduleId: 'sch-proxy-run',
+          firedAt: firedAt + 1,
+          status: 'running',
+        }),
+      ).resolves.toBeNull();
+      expect(await storage.listRuns('sch-proxy-run')).toHaveLength(1);
     } finally {
       await client.dispose();
     }

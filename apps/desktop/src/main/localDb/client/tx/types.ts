@@ -7,6 +7,7 @@ export type DbTxName =
   | 'embedding.commit'
   | 'embedding.recordFailures'
   | 'embedding.enqueue'
+  | 'scheduler.claimDueFireAndInsertRun'
   | 'orca.reserveWorkerCreation'
   | 'orca.renewWorkerCreationReservation'
   | 'orca.releaseWorkerCreationReservation'
@@ -150,6 +151,31 @@ export interface EmbeddingEnqueueArgs {
     modelId: string;
     vecTable: string;
   }>;
+}
+
+export interface SchedulerClaimDueFireAndInsertRunArgs {
+  scheduleId: string;
+  expectedNextFireAt: number;
+  run: {
+    id: string;
+    scheduleId: string;
+    sessionId?: string | null;
+    firedAt: number;
+    finishedAt?: number | null;
+    status: string;
+    errorMsg?: string | null;
+    costUsd?: number | null;
+    estimatedValueUsd?: number | null;
+    costAmount?: number | null;
+    estimatedValueAmount?: number | null;
+    costCurrency?: 'CNY' | 'USD' | null;
+    costIsApproximate?: boolean | number | null;
+    costAttribution?: string | null;
+    resultText?: string | null;
+    preRunHookResult?: string | null;
+    readAt?: number | null;
+    heartbeatAt?: number | null;
+  };
 }
 
 /**
@@ -365,6 +391,7 @@ export type DbTxArgsByName = {
   'embedding.commit': EmbeddingCommitArgs;
   'embedding.recordFailures': EmbeddingRecordFailuresArgs;
   'embedding.enqueue': EmbeddingEnqueueArgs;
+  'scheduler.claimDueFireAndInsertRun': SchedulerClaimDueFireAndInsertRunArgs;
   'orca.reserveWorkerCreation': OrcaReserveWorkerCreationArgs;
   'orca.renewWorkerCreationReservation': OrcaRenewWorkerCreationReservationArgs;
   'orca.releaseWorkerCreationReservation': OrcaReleaseWorkerCreationReservationArgs;
@@ -390,6 +417,7 @@ export type DbTxResultByName = {
   'embedding.commit': undefined;
   'embedding.recordFailures': { failCount: number };
   'embedding.enqueue': { inserted: number; skipped: number };
+  'scheduler.claimDueFireAndInsertRun': boolean;
   'orca.reserveWorkerCreation': OrcaReserveWorkerCreationResult;
   'orca.renewWorkerCreationReservation': boolean;
   'orca.releaseWorkerCreationReservation': undefined;

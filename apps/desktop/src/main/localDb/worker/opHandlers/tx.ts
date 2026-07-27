@@ -32,6 +32,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return embeddingRecordFailures(db, txArgs);
     case 'embedding.enqueue':
       return embeddingEnqueue(db, txArgs);
+    case 'scheduler.claimDueFireAndInsertRun':
+      return schedulerClaimDueFireAndInsertRun(db, txArgs);
     case 'orca.reserveWorkerCreation':
       return orcaReserveWorkerCreation(db, txArgs);
     case 'orca.renewWorkerCreationReservation':
@@ -1112,6 +1114,59 @@ function orcaReserveWorkerCreation(db: Database.Database, args: unknown): unknow
       (id, team_id, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
       .run(reservationId, teamId, label, now, expiresAt);
     return { ok: true, occupiedSlotsBefore };
+  })();
+}
+
+function schedulerClaimDueFireAndInsertRun(db: Database.Database, args: unknown): boolean {
+  const payload = asRecord(args, 'scheduler.claimDueFireAndInsertRun args');
+  const scheduleId = expectString(payload.scheduleId, 'scheduleId');
+  const expectedNextFireAt = expectNumber(payload.expectedNextFireAt, 'expectedNextFireAt');
+  const run = asRecord(payload.run, 'run');
+  const runScheduleId = expectString(run.scheduleId, 'run.scheduleId');
+  if (runScheduleId !== scheduleId) {
+    throw invalidArgs('run.scheduleId must match scheduleId');
+  }
+
+  return db.transaction(() => {
+    const claim = db.prepare(
+      `UPDATE schedules
+       SET next_fire_at = NULL, last_fired_at = ?
+       WHERE id = ? AND status = 'active' AND next_fire_at = ?`,
+    ).run(expectNumber(run.firedAt, 'run.firedAt'), scheduleId, expectedNextFireAt);
+    if (claim.changes === 0) return false;
+
+    db.prepare(
+      `INSERT INTO schedule_runs (
+        id, schedule_id, session_id, fired_at, finished_at, status, error_msg,
+        cost_usd, estimated_value_usd, cost_amount, estimated_value_amount,
+        cost_currency, cost_is_approximate, cost_attribution, result_text,
+        pre_run_hook_result, read_at, heartbeat_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      expectString(run.id, 'run.id'),
+      runScheduleId,
+      nullableString(run.sessionId),
+      expectNumber(run.firedAt, 'run.firedAt'),
+      nullableNumber(run.finishedAt),
+      expectString(run.status, 'run.status'),
+      nullableString(run.errorMsg),
+      run.costUsd == null ? 0 : expectNumber(run.costUsd, 'run.costUsd'),
+      run.estimatedValueUsd == null
+        ? 0
+        : expectNumber(run.estimatedValueUsd, 'run.estimatedValueUsd'),
+      run.costAmount == null ? 0 : expectNumber(run.costAmount, 'run.costAmount'),
+      run.estimatedValueAmount == null
+        ? 0
+        : expectNumber(run.estimatedValueAmount, 'run.estimatedValueAmount'),
+      nullableString(run.costCurrency),
+      run.costIsApproximate === true || run.costIsApproximate === 1 ? 1 : 0,
+      nullableString(run.costAttribution) ?? 'exact',
+      nullableString(run.resultText),
+      nullableString(run.preRunHookResult),
+      nullableNumber(run.readAt),
+      nullableNumber(run.heartbeatAt),
+    );
+    return true;
   })();
 }
 

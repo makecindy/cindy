@@ -17,6 +17,7 @@
 import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
+import type { DbClient } from '../localDb/client/DbClient';
 
 import type { Schedule, ScheduleRun, ScheduleStorage, ListFilter } from '@cindy/maker-scheduler';
 
@@ -41,6 +42,7 @@ import {
 } from '../../shared/regionalMoney.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
+type SchedulerTxClient = Pick<DbClient, 'tx'>;
 
 export interface ScheduleSidebarIndexRun {
   runId: string;
@@ -318,7 +320,10 @@ function legacyRunFromSession(
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
-  constructor(private readonly getDb: () => SchedulerDrizzleDb) {}
+  constructor(
+    private readonly getDb: () => SchedulerDrizzleDb,
+    private readonly getDbClient?: () => SchedulerTxClient,
+  ) {}
 
   // ---------- Schedule CRUD ----------
 
@@ -418,6 +423,20 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     expectedNextFireAt: number,
     run: ScheduleRun,
   ): Promise<Schedule | null> {
+    if (this.getDbClient) {
+      const claimed = await this.getDbClient().tx('scheduler.claimDueFireAndInsertRun', {
+        scheduleId: id,
+        expectedNextFireAt,
+        run: scheduleRunCreateToRow(run),
+      });
+      if (!claimed) return null;
+      const schedule = await this.get(id);
+      if (!schedule) {
+        throw new Error(`claimDueFireAndInsertRun: claimed schedule vanished for id=${id}`);
+      }
+      return schedule;
+    }
+
     const db = this.getDb();
     return db.transaction(() => {
       const result = db
