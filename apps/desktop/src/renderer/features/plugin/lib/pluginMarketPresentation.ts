@@ -43,7 +43,10 @@ export function orderPluginCatalogItems<TInstalled extends { id: string }>(
 
   for (const marketItem of marketItems) {
     const availableItem = availableByPluginId.get(marketItem.pluginId);
-    if (availableItem) {
+    if (
+      availableItem &&
+      (marketItem.installState === 'not-installed' || marketItem.installState === 'conflict')
+    ) {
       ordered.push({ kind: 'market', item: availableItem });
     }
     if (
