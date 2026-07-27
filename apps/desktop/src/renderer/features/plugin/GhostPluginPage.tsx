@@ -715,11 +715,18 @@ export function GhostPluginPage() {
   // 详情页安装按钮与市场卡片「安装」共用同一实现:入参为完整 detail(含
   // manifest),确认框据此展示权限清单——装完即开=运行授权,清单不可省。
   // 卡片入口先经 pluginMarket.detail 拉到完整 manifest 再进本函数。
-  const runMarketInstall = useCallback(async (detail: PluginMarketDetail) => {
+  // 调用方已持锁时经 heldLease 传入复用(锁非重入),否则本函数自获取。
+  const runMarketInstall = useCallback(async (
+    detail: PluginMarketDetail,
+    heldLease?: { pluginId: string },
+  ) => {
     // 确认框等待期间也持有 lease。账号/模式切换会清除当前 lease,
     // 旧确认回调恢复后必须先验权,不能在新会话里继续安装。
-    const marketBusyLease = acquireMarketBusy(detail.pluginId);
+    const marketBusyLease = heldLease ?? acquireMarketBusy(detail.pluginId);
     if (!marketBusyLease) return;
+    // 锁非重入:调用方已持锁(heldLease)时本函数不释放,由调用方 finally 释放;
+    // 自己 acquire 的才在本函数内释放。
+    const ownsLease = heldLease === undefined;
     // 详情页按钮在 update-available 态复用本入口,后端走原位更新并保留
     // 生效状态 —— 文案必须分支,不能对更新路径承诺"装完即开"(review P1)。
     const isUpdate = detail.installState === 'update-available';
@@ -749,7 +756,7 @@ export function GhostPluginPage() {
       if (isMarketBusyLeaseActive(marketBusyLease)) {
         toast.error(t('settings.ghosts.market.errors.stateChanged'));
       }
-      releaseMarketBusy(marketBusyLease);
+      if (ownsLease) releaseMarketBusy(marketBusyLease);
       await refreshMarket();
       return;
     }
@@ -811,7 +818,7 @@ export function GhostPluginPage() {
         toast.error(t(pluginMarketErrorKey(error)));
       }
     } finally {
-      releaseMarketBusy(marketBusyLease);
+      if (ownsLease) releaseMarketBusy(marketBusyLease);
     }
   }, [
     acquireMarketBusy,
@@ -837,7 +844,8 @@ export function GhostPluginPage() {
       try {
         const detail = await window.electronAPI.pluginMarket.detail(pluginId);
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-        await runMarketInstall(detail);
+        // 已持锁,传入复用(runMarketInstall 不再自获取/释放,由本函数 finally 收口)。
+        await runMarketInstall(detail, marketBusyLease);
       } catch (error) {
         if (isMarketBusyLeaseActive(marketBusyLease)) {
           toast.error(t(pluginMarketErrorKey(error)));

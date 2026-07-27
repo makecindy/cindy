@@ -123,11 +123,12 @@ export interface CindyGhostInfo {
   readiness?: CindyGhostReadiness | (string & {});
   tools: CindyGhostToolInfo[];
   /**
-   * Host 现查的配置评估。state=required 的条目 tools 必须为空(不派发
+   * Host 现查的配置评估,通常仅在 readiness 非 ready 时返回(ready 态省略,
+   * 此时 tools 正常非空)。state=required 的条目 tools 必须为空(不派发
    * 可盲调的工具面),Agent 引用它的正确动作是基于本 assessment 发起
-   * setup 配置卡;评估读取/计算失败时字段省略,且此时 tools 同样必须
-   * 为空并带 message 说明——评估失败按未就绪处理,Agent 不得把字段
-   * 缺失解释为 ready 或自行放行。
+   * setup 配置卡;只有在 readiness 非 ready 且评估读取/计算失败时,字段
+   * 才省略——此时 tools 同样必须为空并带 message 说明,按未就绪处理,
+   * Agent 不得把这种字段缺失解释为 ready 或自行放行。
    */
   setup?: CindyGhostSetupAssessment;
   /** 条目级诊断(如配置评估失败时的处置指引);正常条目省略。 */

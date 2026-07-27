@@ -8,6 +8,7 @@
  * 代表任务运行时的状态,藏掉选项会挡住"先建任务、稍后唤醒/配置意识"的正常路径。
  */
 import { SCRIPT_CAPABILITIES, type ScriptCapability } from '@cindy/maker-scheduler';
+import type { GhostReadiness } from '../../shared/ghostLifecycle.js';
 
 /**
  * 能力 → 依赖意识 id。只登记有意识依赖的能力;不在表内 = host 原生实现,恒可用
@@ -47,7 +48,7 @@ export interface GhostStateSnapshot {
    * 旧调用方口径不变;评估失败由调用方显式传 'unknown',绝不把
    * 「判定失败」折叠成「可用」。
    */
-  readiness?: 'ready' | 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
+  readiness?: GhostReadiness;
 }
 
 export function resolveScriptCapabilityStatuses(
