@@ -392,8 +392,21 @@ export function useCodexAuth(options?: { enabled?: boolean }) {
 
   const cancelLogin = useCallback(async () => {
     invalidatePendingCodexLogin();
-    await window.electronAPI.maker.auth.cancelLogin(AGENT_KIND).catch(() => undefined);
-    transition({ type: 'cancelled' });
+    try {
+      await window.electronAPI.maker.auth.cancelLogin(AGENT_KIND);
+      transition({ type: 'cancelled' });
+    } catch (error) {
+      // Cancel may race with a just-persisted OAuth token. If durable cleanup failed,
+      // keep the UI aligned with Main's authoritative state instead of claiming that
+      // the account disconnected.
+      try {
+        const raw = await window.electronAPI.maker.auth.getState(AGENT_KIND);
+        transition({ type: 'refreshed-state', result: raw as CodexLoginResult });
+      } catch {
+        const message = error instanceof Error ? error.message : 'cancel_login_failed';
+        transition({ type: 'login-threw', message });
+      }
+    }
   }, [transition]);
 
   const logout = useCallback(async () => {

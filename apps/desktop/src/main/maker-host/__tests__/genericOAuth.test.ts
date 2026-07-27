@@ -268,6 +268,42 @@ describe('登录流与凭证落盘失败', () => {
     expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('newer-login');
   });
 
+  it('取消回滚用严格持久读取核对本次 token，不受热路径 fail-soft 读取影响', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    storage.read = () => null;
+
+    expect(rollback?.()).toBe(true);
+    expect(storage.map.has('acme')).toBe(false);
+  });
+
+  it('取消回滚无法严格核对持久 token 时报告失败并保留凭证', async () => {
+    autoAuthorize();
+    fetchResponder = () =>
+      new Response(JSON.stringify({ access_token: 'at-new', expires_in: 3600 }), { status: 200 });
+    let rollback: (() => boolean) | undefined;
+
+    await runGenericOAuthLogin(
+      { id: 'acme', name: 'Acme' },
+      OAUTH,
+      { onCredentialPersisted: (fn) => { rollback = fn; } },
+    );
+    storage.readStrict = () => {
+      throw new Error('safeStorage unavailable');
+    };
+
+    expect(rollback?.()).toBe(false);
+    expect(JSON.parse(storage.map.get('acme')!).access_token).toBe('at-new');
+  });
+
   it('登录时 storage.write 失败 → 硬失败且不留「已连接」内存态（回归：防重启后授权静默丢失）', async () => {
     autoAuthorize();
     storage.write = () => false;

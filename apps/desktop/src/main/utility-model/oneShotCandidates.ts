@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import { fetch as undiciFetch } from 'undici';
-
 import { toSdkModelString, type AgentKind, type Maker } from '@cindy/maker-core';
 import { appendProviderRequestPath } from '@cindy/model-providers';
 
@@ -11,6 +9,8 @@ import { getChatgptBridgeAuth } from '../maker-host/anthropic-responses-bridge-h
 import { getValidClaudeAiOAuth } from '../maker-host/claude-oauth-refresh.js';
 import { getGrokAccessToken } from '../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
+// undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
+import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';

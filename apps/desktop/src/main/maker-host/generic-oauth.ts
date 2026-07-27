@@ -31,6 +31,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 
 const log = desktopMakerLogger.child('generic-oauth');
 
@@ -87,7 +88,8 @@ let io: GenericOAuthIo = {
     write: () => false,
     remove: () => true,
   },
-  fetchImpl: fetch,
+  // 第三方 provider 的 token / device / refresh 端点多在境外,默认走吃系统代理的通道。
+  fetchImpl: outboundFetch,
   openExternal: async () => {
     throw new Error('generic-oauth openExternal not configured');
   },
@@ -743,7 +745,17 @@ export async function runGenericOAuthLogin(
     }
     const persistedRaw = JSON.stringify(persistedBlob);
     options?.onCredentialPersisted?.(() => {
-      if (io.storage.read(provider.id) !== persistedRaw) return true;
+      let currentRaw: string | null;
+      try {
+        currentRaw = io.storage.readStrict(provider.id);
+      } catch (err) {
+        log.warn('generic oauth 取消回滚无法严格核对持久凭证', {
+          providerId: provider.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+      if (currentRaw !== persistedRaw) return true;
       return logoutGenericOAuth(provider.id);
     });
     listener?.succeed(provider.name);

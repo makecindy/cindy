@@ -389,9 +389,6 @@ export function readCustomProviderKeyForMutation(
   const logicalKey = customProviderSecretStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('provider credential encryption is unavailable');
-  }
   let encoded: string;
   try {
     encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
@@ -404,6 +401,9 @@ export function readCustomProviderKeyForMutation(
       'read custom provider key snapshot failed',
     );
     throw new Error('existing provider credential is unreadable');
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('provider credential encryption is unavailable');
   }
   try {
     return safeStorage.decryptString(Buffer.from(encoded, 'base64'));

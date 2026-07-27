@@ -44,6 +44,7 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
+import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 
 const log = createLogger('maker-host:title-one-shot');
@@ -301,7 +302,8 @@ export async function generateTitleViaProvider(
   args: { sessionId: string; agentKind: AgentKind; prompt: string; signal?: AbortSignal },
   deps: TitleOneShotDeps = {},
 ): Promise<string | null> {
-  const fetchImpl = deps.fetchImpl ?? undiciFetch;
+  // 默认走吃系统代理的 undici fetch:上游可能是境外端点(catalog routing.upstream)。
+  const fetchImpl = deps.fetchImpl ?? outboundUndiciFetch;
   const readSessionProviderId = deps.readSessionProviderId ?? (async () => null);
   const listConnectedProviders = deps.listConnectedProviders ?? (async () => []);
   const readCodexCreds = deps.readCodexCreds ?? readCodexOneShotCreds;

@@ -77,36 +77,100 @@ interface CachedResolution {
   expiresAt: number;
 }
 
+/**
+ * 缓存条目上限。调用方可以按「origin + path」解析(PAC 允许按路径判定),条目数因此
+ * 与被访问的路径数同阶;满了整体重建(下一轮按 TTL 重新解析),不做 LRU。
+ */
+const SYSTEM_PROXY_CACHE_MAX_ENTRIES = 256;
+
 const systemProxyCache = new Map<string, CachedResolution>();
 // 每个 origin 上次记录过日志的生效值;仅在变化时记 info,避免 per-request 刷日志。
 const lastLoggedByOrigin = new Map<string, string>();
 
+/** 日志维度恒为 origin:path 可能带业务语义,且按 path 去重会把日志刷成噪音。 */
+function originForLog(upstreamUrl: string): string {
+  try {
+    const u = new URL(upstreamUrl);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return upstreamUrl;
+  }
+}
+
 function logIfChanged(upstreamUrl: string, source: 'env' | 'system', value: string | null): void {
+  const origin = originForLog(upstreamUrl);
   // env 值可能是 http://user:pass@host 形态,持久化日志只允许脱敏形态(scheme://host:port)。
   const rendered = value === null ? 'direct' : redactProxyUrlForLog(value);
-  if (lastLoggedByOrigin.get(upstreamUrl) === `${source}:${rendered}`) return;
-  lastLoggedByOrigin.set(upstreamUrl, `${source}:${rendered}`);
-  log.info('outbound proxy resolved', { upstream: upstreamUrl, source, proxy: rendered });
+  if (lastLoggedByOrigin.get(origin) === `${source}:${rendered}`) return;
+  if (lastLoggedByOrigin.size >= SYSTEM_PROXY_CACHE_MAX_ENTRIES) lastLoggedByOrigin.clear();
+  lastLoggedByOrigin.set(origin, `${source}:${rendered}`);
+  log.info('outbound proxy resolved', { upstream: origin, source, proxy: rendered });
+}
+
+/** resolveProxy 自身的上限。Chromium 侧卡住时不能让调用方无界等待。 */
+const SYSTEM_PROXY_RESOLVE_TIMEOUT_MS = 2000;
+/**
+ * 解析超时后按直连缓存的时长。必须写缓存(而不是什么都不写):否则每个请求都会再发一次
+ * resolveProxy,把已经卡住的解析路径打爆(IPC / Promise 堆积)。TTL 取短值,让代理软件
+ * 恢复后几秒内自动回到正常判定。
+ */
+const SYSTEM_PROXY_TIMEOUT_CACHE_TTL_MS = 5000;
+
+/** 给 resolveProxy 套超时:超时返回 null 并告知调用方这是超时(用于短 TTL 缓存)。 */
+async function resolveProxyWithTimeout(
+  ses: { resolveProxy(url: string): Promise<string> },
+  upstreamUrl: string,
+): Promise<{ value: string | null; timedOut: boolean }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<{ value: string | null; timedOut: boolean }>([
+      ses.resolveProxy(upstreamUrl).then((result) => ({
+        value: parseChromiumProxyResult(result),
+        timedOut: false,
+      })),
+      new Promise<{ value: string | null; timedOut: boolean }>((resolve) => {
+        timer = setTimeout(() => resolve({ value: null, timedOut: true }), SYSTEM_PROXY_RESOLVE_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function resolveViaSystemProxy(upstreamUrl: string): Promise<string | null> {
   const cached = systemProxyCache.get(upstreamUrl);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (systemProxyCache.size >= SYSTEM_PROXY_CACHE_MAX_ENTRIES) systemProxyCache.clear();
   // app 未 ready 时 session 不可用;此时按直连处理(splash 极早期,正常请求不会赶在这)。
   if (!app.isReady()) return null;
   const ses = session.defaultSession;
   if (!ses || typeof ses.resolveProxy !== 'function') return null;
   let value: string | null = null;
+  let timedOut = false;
   try {
-    value = parseChromiumProxyResult(await ses.resolveProxy(upstreamUrl));
+    const resolved = await resolveProxyWithTimeout(ses, upstreamUrl);
+    value = resolved.value;
+    timedOut = resolved.timedOut;
+    if (timedOut) {
+      log.warn('system proxy resolution timed out — using direct connection', {
+        upstream: originForLog(upstreamUrl),
+        timeoutMs: SYSTEM_PROXY_RESOLVE_TIMEOUT_MS,
+      });
+    }
   } catch (err) {
     log.warn('system proxy resolution failed — using direct connection', {
-      upstream: upstreamUrl,
+      upstream: originForLog(upstreamUrl),
       err: err instanceof Error ? err.message : String(err),
     });
     value = null;
   }
-  systemProxyCache.set(upstreamUrl, { value, expiresAt: Date.now() + SYSTEM_PROXY_CACHE_TTL_MS });
+  // 超时也写缓存,只是 TTL 短得多 —— 否则后续每个请求都会再打一次已经卡住的解析。
+  systemProxyCache.set(upstreamUrl, {
+    value,
+    expiresAt:
+      Date.now() + (timedOut ? SYSTEM_PROXY_TIMEOUT_CACHE_TTL_MS : SYSTEM_PROXY_CACHE_TTL_MS),
+  });
   return value;
 }
 

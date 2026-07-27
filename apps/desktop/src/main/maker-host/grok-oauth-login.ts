@@ -30,6 +30,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { bindNativeProviderAuth, isNativeProviderAuthBound, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
 import type { XaiBridgeAuthRecoveryOutcome } from './xai-bridge-auth-invalidation.js';
@@ -146,7 +147,7 @@ async function resolveEndpoints(
   signal: AbortSignal,
 ): Promise<{ authorize: string; token: string }> {
   try {
-    const res = await fetch(OIDC_DISCOVERY_URL, { signal });
+    const res = await outboundFetch(OIDC_DISCOVERY_URL, { signal });
     if (res.ok) {
       const j = (await res.json()) as { authorization_endpoint?: string; token_endpoint?: string };
       if (j.authorization_endpoint && j.token_endpoint) {
@@ -525,7 +526,7 @@ export async function runGrokOAuthLogin(opts?: {
 
     opts?.onProgress?.('exchanging');
     // form-encoded + PKCE 二次校验(challenge/method 再发一次)。
-    const res = await fetch(token, {
+    const res = await outboundFetch(token, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -678,7 +679,7 @@ async function refreshBlob(current: GrokTokenBlob, force: boolean): Promise<Grok
     // 刷新路径只需 token endpoint，直接用常量，避免 OIDC discovery fetch 挂起整条 _refreshChain。
     // 必须带超时:本 fetch 在 _refreshChain mutex 内,undici 默认 headersTimeout 5 分钟,
     // auth.x.ai 挂起会让所有排队的 xai/ 请求一起卡住;超时走 catch → 本次用旧 token。
-    const res = await fetch(FALLBACK_TOKEN_URL, {
+    const res = await outboundFetch(FALLBACK_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({

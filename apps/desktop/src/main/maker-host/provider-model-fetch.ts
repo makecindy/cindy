@@ -18,6 +18,7 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { deriveModelsDiscoveryUrl, parseModelsListResponse } from './generic-oauth.js';
+import { outboundFetch } from './outbound-fetch.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
@@ -111,7 +112,7 @@ function networkErrorCode(err: unknown): string {
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
 export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderModelsFetchResult> {
   if (
     spec.authMethod === 'none'

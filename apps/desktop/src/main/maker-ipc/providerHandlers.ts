@@ -571,7 +571,15 @@ export function registerProviderHandlers(
     deps.broadcastChanged();
   }
 
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (_event, input: unknown, keyInput?: unknown) => {
+  function assertTrustedProviderMutationSender(event: unknown): void {
+    if (!deps.assertTrustedSender) {
+      throwIpcError('PERMISSION_DENIED', 'sender trust guard unavailable');
+    }
+    deps.assertTrustedSender(event);
+  }
+
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (event, input: unknown, keyInput?: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const v = validateCustomProviderConfig(input);
     if (!v.ok) throwIpcError(v.code, v.message);
     const keys = parseRuntimeKeys(keyInput);
@@ -601,7 +609,8 @@ export function registerProviderHandlers(
     });
   });
 
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, async (_event, input: unknown, keyInput?: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, async (event, input: unknown, keyInput?: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const v = validateCustomProviderConfig(input);
     if (!v.ok) throwIpcError(v.code, v.message);
     const keys = parseRuntimeKeys(keyInput);
@@ -669,7 +678,8 @@ export function registerProviderHandlers(
     });
   });
 
-  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (_event, providerId: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, async (event, providerId: unknown) => {
+    assertTrustedProviderMutationSender(event);
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
@@ -765,10 +775,7 @@ export function registerProviderHandlers(
     // 守卫缺席按拒绝处理:可选依赖用 `?.()` 调用时,漏接线会静默退化成「无守卫」,而这种
     // 退化没有任何编译期或运行期信号。宁可在接线回归时把功能打死,也不要让它悄悄敞开
     // (PR #548 review)。
-    if (!deps.assertTrustedSender) {
-      throwIpcError('PERMISSION_DENIED', 'sender trust guard unavailable');
-    }
-    deps.assertTrustedSender(event);
+    assertTrustedProviderMutationSender(event);
     const providerId = requireProviderId(input);
     let failure: ProviderModelDiscoveryFailure | null;
     try {
@@ -786,7 +793,8 @@ export function registerProviderHandlers(
     // 与 buildRegistry 的投影同口径:detail 可能是上游原始响应体,不能过 IPC 边界。
     // 这是独立于 provider 列表的第二条返回路径,必须各自剥离(PR #548 review)。
     if (!failure) return { ok: true };
-    const { detail: _detail, ...failureView } = failure;
+    const failureView = { ...failure };
+    delete failureView.detail;
     return { ok: false, failure: failureView };
   });
 

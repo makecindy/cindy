@@ -25,6 +25,7 @@ import path from 'node:path';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { getGrokAccessToken } from './grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
 import { chatgptAccountIdFromIdToken, desktopCodexAuthAdapter } from './auth-adapters.js';
@@ -131,7 +132,7 @@ async function refreshIfNeeded(authPath: string, current: CodexAuthFile): Promis
     log.info('bridge 兜底刷新 codex access_token', { last_refresh: fresh.last_refresh });
     // 必须带超时:本 fetch 在 _refreshChain mutex 内,undici 默认 headersTimeout 5 分钟,
     // auth.openai.com 挂起会让所有排队的 chatgpt/ 请求一起卡住。超时走 catch → 本次用旧 token。
-    const res = await fetch(OPENAI_TOKEN_URL, {
+    const res = await outboundFetch(OPENAI_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -310,6 +311,9 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
     _handler = createResponsesHandler({
       providers: [codexProviderConfig(), xaiProviderConfig()],
       logger: log,
+      // 订阅直连的上游(chatgpt.com / api.x.ai)由 handler 自己发出,不经 compat-proxy
+      // 的转发层,拿不到那边的出站代理;必须显式注入(见 outbound-fetch.ts)。
+      fetchImpl: outboundFetch,
     });
   } catch (err) {
     _handler = null;

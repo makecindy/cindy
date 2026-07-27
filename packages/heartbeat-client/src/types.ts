@@ -60,6 +60,13 @@ export interface HeartbeatClientOptions {
    * 适合复用 heartbeat 的节拍做本地轻量任务,但回调异常不会中断心跳上报。
    */
   onTick?: (payload: HeartbeatTickPayload) => void;
+  /**
+   * 出网通道。缺省 = `globalThis.fetch`。注意 **Node / Electron 主进程**下它是 undici,
+   * 不读系统代理设置也不读代理环境变量;需要经代理出网的宿主要注入自己的实现
+   * (desktop 注入 main/maker-host/outbound-fetch)。浏览器环境不受此影响 —— 那里的
+   * fetch 走浏览器网络栈,系统代理天然生效。
+   */
+  fetchImpl?: typeof fetch;
 }
 
 /** start() 返回的句柄,允许停止与状态查询。 */

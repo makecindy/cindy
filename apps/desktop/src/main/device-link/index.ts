@@ -34,6 +34,7 @@ import * as authManager from '../authManager';
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
 import { tryGetDbClient } from '../localDb/client/current';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
 import {
   DeviceLinkOwnershipArbiter,
   createDbClientOwnershipStore,
@@ -244,7 +245,10 @@ export function initDeviceLinkService(): void {
       // 硬编码 false 会把 server presence 覆盖成空闲、且轮询 dedupe 压掉补正(New-F)。见 busyReporter。
       busy: helloBusy(),
     }),
-    createWebSocket: (url, headers) => new WebSocket(url, { headers }),
+    // agent:`ws` 不吃系统代理,relay 在代理网络下会连不上;直连时为 undefined,
+    // 行为与不传一致(见 maker-host/outbound-fetch)。
+    createWebSocket: async (url, headers) =>
+      new WebSocket(url, { headers, agent: await createOutboundHttpAgent(url) }),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),

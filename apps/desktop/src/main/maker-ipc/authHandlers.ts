@@ -355,6 +355,24 @@ export function registerMakerAuthHandlers(
             // cancelLogin 已无 pending process，必须显式走 durable logout 才不会留下新 token。
             await maker.logoutAgent(kind);
           } catch (err) {
+            // 登录调用已经因 generation 作废并向其调用方返回 cancelled；durable logout
+            // 若失败，不能让其它观察窗口继续相信“已断开”。重读 Maker 权威状态并广播，
+            // renderer 的显式 cancel 路径也会重读一次，以覆盖广播丢失/订阅尚未就绪。
+            try {
+              const authoritative = await maker.getAgentAuthState(kind);
+              if (isCurrent()) {
+                broadcast(MAKER_PUSH.AUTH_STATE_CHANGED, {
+                  agentKind: kind,
+                  ...authoritative,
+                });
+              }
+            } catch (stateErr) {
+              log.warn(
+                `failed to reconcile auth after cancellation cleanup error: ${
+                  stateErr instanceof Error ? stateErr.message : String(stateErr)
+                }`,
+              );
+            }
             throwIpcError('INTERNAL', err instanceof Error ? err.message : String(err));
           }
         }

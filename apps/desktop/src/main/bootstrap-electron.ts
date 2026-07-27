@@ -241,6 +241,7 @@ import { getDrizzleDir } from './localDb/migrate';
 import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
 import { startEmbeddingHost, stopEmbeddingHost, isEmbeddingHostStarted } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
+import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import { onQuit, installQuitHandler } from './lifecycle';
 import { initStartupDiagnostics } from './startup-diagnostics';
@@ -760,6 +761,9 @@ function attemptStartEmbeddingHost(): void {
       getApiKey: () => readClaudeApiKey(),
       // 函数形态:model-access 下发切换 endpoint 后,常驻的 embedding host 无需重启。
       gatewayBaseUrl: () => effectiveXdGatewayBaseUrl(),
+      // /v1/embeddings 也要吃系统代理:裸全局 fetch 在「系统代理」模式下裸直连出网
+      // (见 maker-host/outbound-fetch.ts)。
+      fetchImpl: outboundFetch,
       log: createSchedulerLogger('embeddingHost'),
     });
     // chat-history-embedder consumer 注册 + setEnabled(true) 触发 cutoff 落盘。

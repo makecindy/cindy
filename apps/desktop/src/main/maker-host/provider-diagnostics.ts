@@ -27,6 +27,7 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { outboundFetch } from './outbound-fetch.js';
 
 /** 探测请求超时。 */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -221,7 +222,8 @@ function networkErrorCode(err: unknown): string {
 /** 跑一次探测请求并分类结果。fetch 可注入（单测）。 */
 export async function runProviderProbe(
   spec: ProviderProbeSpec,
-  fetchImpl: typeof fetch = fetch,
+  // 默认吃系统代理:探测必须与真实会话同口径,否则代理用户会被误判成「连不通」。
+  fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderTestResult> {
   if (spec.authMethod === 'none' && !isLoopbackProviderUrl(spec.baseUrl)) {
     throw new TypeError('no-auth provider probes require a loopback URL');
@@ -378,7 +380,7 @@ export function setDiagnosticsOAuthTokenReader(reader: OAuthProbeTokenReader): v
 /** 测试入口（IPC handler 消费）。 */
 export async function testProviderConnection(
   input: ProviderTestInput,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = outboundFetch,
 ): Promise<ProviderTestResult> {
   const spec = input.kind === 'saved' ? resolveSavedProbeSpec(input.providerId, input.agent) : input.spec;
   return runProviderProbe(spec, fetchImpl);

@@ -162,6 +162,7 @@ import {
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   CINDY_CAPABILITY_KEYS,
   readGhostCindyOverrides,
@@ -1881,8 +1882,10 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
         store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
         remove: (ghostId, storageKey) => removeGhostSecret(ghostId, storageKey),
       },
-      // 与 networkSlot 同选型:Node 侧全局 fetch(undici),不吃系统代理。
-      fetchImpl: (url, init) => fetch(url, init as RequestInit),
+      // 与 networkSlot 同选型:Node 侧 undici fetch(Chromium 栈的 manual redirect 给
+      // opaqueredirect,守不住逐跳白名单),但经 outboundFetch 拿到系统代理 ——
+      // 意识 OAuth 的 token 端点(Google / Atlassian 等)多在境外。
+      fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       openExternal: (url) => shell.openExternal(url),
       // tokenBroker 声明的意识(仅第一方,门控在装入闸与连接闸)经独立
       // oauth-broker 服务换/刷 token:serverApiFetch 自带登录 JWT 注入与
@@ -2139,13 +2142,13 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
       getLoginEmail: () => getAuthState().user?.email ?? null,
-      // 用 Node 侧全局 fetch(undici)而非 Electron net.fetch:redirect:'manual'
-      // 在 undici 下如实返回 3xx + Location,本槽据此逐跳校验白名单;Chromium
-      // 栈的 manual 会给 opaqueredirect(读不到 Location),无法逐跳守门。
-      // 代价是不吃系统代理设置,意识自带服务场景可接受,有诉求再评估。
+      // 用 Node 侧 undici fetch 而非 Electron net.fetch:redirect:'manual' 在 undici
+      // 下如实返回 3xx + Location,本槽据此逐跳校验白名单;Chromium 栈的 manual 会给
+      // opaqueredirect(读不到 Location),无法逐跳守门。系统代理由 outboundFetch 补上
+      // (意识声明的域名大量在境外,裸 undici 直连在「系统代理」模式下出不去)。
       // init 收窄:body 的 Uint8Array 在 lib.dom 的 BodyInit 泛型下对不齐,
       // 运行时 undici 原生支持,按 RequestInit 交给 fetch。
-      fetchImpl: (url, init) => fetch(url, init as RequestInit),
+      fetchImpl: (url, init) => outboundFetch(url, init as RequestInit),
       // 媒体模式(as:'media'):字节直落总仓 + ghost-gallery 记账(出生=该
       // 意识,与 cindy 槽产物同一记账口径),走统一入库助手 ingestMedia
       // (规则 25)。mime 白名单同一来源(blobStore),槽内归一化后再判。

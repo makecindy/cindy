@@ -361,6 +361,64 @@ describe('maker auth IPC handlers', () => {
     });
   });
 
+  it('re-broadcasts authoritative auth and rejects cancel when durable cleanup fails', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const cancelAgentLogin = vi.fn();
+    const logoutAgent = vi.fn().mockRejectedValue(new Error('disconnect marker write failed'));
+    const getAgentAuthState = vi.fn().mockResolvedValue({
+      authenticated: true,
+      authSource: 'oauth',
+      identity: 'still-connected@example.test',
+    });
+    let finishRefresh!: (value: boolean) => void;
+    const refreshAgentLocalModels = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    const triggerAgentLogin = vi.fn().mockResolvedValue({
+      authenticated: true,
+      authSource: 'oauth',
+    });
+    const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({
+        triggerAgentLogin,
+        refreshAgentLocalModels,
+        cancelAgentLogin,
+        logoutAgent,
+        getAgentAuthState,
+      }),
+      broadcast,
+      () => null,
+      onCodexAuthChange,
+    );
+
+    const login = harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex');
+    await vi.waitFor(() => expect(refreshAgentLocalModels).toHaveBeenCalledOnce());
+    const cancel = harness.invoke(MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex');
+    finishRefresh(true);
+
+    await expect(login).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await expect(cancel).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(getAgentAuthState).toHaveBeenCalledWith('codex');
+    expect(onCodexAuthChange).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: true,
+      authSource: 'oauth',
+      identity: 'still-connected@example.test',
+    });
+  });
+
   it('reuses adapter-stage durable cancellation, then performs cache cleanup and one push', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();

@@ -124,6 +124,39 @@ describe('useCodexAuth lifecycle', () => {
     expect(result.current.state.kind).toBe('unauthenticated');
   });
 
+  it('reconciles and surfaces a failed durable cancellation instead of claiming disconnect', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.cancelLogin.mockRejectedValue(
+      new Error('[INTERNAL] failed to persist Codex disconnect state'),
+    );
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth' as const,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth' as const,
+      });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+    await act(async () => {
+      await result.current.cancelLogin();
+    });
+
+    expect(auth.cancelLogin).toHaveBeenCalledWith('codex');
+    expect(auth.getState).toHaveBeenCalledTimes(2);
+    expect(result.current.state).toEqual({
+      kind: 'authenticated',
+      identity: 'user@example.com',
+      expiresAt: undefined,
+      authSource: 'oauth',
+    });
+  });
+
   it('returns failed while retaining a generic main-process login reason', async () => {
     const auth = installAuthApi(async () => undefined);
     auth.triggerLogin.mockResolvedValue({ authenticated: false, errorReason: 'login_timeout' });

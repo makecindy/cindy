@@ -122,7 +122,7 @@ describe('provider:list IPC handler', () => {
 describe('provider:models-rediscover handler', () => {
   it('校验 sender 后才发起重新发现;不可信 sender 直接拒绝', async () => {
     const harness = new IpcHarness();
-    const assertTrustedSender = vi.fn((_event: unknown) => {
+    const assertTrustedSender = vi.fn(() => {
       throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
     });
     const deps = makeDeps({ assertTrustedSender });
@@ -197,6 +197,50 @@ describe('provider:models-rediscover handler', () => {
 });
 
 describe('provider:custom:* CRUD handlers', () => {
+  it('rejects credential-mutating CRUD before parsing or touching secrets for an untrusted sender', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn(() => {
+      throwIpcError('PERMISSION_DENIED', 'untrusted provider mutation sender');
+    });
+    const deps = makeDeps({ assertTrustedSender });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_CREATE,
+        validConfig,
+        { codex: 'must-not-stage' },
+      ),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE,
+        validConfig,
+        { codex: 'must-not-stage' },
+      ),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, validConfig.id),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+
+    expect(assertTrustedSender).toHaveBeenCalledTimes(3);
+    expect(deps.readCustomProviderKeyForMutation).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.removeOAuthCredentials).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the provider mutation sender guard is not wired', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ assertTrustedSender: undefined });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig),
+    ).rejects.toThrow(/PERMISSION_DENIED.*guard unavailable/);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+
   it('creates a valid provider, persists it, refreshes + broadcasts', async () => {
     mountDb();
     const harness = new IpcHarness();

@@ -60,6 +60,7 @@ import {
 } from '../active-catalog.js';
 import { hasClaudeAiOAuth, readClaudeAiOAuth } from '../claude-credentials-store.js';
 import { getValidClaudeAiOAuth } from '../claude-oauth-refresh.js';
+import { outboundFetch } from '../outbound-fetch.js';
 
 const log = createLogger('model-discovery:anthropic');
 
@@ -929,7 +930,7 @@ export function refreshAnthropicModelsFromHttp(options?: {
     let url: string | null = `${upstream.replace(/\/+$/, '')}/v1/models?limit=1000`;
     try {
       for (let page = 0; url && page < MAX_MODEL_PAGES; page += 1) {
-        const res: Response = await fetch(url, {
+        const res: Response = await outboundFetch(url, {
           headers: {
             authorization: `Bearer ${oauth.accessToken}`,
             'anthropic-version': '2023-06-01',

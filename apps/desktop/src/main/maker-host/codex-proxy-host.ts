@@ -63,6 +63,7 @@ import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-
 import { encryptedStripController, imageGenerationStripController } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
+import { outboundFetch } from './outbound-fetch.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -292,7 +293,9 @@ function createChatBridgeDecision(
     rewriteModel: (model: string) => rewriteChatBridgeModel(model, stripPrefix),
     capabilities,
     ...(onUpstreamError ? { onUpstreamError } : {}),
-  }, { logger: log });
+    // localHandler 分支的上游请求由 chat bridge 自己发,绕开了 compat-proxy 转发层的
+    // 出站代理;显式注入代理感知 fetch(见 outbound-fetch.ts)。
+  }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, res }) => {
       let body = parsedBody;
