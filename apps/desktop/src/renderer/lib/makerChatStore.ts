@@ -3577,13 +3577,22 @@ function initGlobalListeners(): void {
         }
       }
       // guard fall-through（cap 超限 / 已重试同消息）：重试不会发生。
-      // main 侧对所有 remote auth error 均跳过持久化；在此补落。
+      // 仅 legacy CC/XD 在此补落：main 侧只对 CC remote auth error 跳过持久化
+      // （isRemoteAuthRetryErrorEvent 对 codex 直接返回 false），由这里的 deferred
+      // IPC 兜底。Codex remote auth error 在 main 侧走正常 onTurnErrorEvent 热路径
+      // 落库；这里再落会双写——Codex 事件无 agentMeta，main 又在广播后 reset turn
+      // 身份，两次落库的 dedup key 对不上，重开会话会出现重复错误卡。
       // 限制仅当 preSnap.remoteHostId 已加载时才触发：
       //   - 对于已加载的远程会话，能确认无 retry 在途，可安全落库。
       //   - 对于从未打开的后台会话（remoteHostId 为 null），无法判断另一个窗口
       //     是否正在 retry；贸然落库若 retry 成功会留下虚假错误卡，不落库则
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
-      if (isAuthError && preSnap.remoteHostId && !preSnap._authRetryInFlight) {
+      if (
+        isAuthError &&
+        preSnap.remoteHostId &&
+        preSnap.agentKind === 'claude-code' &&
+        !preSnap._authRetryInFlight
+      ) {
         void makerApiFor(sessionId).input.persistTurnErrorDeferred(
           sessionId,
           event.data as Record<string, unknown> | null,

@@ -1285,7 +1285,9 @@ describe('makerChatStore text delta batching', () => {
         type: 'error',
         source: 'codex',
         data: { errorStatus: 401, message: 'Authorization: [REDACTED]' },
-        agentMeta: { sdkSessionId: 'sdk-1' },
+        // 真实 Codex 事件没有 agentMeta（SDK 无 uuid 概念）——不注入合成值，
+        // 正好覆盖双写修复：renderer 不再 deferred 补落，main 热路径唯一落库。
+        agentMeta: null,
       },
     });
     await flushPromises();
@@ -1293,11 +1295,9 @@ describe('makerChatStore text delta batching', () => {
     expect(window.electronAPI.safeStorageRead).not.toHaveBeenCalled();
     expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
     expect(input.enqueue).not.toHaveBeenCalled();
-    expect(input.persistTurnErrorDeferred).toHaveBeenCalledWith(
-      SESSION_ID,
-      { errorStatus: 401, message: 'Authorization: [REDACTED]' },
-      { sdkSessionId: 'sdk-1' },
-    );
+    // main 侧 isRemoteAuthRetryErrorEvent 对 codex 返回 false，error 行走正常
+    // onTurnErrorEvent 落库；renderer 再 deferred 会双写（dedup key 对不上）。
+    expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
     expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
       'Authorization: [REDACTED] (HTTP 401)',
     );
@@ -1410,7 +1410,7 @@ describe('makerChatStore text delta batching', () => {
       },
     ];
     vi.mocked(sessionService.get).mockResolvedValue({
-      agentKind: 'claude-code',
+      agentKind: 'cc',
       remoteHostId: 'remote-host',
       sdkSessionId: null,
       fastMode: false,
