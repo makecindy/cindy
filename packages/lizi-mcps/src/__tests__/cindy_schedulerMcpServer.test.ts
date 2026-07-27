@@ -100,9 +100,12 @@ class InMemoryStorage implements ScheduleStorage {
     return [];
   }
   async touchRunHeartbeats(): Promise<void> {}
-  async hasRunningRuns(scheduleId?: string): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean> {
     return [...this.runs.values()].some(
-      (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
+      (r) =>
+        r.status === 'running' &&
+        (scheduleId === undefined || r.scheduleId === scheduleId) &&
+        (opts?.firedAt === undefined || r.firedAt === opts.firedAt),
     );
   }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
@@ -110,6 +113,18 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
+    return { ...ex };
+  }
+  async claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
+    ex.nextFireAt = undefined;
+    ex.lastFiredAt = run.firedAt;
+    this.runs.set(run.id, { ...run });
     return { ...ex };
   }
 }

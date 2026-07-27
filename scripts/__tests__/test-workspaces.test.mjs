@@ -52,11 +52,11 @@ test("root unit and all scripts run runner self-tests before workspace sweep", (
 	const scripts = readRootScripts();
 	assert.match(
 		scripts["test:unit"],
-		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --tier unit$/,
+		/^corepack pnpm test:runner && corepack pnpm exec node scripts\/test-workspaces\.mjs --tier unit$/,
 	);
 	assert.match(
 		scripts["test:all"],
-		/^pnpm test:runner && node scripts\/test-workspaces\.mjs --all$/,
+		/^corepack pnpm test:runner && corepack pnpm exec node scripts\/test-workspaces\.mjs --all$/,
 	);
 });
 
@@ -64,7 +64,7 @@ test("root db and guard delegate to the workspace runner", () => {
 	const scripts = readRootScripts();
 	assert.equal(
 		scripts["test:db"],
-		"pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
+		"corepack pnpm test:runner && corepack pnpm exec node scripts/test-workspaces.mjs --tier db",
 	);
 	assert.equal(scripts["test:guard"], "node scripts/test-workspaces.mjs --tier guard");
 });

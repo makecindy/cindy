@@ -64,9 +64,12 @@ class InMemoryStorage implements ScheduleStorage {
       .sort((a, b) => b.firedAt - a.firedAt)
       .slice(0, limit);
   }
-  async hasRunningRuns(scheduleId?: string): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean> {
     return [...this.runs.values()].some(
-      (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
+      (r) =>
+        r.status === 'running' &&
+        (scheduleId === undefined || r.scheduleId === scheduleId) &&
+        (opts?.firedAt === undefined || r.firedAt === opts.firedAt),
     );
   }
   async deleteRun(id: string): Promise<ScheduleRun | null> {
@@ -110,6 +113,18 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
     ex.nextFireAt = undefined;
+    return { ...ex };
+  }
+  async claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null> {
+    const ex = this.schedules.get(id);
+    if (!ex || ex.status !== 'active' || ex.nextFireAt !== expectedNextFireAt) return null;
+    ex.nextFireAt = undefined;
+    ex.lastFiredAt = run.firedAt;
+    this.runs.set(run.id, { ...run });
     return { ...ex };
   }
 }
@@ -1631,7 +1646,7 @@ describe('Scheduler cross-instance dedupe', () => {
     const firedEvents: unknown[] = [];
     h.scheduler.on('fired', (e) => firedEvents.push(e));
     // 模拟另一进程在本进程 CAS 前一瞬抢先认领
-    vi.spyOn(h.storage, 'claimDueFire').mockResolvedValueOnce(null);
+    vi.spyOn(h.storage, 'claimDueFireAndInsertRun').mockResolvedValueOnce(null);
     h.clock.advance(60_000);
     await h.scheduler.tick();
     expect(h.runner.fire).not.toHaveBeenCalled();
@@ -1642,7 +1657,7 @@ describe('Scheduler cross-instance dedupe', () => {
   it('claimDueFire 抛错时:放回内存,下个 tick 重试成功', async () => {
     const h = makeHarness();
     const sch = await h.scheduler.create({ ...baseInput });
-    vi.spyOn(h.storage, 'claimDueFire').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+    vi.spyOn(h.storage, 'claimDueFireAndInsertRun').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
     h.clock.advance(60_000);
     await h.scheduler.tick();
     expect(h.runner.fire).not.toHaveBeenCalled();
@@ -1906,13 +1921,28 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const a = makeHarness({ storage, clock });
     const sch = await a.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
 
-    await storage.update(sch.id, { nextFireAt: undefined });
+    await storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: clock.now() });
     insertRunningRun(storage, 'run-live-claim', sch.id, clock.now(), clock.now());
 
     const b = makeHarness({ storage, clock });
     await b.scheduler.start();
 
     expect((await storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    await b.scheduler.stop();
+  });
+
+  it('start() avoids running-run queries for schedules that would not re-arm', async () => {
+    const storage = new InMemoryStorage();
+    const clock = new FakeClock();
+    const manual = makeHarness({ storage, clock });
+    const sch = await manual.scheduler.create({ ...baseInput, manual: true });
+    await storage.update(sch.id, { nextFireAt: undefined });
+    const hasRunningSpy = vi.spyOn(storage, 'hasRunningRuns');
+
+    const b = makeHarness({ storage, clock });
+    await b.scheduler.start();
+
+    expect(hasRunningSpy).not.toHaveBeenCalled();
     await b.scheduler.stop();
   });
 
@@ -2067,15 +2097,33 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const h = makeHarness();
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
     await h.scheduler.start();
-    await h.storage.update(sch.id, { nextFireAt: undefined });
+    const claimedAt = h.clock.now();
+    await h.storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: claimedAt });
     // 心跳过期的僵尸 + 心跳新鲜的活 run 并存(如 runNow 僵尸 + 认领执行中)
-    insertRunningRun(h.storage, 'run-dead', sch.id, h.clock.now(), h.clock.now());
-    insertRunningRun(h.storage, 'run-live', sch.id, h.clock.now(), h.clock.now() + 90_000);
+    insertRunningRun(h.storage, 'run-dead', sch.id, claimedAt - 1_000, h.clock.now());
+    insertRunningRun(h.storage, 'run-live', sch.id, claimedAt, h.clock.now() + 90_000);
     await advancePastSweep(h);
     expect(h.storage.runs.get('run-dead')?.status).toBe('interrupted');
     expect(h.storage.runs.get('run-live')?.status).toBe('running');
     // 执行方 fireOne 收口时会按 recurring 语义重排,这里不抢
     expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+    await h.scheduler.stop();
+  });
+
+  it('清扫后只剩手动 runNow running 行时,不把它当自动认领并恢复排期', async () => {
+    const h = makeHarness();
+    const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+    await h.scheduler.start();
+    const claimedAt = h.clock.now();
+    await h.storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: claimedAt });
+    insertRunningRun(h.storage, 'run-claimed-dead', sch.id, claimedAt, h.clock.now());
+    insertRunningRun(h.storage, 'run-manual-live', sch.id, claimedAt + 1, h.clock.now() + 90_000);
+
+    await advancePastSweep(h);
+
+    expect(h.storage.runs.get('run-claimed-dead')?.status).toBe('interrupted');
+    expect(h.storage.runs.get('run-manual-live')?.status).toBe('running');
+    expect((await h.storage.get(sch.id))?.nextFireAt).toBe(sch.createdAt + 3_600_000);
     await h.scheduler.stop();
   });
 
@@ -2113,10 +2161,11 @@ describe('Scheduler run heartbeat lease & zombie sweep', () => {
     const h = makeHarness();
     const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
     await h.scheduler.start();
-    await h.storage.update(sch.id, { nextFireAt: undefined });
     const t0 = h.clock.now();
+    const liveFiredAt = t0 - 600_000;
+    await h.storage.update(sch.id, { nextFireAt: undefined, lastFiredAt: liveFiredAt });
     // 长跑中的活 claim run(心跳新鲜),firedAt 最老
-    insertRunningRun(h.storage, 'run-live-old', sch.id, t0 - 600_000, t0 + 90_000);
+    insertRunningRun(h.storage, 'run-live-old', sch.id, liveFiredAt, t0 + 90_000);
     // 其后落库的 12 条终态行,把活 run 挤出 listRuns(…, 10) 的窗口
     for (let i = 0; i < 12; i++) {
       h.storage.runs.set(`run-done-${i}`, {

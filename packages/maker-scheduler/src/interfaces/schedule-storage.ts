@@ -15,9 +15,23 @@ export interface ScheduleStorage {
    * 时,把 nextFireAt 置空并返回更新后的行;否则(已被另一实例认领 / 已被改期 /
    * 已暂停删除)不做任何修改并返回 null,调用方据此放弃本次触发。
    * 认领后的 nextFireAt 由引擎在 run 结束时按 recurring 语义重排;进程中途崩溃
-   * 留下的空 nextFireAt 由任一实例下次 start() 的归一逻辑重新排期。
+   * 留下的空 nextFireAt 由僵尸 run 清扫后的归一逻辑重新排期。
    */
   claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null>;
+
+  /**
+   * 原子认领一次自动触发并写入对应的 running run。多实例启动归一会用
+   * running run 判断 nextFireAt=NULL 是否代表"另一个实例正在执行";因此
+   * claim 与 running 行必须同事务可见,不能先清 nextFireAt 再晚些 insertRun。
+   * 实现同时把 schedules.lastFiredAt 写成 run.firedAt,作为"这条 running
+   * run 是自动 claim owner"的轻量标记;手动 runNow 的 running 行不应阻止
+   * 崩溃认领后的补排。
+   */
+  claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null>;
 
   insertRun(run: ScheduleRun): Promise<ScheduleRun>;
   updateRun(id: string, patch: Partial<ScheduleRun>): Promise<ScheduleRun | null>;
@@ -66,5 +80,5 @@ export interface ScheduleStorage {
    * 不能用 listRuns 的历史展示查询——它带条数上限，活跃 claim run 被更新的
    * runNow/终态行挤出窗口时会漏判（codex review P2）。
    */
-  hasRunningRuns(scheduleId?: string): Promise<boolean>;
+  hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean>;
 }

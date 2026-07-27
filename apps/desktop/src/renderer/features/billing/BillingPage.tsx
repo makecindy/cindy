@@ -146,7 +146,7 @@ function formatBillingDate(value: string | null, locale: string): string | null 
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return null;
   try {
-    return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(timestamp);
+    return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(timestamp);
   } catch {
     return null;
   }

@@ -409,6 +409,42 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return this.get(id);
   }
 
+  /**
+   * 原子认领自动触发并写入 running run。启动归一依赖 running 行判断
+   * next_fire_at=NULL 是否是活认领,因此两张表必须同事务可见。
+   */
+  async claimDueFireAndInsertRun(
+    id: string,
+    expectedNextFireAt: number,
+    run: ScheduleRun,
+  ): Promise<Schedule | null> {
+    const db = this.getDb();
+    return db.transaction(() => {
+      const result = db
+        .update(schedules)
+        .set({ nextFireAt: null, lastFiredAt: run.firedAt })
+        .where(
+          and(
+            eq(schedules.id, id),
+            eq(schedules.status, 'active'),
+            eq(schedules.nextFireAt, expectedNextFireAt),
+          ),
+        )
+        .run();
+      const changes = (result as unknown as { changes?: number }).changes;
+      if (typeof changes !== 'number') {
+        throw new Error('claimDueFireAndInsertRun: sqlite driver did not report changes count');
+      }
+      if (changes === 0) return null;
+      db.insert(scheduleRuns).values(scheduleRunCreateToRow(run)).run();
+      const [row] = db.select().from(schedules).where(eq(schedules.id, id)).limit(1).all();
+      if (!row) {
+        throw new Error(`claimDueFireAndInsertRun: claimed schedule vanished for id=${id}`);
+      }
+      return scheduleToCamel(row);
+    });
+  }
+
   // ---------- ScheduleRun CRUD ----------
 
   async insertRun(run: ScheduleRun): Promise<ScheduleRun> {
@@ -1017,7 +1053,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * "是否仍有活 run"不变量用,无上限,不受 listRuns 展示条数影响);
    * 不传 = 全局(updater 自动重启的 busy probe 沿用)。
    */
-  async hasRunningRuns(scheduleId?: string): Promise<boolean> {
+  async hasRunningRuns(scheduleId?: string, opts?: { firedAt?: number }): Promise<boolean> {
     const db = this.getDb();
     const [row] = await db
       .select({ id: scheduleRuns.id })
@@ -1026,6 +1062,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         and(
           eq(scheduleRuns.status, 'running'),
           ...(scheduleId !== undefined ? [eq(scheduleRuns.scheduleId, scheduleId)] : []),
+          ...(opts?.firedAt !== undefined ? [eq(scheduleRuns.firedAt, opts.firedAt)] : []),
         ),
       )
       .limit(1);

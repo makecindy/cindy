@@ -420,6 +420,61 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  it('claimDueFireAndInsertRun: 同事务置空 next_fire_at、写 last_fired_at 并插入 running 行', async () => {
+    const harness = createStorageHarness();
+    const due = 1_700_000_060_000;
+    const firedAt = 1_700_000_061_000;
+    try {
+      await harness.storage.insert(baseSchedule({ id: 'sch-claim-run', nextFireAt: due }));
+
+      expect(
+        await harness.storage.claimDueFireAndInsertRun('sch-claim-run', due + 1, {
+          id: 'run-miss',
+          scheduleId: 'sch-claim-run',
+          firedAt,
+          status: 'running',
+          heartbeatAt: firedAt,
+        }),
+      ).toBeNull();
+      expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(0);
+      expect((await harness.storage.get('sch-claim-run'))?.nextFireAt).toBe(due);
+
+      const claimed = await harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
+        id: 'run-hit',
+        scheduleId: 'sch-claim-run',
+        firedAt,
+        status: 'running',
+        heartbeatAt: firedAt,
+        costAttribution: 'unavailable',
+      });
+      expect(claimed?.nextFireAt).toBeUndefined();
+      expect(claimed?.lastFiredAt).toBe(firedAt);
+      expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt })).toBe(true);
+      expect(await harness.storage.hasRunningRuns('sch-claim-run', { firedAt: firedAt + 1 })).toBe(false);
+      expect(await harness.storage.listRuns('sch-claim-run')).toEqual([
+        expect.objectContaining({
+          id: 'run-hit',
+          status: 'running',
+          firedAt,
+          heartbeatAt: firedAt,
+          costAttribution: 'unavailable',
+        }),
+      ]);
+
+      await expect(
+        harness.storage.claimDueFireAndInsertRun('sch-claim-run', due, {
+          id: 'run-duplicate',
+          scheduleId: 'sch-claim-run',
+          firedAt: firedAt + 1,
+          status: 'running',
+        }),
+      ).resolves.toBeNull();
+      expect(await harness.storage.listRuns('sch-claim-run')).toHaveLength(1);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('claimDueFire: 经 DbClient drizzleProxy(worker RPC)也能拿到 changes 完成 CAS', async () => {
     // 回归测试 — 防退化:主进程生产链路的 db 是 drizzleProxy,不是直连
     // better-sqlite3 drizzle。代理对隐式 await 的写操作丢弃 { changes },
