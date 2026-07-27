@@ -24,7 +24,7 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { resolveDeviceId } from './deviceId';
+import { resolveDeviceId } from './deviceId.js';
 import windowStateKeeper from 'electron-window-state';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {

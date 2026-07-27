@@ -19,7 +19,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
-import { resolveDeviceId } from './deviceId';
+import { resolveDeviceId } from './deviceId.js';
 import {
   AuthApiError,
   CindyAuthClient,
