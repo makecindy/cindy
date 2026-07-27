@@ -717,16 +717,25 @@ export function GhostPluginPage() {
         description: isUpdate
           ? t('settings.ghosts.market.updateConfirmDescription')
           : t('settings.ghosts.market.installConfirmDescription'),
-        content: isUpdate ? (
-          <GhostPermissionDiffView diff={diff} />
-        ) : (
-          <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+        content: (
+          <div
+            className="overflow-y-auto overscroll-contain pr-1"
+            style={{ maxHeight: 'min(56vh, 520px)', scrollbarGutter: 'stable' }}
+          >
+            {isUpdate ? (
+              <GhostPermissionDiffView diff={diff} />
+            ) : (
+              <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+            )}
+          </div>
         ),
         maxWidth: 520,
         confirmText: isUpdate
           ? t('settings.ghosts.updateConfirm.confirm')
           : t('settings.ghosts.market.install'),
-        cancelText: t('settings.ghosts.installConfirm.cancel'),
+        cancelText: isUpdate
+          ? t('settings.ghosts.updateConfirm.cancel')
+          : t('settings.ghosts.installConfirm.cancel'),
         autoFocusConfirm: true,
       });
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;

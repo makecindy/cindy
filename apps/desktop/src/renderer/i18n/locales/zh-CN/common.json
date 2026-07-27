@@ -2300,7 +2300,7 @@
         "noPermissions": "此插件未声明额外能力。",
         "installConfirmTitle": "安装「{{name}}」？",
         "installConfirmDescription": "安装包将经过完整性与清单校验。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
-        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。生效状态与面板位置保持不变。"
+        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。"
       },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
