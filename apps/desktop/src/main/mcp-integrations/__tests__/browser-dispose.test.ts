@@ -178,9 +178,9 @@ describe('stopRuntimeForQuitIfUsed', () => {
   it('a successful stop RESETS usage — use → backend-switch stop → quit skips (review P1)', async () => {
     // 使用后切换后端(ExternalChromeBackend.dispose)已成功停掉服务;若使用态
     // 终身保留,退出时会再派一次 stop,vendored bridge 会先把已停的服务重新
-    // 拉起——这正是本包装要避免的退出期启动。
+    // 拉起——这正是本包装要避免的退出期启动。stopped:true = 真正 tear down。
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
-      async (req) => ({ ok: true, action: req.action, status: 200 }),
+      async (req) => ({ ok: true, action: req.action, status: 200, data: req.action === 'stop' ? { stopped: true } : undefined }),
     );
     const tracked = trackBrowserRuntimeUsage({ call });
     const logger = fakeLogger();
@@ -224,7 +224,7 @@ describe('stopRuntimeForQuitIfUsed', () => {
     let resolveSlow!: (r: BrowserControlResult) => void;
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>((req) =>
       req.action === 'stop'
-        ? Promise.resolve({ ok: true, action: req.action, status: 200 })
+        ? Promise.resolve({ ok: true, action: req.action, status: 200, data: { stopped: true } })
         : new Promise((resolve) => {
             resolveSlow = resolve;
           }),
@@ -260,7 +260,7 @@ describe('stopRuntimeForQuitIfUsed', () => {
     await tracked.call({ action: 'status' }); // usage = true
     const switchStop = tracked.call({ action: 'stop' }); // 后端切换的 stop,在途
     const quit = stopRuntimeForQuitIfUsed(tracked, logger);
-    resolveStop({ ok: true, action: 'stop', status: 200 });
+    resolveStop({ ok: true, action: 'stop', status: 200, data: { stopped: true } });
     await switchStop;
     await quit;
 
@@ -292,7 +292,7 @@ describe('stopRuntimeForQuitIfUsed', () => {
 
     const pendingStop = tracked.call({ action: 'stop' }); // 先派发的 stop
     const lateStart = tracked.call({ action: 'start' }); // stop 之后新进的 start
-    resolveStop({ ok: true, action: 'stop', status: 200 }); // stop 成功:只作废更早的调用
+    resolveStop({ ok: true, action: 'stop', status: 200, data: { stopped: true } }); // stop 真正 tear down:只作废更早的调用
     await pendingStop;
     resolveStart({ ok: true, action: 'start', status: 200 }); // start 应答:重新计使用
     await lateStart;
@@ -302,9 +302,40 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(call.mock.calls.map(([req]) => req.action)).toEqual(['stop', 'start', 'stop']); // quit 照常清理
   });
 
+  it('a NO-OP stop (stopped:false) does not invalidate a racing cold start (review P1)', async () => {
+    // 后端切换的 stop 撞上冷启动:vendored /stop 见 running===null 返回
+    // stopped:false(HTTP 200)——它没有 tear down 任何东西,更没覆盖到那次
+    // 在途 launch。若照样清使用态+抬屏障,晚到的 start 应答会被忽略,quit
+    // 跳过清理,新拉起的 Chrome 和 profile 锁被留下。
+    let resolveStart!: (r: BrowserControlResult) => void;
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>((req) => {
+      if (req.action === 'start') {
+        return new Promise((resolve) => {
+          resolveStart = resolve;
+        });
+      }
+      return Promise.resolve(
+        req.action === 'stop'
+          ? { ok: true, action: req.action, status: 200, data: { stopped: false } }
+          : { ok: true, action: req.action, status: 200 },
+      );
+    });
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    const coldStart = tracked.call({ action: 'start' }); // 冷启动在途(先派发)
+    await tracked.call({ action: 'stop' }); // 后端切换的 no-op stop
+    resolveStart({ ok: true, action: 'start', status: 200 }); // launch 完成
+    await coldStart;
+    expect(tracked.everCalled()).toBe(true);
+
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+    expect(call.mock.calls.map(([req]) => req.action)).toEqual(['start', 'stop', 'stop']); // quit 照常清理
+  });
+
   it('usage flips back on when non-stop traffic resumes after a successful stop', async () => {
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
-      async (req) => ({ ok: true, action: req.action, status: 200 }),
+      async (req) => ({ ok: true, action: req.action, status: 200, data: req.action === 'stop' ? { stopped: true } : undefined }),
     );
     const tracked = trackBrowserRuntimeUsage({ call });
     const logger = fakeLogger();

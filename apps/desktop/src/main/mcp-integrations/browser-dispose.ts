@@ -133,7 +133,21 @@ export function trackBrowserRuntimeUsage(
         // quit stop is the safe direction there.
         settled = result.then(
           (response) => {
-            if ((response as { ok?: unknown } | null | undefined)?.ok === true) {
+            const r = response as
+              | { ok?: unknown; data?: { stopped?: unknown } | null }
+              | null
+              | undefined;
+            // Only a stop that actually tore something down invalidates usage
+            // (review P1): the vendored /stop reports `data.stopped`, and a
+            // no-op stop (`stopped:false` — nothing running at that instant,
+            // e.g. it raced a cold `start` whose launch it did NOT cover)
+            // must leave usage and the barrier untouched, so the racing
+            // start's later response re-marks usage and quit still cleans up
+            // the Chrome it launched. Vendored state machine guarantees
+            // `stopped:true` only after the launch finished (`running` is
+            // assigned post-launch), so a mid-launch race always lands here
+            // as `stopped:false`.
+            if (r?.ok === true && r.data?.stopped === true) {
               everCalled = false;
               stopInvalidationBarrier = Math.max(stopInvalidationBarrier, mySeq);
             }

@@ -338,6 +338,27 @@ describe('armShutdownHardKillWatchdog', () => {
     );
   });
 
+  it('async spawn "error" resets the flag and retries ONCE (review P1: watchdog must not stay absent)', async () => {
+    // 异步启动失败(ENOENT/EACCES)时 watchdog 实际不在位;shutdown 又只布防
+    // 一次——必须回置并立即重试,否则退出挂死将无人补刀。单次重试闸防死循环。
+    const { armShutdownHardKillWatchdog } = await freshLifecycle();
+    const children: Array<{ once: ReturnType<typeof vi.fn>; unref: ReturnType<typeof vi.fn> }> = [];
+    const spawn = vi.fn(() => {
+      const child = { once: vi.fn(), unref: vi.fn() };
+      children.push(child);
+      return child;
+    });
+
+    armShutdownHardKillWatchdog({ spawn, pid: 1, platform: 'darwin' });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    // 第一个 child 异步报错 → 立即重试布防第二个
+    (children[0].once.mock.calls[0][1] as (err: Error) => void)(new Error('EACCES'));
+    expect(spawn).toHaveBeenCalledTimes(2);
+    // 第二个也报错:重试闸已用,不再无限重试
+    (children[1].once.mock.calls[0][1] as (err: Error) => void)(new Error('EACCES'));
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
   it('sync spawn failure resets the armed flag so a later call can retry (review)', async () => {
     // 布防标志若在 spawn 前置位且失败不回置,进程余下生命周期都会跳过布防——
     // watchdog 实际不在位却再也无法重试。

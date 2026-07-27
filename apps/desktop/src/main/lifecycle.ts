@@ -197,6 +197,8 @@ type WatchdogSpawn = (
 };
 
 let _watchdogArmed = false;
+/** 异步 spawn 失败后的单次重试闸(防 error→重试→error 无限循环)。 */
+let _watchdogSpawnRetried = false;
 
 /**
  * 布防外部硬杀 watchdog: spawn 一个 detached 的外部杀手进程, 宽限期后对本进程
@@ -286,6 +288,14 @@ export function armShutdownHardKillWatchdog(
     // 日志痕迹 —— 这里 warn 留痕, 让退出尸检能看出"补刀兜底当时不在位"。
     child.once?.('error', (err) => {
       log.warn('shutdown hard-kill watchdog process failed to start (continuing shutdown)', err);
+      // 异步启动失败 = 实际未布防(review P1):回置标志并立即重试一次——
+      // EACCES/EAGAIN(fork 上限)这类瞬时失败第二次往往能成;仍失败则放弃
+      // (ENOENT 级环境缺失重试无意义),单次重试闸防 error→重试死循环。
+      _watchdogArmed = false;
+      if (!_watchdogSpawnRetried) {
+        _watchdogSpawnRetried = true;
+        armShutdownHardKillWatchdog(options);
+      }
     });
     child.unref();
     // log 放在 spawn 之后 (review P1): 统一 logger 同步写日志文件, 坏盘/网络盘
@@ -360,6 +370,10 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // ── Layer 1: graceful quit (before-quit) ────────────────────────────────
   // preventDefault 阻断默认 quit, 等 disposer chain 跑完再 app.exit(0)。
   app.on('before-quit', (e) => {
+    // arm-first(review P1):本 handler 必然走向退出,而下面第一行 log 就是
+    // 同步盘 IO——日志落在坏盘/网络盘上时会在布防前就挂死,watchdog 形同虚设。
+    // 幂等,与 beginShutdown 里的布防互为兜底。
+    armShutdownHardKillWatchdog();
     log.info('before-quit received');
     if (_isDisposing) return;
     e.preventDefault();
@@ -375,6 +389,8 @@ export function installQuitHandler(timeoutMs = 2000): void {
   if (process.platform === 'win32') shutdownSignals.push('SIGBREAK');
   for (const sig of shutdownSignals) {
     process.on(sig, () => {
+      // arm-first(review P1):同 before-quit,先布防再碰日志盘 IO。
+      armShutdownHardKillWatchdog();
       log.info(`received ${sig}, gracefully shutting down`);
       if (_isDisposing) return;
       if (app.isReady()) {
@@ -415,6 +431,9 @@ export function installQuitHandler(timeoutMs = 2000): void {
       broadcastTransientNetworkErrorTip(err);
       return;
     }
+    // arm-first(review P1):只在确定退出的分支布防——上面 broken-stdio /
+    // 瞬时网络两个不退出的分支绝不能布防,否则 20s 后 watchdog 会误杀健康进程。
+    armShutdownHardKillWatchdog();
     log.error('uncaughtException — shutting down', err);
     if (_isDisposing) return;
     void beginShutdown(timeoutMs, 'uncaughtException').finally(() => app.exit(1));
@@ -449,6 +468,9 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
+    // arm-first(review P1):沙箱/webview 两个不退出的分支在上面已 return,
+    // 走到这里必然退出。
+    armShutdownHardKillWatchdog();
     log.error(`render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`);
     if (_isDisposing) return;
     void beginShutdown(timeoutMs, `render-process-gone:${details.reason}`).finally(() =>
