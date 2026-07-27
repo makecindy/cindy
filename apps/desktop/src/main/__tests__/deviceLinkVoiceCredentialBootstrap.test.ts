@@ -29,10 +29,13 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
 
     expect(deviceLinkHost).toContain('wireInboundDispatch,');
-    expect(deviceLinkHost).toContain('wireInboundDispatch(client);');
-    expect(deviceLinkHost.indexOf('setControllersChangedListener((controllers) =>')).toBeLessThan(
-      deviceLinkHost.indexOf('wireInboundDispatch(client);'),
+    const listenerRegistration = deviceLinkHost.indexOf(
+      'setControllersChangedListener((controllers, updateRelaunchControllers) =>',
     );
+    const inboundWiring = deviceLinkHost.indexOf('wireInboundDispatch(client);');
+    expect(listenerRegistration).toBeGreaterThanOrEqual(0);
+    expect(inboundWiring).toBeGreaterThanOrEqual(0);
+    expect(listenerRegistration).toBeLessThan(inboundWiring);
   });
 
   it('replays desktop subscriptions when a remote device becomes controllable again', () => {
