@@ -229,7 +229,7 @@ function TopicList({ intro, topics }: { intro?: string; topics: ReleaseNoteTopic
   return (
     <div className="flex flex-col items-center px-7">
       {intro && (
-        <div className="w-full max-w-[760px] pb-3 text-13 break-words text-[var(--cmd-palette-item-meta)]">
+        <div className="w-full max-w-[760px] pb-3 text-sm leading-[1.7] break-words text-[var(--cmd-palette-item-meta)]">
           {intro}
         </div>
       )}

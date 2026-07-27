@@ -92,6 +92,32 @@ describe('release-notes normalization', () => {
     ]);
   });
 
+  it('legacy payload 的畸形 section/作者组/条目被丢弃而不是抛异常', async () => {
+    stubFetch({
+      version: '0.1.21',
+      date: '2026-07-31',
+      contributors: ['A', 42, null],
+      sections: [
+        { title: 'Bug Fixes' }, // 缺 items
+        { items: [{ name: 'X', list: ['x'] }] }, // 缺 title
+        {
+          title: 'New Features',
+          items: [
+            { name: 'A', list: ['正常条目', 7, null] },
+            { name: 'B' }, // 缺 list
+            'not-a-group',
+          ],
+        },
+      ],
+    });
+    const mod = await import('@/release-notes');
+    const notes = await mod.fetchReleaseNotes('0.1.21');
+    expect(notes?.contributors).toEqual(['A']);
+    expect(notes?.sections).toEqual([
+      { title: 'New Features', items: [{ text: '正常条目', by: 'A' }] },
+    ]);
+  });
+
   it('无任何可渲染内容(全部 topic 畸形且无 sections)按拉取失败处理', async () => {
     const fetchReleaseNotes = stubFetch({
       version: '0.1.20',

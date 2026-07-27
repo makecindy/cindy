@@ -116,16 +116,27 @@ export async function fetchReleaseNotes(
 
   // Defensive defaults: tolerate older payloads missing `contributors`,
   // topic-format payloads missing `sections`, and legacy payloads missing
-  // `topics`. Malformed topic entries are dropped rather than crashing.
+  // `topics`. Malformed entries (topics, sections, author groups, bullets)
+  // are dropped rather than crashing the dialog on a bad CDN document.
   const rawTopics = Array.isArray(raw.topics) ? raw.topics : [];
+  const rawSections = Array.isArray(raw.sections) ? raw.sections : [];
   const notes: ReleaseNotes = {
     version: raw.version,
     date: raw.date,
-    contributors: raw.contributors ?? [],
-    sections: (raw.sections ?? []).map((s) => ({
-      title: s.title,
-      items: (s.items as RawReleaseNoteItem[]).flatMap(expandRawItem),
-    })),
+    contributors: Array.isArray(raw.contributors)
+      ? raw.contributors.filter((c): c is string => typeof c === 'string')
+      : [],
+    sections: rawSections
+      .filter((s) => typeof s?.title === 'string' && Array.isArray(s?.items))
+      .map((s) => ({
+        title: s.title,
+        items: (s.items as RawReleaseNoteItem[])
+          .filter((g) => typeof g?.name === 'string' && Array.isArray(g?.list))
+          .flatMap((g) => expandRawItem({
+            name: g.name,
+            list: g.list.filter((text): text is string => typeof text === 'string'),
+          })),
+      })),
     topics: rawTopics
       .filter((t) => isRenderableTopic(t))
       .map((t) => ({
