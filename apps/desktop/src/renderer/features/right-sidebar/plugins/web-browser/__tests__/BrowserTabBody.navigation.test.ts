@@ -28,8 +28,9 @@ vi.mock('../../../hooks/useBrowserWebview', () => ({
 vi.mock('../../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
     release: vi.fn(),
-    // useBrowserComment 经 peek 取 webview 挂 ipc-message 监听;导航测试里没有
-    // 真 webview。wrapper 仅用于验证 layout cleanup 的 Pool 代际归属。
+    // BrowserTabBody 还会调用 useBrowserComment；该 hook 经 peek 获取 webview
+    // 并监听 ipc-message。导航测试没有真 webview，wrapper 仅用于验证 layout
+    // cleanup 的 Pool 代际归属。
     peek: vi.fn(() => poolMocks.currentWrapper
       ? { wrapper: poolMocks.currentWrapper, webview: null }
       : null),
