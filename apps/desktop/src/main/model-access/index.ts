@@ -33,6 +33,7 @@ import {
   type CredentialsSync,
 } from './credentialsSync.js';
 import {
+  buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
   waitForModelsSyncRefresh,
 } from './modelsSyncRefresh.js';
@@ -58,7 +59,6 @@ const log = createLogger('modelAccess');
  */
 
 const CREDENTIALS_PATH = '/api/model-access/credentials';
-const MODELS_PATH = '/api/model-access/models';
 
 function notifyXdProviderKeyChanged(): void {
   getGhostSetupChangeBus().emitAll({
@@ -176,9 +176,11 @@ function applyGatewayModels(models: ModelAccessGatewayModel[]): void {
 async function runModelsSync(myGen: number, myAttempt: number): Promise<void> {
   let payload: { models: ModelAccessGatewayModel[] };
   try {
-    payload = await serverApiFetch<{ models: ModelAccessGatewayModel[] }>(MODELS_PATH, {
-      baseUrl: getClientEndpoint('modelAccessApiBaseUrl'),
-    });
+    const request = buildModelsSyncRequest(getClientEndpoint('modelAccessApiBaseUrl'));
+    payload = await serverApiFetch<{ models: ModelAccessGatewayModel[] }>(
+      request.path,
+      request.options,
+    );
   } catch (err) {
     log.warn('xd gateway models fetch failed (keeping last valid list)', {
       error: err instanceof Error ? err.message : String(err),

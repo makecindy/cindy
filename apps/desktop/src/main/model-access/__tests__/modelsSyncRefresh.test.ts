@@ -1,12 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildModelsSyncRequest,
   ensureCredentialsReadyForModelsRefresh,
   waitForModelsSyncRefresh,
+  XD_MODELS_SYNC_TIMEOUT_MS,
   type ModelsSyncFlightSnapshot,
 } from '../modelsSyncRefresh.js';
 
 describe('waitForModelsSyncRefresh', () => {
+  it('gives the shared XD model-list request a finite deadline', () => {
+    expect(buildModelsSyncRequest('https://model-access.example.com')).toEqual({
+      path: '/api/model-access/models',
+      options: {
+        baseUrl: 'https://model-access.example.com',
+        timeoutMs: 20_000,
+      },
+    });
+    expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);
+    expect(XD_MODELS_SYNC_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
   it('reuses ready credentials and preserves the prior snapshot when the model request fails', async () => {
     const existingModels = ['last-known-model'];
     const retry = vi.fn(async () => {

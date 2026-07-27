@@ -1,6 +1,22 @@
 import type { ModelAccessStatus } from '../../shared/modelAccess.js';
 import type { CredentialsSync } from './credentialsSync.js';
 
+/** Bound the shared single-flight so a black-hole connection cannot block later refreshes. */
+export const XD_MODELS_SYNC_TIMEOUT_MS = 20_000;
+
+export function buildModelsSyncRequest(baseUrl: string): {
+  path: '/api/model-access/models';
+  options: { baseUrl: string; timeoutMs: number };
+} {
+  return {
+    path: '/api/model-access/models',
+    options: {
+      baseUrl,
+      timeoutMs: XD_MODELS_SYNC_TIMEOUT_MS,
+    },
+  };
+}
+
 /**
  * Wait for the model-list request that belongs to one Cindy account generation.
  *
