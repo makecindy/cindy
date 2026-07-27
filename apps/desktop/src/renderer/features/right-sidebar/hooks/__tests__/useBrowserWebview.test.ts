@@ -27,12 +27,25 @@ interface MockWebview {
 
 let mockWebview: MockWebview;
 
+type MockPoolEntry = {
+  wrapper: HTMLDivElement;
+  webview: MockWebview;
+  guestFailure: null | {
+    kind: 'render-process-gone' | 'unresponsive';
+    reason: string;
+  };
+};
+
 const poolMocks = vi.hoisted(() => ({
   releaseListeners: new Set<(tabId: string) => void>(),
-  currentEntry: null as { wrapper: HTMLDivElement; webview: MockWebview } | null,
+  entryCreatedListeners: new Set<(tabId: string) => void>(),
+  currentEntry: null as MockPoolEntry | null,
   fireRelease(tabId: string) {
     this.currentEntry = null;
     for (const cb of [...this.releaseListeners]) cb(tabId);
+  },
+  fireEntryCreated(tabId: string) {
+    for (const cb of [...this.entryCreatedListeners]) cb(tabId);
   },
 }));
 
@@ -44,17 +57,24 @@ const bridgeMocks = vi.hoisted(() => ({
 vi.mock('../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
     acquire: vi.fn(() => {
-      const entry = poolMocks.currentEntry ?? {
+      if (poolMocks.currentEntry) return poolMocks.currentEntry;
+      const entry: MockPoolEntry = {
         wrapper: document.createElement('div'),
         webview: mockWebview,
+        guestFailure: null,
       };
       poolMocks.currentEntry = entry;
+      poolMocks.fireEntryCreated('tab-a');
       return entry;
     }),
     peek: vi.fn(() => poolMocks.currentEntry),
     onRelease: vi.fn((cb: (tabId: string) => void) => {
       poolMocks.releaseListeners.add(cb);
       return () => poolMocks.releaseListeners.delete(cb);
+    }),
+    onEntryCreated: vi.fn((cb: (tabId: string) => void) => {
+      poolMocks.entryCreatedListeners.add(cb);
+      return () => poolMocks.entryCreatedListeners.delete(cb);
     }),
   },
 }));
@@ -125,6 +145,7 @@ describe('useBrowserWebview', () => {
     cleanup();
     vi.clearAllMocks();
     poolMocks.releaseListeners.clear();
+    poolMocks.entryCreatedListeners.clear();
     bridgeMocks.resourceCb = null;
   });
 
@@ -156,6 +177,63 @@ describe('useBrowserWebview', () => {
 
     expect(acquire).toHaveBeenCalledTimes(1);
     expect(result!.wrapper).not.toBeNull();
+  });
+
+  it('touches an existing entry through acquire when it becomes visible', async () => {
+    const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
+    const existing: MockPoolEntry = {
+      wrapper: document.createElement('div'),
+      webview: mockWebview,
+      guestFailure: null,
+    };
+    poolMocks.currentEntry = existing;
+    let result: UseBrowserWebviewResult | null = null;
+
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
+    expect(result!.wrapper).toBe(existing.wrapper);
+  });
+
+  it('observes an entry explicitly created while hidden without navigating it', async () => {
+    const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: false,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      browserWebviewPool.acquire('tab-a');
+    });
+
+    expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
+    expect(result!.wrapper).toBeNull();
+    expect(mockWebview.addEventListener).toHaveBeenCalledWith(
+      'render-process-gone',
+      expect.any(Function),
+    );
+    expect(mockWebview.loadURL).not.toHaveBeenCalled();
+  });
+
+  it('restores a guest crash captured before hidden hook listeners bind', async () => {
+    const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
+    bridgeMocks.consumePendingKillCause.mockReturnValueOnce('memory');
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: false,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      const entry = browserWebviewPool.acquire('tab-a');
+      entry.guestFailure = { kind: 'render-process-gone', reason: 'killed' };
+    });
+
+    expect(result!.crash).toEqual({ reason: 'killed', cause: 'resource-memory' });
   });
 
   it('restores the real webview URL when an optimistic navigation is aborted', () => {
@@ -241,6 +319,13 @@ describe('useBrowserWebview', () => {
     expect(acquire).toHaveBeenCalledTimes(1);
     const firstWrapper = result!.wrapper;
 
+    act(() => {
+      for (let i = 0; i <= BROWSER_NAVIGATION_FUSE_LIMIT; i += 1) {
+        result!.navigate(`https://example.com/old-${i}`);
+      }
+    });
+    expect(result!.crash).toEqual({ reason: 'navigation-loop' });
+
     view.rerender(
       createElement(HookProbe, { visible: false, onResult: (next) => { result = next; } }),
     );
@@ -258,6 +343,9 @@ describe('useBrowserWebview', () => {
     expect(result!.wrapper).not.toBe(firstWrapper);
     expect(result!.url).toBe('');
     expect(result!.crash).toBeNull();
+
+    act(() => result!.navigate('https://example.com/replacement'));
+    expect(mockWebview.loadURL).toHaveBeenCalledWith('https://example.com/replacement');
   });
 
   it('does not re-acquire when a foreign tab is released', async () => {
