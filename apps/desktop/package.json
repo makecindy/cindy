@@ -126,7 +126,7 @@
     "electron-window-state": "^5.0.3",
     "fix-path": "^5.0.0",
     "gray-matter": "^4.0.3",
-    "harmonyos-sans-sc-webfont-splitted": "^1.1.0",
+    "harmonyos-sans-sc-webfont-splitted": "1.1.0",
     "highlight.js": "^11.11.1",
     "html-to-image": "^1.11.13",
     "i18next": "^26.1.0",

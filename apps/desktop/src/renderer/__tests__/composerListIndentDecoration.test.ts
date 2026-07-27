@@ -883,7 +883,15 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-long-run-body');
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
     expect(css).toContain('.ProseMirror .composer-list-cjk-punctuation-font');
-    expect(css).toContain("font-family: 'Cindy CJK Punctuation'");
+    expect(css).toContain("font-family: 'Cindy CJK Punctuation Local'");
+    expect(css).toContain("font-family: 'Cindy CJK Punctuation Bundled'");
+    expect(css).toContain('unicode-range: U+3000-303F, U+FF00-FFEF;');
+    const punctuationFontCss = css.slice(
+      css.indexOf("font-family: 'Cindy CJK Punctuation Local'"),
+      css.indexOf('.ProseMirror .composer-list-cjk-punctuation-font'),
+    );
+    expect(punctuationFontCss.match(/font-style: normal;/g)).toHaveLength(5);
+    expect(punctuationFontCss.match(/font-weight: 400;/g)).toHaveLength(5);
     const bundledPunctuationFonts = [
       'Regular_256855.woff2',
       'Regular_312071.woff2',
@@ -909,6 +917,10 @@ describe('wiring contract', () => {
         ),
       ).toBe(true);
     });
+    const desktopPackage = JSON.parse(
+      readFileSync(resolve(__dirname, '..', '..', '..', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    expect(desktopPackage.dependencies?.['harmonyos-sans-sc-webfont-splitted']).toBe('1.1.0');
     expect(css).toContain('tab-size: 8ch;');
     expect(css).toContain('white-space: pre;');
     const fallbackPrefixRule = css.match(
