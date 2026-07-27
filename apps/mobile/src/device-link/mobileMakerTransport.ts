@@ -11,6 +11,7 @@ import type {
 } from '@/session/sessionReferences';
 import {
   DEVICE_LINK_MEDIA_FETCH_CHANNEL,
+  DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   MOBILE_REMOTE_INVOKE_CHANNELS,
@@ -24,6 +25,7 @@ import type {
   MobileSessionAgentSwitchIntent,
   MobileSessionAgentSwitchResult,
   MobileVoiceDictionaryLearningRequest,
+  MobileVoiceDictionarySnapshotResult,
   MobileVoiceDictionaryLearningResult,
 } from '@cindy/maker-shared/device-link-contract';
 import type { ProviderView } from '@cindy/model-providers/registry';
@@ -395,6 +397,11 @@ export interface MobileMakerTransport {
   fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean }): Promise<MobileRemoteMediaFetchResult>;
   transcribeVoice(input: MobileVoiceTranscribeRequest): Promise<MobileVoiceTranscribeResult>;
   recordVoiceDictionaryLearning(input: MobileVoiceDictionaryLearningRequest): Promise<MobileVoiceDictionaryLearningResult>;
+  /**
+   * 拉取被控桌面的语音词典只读快照。老被控端不识别该 channel 会回
+   * CHANNEL_NOT_ALLOWED,调用方据此静默回退到「无词典」,不打断语音输入。
+   */
+  getVoiceDictionary(): Promise<MobileVoiceDictionarySnapshotResult>;
   getPendingInteractions(sessionId: string): Promise<PendingInteraction[]>;
   resolveInteraction(requestId: string, decision: Record<string, unknown>): Promise<void>;
   getContextUsage(sessionId: string, createOpts?: Record<string, unknown>): Promise<unknown>;
@@ -584,6 +591,7 @@ export function createMobileMakerTransport({
     ),
     transcribeVoice: (input) => call(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL, [input]),
     recordVoiceDictionaryLearning: (input) => call(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL, [input]),
+    getVoiceDictionary: () => call(DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL, []),
     getPendingInteractions: (sessionId) => call('maker:get-pending-interactions', [sessionId]),
     resolveInteraction: (requestId, decision) =>
       call('maker:resolve-interaction', [requestId, decision]),

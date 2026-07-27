@@ -894,6 +894,11 @@
             "externalAppMacOnly": "外部 App 粘贴后的自动学习目前仅支持 macOS；App 内语音输入不受影响。",
             "ariaLabel": "切换词典自动学习"
           },
+          "deviceSync": {
+            "label": "在我的设备之间同步",
+            "hint": "词典会在同时在线的电脑之间自动合并，内容端到端传输，不经服务器保存。",
+            "ariaLabel": "切换词典跨设备同步"
+          },
           "add": "新词",
           "save": "保存",
           "cancel": "取消",

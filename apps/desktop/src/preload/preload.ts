@@ -1042,6 +1042,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:settings:update-shortcut', shortcut),
     deleteDictionaryEntries: (entryIds: string[]): Promise<unknown> =>
       ipcRenderer.invoke('voice-input:dictionary:delete-entries', entryIds),
+    addDictionaryEntry: (text: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:add-entry', text),
+    importDictionaryEntries: (texts: string[]): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:import-entries', texts),
+    renameDictionaryEntry: (entryId: string, text: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice-input:dictionary:rename-entry', { entryId, text }),
     recordDictionaryLearningActions: (actions: unknown[]): Promise<unknown> =>
       ipcRenderer.invoke('voice-input:dictionary-learning:record-actions', actions),
     getHistory: (limit?: number): unknown => {

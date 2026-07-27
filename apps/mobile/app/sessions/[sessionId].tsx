@@ -335,6 +335,10 @@ import {
   updateMobileVoiceInputHistoryEntryForHost,
 } from '@/session/mobileVoiceHistoryStore';
 import {
+  hydrateMobileVoiceDictionary,
+  refreshMobileVoiceDictionary,
+} from '@/session/mobileVoiceDictionaryCache';
+import {
   playMobileVoiceInputEndCue,
 } from '@/session/mobileVoiceCue';
 import {
@@ -3439,9 +3443,13 @@ export default function SessionScreen() {
       // Claim the connection prewarmed at pressIn (if any): its credential is
       // already resolved and its ASR WebSocket already connecting, so the
       // handshake overlaps the press gesture instead of following it.
+      // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
+      // 被控端)就用上次缓存,绝不为它推迟开麦。本次拉到的内容供下一次润色使用。
+      void refreshMobileVoiceDictionary(deviceId, () => maker.getVoiceDictionary());
       const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
         takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),
         getMobileVoiceInputHistoryForHost(deviceId),
+        hydrateMobileVoiceDictionary(deviceId),
       ]);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential

@@ -6,6 +6,7 @@ export const DEVICE_LINK_MEDIA_FETCH_CHANNEL = 'device-link:media:fetch';
 export const DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcribe';
 export const DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 export const DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL = 'device-link:voice:dictionary-learning';
+export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dictionary:get';
 
 export type MobileVoiceCredentialSyncAsr = {
   provider: string;
@@ -64,6 +65,31 @@ export type MobileVoiceCredentialSyncResult = {
   refinerProviderChain?: MobileVoiceCredentialSyncRefiner[];
   settings?: MobileVoiceCredentialSyncSettings;
 };
+
+/**
+ * 手机拉取被控桌面词典的只读快照。
+ *
+ * 手机不参与 CRDT 合并 —— 它在后台不维持 WebSocket,拿不到对等同步的 push 帧,
+ * 也不该持有一份会分叉的可写词典。这里只投影 refine 真正用得上的字段。
+ */
+export type MobileVoiceDictionarySnapshotResult =
+  | {
+      ok: true;
+      entries: MobileVoiceCredentialSyncDictionaryEntry[];
+      /**
+       * 该桌面同步状态的版本向量:`{ nodeId: 该节点的最大 HLC }`。
+       *
+       * 手机同时拉多台电脑时用它判断哪一份**包含**了另一份。不能用响应到达时间
+       * (并发请求里慢的那个反而显得"更新"),也不能只比最大 HLC —— 两台电脑各自
+       * 新增了不同的词、还没来得及互相同步时,最大 HLC 大的那份并不包含另一份,
+       * 拿它当完整答案会漏词。老版本被控端不带这个字段,手机退回按到达时间比较。
+       */
+      stateVector?: Record<string, string>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 export type MobileVoiceDictionaryLearningRequest = {
   source: 'mobile';
@@ -265,6 +291,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   DEVICE_LINK_MEDIA_FETCH_CHANNEL,
   DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL,
   DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL,
+  DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL,
   'maker:get-pending-interactions',
   'maker:resolve-interaction',
   'maker:get-context-usage',

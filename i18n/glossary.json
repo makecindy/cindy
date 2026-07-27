@@ -13,26 +13,35 @@
   ],
   "terms": [
     {
-      "id": "content-update",
-      "status": "proposed",
-      "en": "Content Update",
+      "id": "active",
+      "status": "decided",
+      "en": "Active",
       "translations": {
-        "zh-CN": "内容更新",
-        "ja": "コンテンツ更新",
-        "ko": "콘텐츠 업데이트"
+        "zh-CN": "活跃",
+        "ja": "アクティブ",
+        "ko": "활성"
       },
-      "note": "指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。"
-    },
-    {
-      "id": "device-code",
-      "status": "proposed",
-      "en": "Device Code",
-      "translations": {
-        "zh-CN": "设备码",
-        "ja": "デバイスコード",
-        "ko": "기기 코드"
+      "checkCase": false,
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "生效中",
+            "when": "计费语境（\"no active subscription\"→没有生效中的订阅），指订阅状态而非活跃度"
+          }
+        ]
       },
-      "note": "OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。"
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "活动",
+            "whenEn": "Active"
+          }
+        ]
+      },
+      "note": "对话 / 设备状态用「活跃」（现状 21:7）。mobile/devices 同一屏上筛选 chip 写「活跃」、指标磁贴写「活动」。条件禁用：「活动」是 Activity 的正确译法，无条件禁会误伤「活动记录」这类。豁免 Windows Computer Use 提示：那里的 active desktop 指「当前接收输入、显示目标应用的 Windows 桌面」，是 OS 概念，中文既定说法为「当前活动桌面」，与产品的活跃度无关。",
+      "exempt": [
+        "desktop:settings.computerUse.directControl.permissions.windowsHint"
+      ]
     },
     {
       "id": "cindy-codex-home",
@@ -69,42 +78,293 @@
       ]
     },
     {
-      "id": "subagent",
+      "id": "author",
       "status": "decided",
-      "en": "Subagent",
+      "en": "Author",
       "translations": {
-        "zh-CN": "Subagent",
-        "ja": "サブエージェント",
-        "ko": "하위 에이전트"
+        "zh-CN": "作者",
+        "ja": "作成者",
+        "ko": "작성자"
       },
+      "checkCase": false,
       "forbidden": {
         "zh-CN": [
           {
-            "text": "代理",
-            "whenEn": "Subagent"
+            "text": "提交者",
+            "whenEn": "Author"
+          },
+          {
+            "text": "提出者",
+            "whenEn": "Author"
           }
         ]
       },
-      "note": "Agent 的派生概念，中文跟随 Agent 保留英文原词，不译「子代理」。「代理」在此条下按 whenEn=Subagent 登记：同一个中文词在 Agent / Subagent / Proxy 三处各有来源，只有按英文源区分，自动替换才知道该换成哪个词。ja / ko 沿用既有音译。"
+      "note": "中文用「作者」（现状 9:4）。典型的同模块自相矛盾：issueTracker 同一个页面里，assignee.labelAuthor 写「提交者」、list.filterAuthor 写「提出者」、visibility.onlyAuthorCanChange 写「作者」——同一个字段三种叫法。条件禁用避免误伤 Committer / Reporter 等其它英文词的正确译法。"
     },
     {
-      "id": "proxy",
+      "id": "automation",
       "status": "decided",
-      "en": "Proxy",
+      "en": "Automation",
       "translations": {
-        "zh-CN": "Proxy",
-        "ja": "プロキシ",
-        "ko": "프록시"
+        "zh-CN": "自动化",
+        "ja": "自動化",
+        "ko": "자동화"
+      },
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "自动任务",
+            "when": "指单条自动化实例（一个定时跑的任务）时"
+          },
+          {
+            "text": "自动化任务",
+            "when": "需要与模块名区分、强调它是一条任务时"
+          },
+          {
+            "text": "自动操作",
+            "when": "Computer Use 语境——「自动操作电脑 / 浏览器」，指代操控设备而非定时任务"
+          }
+        ]
+      },
+      "forbidden": {
+        "ja": [
+          "オートメーション"
+        ],
+        "ko": [
+          "오토메이션"
+        ]
+      },
+      "note": "模块名 / 能力名用「自动化」（现状 88 处主流）；指单条实例时用「自动任务」，这是刻意保留的场景差异——一刀切会写出「查看你的自动化」这类别扭中文。特别注意 Automation 在本产品里指两个不同概念：scheduler 的定时任务，以及 settings.computerUse 的操控电脑能力；后者用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此不设 forbidden。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
+      "exempt": [
+        "desktop:settings.contacts.import.permissionDenied",
+        "desktop:settings.contacts.ipcError.PERMISSION_DENIED"
+      ]
+    },
+    {
+      "id": "balance",
+      "status": "decided",
+      "en": "Balance",
+      "translations": {
+        "zh-CN": "余额",
+        "ja": "残高",
+        "ko": "잔액"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "额度",
+            "whenEn": "Balance"
+          }
+        ]
+      },
+      "note": "账户余额用「余额」。原先被并入「额度」（可用额度 / 额度更新于 / 剩余额度），与 Credits、Quota 混同。Balance 是「账上还剩多少」，Credits 是「可购买消耗的计数单位」，Quota 是「周期内上限」——三者是不同层面的量，中文必须分开。"
+    },
+    {
+      "id": "chat",
+      "status": "decided",
+      "en": "Chat",
+      "translations": {
+        "zh-CN": "对话",
+        "ja": "チャット",
+        "ko": "채팅"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [
+          "聊天"
+        ]
+      },
+      "note": "在本产品里 Chat 与 Session 指同一个东西，中文统一叫「对话」（2026-07 裁决），不再区分「聊天 / 会话 / 对话」三套说法。原先 22 处「聊天」（聊天正文、聊天区、聊天记录…）已一并改为「对话」。ja / ko 保留各自既有译法，两语没有中文这种三词混用问题。"
+    },
+    {
+      "id": "collaboration",
+      "status": "decided",
+      "en": "Collaboration",
+      "translations": {
+        "zh-CN": "协同",
+        "ja": "協同",
+        "ko": "협업"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "协作",
+            "whenEn": "Collaboration"
+          }
+        ]
+      },
+      "note": "Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。",
+      "exempt": [
+        "desktop:settings.contacts."
+      ]
+    },
+    {
+      "id": "collapse",
+      "status": "decided",
+      "en": "Collapse",
+      "translations": {
+        "zh-CN": "收起",
+        "ja": "折りたたむ",
+        "ko": "접기"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "折叠",
+            "whenEn": "Collapse"
+          }
+        ]
+      },
+      "note": "中文用「收起」（现状 29:7），与反义词「展开」（Expand，29/30 已统一）配对。ccAgent 与 rightSidebar 内部各自「收起 / 折叠」混用，是同模块自相矛盾。条件禁用：「折叠」在别处可能是正常中文，只在英文源含 Collapse 时判违规。"
+    },
+    {
+      "id": "content-update",
+      "status": "proposed",
+      "en": "Content Update",
+      "translations": {
+        "zh-CN": "内容更新",
+        "ja": "コンテンツ更新",
+        "ko": "콘텐츠 업데이트"
+      },
+      "note": "指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。"
+    },
+    {
+      "id": "credits",
+      "status": "decided",
+      "en": "Credits",
+      "translations": {
+        "zh-CN": "点数",
+        "ja": "クレジット",
+        "ko": "크레딧"
+      },
+      "checkCase": false,
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "credits",
+            "when": "指第三方服务自身的 credits（如 Codex / ChatGPT 订阅余量），保留其原生叫法"
+          },
+          {
+            "text": "重置次数",
+            "when": "reset credits——指可用的配额重置次数，与计费点数无关"
+          }
+        ]
       },
       "forbidden": {
         "zh-CN": [
           {
-            "text": "代理",
-            "whenEn": "Proxy"
+            "text": "额度",
+            "whenEn": "Credit"
           }
         ]
       },
-      "note": "网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。whenEn 的匹配走 makeSourceTermMatcher,复数按英语真实形态展开:Proxy 的复数是 proxies,原先只认「加 s」,英文源写 system proxies 时这条条件禁用会整个跳过。"
+      "note": "计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。"
+    },
+    {
+      "id": "device-code",
+      "status": "proposed",
+      "en": "Device Code",
+      "translations": {
+        "zh-CN": "设备码",
+        "ja": "デバイスコード",
+        "ko": "기기 코드"
+      },
+      "note": "OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。"
+    },
+    {
+      "id": "directory",
+      "status": "decided",
+      "en": "Directory",
+      "translations": {
+        "zh-CN": "目录",
+        "ja": "ディレクトリ",
+        "ko": "디렉터리"
+      },
+      "checkCase": false,
+      "forbidden": {},
+      "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。"
+    },
+    {
+      "id": "dismiss",
+      "status": "decided",
+      "en": "Dismiss",
+      "translations": {
+        "zh-CN": "关闭",
+        "ja": "閉じる",
+        "ko": "닫기"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "忽略",
+            "whenEn": "Dismiss"
+          },
+          {
+            "text": "知道了",
+            "whenEn": "Dismiss"
+          }
+        ]
+      },
+      "note": "中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。"
+    },
+    {
+      "id": "effort",
+      "status": "decided",
+      "en": "Effort",
+      "translations": {
+        "zh-CN": "推理强度",
+        "ja": "推論強度",
+        "ko": "추론 강도"
+      },
+      "forbidden": {
+        "zh-CN": [
+          "思考强度",
+          "思考深度",
+          "推理深度",
+          "努力程度",
+          "推理力度"
+        ],
+        "ja": [
+          "推論レベル",
+          "推論の強度"
+        ]
+      },
+      "note": "模型的推理投入档位（low/medium/high/…）。用「推理强度」有三重依据：①同类工具 i18n 里断层第一（GitHub 代码搜索共现量级 1452，第二名「思考强度」431）；②OpenAI 简中帮助中心即用此词；③跨 provider 中立——Cindy 的 create_worker 用一个 effort 同时映射 Codex reasoning effort 与 Claude thinking 预算，而 Anthropic 官方简中叫「努力程度」、OpenAI 叫「推理强度」，需要不偏向任一方的词。禁用项各有硬理由：「思考深度」「推理深度」会与国内产品普遍的「深度思考」开关撞车，且语义错误（低 effort 是想得少，不是想得浅）；「努力程度」在中文里强烈指向人的绩效评价；「推理等级/级别」未入禁用但不推荐——Cindy 已有 model tier 概念，「等级」易被读成模型档位。"
+    },
+    {
+      "id": "issue",
+      "status": "decided",
+      "en": "Issue",
+      "translations": {
+        "zh-CN": "Issue",
+        "ja": "Issue",
+        "ko": "이슈"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "zh-CN": [
+          "工单",
+          "议题"
+        ],
+        "ja": [
+          {
+            "text": "課題",
+            "whenEn": "Issue"
+          }
+        ]
+      },
+      "note": "保留英文（2026-07 裁决）。现状「工单」32 /「议题」4 是既有 bug 的来源：列表按钮写「新建议题」、点进去页面标题写「新建工单」。「问题」不入 forbidden——它在「修复问题和失败」这类泛指语境下是正常中文，不是 Issue 的误译。checkCase 关闭：issue 同时是常用英语单词，prompt 模板里的 \"fix the issue\" 是正常用法，做大小写约束会制造 9 处假阳性。（2026-07 修正：ko 原声明 Issue 仅 3 处，实测 이슈 45 处才是主流，改随本语言主流；ja 的 Issue 43:2 保持不变。）ja 的「課題」同样是多义词（问题 / 课题），按 whenEn=Issue 条件禁用——插件创建 prompt 里的 \"define the problem\" 用「課題」是正确的。豁免两个 Jira capability:那里指的是 Jira 自己的记录类型,日文 UI 的既定叫法是「課題」,保留英文反而与用户实际看到的 Jira 界面对不上。产品自身的 Issue 不受影响。",
+      "minorityByDesign": {
+        "ja": "ja 侧 Issue 43/63 本就是主流，此处无偏离；保留字段以说明与 ko 的 이슈 有意分道——各语言跟随本语言主流，不强求跨语言一致。"
+      },
+      "exempt": [
+        "desktop:scheduler.editor.script.capabilityDescs.jira_comment",
+        "desktop:scheduler.editor.script.capabilityDescs.jira_read"
+      ]
     },
     {
       "id": "plugin",
@@ -142,16 +402,127 @@
       "exempt": []
     },
     {
-      "id": "worker",
+      "id": "provider",
       "status": "decided",
-      "en": "Worker",
+      "en": "Provider",
       "translations": {
-        "zh-CN": "Worker",
-        "ja": "Worker",
-        "ko": "Worker"
+        "zh-CN": "供应商",
+        "ja": "プロバイダー",
+        "ko": "제공자"
       },
-      "forbidden": {},
-      "note": "Orca 协同角色名，四语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "模型供应商",
+            "when": "首次出现或需要消歧时用全称，如设置页标题"
+          }
+        ]
+      },
+      "forbidden": {
+        "zh-CN": [
+          "提供方",
+          "提供商"
+        ],
+        "ja": [
+          {
+            "text": "提供元",
+            "whenEn": "Provider"
+          },
+          {
+            "text": "事業者",
+            "whenEn": "Provider"
+          }
+        ],
+        "ko": [
+          "공급자",
+          "제공업체"
+        ]
+      },
+      "note": "中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 \"source\"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。",
+      "exempt": [
+        "desktop:billing.balance.creditParityCny",
+        "desktop:billing.balance.creditParityUsd",
+        "desktop:login.ssoVerificationSubtitle",
+        "mobile/loginMessages:ssoVerificationSubtitle"
+      ]
+    },
+    {
+      "id": "proxy",
+      "status": "decided",
+      "en": "Proxy",
+      "translations": {
+        "zh-CN": "Proxy",
+        "ja": "プロキシ",
+        "ko": "프록시"
+      },
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "代理",
+            "whenEn": "Proxy"
+          }
+        ]
+      },
+      "note": "网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。whenEn 的匹配走 makeSourceTermMatcher,复数按英语真实形态展开:Proxy 的复数是 proxies,原先只认「加 s」,英文源写 system proxies 时这条条件禁用会整个跳过。"
+    },
+    {
+      "id": "quota",
+      "status": "decided",
+      "en": "Quota",
+      "translations": {
+        "zh-CN": "配额",
+        "ja": "クォータ",
+        "ko": "할당량"
+      },
+      "checkCase": false,
+      "forbidden": {
+        "ja": [
+          "残量"
+        ],
+        "zh-CN": [
+          {
+            "text": "额度",
+            "whenEn": "Quota"
+          }
+        ]
+      },
+      "note": "周期内的使用上限用「配额」（现状已有 3 处这么写）。与 credits 条目一起裁决：「额度」原先同时表示 Balance / Credits / Quota，三个概念在计费与限额提示里互相污染。「额度」的 forbidden 统一登记在 credits 条目下，不在这里重复——一个词只归属一个术语，否则同一处违规会被两个术语各报一次。（2026-07 修正：ko 原声明 쿼터 在全仓零出现，属凭空造词；ja 原声明 クォータ 仅 desktop 用、mobile 用 残量。定为 ja クォータ / ko 할당량——残量 语义偏 Balance 会与 残高 混淆，而 ko 的 사용량 正是 Usage 的标准词，让 Quota 占用它会重演 zh「额度」三义合一的错误。）",
+      "minorityByDesign": {
+        "ja": "主流 残量 语义偏「余量」，会与 Balance 的 残高 混淆；クォータ 是 quota 的准确音译，desktop 已在用。",
+        "ko": "主流 사용량 正是 Usage 的标准词，让 Quota 占用它会重演 zh「额度」同时表示 Balance/Credits/Quota 的错误；할당량 是配额的标准韩语。"
+      }
+    },
+    {
+      "id": "running",
+      "status": "decided",
+      "en": "Running",
+      "translations": {
+        "zh-CN": "运行中",
+        "ja": "実行中",
+        "ko": "실행 중"
+      },
+      "checkCase": false,
+      "alsoAllowed": {
+        "zh-CN": [
+          {
+            "text": "正在运行",
+            "when": "完整句子里作谓语时（\"Agent 正在运行\"），不是状态标签"
+          }
+        ]
+      },
+      "forbidden": {
+        "zh-CN": [
+          {
+            "text": "执行中",
+            "whenEn": "Running"
+          },
+          {
+            "text": "进行中",
+            "whenEn": "Running"
+          }
+        ]
+      },
+      "note": "状态标签用「运行中」（现状 16:9）。条件禁用是必需的——「进行中」是 In Progress 的正确译法、「执行中」在别处也可能对，无条件禁会大面积误伤。mobile/devices 的自动化面板上「运行中 / 执行中 / 重跑中」三种写法同屏出现。"
     },
     {
       "id": "session",
@@ -199,52 +570,6 @@
         "mobile/composer:voice.sessionExpiredOrForbidden",
         "mobile/composer:voice.sessionNotConnected"
       ]
-    },
-    {
-      "id": "chat",
-      "status": "decided",
-      "en": "Chat",
-      "translations": {
-        "zh-CN": "对话",
-        "ja": "チャット",
-        "ko": "채팅"
-      },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          "聊天"
-        ]
-      },
-      "note": "在本产品里 Chat 与 Session 指同一个东西，中文统一叫「对话」（2026-07 裁决），不再区分「聊天 / 会话 / 对话」三套说法。原先 22 处「聊天」（聊天正文、聊天区、聊天记录…）已一并改为「对话」。ja / ko 保留各自既有译法，两语没有中文这种三词混用问题。"
-    },
-    {
-      "id": "thread",
-      "status": "decided",
-      "en": "Thread",
-      "translations": {
-        "zh-CN": "对话",
-        "ja": "スレッド",
-        "ko": "스레드"
-      },
-      "checkCase": false,
-      "alsoAllowed": {
-        "zh-CN": [
-          {
-            "text": "thread",
-            "when": "指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文"
-          },
-          {
-            "text": "评论",
-            "when": "指 GitHub PR 的 review thread 时，用「review 评论」"
-          }
-        ]
-      },
-      "forbidden": {
-        "zh-CN": [
-          "线程"
-        ]
-      },
-      "note": "全仓仅 8 处，按语境分四类，是「同一个词必须分场合翻译」的典型：①指产品内的对话 → 跟随 session 叫「对话」（已落地 3 处）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 \"persistent work thread\" → 原译「工作线程」，中文有 OS 线程歧义，已改写为「持续推进的工作对话」。「线程」一律禁用。"
     },
     {
       "id": "skill",
@@ -297,222 +622,52 @@
       "note": "产品名，四语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。"
     },
     {
-      "id": "issue",
+      "id": "subagent",
       "status": "decided",
-      "en": "Issue",
+      "en": "Subagent",
       "translations": {
-        "zh-CN": "Issue",
-        "ja": "Issue",
-        "ko": "이슈"
-      },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          "工单",
-          "议题"
-        ],
-        "ja": [
-          {
-            "text": "課題",
-            "whenEn": "Issue"
-          }
-        ]
-      },
-      "note": "保留英文（2026-07 裁决）。现状「工单」32 /「议题」4 是既有 bug 的来源：列表按钮写「新建议题」、点进去页面标题写「新建工单」。「问题」不入 forbidden——它在「修复问题和失败」这类泛指语境下是正常中文，不是 Issue 的误译。checkCase 关闭：issue 同时是常用英语单词，prompt 模板里的 \"fix the issue\" 是正常用法，做大小写约束会制造 9 处假阳性。（2026-07 修正：ko 原声明 Issue 仅 3 处，实测 이슈 45 处才是主流，改随本语言主流；ja 的 Issue 43:2 保持不变。）ja 的「課題」同样是多义词（问题 / 课题），按 whenEn=Issue 条件禁用——插件创建 prompt 里的 \"define the problem\" 用「課題」是正确的。豁免两个 Jira capability:那里指的是 Jira 自己的记录类型,日文 UI 的既定叫法是「課題」,保留英文反而与用户实际看到的 Jira 界面对不上。产品自身的 Issue 不受影响。",
-      "minorityByDesign": {
-        "ja": "ja 侧 Issue 43/63 本就是主流，此处无偏离；保留字段以说明与 ko 的 이슈 有意分道——各语言跟随本语言主流，不强求跨语言一致。"
-      },
-      "exempt": [
-        "desktop:scheduler.editor.script.capabilityDescs.jira_comment",
-        "desktop:scheduler.editor.script.capabilityDescs.jira_read"
-      ]
-    },
-    {
-      "id": "provider",
-      "status": "decided",
-      "en": "Provider",
-      "translations": {
-        "zh-CN": "供应商",
-        "ja": "プロバイダー",
-        "ko": "제공자"
-      },
-      "alsoAllowed": {
-        "zh-CN": [
-          {
-            "text": "模型供应商",
-            "when": "首次出现或需要消歧时用全称，如设置页标题"
-          }
-        ]
+        "zh-CN": "Subagent",
+        "ja": "サブエージェント",
+        "ko": "하위 에이전트"
       },
       "forbidden": {
         "zh-CN": [
-          "提供方",
-          "提供商"
-        ],
-        "ja": [
           {
-            "text": "提供元",
-            "whenEn": "Provider"
-          },
-          {
-            "text": "事業者",
-            "whenEn": "Provider"
+            "text": "代理",
+            "whenEn": "Subagent"
           }
-        ],
-        "ko": [
-          "공급자",
-          "제공업체"
         ]
       },
-      "note": "中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 \"source\"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。",
-      "exempt": [
-        "desktop:billing.balance.creditParityCny",
-        "desktop:billing.balance.creditParityUsd",
-        "desktop:login.ssoVerificationSubtitle",
-        "mobile/loginMessages:ssoVerificationSubtitle"
-      ]
+      "note": "Agent 的派生概念，中文跟随 Agent 保留英文原词，不译「子代理」。「代理」在此条下按 whenEn=Subagent 登记：同一个中文词在 Agent / Subagent / Proxy 三处各有来源，只有按英文源区分，自动替换才知道该换成哪个词。ja / ko 沿用既有音译。"
     },
     {
-      "id": "effort",
+      "id": "thread",
       "status": "decided",
-      "en": "Effort",
+      "en": "Thread",
       "translations": {
-        "zh-CN": "推理强度",
-        "ja": "推論強度",
-        "ko": "추론 강도"
-      },
-      "forbidden": {
-        "zh-CN": [
-          "思考强度",
-          "思考深度",
-          "推理深度",
-          "努力程度",
-          "推理力度"
-        ],
-        "ja": [
-          "推論レベル",
-          "推論の強度"
-        ]
-      },
-      "note": "模型的推理投入档位（low/medium/high/…）。用「推理强度」有三重依据：①同类工具 i18n 里断层第一（GitHub 代码搜索共现量级 1452，第二名「思考强度」431）；②OpenAI 简中帮助中心即用此词；③跨 provider 中立——Cindy 的 create_worker 用一个 effort 同时映射 Codex reasoning effort 与 Claude thinking 预算，而 Anthropic 官方简中叫「努力程度」、OpenAI 叫「推理强度」，需要不偏向任一方的词。禁用项各有硬理由：「思考深度」「推理深度」会与国内产品普遍的「深度思考」开关撞车，且语义错误（低 effort 是想得少，不是想得浅）；「努力程度」在中文里强烈指向人的绩效评价；「推理等级/级别」未入禁用但不推荐——Cindy 已有 model tier 概念，「等级」易被读成模型档位。"
-    },
-    {
-      "id": "credits",
-      "status": "decided",
-      "en": "Credits",
-      "translations": {
-        "zh-CN": "点数",
-        "ja": "クレジット",
-        "ko": "크레딧"
+        "zh-CN": "对话",
+        "ja": "スレッド",
+        "ko": "스레드"
       },
       "checkCase": false,
       "alsoAllowed": {
         "zh-CN": [
           {
-            "text": "credits",
-            "when": "指第三方服务自身的 credits（如 Codex / ChatGPT 订阅余量），保留其原生叫法"
+            "text": "thread",
+            "when": "指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文"
           },
           {
-            "text": "重置次数",
-            "when": "reset credits——指可用的配额重置次数，与计费点数无关"
+            "text": "评论",
+            "when": "指 GitHub PR 的 review thread 时，用「review 评论」"
           }
         ]
       },
       "forbidden": {
         "zh-CN": [
-          {
-            "text": "额度",
-            "whenEn": "Credit"
-          }
+          "线程"
         ]
       },
-      "note": "计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。"
-    },
-    {
-      "id": "quota",
-      "status": "decided",
-      "en": "Quota",
-      "translations": {
-        "zh-CN": "配额",
-        "ja": "クォータ",
-        "ko": "할당량"
-      },
-      "checkCase": false,
-      "forbidden": {
-        "ja": [
-          "残量"
-        ],
-        "zh-CN": [
-          {
-            "text": "额度",
-            "whenEn": "Quota"
-          }
-        ]
-      },
-      "note": "周期内的使用上限用「配额」（现状已有 3 处这么写）。与 credits 条目一起裁决：「额度」原先同时表示 Balance / Credits / Quota，三个概念在计费与限额提示里互相污染。「额度」的 forbidden 统一登记在 credits 条目下，不在这里重复——一个词只归属一个术语，否则同一处违规会被两个术语各报一次。（2026-07 修正：ko 原声明 쿼터 在全仓零出现，属凭空造词；ja 原声明 クォータ 仅 desktop 用、mobile 用 残量。定为 ja クォータ / ko 할당량——残量 语义偏 Balance 会与 残高 混淆，而 ko 的 사용량 正是 Usage 的标准词，让 Quota 占用它会重演 zh「额度」三义合一的错误。）",
-      "minorityByDesign": {
-        "ja": "主流 残量 语义偏「余量」，会与 Balance 的 残高 混淆；クォータ 是 quota 的准确音译，desktop 已在用。",
-        "ko": "主流 사용량 正是 Usage 的标准词，让 Quota 占用它会重演 zh「额度」同时表示 Balance/Credits/Quota 的错误；할당량 是配额的标准韩语。"
-      }
-    },
-    {
-      "id": "balance",
-      "status": "decided",
-      "en": "Balance",
-      "translations": {
-        "zh-CN": "余额",
-        "ja": "残高",
-        "ko": "잔액"
-      },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "额度",
-            "whenEn": "Balance"
-          }
-        ]
-      },
-      "note": "账户余额用「余额」。原先被并入「额度」（可用额度 / 额度更新于 / 剩余额度），与 Credits、Quota 混同。Balance 是「账上还剩多少」，Credits 是「可购买消耗的计数单位」，Quota 是「周期内上限」——三者是不同层面的量，中文必须分开。"
-    },
-    {
-      "id": "automation",
-      "status": "decided",
-      "en": "Automation",
-      "translations": {
-        "zh-CN": "自动化",
-        "ja": "自動化",
-        "ko": "자동화"
-      },
-      "alsoAllowed": {
-        "zh-CN": [
-          {
-            "text": "自动任务",
-            "when": "指单条自动化实例（一个定时跑的任务）时"
-          },
-          {
-            "text": "自动化任务",
-            "when": "需要与模块名区分、强调它是一条任务时"
-          },
-          {
-            "text": "自动操作",
-            "when": "Computer Use 语境——「自动操作电脑 / 浏览器」，指代操控设备而非定时任务"
-          }
-        ]
-      },
-      "forbidden": {
-        "ja": [
-          "オートメーション"
-        ],
-        "ko": [
-          "오토메이션"
-        ]
-      },
-      "note": "模块名 / 能力名用「自动化」（现状 88 处主流）；指单条实例时用「自动任务」，这是刻意保留的场景差异——一刀切会写出「查看你的自动化」这类别扭中文。特别注意 Automation 在本产品里指两个不同概念：scheduler 的定时任务，以及 settings.computerUse 的操控电脑能力；后者用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此不设 forbidden。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
-      "exempt": [
-        "desktop:settings.contacts.import.permissionDenied",
-        "desktop:settings.contacts.ipcError.PERMISSION_DENIED"
-      ]
+      "note": "全仓仅 8 处，按语境分四类，是「同一个词必须分场合翻译」的典型：①指产品内的对话 → 跟随 session 叫「对话」（已落地 3 处）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 \"persistent work thread\" → 原译「工作线程」，中文有 OS 线程歧义，已改写为「持续推进的工作对话」。「线程」一律禁用。"
     },
     {
       "id": "usage",
@@ -543,158 +698,27 @@
       ]
     },
     {
-      "id": "collapse",
-      "status": "decided",
-      "en": "Collapse",
+      "id": "voice-dictionary",
+      "status": "proposed",
+      "en": "Voice dictionary",
       "translations": {
-        "zh-CN": "收起",
-        "ja": "折りたたむ",
-        "ko": "접기"
+        "zh-CN": "语音词典",
+        "ja": "音声辞書",
+        "ko": "음성 사전"
       },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "折叠",
-            "whenEn": "Collapse"
-          }
-        ]
-      },
-      "note": "中文用「收起」（现状 29:7），与反义词「展开」（Expand，29/30 已统一）配对。ccAgent 与 rightSidebar 内部各自「收起 / 折叠」混用，是同模块自相矛盾。条件禁用：「折叠」在别处可能是正常中文，只在英文源含 Collapse 时判违规。"
+      "note": "语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。"
     },
     {
-      "id": "author",
+      "id": "worker",
       "status": "decided",
-      "en": "Author",
+      "en": "Worker",
       "translations": {
-        "zh-CN": "作者",
-        "ja": "作成者",
-        "ko": "작성자"
+        "zh-CN": "Worker",
+        "ja": "Worker",
+        "ko": "Worker"
       },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "提交者",
-            "whenEn": "Author"
-          },
-          {
-            "text": "提出者",
-            "whenEn": "Author"
-          }
-        ]
-      },
-      "note": "中文用「作者」（现状 9:4）。典型的同模块自相矛盾：issueTracker 同一个页面里，assignee.labelAuthor 写「提交者」、list.filterAuthor 写「提出者」、visibility.onlyAuthorCanChange 写「作者」——同一个字段三种叫法。条件禁用避免误伤 Committer / Reporter 等其它英文词的正确译法。"
-    },
-    {
-      "id": "collaboration",
-      "status": "decided",
-      "en": "Collaboration",
-      "translations": {
-        "zh-CN": "协同",
-        "ja": "協同",
-        "ko": "협업"
-      },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "协作",
-            "whenEn": "Collaboration"
-          }
-        ]
-      },
-      "note": "Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。",
-      "exempt": [
-        "desktop:settings.contacts."
-      ]
-    },
-    {
-      "id": "running",
-      "status": "decided",
-      "en": "Running",
-      "translations": {
-        "zh-CN": "运行中",
-        "ja": "実行中",
-        "ko": "실행 중"
-      },
-      "checkCase": false,
-      "alsoAllowed": {
-        "zh-CN": [
-          {
-            "text": "正在运行",
-            "when": "完整句子里作谓语时（\"Agent 正在运行\"），不是状态标签"
-          }
-        ]
-      },
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "执行中",
-            "whenEn": "Running"
-          },
-          {
-            "text": "进行中",
-            "whenEn": "Running"
-          }
-        ]
-      },
-      "note": "状态标签用「运行中」（现状 16:9）。条件禁用是必需的——「进行中」是 In Progress 的正确译法、「执行中」在别处也可能对，无条件禁会大面积误伤。mobile/devices 的自动化面板上「运行中 / 执行中 / 重跑中」三种写法同屏出现。"
-    },
-    {
-      "id": "dismiss",
-      "status": "decided",
-      "en": "Dismiss",
-      "translations": {
-        "zh-CN": "关闭",
-        "ja": "閉じる",
-        "ko": "닫기"
-      },
-      "checkCase": false,
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "忽略",
-            "whenEn": "Dismiss"
-          },
-          {
-            "text": "知道了",
-            "whenEn": "Dismiss"
-          }
-        ]
-      },
-      "note": "中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。"
-    },
-    {
-      "id": "active",
-      "status": "decided",
-      "en": "Active",
-      "translations": {
-        "zh-CN": "活跃",
-        "ja": "アクティブ",
-        "ko": "활성"
-      },
-      "checkCase": false,
-      "alsoAllowed": {
-        "zh-CN": [
-          {
-            "text": "生效中",
-            "when": "计费语境（\"no active subscription\"→没有生效中的订阅），指订阅状态而非活跃度"
-          }
-        ]
-      },
-      "forbidden": {
-        "zh-CN": [
-          {
-            "text": "活动",
-            "whenEn": "Active"
-          }
-        ]
-      },
-      "note": "对话 / 设备状态用「活跃」（现状 21:7）。mobile/devices 同一屏上筛选 chip 写「活跃」、指标磁贴写「活动」。条件禁用：「活动」是 Activity 的正确译法，无条件禁会误伤「活动记录」这类。豁免 Windows Computer Use 提示：那里的 active desktop 指「当前接收输入、显示目标应用的 Windows 桌面」，是 OS 概念，中文既定说法为「当前活动桌面」，与产品的活跃度无关。",
-      "exempt": [
-        "desktop:settings.computerUse.directControl.permissions.windowsHint"
-      ]
+      "forbidden": {},
+      "note": "Orca 协同角色名，四语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
     },
     {
       "id": "worktree",
@@ -722,19 +746,6 @@
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
-    },
-    {
-      "id": "directory",
-      "status": "decided",
-      "en": "Directory",
-      "translations": {
-        "zh-CN": "目录",
-        "ja": "ディレクトリ",
-        "ko": "디렉터리"
-      },
-      "checkCase": false,
-      "forbidden": {},
-      "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。"
     }
   ]
 }

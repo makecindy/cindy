@@ -894,6 +894,11 @@
             "externalAppMacOnly": "Auto-learning after pasting into external apps is currently macOS-only. In-app voice input is unaffected.",
             "ariaLabel": "Toggle dictionary auto-learning"
           },
+          "deviceSync": {
+            "label": "Sync across my devices",
+            "hint": "Your dictionary merges automatically between computers that are online at the same time. Entries are sent device to device and never stored on a server.",
+            "ariaLabel": "Toggle dictionary sync across devices"
+          },
           "add": "New term",
           "save": "Save",
           "cancel": "Cancel",

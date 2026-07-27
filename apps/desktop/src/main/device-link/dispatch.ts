@@ -32,6 +32,7 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  DL_VOICE_DICTIONARY_GET_CHANNEL,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -55,6 +56,7 @@ import { runDeviceLinkInvokeContext } from './invoke-context';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
+import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
 import { setBroadcastTapListener } from './broadcast-tap';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -1024,6 +1026,19 @@ export async function runInvoke(
         message: '手机语音输入已改用 Cindy 官方语音服务,请升级手机版。',
       },
     };
+  }
+
+  // device-link:voice:dictionary:get 是手机拉取本机词典的只读快照。手机在后台不维持
+  // WebSocket,拿不到桌面之间对等同步的 push 帧,所以改为需要时主动拉一份;它只读、
+  // 不参与合并,避免移动端维护一份会分叉的词典。
+  if (payload.channel === DL_VOICE_DICTIONARY_GET_CHANNEL) {
+    try {
+      return { ok: true, result: { ok: true, ...readDictionaryProjectionForMobile() } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`voice:dictionary:get failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'VOICE_DICTIONARY_GET_FAILED', message } };
+    }
   }
 
   // device-link:voice:dictionary-learning 是手机端 voice refine 后的术语学习 evidence 回写:

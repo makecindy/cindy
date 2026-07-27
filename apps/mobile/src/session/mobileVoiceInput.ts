@@ -12,6 +12,7 @@ import {
   type TextModelClient,
 } from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
+import type { MobileVoiceCredentialSyncDictionaryEntry as MobileVoiceDictionaryEntry } from '@cindy/maker-shared/device-link-contract';
 import { redactMobileVoiceCredentialText } from '@/session/mobileVoiceCredentialRedaction';
 import {
   composerVoiceStateLabel,
@@ -230,10 +231,16 @@ export function buildMobileVoiceRefinementContext(
     sourceLanguage?: string;
     refinementContext?: DictationRefinementContext;
     localVoiceInputHistory?: readonly string[];
+    /**
+     * 从被控桌面拉来的词典快照。托管路径的 credential 本身不带词典
+     * (`createMobileCindyVoiceCredential` 只填语言与开关),词典改由
+     * `mobileVoiceDictionaryCache` 单独拉取并缓存。
+     */
+    dictionaryEntries?: readonly MobileVoiceDictionaryEntry[];
   } = {},
 ): DictationRefinementContext {
   const settings = credential.settings;
-  const dictionaryEntries = settings?.dictionaryEntries ?? [];
+  const dictionaryEntries = options.dictionaryEntries ?? settings?.dictionaryEntries ?? [];
   const history = mergeMobileVoiceHistories(settings?.voiceInputHistory, options.localVoiceInputHistory);
   const uiLanguage = options.refinementContext?.uiLanguage?.trim()
     || options.uiLanguage?.trim()
@@ -635,7 +642,7 @@ function hasReadableStreamBody(value: unknown): value is ReadableStream<Uint8Arr
 }
 
 function formatMobileVoiceDictionary(
-  entries: NonNullable<StoredMobileVoiceCredential['settings']>['dictionaryEntries'] | undefined,
+  entries: readonly MobileVoiceDictionaryEntry[] | undefined,
 ): string {
   return (entries ?? [])
     .map((entry) => entry.text.trim())

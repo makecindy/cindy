@@ -27,6 +27,7 @@ import {
   type MobileVoiceDraftInsertion,
 } from '@/session/mobileVoiceInput';
 import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
 
 type StartRealtimeAudio = (options: {
   sampleRate: number;
@@ -670,6 +671,9 @@ function createMobileRefiner(
     contextProvider: () => buildMobileVoiceRefinementContext(credential, {
       refinementContext: options.refinementContext,
       localVoiceInputHistory: options.localVoiceInputHistory,
+      // 词典来自被控桌面的只读快照缓存(拉取在开麦时异步触发)。桌面离线或还没
+      // 拉到时是空数组 —— 润色照常进行,只是少了术语提示。
+      dictionaryEntries: readCachedMobileVoiceDictionary(credential.hostDeviceId),
     }),
   });
 }

@@ -55,6 +55,7 @@ describe('mobile maker transport', () => {
       'device-link:media:fetch',
       'device-link:voice:transcribe',
       'device-link:voice:dictionary-learning',
+      'device-link:voice:dictionary:get',
       'maker:get-pending-interactions',
       'maker:resolve-interaction',
       'maker:get-context-usage',
@@ -279,6 +280,7 @@ describe('mobile maker transport', () => {
       beforeText: 'XDMaker',
       afterText: 'XDMaker',
     });
+    await maker.getVoiceDictionary();
     await maker.input.stop('s1', { pauseQueue: true });
     await maker.input.compact('s1');
     await maker.input.retryLastError('s1');
@@ -319,6 +321,7 @@ describe('mobile maker transport', () => {
         beforeText: 'XDMaker',
         afterText: 'XDMaker',
       }]],
+      ['device-link:voice:dictionary:get', []],
       ['maker:input:stop', ['s1', { pauseQueue: true }]],
       ['maker:input:compact', ['s1']],
       ['maker:input:retry-last-error', ['s1']],

@@ -1350,6 +1350,9 @@ interface ElectronAPI {
       | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode }
     >;
     deleteDictionaryEntries: (entryIds: string[]) => Promise<VoiceInputSettingsData>;
+    addDictionaryEntry: (text: string) => Promise<VoiceInputSettingsData>;
+    importDictionaryEntries: (texts: string[]) => Promise<VoiceInputSettingsData>;
+    renameDictionaryEntry: (entryId: string, text: string) => Promise<VoiceInputSettingsData>;
     recordDictionaryLearningActions: (actions: VoiceInputDictionaryLearningAction[]) => Promise<{
       settings: VoiceInputSettingsData;
       newAutomaticEntries: Array<{ id: string; text: string }>;
