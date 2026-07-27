@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Hand,
   CodeXml,
@@ -106,6 +106,7 @@ export function PermissionSelector({
 }: PermissionSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const selectedOptionRef = useRef<HTMLButtonElement>(null);
   const agentKind = vendorKeyToAgentKind(vendorKey);
   // device-link:deviceId 非空 → 权限档从被控端读(本地会话 undefined,行为不变)。
   const { capabilities } = useAgentCapabilities(agentKind, deviceId);
@@ -219,7 +220,11 @@ export function PermissionSelector({
   );
 
   const optionsList = (
-      <div role="listbox" aria-label={t('newChat.permissionSelector.listAria')}>
+      <div
+        role="listbox"
+        aria-label={t('newChat.permissionSelector.listAria')}
+        className="flex flex-col gap-0.5"
+      >
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
           const isSelected = effectiveMode === option.id;
@@ -234,6 +239,11 @@ export function PermissionSelector({
               contentClassName="max-w-[280px] whitespace-normal break-words text-left"
             >
               <button
+                type="button"
+                ref={isSelected ? selectedOptionRef : undefined}
+                // MorphPopover 打开后优先聚焦当前选中项；否则会聚焦列表首项，
+                // 触发“默认权限”的 focus tooltip，造成介绍与当前权限不一致。
+                data-morph-autofocus={isSelected ? '' : undefined}
                 onClick={() => {
                   onPermissionModeChange(option.id);
                   setOpen(false);
@@ -296,6 +306,12 @@ export function PermissionSelector({
           align="end"
           sideOffset={4}
           collisionPadding={8}
+          onOpenAutoFocus={(event) => {
+            // Radix 默认聚焦首个可交互项；与 MorphPopover 保持一致，聚焦当前选中权限，
+            // 使 focus tooltip 的介绍与 field trigger 当前值一致。
+            event.preventDefault();
+            selectedOptionRef.current?.focus();
+          }}
           className={cn(
             // 面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
             // 控件更宽或更窄;Radix 语义即 --radix-popover-trigger-width)。行内容自带

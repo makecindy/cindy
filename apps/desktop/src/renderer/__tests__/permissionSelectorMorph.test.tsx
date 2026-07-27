@@ -63,11 +63,19 @@ describe('PermissionSelector (MorphPopover pilot)', () => {
     expect(listbox).toBeTruthy();
     expect(screen.getAllByRole('option')).toHaveLength(4);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    // 选中档正确标记(焦点策略 2026-07-23 改回落首个可交互项,恢复键盘可达性,见 codex review)
+    // 选中档正确标记
     const selected = screen
       .getAllByRole('option')
       .find((o) => o.getAttribute('aria-selected') === 'true');
     expect(selected).toBeTruthy();
+  });
+
+  it('打开时聚焦当前选中权限，避免 focus tooltip 错指向首个选项', async () => {
+    renderSelector({ permissionMode: 'bypassPermissions' });
+    fireEvent.click(getTrigger());
+
+    const selectedOption = await screen.findByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
   });
 
   it('点击选项回调 onPermissionModeChange 并收合卸载', async () => {
@@ -185,6 +193,14 @@ describe('PermissionSelector triggerVariant', () => {
 
     fireEvent.click(screen.getByText('完全访问'));
     expect(onChange).toHaveBeenCalledWith('bypassPermissions');
+  });
+
+  it('field 形态打开时同样聚焦当前选中权限', async () => {
+    renderSelector({ triggerVariant: 'field', permissionMode: 'bypassPermissions' });
+    fireEvent.click(getTrigger());
+
+    const selectedOption = await screen.findByRole('option', { name: '完全访问' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
   });
 
   it('ariaContext 前置到 trigger 可及名(多实例同屏读屏区分,不传则原样)', () => {
