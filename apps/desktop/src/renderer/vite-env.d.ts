@@ -4222,9 +4222,12 @@ interface ElectronAPI {
       getState: (agentKind: 'claude-code' | 'codex') => Promise<CodexAuthState>;
       triggerLogin: (
         agentKind: 'claude-code' | 'codex',
-        options?: { mode?: 'browser' | 'device-code' },
+        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
       ) => Promise<CodexAuthState>;
-      cancelLogin: (agentKind: 'claude-code' | 'codex') => Promise<void>;
+      cancelLogin: (
+        agentKind: 'claude-code' | 'codex',
+        options?: { releaseOwner?: boolean; ownerId?: string },
+      ) => Promise<void>;
       logout: (agentKind: 'claude-code' | 'codex') => Promise<void>;
       onStateChanged: (
         cb: (s: { agentKind: 'claude-code' | 'codex' } & CodexAuthState) => void,

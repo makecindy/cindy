@@ -42,7 +42,11 @@ describe('triggerCodexLoginOnce', () => {
     browser.resolve({ authenticated: false });
     await expect(first).resolves.toEqual({ authenticated: false });
     await expect(deviceCode).resolves.toEqual({ authenticated: true });
-    expect(triggerLogin).toHaveBeenNthCalledWith(2, 'codex', { mode: 'device-code' });
+    expect(triggerLogin).toHaveBeenNthCalledWith(
+      2,
+      'codex',
+      expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+    );
   });
 
   it('does not start a queued mode switch after renderer cancellation', async () => {
@@ -96,6 +100,90 @@ describe('triggerCodexLoginOnce', () => {
     browser.resolve({ authenticated: false });
     await expect(first).resolves.toEqual({ authenticated: false });
     await expect(deviceCode).resolves.toEqual({ authenticated: true });
-    expect(triggerLogin).toHaveBeenNthCalledWith(2, 'codex', { mode: 'device-code' });
+    expect(triggerLogin).toHaveBeenNthCalledWith(
+      2,
+      'codex',
+      expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+    );
+  });
+
+  it('cancels a shared login only after its last explicit owner releases', async () => {
+    const login = deferred<{ authenticated: boolean; errorReason?: string }>();
+    const triggerLogin = vi.fn(() => login.promise);
+    const cancelLogin = vi.fn(async () => undefined);
+    Object.assign(window, {
+      electronAPI: {
+        maker: { auth: { triggerLogin, cancelLogin } },
+      },
+    });
+    const { acquireCodexLogin } = await import('../codexAuthLogin');
+
+    const first = acquireCodexLogin('device-code');
+    const second = acquireCodexLogin('device-code');
+    expect(first.promise).toBe(second.promise);
+    expect(triggerLogin).toHaveBeenCalledOnce();
+
+    first.release({ cancelIfLastOwner: true });
+    expect(cancelLogin).not.toHaveBeenCalled();
+
+    second.release({ cancelIfLastOwner: true });
+    expect(cancelLogin).toHaveBeenCalledOnce();
+    expect(cancelLogin).toHaveBeenCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: expect.any(String),
+    });
+
+    login.resolve({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(first.promise).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+  });
+
+  it('does not let an old-mode owner cleanup cancel the queued new-mode login', async () => {
+    const browser = deferred<{ authenticated: boolean; errorReason?: string }>();
+    const deviceCode = deferred<{ authenticated: boolean; errorReason?: string }>();
+    const triggerLogin = vi.fn((_: string, options?: { mode?: string }) =>
+      options?.mode === 'device-code' ? deviceCode.promise : browser.promise,
+    );
+    const cancelLogin = vi.fn(async () => undefined);
+    Object.assign(window, {
+      electronAPI: {
+        maker: { auth: { triggerLogin, cancelLogin } },
+      },
+    });
+    const { acquireCodexLogin } = await import('../codexAuthLogin');
+
+    const browserOwner = acquireCodexLogin('browser');
+    const deviceOwner = acquireCodexLogin('device-code');
+    expect(cancelLogin).toHaveBeenCalledOnce();
+
+    browserOwner.release({ cancelIfLastOwner: true });
+    expect(cancelLogin).toHaveBeenCalledOnce();
+
+    browser.resolve({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(browserOwner.promise).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await vi.waitFor(() =>
+      expect(triggerLogin).toHaveBeenNthCalledWith(
+        2,
+        'codex',
+        expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+      ),
+    );
+
+    deviceOwner.release({ cancelIfLastOwner: true });
+    expect(cancelLogin).toHaveBeenCalledTimes(2);
+    expect(cancelLogin).toHaveBeenLastCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: expect.any(String),
+    });
+    deviceCode.resolve({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(deviceOwner.promise).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
   });
 });

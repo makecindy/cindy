@@ -4489,11 +4489,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
         agentKind: 'claude-code' | 'codex',
-        options?: { mode?: 'browser' | 'device-code' },
+        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
       ): Promise<unknown> =>
         ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
-      cancelLogin: (agentKind: 'claude-code' | 'codex'): Promise<void> =>
-        ipcRenderer.invoke('maker:auth:cancel-login', agentKind),
+      cancelLogin: (
+        agentKind: 'claude-code' | 'codex',
+        options?: { releaseOwner?: boolean; ownerId?: string },
+      ): Promise<void> =>
+        ipcRenderer.invoke('maker:auth:cancel-login', agentKind, options),
       logout: (agentKind: 'claude-code' | 'codex'): Promise<void> =>
         ipcRenderer.invoke('maker:auth:logout', agentKind),
       onStateChanged: fanOutMakerAuthStateChanged,

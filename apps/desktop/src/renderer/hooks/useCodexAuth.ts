@@ -11,8 +11,9 @@ import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
 import {
+  acquireCodexLogin,
   invalidatePendingCodexLogin,
-  triggerCodexLoginOnce,
+  type CodexLoginLease,
   type CodexLoginResult,
 } from './codexAuthLogin';
 import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
@@ -239,11 +240,63 @@ export function isChatGptConnectionConnected(
   return state.kind === 'authenticated' && state.authSource === 'oauth';
 }
 
+/**
+ * 将共享 Codex 登录绑定到真实发起它的 React owner。
+ *
+ * 观察型 useCodexAuth 实例不会获得 lease，因此卸载时不会取消别的窗口发起的登录。
+ */
+export function useOwnedCodexLogin(): (
+  mode?: 'browser' | 'device-code',
+) => Promise<CodexLoginResult> {
+  const leasesRef = useRef(new Set<CodexLoginLease>());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const lease of leasesRef.current) {
+        lease.release({ cancelIfLastOwner: true });
+      }
+      leasesRef.current.clear();
+    };
+  }, []);
+
+  return useCallback((mode: 'browser' | 'device-code' = 'browser') => {
+    if (!mountedRef.current) {
+      return Promise.resolve({
+        authenticated: false,
+        errorReason: 'login_cancelled',
+      });
+    }
+    const lease = acquireCodexLogin(mode);
+    leasesRef.current.add(lease);
+    return lease.promise
+      .then(
+        (result) =>
+          mountedRef.current
+            ? result
+            : { authenticated: false, errorReason: 'login_cancelled' },
+        (error) => {
+          if (!mountedRef.current) {
+            return { authenticated: false, errorReason: 'login_cancelled' };
+          }
+          throw error;
+        },
+      )
+      .finally(() => {
+        if (!leasesRef.current.delete(lease)) return;
+        lease.release();
+      });
+  }, []);
+}
+
 export function useCodexAuth(options?: { enabled?: boolean }) {
   const enabled = options?.enabled ?? true;
   const { t } = useTranslation();
   const [machine, setMachine] = useState<CodexAuthMachineState>(createInitialMachineState);
   const machineRef = useRef(machine);
+  const triggerOwnedLogin = useOwnedCodexLogin();
 
   const transition = useCallback((event: CodexAuthMachineEvent) => {
     const current = machineRef.current;
@@ -323,7 +376,7 @@ export function useCodexAuth(options?: { enabled?: boolean }) {
   ): Promise<CodexLoginOutcome> => {
     transition({ type: 'login-pending', mode });
     try {
-      const result = await triggerCodexLoginOnce(mode);
+      const result = await triggerOwnedLogin(mode);
       transition({ type: 'login-result', result });
       if (result.authenticated) {
         toast.success(t('logic.toasts.codexConnected'));
@@ -335,7 +388,7 @@ export function useCodexAuth(options?: { enabled?: boolean }) {
       transition({ type: 'login-threw', message });
       return message.includes('login_cancelled') ? 'cancelled' : 'failed';
     }
-  }, [t, transition]);
+  }, [t, transition, triggerOwnedLogin]);
 
   const cancelLogin = useCallback(async () => {
     invalidatePendingCodexLogin();

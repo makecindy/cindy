@@ -162,7 +162,7 @@ describe('maker auth IPC handlers', () => {
     });
   });
 
-  it('rejects unsupported login modes before invoking Maker', async () => {
+  it('rejects unsupported login modes and malformed owner options before invoking Maker', async () => {
     const harness = new IpcHarness();
     const triggerAgentLogin = vi.fn();
     registerMakerAuthHandlers(harness, createMakerStub({ triggerAgentLogin }), vi.fn(), () => null);
@@ -173,6 +173,16 @@ describe('maker auth IPC handlers', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'claude-code', {
         mode: 'device-code',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+        ownerId: 'contains whitespace',
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    await expect(
+      harness.invokeFrom(101, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex', {
+        releaseOwner: true,
       }),
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     expect(triggerAgentLogin).not.toHaveBeenCalled();
@@ -356,6 +366,207 @@ describe('maker auth IPC handlers', () => {
     expect(logoutAgent).not.toHaveBeenCalled();
     expect(onCodexAuthChange).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('keeps a shared login alive until the last BrowserWindow owner releases it', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const cancelAgentLogin = vi.fn();
+    const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
+    let finishLogin!: (state: AuthState) => void;
+    const sharedLogin = new Promise<AuthState>((resolve) => {
+      finishLogin = resolve;
+    });
+    const triggerAgentLogin = vi.fn(() => sharedLogin);
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin, cancelAgentLogin }),
+      broadcast,
+      () => null,
+      onCodexAuthChange,
+    );
+
+    const first = harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-101-operation-1',
+    });
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    const second = harness.invokeFrom(202, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-202-operation-1',
+    });
+    await Promise.resolve();
+    expect(triggerAgentLogin).toHaveBeenCalledOnce();
+
+    await expect(
+      harness.invokeFrom(101, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex', {
+        releaseOwner: true,
+        ownerId: 'window-101-operation-1',
+      }),
+    ).resolves.toBeUndefined();
+    expect(cancelAgentLogin).not.toHaveBeenCalled();
+    await expect(
+      harness.invokeFrom(101, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex', {
+        releaseOwner: true,
+        ownerId: 'window-101-operation-1',
+      }),
+    ).resolves.toBeUndefined();
+    expect(cancelAgentLogin).not.toHaveBeenCalled();
+
+    const lastRelease = harness.invokeFrom(202, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex', {
+      releaseOwner: true,
+      ownerId: 'window-202-operation-1',
+    });
+    await vi.waitFor(() => expect(cancelAgentLogin).toHaveBeenCalledOnce());
+    expect(cancelAgentLogin).toHaveBeenCalledWith('codex');
+
+    finishLogin({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(first).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await expect(second).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await expect(lastRelease).resolves.toBeUndefined();
+    expect(onCodexAuthChange).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+  });
+
+  it('coalesces same-mode BrowserWindow callers through one successful main finalization', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    let finishLogin!: (state: AuthState) => void;
+    const triggerAgentLogin = vi.fn(
+      () =>
+        new Promise<AuthState>((resolve) => {
+          finishLogin = resolve;
+        }),
+    );
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin }),
+      broadcast,
+      () => null,
+    );
+
+    const first = harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-101-success',
+    });
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    const second = harness.invokeFrom(202, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-202-success',
+    });
+    finishLogin({ authenticated: true, authSource: 'api-key' });
+
+    await expect(first).resolves.toEqual({ authenticated: true, authSource: 'api-key' });
+    await expect(second).resolves.toEqual({ authenticated: true, authSource: 'api-key' });
+    expect(triggerAgentLogin).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: true,
+      authSource: 'api-key',
+    });
+  });
+
+  it('releases login ownership when BrowserWindows are destroyed', async () => {
+    const harness = new IpcHarness();
+    const broadcast = vi.fn();
+    const cancelAgentLogin = vi.fn();
+    const onCodexAuthChange = vi.fn().mockResolvedValue(undefined);
+    let finishLogin!: (state: AuthState) => void;
+    const triggerAgentLogin = vi.fn(
+      () =>
+        new Promise<AuthState>((resolve) => {
+          finishLogin = resolve;
+        }),
+    );
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin, cancelAgentLogin }),
+      broadcast,
+      () => null,
+      onCodexAuthChange,
+    );
+
+    const first = harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-101-destroyed',
+    });
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    const second = harness.invokeFrom(202, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-202-destroyed',
+    });
+
+    harness.destroySender(101);
+    expect(cancelAgentLogin).not.toHaveBeenCalled();
+    harness.destroySender(202);
+    expect(cancelAgentLogin).toHaveBeenCalledOnce();
+
+    finishLogin({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(first).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await expect(second).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+    await vi.waitFor(() => expect(onCodexAuthChange).toHaveBeenCalledOnce());
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.AUTH_STATE_CHANGED, {
+      agentKind: 'codex',
+      authenticated: false,
+      errorReason: 'login_cancelled',
+    });
+  });
+
+  it('ignores a stale owner release from the same BrowserWindow', async () => {
+    const harness = new IpcHarness();
+    const cancelAgentLogin = vi.fn();
+    let finishLogin!: (state: AuthState) => void;
+    const triggerAgentLogin = vi.fn(
+      () =>
+        new Promise<AuthState>((resolve) => {
+          finishLogin = resolve;
+        }),
+    );
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin, cancelAgentLogin }),
+      vi.fn(),
+      () => null,
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    const login = harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-101-new-operation',
+    });
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    await expect(
+      harness.invokeFrom(101, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex', {
+        releaseOwner: true,
+        ownerId: 'window-101-old-operation',
+      }),
+    ).resolves.toBeUndefined();
+    expect(cancelAgentLogin).not.toHaveBeenCalled();
+
+    const release = harness.invokeFrom(101, MAKER_INVOKE.AUTH_CANCEL_LOGIN, 'codex', {
+      releaseOwner: true,
+      ownerId: 'window-101-new-operation',
+    });
+    expect(cancelAgentLogin).toHaveBeenCalledOnce();
+    finishLogin({ authenticated: false, errorReason: 'login_cancelled' });
+    await expect(login).resolves.toMatchObject({ errorReason: 'login_cancelled' });
+    await expect(release).resolves.toBeUndefined();
   });
 
   it('does not let an older Cancel cleanup disconnect a newer login', async () => {
@@ -557,6 +768,57 @@ describe('maker auth IPC handlers', () => {
       errorReason: 'login_cancelled',
     });
     expect(triggerAgentLogin).toHaveBeenCalledOnce();
+  });
+
+  it('does not coalesce a new login into the operation being logged out', async () => {
+    const harness = new IpcHarness();
+    let finishFirstLogin!: (state: AuthState) => void;
+    let finishLogout!: () => void;
+    const triggerAgentLogin = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<AuthState>((resolve) => {
+            finishFirstLogin = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ authenticated: true, authSource: 'api-key' });
+    const logoutAgent = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLogout = resolve;
+        }),
+    );
+
+    registerMakerAuthHandlers(
+      harness,
+      createMakerStub({ triggerAgentLogin, logoutAgent }),
+      vi.fn(),
+      () => null,
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    const first = harness.invokeFrom(101, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-101-before-logout',
+    });
+    await vi.waitFor(() => expect(triggerAgentLogin).toHaveBeenCalledOnce());
+    const logout = harness.invoke(MAKER_INVOKE.AUTH_LOGOUT, 'codex');
+    await vi.waitFor(() => expect(logoutAgent).toHaveBeenCalledOnce());
+    const second = harness.invokeFrom(202, MAKER_INVOKE.AUTH_TRIGGER_LOGIN, 'codex', {
+      ownerId: 'window-202-after-logout',
+    });
+    expect(triggerAgentLogin).toHaveBeenCalledOnce();
+
+    finishFirstLogin({ authenticated: false, errorReason: 'login_cancelled' });
+    finishLogout();
+
+    await expect(first).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'auth_mutation_superseded',
+    });
+    await expect(logout).resolves.toBeUndefined();
+    await expect(second).resolves.toEqual({ authenticated: true, authSource: 'api-key' });
+    expect(triggerAgentLogin).toHaveBeenCalledTimes(2);
   });
 
   it('cancels a login request while it is queued behind logout finalization', async () => {

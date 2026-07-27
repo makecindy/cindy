@@ -291,7 +291,69 @@ describe('useCodexAuth lifecycle', () => {
       await expect(firstOutcome).resolves.toBe('authenticated');
       await expect(secondOutcome).resolves.toBe('authenticated');
     });
-    expect(auth.triggerLogin).toHaveBeenCalledWith('codex');
+    expect(auth.triggerLogin).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ ownerId: expect.any(String) }),
+    );
+  });
+
+  it('keeps a shared owned login until the last owner unmounts and ignores observers', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const login = deferred<TestAuthState>();
+    auth.triggerLogin.mockImplementation(() => login.promise);
+    const firstOwner = renderHook(() => useCodexAuth());
+    const secondOwner = renderHook(() => useCodexAuth());
+    const observer = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(firstOwner.result.current.state.kind).toBe('authenticated'));
+    await waitFor(() => expect(secondOwner.result.current.state.kind).toBe('authenticated'));
+    await waitFor(() => expect(observer.result.current.state.kind).toBe('authenticated'));
+
+    let firstOutcome!: ReturnType<typeof firstOwner.result.current.triggerLogin>;
+    let secondOutcome!: ReturnType<typeof secondOwner.result.current.triggerLogin>;
+    act(() => {
+      firstOutcome = firstOwner.result.current.triggerLogin('device-code');
+      secondOutcome = secondOwner.result.current.triggerLogin('device-code');
+    });
+    await waitFor(() =>
+      expect(auth.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+      ),
+    );
+    expect(auth.triggerLogin).toHaveBeenCalledOnce();
+
+    observer.unmount();
+    firstOwner.unmount();
+    expect(auth.cancelLogin).not.toHaveBeenCalled();
+
+    secondOwner.unmount();
+    expect(auth.cancelLogin).toHaveBeenCalledOnce();
+    expect(auth.cancelLogin).toHaveBeenCalledWith('codex', {
+      releaseOwner: true,
+      ownerId: expect.any(String),
+    });
+
+    // 即使 bridge 取消失败、main 最终回了成功，已卸载 owner 也只能观察到 cancelled，
+    // 不能在关闭向导后迟到弹出“连接成功”或更新卸载组件。
+    login.resolve({ authenticated: true, authSource: 'oauth' });
+    await act(async () => {
+      await expect(firstOutcome).resolves.toBe('cancelled');
+      await expect(secondOutcome).resolves.toBe('cancelled');
+    });
+  });
+
+  it('does not start a login through a retained callback after its owner unmounts', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const owner = renderHook(() => useCodexAuth());
+    await waitFor(() => expect(owner.result.current.state.kind).toBe('authenticated'));
+    const triggerAfterUnmount = owner.result.current.triggerLogin;
+
+    owner.unmount();
+    await expect(triggerAfterUnmount('device-code')).resolves.toBe('cancelled');
+
+    expect(auth.triggerLogin).not.toHaveBeenCalled();
+    expect(auth.cancelLogin).not.toHaveBeenCalled();
   });
 
   it('keeps the device code visible while later waiting output arrives', async () => {
@@ -306,7 +368,10 @@ describe('useCodexAuth lifecycle', () => {
       attempt = result.current.triggerLogin('device-code');
     });
     await waitFor(() =>
-      expect(auth.triggerLogin).toHaveBeenCalledWith('codex', { mode: 'device-code' }),
+      expect(auth.triggerLogin).toHaveBeenCalledWith(
+        'codex',
+        expect.objectContaining({ mode: 'device-code', ownerId: expect.any(String) }),
+      ),
     );
 
     act(() => {
