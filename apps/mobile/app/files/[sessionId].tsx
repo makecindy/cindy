@@ -193,6 +193,9 @@ export default function RemoteFileBrowserScreen() {
   }, []);
 
   // 会话兜底拉取(直接经 deep link 进入时 store 里可能还没有)。
+  // deviceUnresponsive 进依赖(review P1,同 preview 页):深链进入且无缓存
+  // 会话时,首次 getSession 撞上熔断 open 会永久失败——本页不注册 reseed
+  // handler,fs-watch 重订阅也不会主动发事件,恢复后必须自动重跑。
   useEffect(() => {
     if (knownSession) {
       setSession(knownSession);
@@ -203,9 +206,12 @@ export default function RemoteFileBrowserScreen() {
       await openLink(deviceId);
       return maker.getSession(sessionId);
     })
-      .then(setSession)
+      .then((loaded) => {
+        setSession(loaded);
+        setError(null);
+      })
       .catch((err) => setError(formatRemoteError(err)));
-  }, [deviceId, knownSession, maker, openLink, sessionId]);
+  }, [deviceId, deviceUnresponsive, knownSession, maker, openLink, sessionId]);
 
   // workdir 就绪后加载偏好(异步存储可能比同步内存新)。
   useEffect(() => {
@@ -255,6 +261,18 @@ export default function RemoteFileBrowserScreen() {
     sortModeRef.current = sortMode;
     setItems(buildFileBrowserGridItems(rawEntriesRef.current, sortMode, Date.now()));
   }, [sortMode]);
+
+  // 熔断恢复:目录静默刷新(缓存保留不清列表,规则 7)。首次 listDir 撞上
+  // 熔断快速失败、或 open 期间目录停更时,恢复不会有任何文件事件来救——
+  // 只在 open→closed 翻转沿触发一次;workdir 尚未就绪时 loadDirectory 自身
+  // no-op(session bootstrap 的恢复重跑会先把 workdir 补回来)。
+  const prevDeviceUnresponsiveRef = useRef(deviceUnresponsive);
+  useEffect(() => {
+    const was = prevDeviceUnresponsiveRef.current;
+    prevDeviceUnresponsiveRef.current = deviceUnresponsive;
+    if (!was || deviceUnresponsive) return;
+    void loadDirectory({ refreshing: true });
+  }, [deviceUnresponsive, loadDirectory]);
 
   // 缓存优先:内存同步命中立即上屏;miss 再试 AsyncStorage 快照(跨启动);
   // 无论命中与否都发一次静默刷新拿最新。

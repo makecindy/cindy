@@ -35,6 +35,10 @@ describe('resolveMobileInvokeTimeoutMs', () => {
     // create-session:冷启动 app-server / agent 拉起无更短 deadline;goal 路径
     // 无稳定客户端会话 id,误超时重试会建出第二个会话。
     expect(resolveMobileInvokeTimeoutMs('maker:create-session')).toBe(30_000);
+    // goal set/resume:restoreSessionForGoal 同样 await createSession 重启持久化
+    // agent;两者有真实副作用,误超时重试会改动/重启已在跑的 goal。
+    expect(resolveMobileInvokeTimeoutMs('maker:goal:set')).toBe(30_000);
+    expect(resolveMobileInvokeTimeoutMs('maker:goal:resume')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
   });
 

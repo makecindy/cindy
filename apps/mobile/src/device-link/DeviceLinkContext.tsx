@@ -845,9 +845,10 @@ async function sendInvoke<T>(
     throw err;
   }
   // 收到 invoke-result 帧即为目标设备真实回包(即使 ok:false 的业务错误)。但
-  // dispatch 特判通道(media/voice,见 BREAKER_NEUTRAL_INVOKE_CHANNELS)的成功
-  // 不走 IPC/DB 路径,不作恢复证据——按通道分类收尾(review P1)。
-  settleDeviceSend(deviceId, slot, classifyDeviceSendSuccess(channel));
+  // dispatch 特判通道(media/voice)的成功不走 IPC/DB 路径,且持有探测席位时
+  // 只有指定探测通道能关熔断(纯内存 IPC handler 的回包不算)——按通道 +
+  // 席位分类收尾(review P1 多轮收敛,见 classifyDeviceSendSuccess)。
+  settleDeviceSend(deviceId, slot, classifyDeviceSendSuccess(channel, slot.decision === 'probe'));
   return unwrapInvoke<T>(result);
 }
 

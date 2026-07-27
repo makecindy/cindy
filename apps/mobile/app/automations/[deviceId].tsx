@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react-native';
 import {
   ActivityIndicator,
@@ -243,6 +243,19 @@ export default function AutomationsScreen() {
   useEffect(() => {
     if (selectedScheduleId) void syncRuns(selectedScheduleId);
   }, [selectedScheduleId, syncRuns]);
+
+  // 熔断恢复重载(review P1):首载撞上熔断快速失败时,探测成功关熔断不会重跑
+  // 本页加载(rehydrate 只回填 remoteSessionStore,不管本页的 schedules /
+  // runsBySchedule),列表会一直空/陈旧到手动同步或无关调度事件。只在
+  // open→closed 的翻转沿触发,平时零开销。
+  const prevDeviceUnresponsiveRef = useRef(deviceUnresponsive);
+  useEffect(() => {
+    const was = prevDeviceUnresponsiveRef.current;
+    prevDeviceUnresponsiveRef.current = deviceUnresponsive;
+    if (!was || deviceUnresponsive) return;
+    void loadSchedules();
+    if (selectedScheduleId) void syncRuns(selectedScheduleId);
+  }, [deviceUnresponsive, loadSchedules, selectedScheduleId, syncRuns]);
 
   useEffect(() => {
     if (scheduleEventSnapshot.scheduleListVersion === 0) return;

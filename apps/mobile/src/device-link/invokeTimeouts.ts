@@ -36,7 +36,11 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s;
  *  - maker:create-session:桌面 await maker.createSession → agent.startSession /
  *    Codex host.ensureStarted,冷启动 app-server 无更短 deadline;goal 路径无
- *    稳定的客户端会话 id,误超时后重试会建出第二个会话。
+ *    稳定的客户端会话 id,误超时后重试会建出第二个会话;
+ *  - maker:goal:set / goal:resume:GoalController.ensureSession 的
+ *    restoreSessionForGoal 同样 await createSession 重启持久化 agent,冷启动
+ *    可超 15s;两者都有真实副作用(set 落库目标并发首轮,resume 先标 active),
+ *    误超时后重试会改动/重启已在跑的 goal。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -47,6 +51,8 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'maker:create-session': 30_000,
   'maker:fork': 30_000,
   'maker:get-context-usage': 30_000,
+  'maker:goal:resume': 30_000,
+  'maker:goal:set': 30_000,
   'maker:regenerate-title': 30_000,
   'maker:rewind:commit': 30_000,
   'maker:send': 30_000,

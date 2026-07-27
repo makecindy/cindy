@@ -171,8 +171,16 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'device-link:voice:transcribe',
 ]);
 
-/** 发送成功 → 熔断信号分类:dispatch 特判通道不定论,其余为真实恢复证据。 */
-export function classifyDeviceSendSuccess(channel: string): BreakerSettleOutcome {
+/**
+ * 发送成功 → 熔断信号分类:dispatch 特判通道不定论,其余为真实恢复证据。
+ * wasProbe(review P1 收敛):持有 half-open 探测席位时,只有指定探测通道
+ * (穿过 local-db 读路径)的回包才允许关熔断——普通 IPC handler 里还有大量
+ * 纯内存实现(如 maker:list-agent-commands 的同步列表),DB 子系统卡死时它们
+ * 照常应答,凑巧抢到探测席位的成功不能作恢复证据。闭合态(非探测)的回包
+ * 仍按通道分类:重置连续计数只是计数语义,不触发恢复突发。
+ */
+export function classifyDeviceSendSuccess(channel: string, wasProbe = false): BreakerSettleOutcome {
+  if (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL) return 'inconclusive';
   return BREAKER_NEUTRAL_INVOKE_CHANNELS.has(channel) ? 'inconclusive' : 'responded';
 }
 

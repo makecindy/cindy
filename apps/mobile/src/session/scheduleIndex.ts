@@ -80,6 +80,12 @@ interface ScheduleIndexThrottleEntry {
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 
+/** 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复的失败类别。 */
+function isLocalLinkDownError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN';
+}
+
 export function loadSessionScheduleIndexThrottled(
   key: string,
   load: () => Promise<Map<string, RemoteSessionScheduleInfo>>,
@@ -128,7 +134,10 @@ export function loadSessionScheduleIndexThrottled(
         // 同样享受「恢复即旁路」而不是干等 30s TTL。
         entry.failedUnresponsive =
           isDeviceUnresponsiveRemoteError(error) || unresponsiveDevicesStore.has(key);
-        entry.failedTransient = !entry.failedUnresponsive && isTransientRemoteError(error);
+        // 收窄为真正的本机链路失败(review):isTransientRemoteError 把
+        // INVOKE_TIMEOUT(目标不回包)也算 transient,若沿用,重连失效钩子会把
+        // 「设备不回包」的负缓存也当断线恢复清掉,削弱止损效果。
+        entry.failedTransient = !entry.failedUnresponsive && isLocalLinkDownError(error);
       }
     },
   );

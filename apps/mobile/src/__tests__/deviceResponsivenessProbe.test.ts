@@ -50,11 +50,21 @@ describe('classifyDeviceSendSuccess(成功回包 → 熔断信号分类)', () =>
     }
   });
 
-  it('代表性探测与业务 DB 通道的成功仍是有效恢复证据', () => {
+  it('代表性探测与业务 DB 通道的成功仍是有效恢复证据(闭合态)', () => {
     expect(classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL)).toBe('responded');
     expect(classifyDeviceSendSuccess('local-db:messages:list')).toBe('responded');
     expect(classifyDeviceSendSuccess('maker:send')).toBe('responded');
     expect(classifyDeviceSendSuccess('file-browser:remote-op')).toBe('responded');
+  });
+
+  it('持有探测席位时只有指定探测通道能关熔断(review P1:纯内存 IPC handler 不算)', () => {
+    // maker:list-agent-commands 等 handler 是同步内存实现,DB 卡死时照常应答;
+    // 半开窗口里凑巧抢到探测席位的成功不能作恢复证据。
+    expect(classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true)).toBe('responded');
+    expect(classifyDeviceSendSuccess('maker:list-agent-commands', true)).toBe('inconclusive');
+    expect(classifyDeviceSendSuccess('local-db:messages:list', true)).toBe('inconclusive');
+    // 闭合态(非探测)不受影响
+    expect(classifyDeviceSendSuccess('maker:list-agent-commands', false)).toBe('responded');
   });
 });
 
