@@ -402,6 +402,27 @@ export function plainTextToTiptapDoc(text: string): JSONContent {
 }
 
 /**
+ * 与 plainTextToTiptapDoc 相同，但给文本附加 quickStartPill mark，
+ * 使编辑器渲染为黑底白字胶囊标签（视觉区分卡片预填 vs 手动输入）。
+ */
+export function quickStartTextToTiptapDoc(text: string): JSONContent {
+  if (!text) {
+    return { type: 'doc', content: [{ type: 'paragraph' }] };
+  }
+  return {
+    type: 'doc',
+    content: text.split('\n').map((line) =>
+      line.length === 0
+        ? { type: 'paragraph' }
+        : {
+            type: 'paragraph',
+            content: [{ type: 'text', marks: [{ type: 'quickStartPill' }], text: line }],
+          },
+    ),
+  };
+}
+
+/**
  * Subscribe to external writes for `sessionId`. Returns an unsubscribe fn.
  * ChatInput uses this to force-setContent when an outside writer (rewind /
  * fork pre-fill) updates the draft for the currently-mounted session.

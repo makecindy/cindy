@@ -150,6 +150,7 @@ import {
   replacePastedTextChipWithPlainText,
   type PastedTextChipAttrs,
 } from './PastedTextChipNode';
+import { QuickStartPillMark } from './QuickStartPillMark';
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Selection, TextSelection } from '@tiptap/pm/state';
@@ -1374,6 +1375,7 @@ export function ChatInput({
       MentionDragCaretDecoration,
       GhostCommandDecoration,
       SlashCommandDecoration,
+      QuickStartPillMark,
     ],
     editorProps: {
       clipboardTextSerializer: (slice) => serializeEditorSlice(editorRef.current, slice),

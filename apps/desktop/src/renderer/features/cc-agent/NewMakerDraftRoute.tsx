@@ -87,6 +87,7 @@ import {
   clearDraftAndNotify as clearComposerDraftAndNotify,
   getDraft as getComposerDraft,
   plainTextToTiptapDoc,
+  quickStartTextToTiptapDoc,
   saveDraft as saveComposerDraft,
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
@@ -2202,7 +2203,7 @@ export function NewMakerDraftRoute() {
       const text = t(labelKey);
       const currentDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
       saveComposerDraft(NEW_MAKER_DRAFT_KEY, {
-        text: plainTextToTiptapDoc(text),
+        text: quickStartTextToTiptapDoc(text),
         attachments: currentDraft?.attachments ?? attachmentState.attachments,
         quotes: currentDraft?.quotes,
         browserComments: currentDraft?.browserComments,
