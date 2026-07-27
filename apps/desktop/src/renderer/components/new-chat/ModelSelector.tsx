@@ -1510,9 +1510,10 @@ function ModelSelectorContentView({
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
         ref={listRef}
-        // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
-        // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
-        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        // 不使用 -mr-2 / scrollbar-gutter:stable:
+        // 列表落在 pane 的 p-2 内,左右与搜索框同宽对齐,滚动条内嵌不贴浮层外框;
+        // pr-1 给滚动条与行内容之间留一点气口。细滚动条见 globals.css。
+        className="morph-panel-list-scroll flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1"
         style={
           constrainedListMaxHeight === undefined
             ? undefined
