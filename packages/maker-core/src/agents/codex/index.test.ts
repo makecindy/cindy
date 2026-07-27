@@ -887,11 +887,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     };
     expect(params.modelProvider).toBe('cindy_openai');
     expect(params.excludeTurns).toBe(true);
-    expect(params.initialTurnsPage).toEqual({
-      limit: 100,
-      sortDirection: 'desc',
-      itemsView: 'summary',
-    });
+    expect(params.initialTurnsPage).toBeUndefined();
     await handle.close();
   });
 
@@ -6537,7 +6533,7 @@ describe('CodexAgent plan mode', () => {
     await normalHandle.close();
   });
 
-  it('does not request a default marker for resumed native plan items without a collaboration marker', async () => {
+  it('conservatively requests a default marker for resumed native plan items', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadResume) {
@@ -6570,7 +6566,7 @@ describe('CodexAgent plan mode', () => {
     const [, params] = turnStartCalls(host)[0] as [string, Record<string, unknown>];
     expect(params.collaborationMode).toEqual({
       mode: 'default',
-      settings: { ...PLAN_SETTINGS, developer_instructions: '' },
+      settings: PLAN_SETTINGS,
     });
     await handle.close();
   });
@@ -6613,7 +6609,7 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
-  it('does not request another default marker when resumed history already ended in Default Mode', async () => {
+  it('conservatively requests a default marker when legacy resumed history ended in Default Mode', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadResume) {
@@ -6653,60 +6649,16 @@ describe('CodexAgent plan mode', () => {
     const [, params] = turnStartCalls(host)[0] as [string, Record<string, unknown>];
     expect(params.collaborationMode).toEqual({
       mode: 'default',
-      settings: { ...PLAN_SETTINGS, developer_instructions: '' },
+      settings: PLAN_SETTINGS,
     });
     await handle.close();
   });
 
-  it('reads the latest collaboration marker from the bounded descending resume page', async () => {
-    const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.ThreadResume) {
-        return {
-          thread: { id: 'resume-thread-id', turns: [] },
-          initialTurnsPage: {
-            data: [
-              {
-                id: 'turn-default',
-                items: [collaborationModeItem('Default')],
-              },
-              {
-                id: 'turn-plan',
-                items: [collaborationModeItem('Plan')],
-              },
-            ],
-            nextCursor: null,
-            backwardsCursor: null,
-          },
-          model: 'gpt-5.4',
-          modelProvider: 'openai',
-          cwd: '/repo',
-        };
-      }
-      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-paged-plan-history',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
-    });
-
-    await handle.send({ type: 'user', content: 'continue normally' });
-    const [, params] = turnStartCalls(host)[0] as [string, Record<string, unknown>];
-    expect(params.collaborationMode).toEqual({
-      mode: 'default',
-      settings: { ...PLAN_SETTINGS, developer_instructions: '' },
-    });
-    await handle.close();
-  });
-
-  it('does not request a default marker for resumed threads without plan history', async () => {
+  it('conservatively resets sticky collaboration mode after metadata-only resume', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installTurnHost(agent);
     const handle = await agent.startSession({
-      sessionId: 'session-normal-resume-reset',
+      sessionId: 'session-metadata-only-resume-reset',
       model: 'gpt-5.4',
       workingDir: '/repo',
       resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
@@ -6717,7 +6669,7 @@ describe('CodexAgent plan mode', () => {
     const [, params] = turnStartCalls(host)[0] as [string, Record<string, unknown>];
     expect(params.collaborationMode).toEqual({
       mode: 'default',
-      settings: { ...PLAN_SETTINGS, developer_instructions: '' },
+      settings: PLAN_SETTINGS,
     });
     await handle.close();
   });
@@ -6779,15 +6731,7 @@ describe('CodexAgent plan mode', () => {
       }
       if (method === Method.ThreadResume) {
         return {
-          thread: {
-            id: 'start-thread-id',
-            turns: [
-              {
-                id: 'turn-1',
-                items: [collaborationModeItem('Plan')],
-              },
-            ],
-          },
+          thread: { id: 'start-thread-id' },
           model: 'gpt-5.4',
           modelProvider: 'openai',
           cwd: '/repo',
@@ -6804,6 +6748,11 @@ describe('CodexAgent plan mode', () => {
     await vi.waitFor(() => {
       expect(turnStartCalls(host)).toHaveLength(3);
     });
+    const [, resumeParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    ) as [string, { excludeTurns?: boolean; initialTurnsPage?: unknown }];
+    expect(resumeParams.excludeTurns).toBe(true);
+    expect(resumeParams.initialTurnsPage).toBeUndefined();
     const [, failedImplParams] = turnStartCalls(host)[1] as [string, {
       collaborationMode?: { mode: string; settings: { developer_instructions: string | null } };
     }];

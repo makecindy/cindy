@@ -154,12 +154,6 @@ const CODEX_MINIMAL_EFFORT_MODELS = new Set([
   'z-ai/glm-5.2',
 ]);
 
-const CODEX_RESUME_HISTORY_PAGE = {
-  limit: 100,
-  sortDirection: 'desc',
-  itemsView: 'summary',
-} as const;
-
 /**
  * item.type → chip status 文案 (对齐 claude-code 6 类). null = 该 item 不触发 chip 切换
  * (imageView/plan/userMessage/hookPrompt 等是 completed-only 或 UI 不暴露的 item)。
@@ -2355,60 +2349,6 @@ export class CodexAgent extends BaseAgent {
     let threadId: string;
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
-    const collaborationModeFromText = (text: string): 'plan' | 'default' | null => {
-      const match = /<collaboration_mode>\s*#\s*(Plan|Default)\s+Mode/i.exec(text);
-      if (!match) return null;
-      return match[1]?.toLowerCase() === 'plan' ? 'plan' : 'default';
-    };
-
-    const textFromResponsesItem = (value: unknown): string[] => {
-      if (!value || typeof value !== 'object') return [];
-      if (Array.isArray(value)) return value.flatMap(textFromResponsesItem);
-      const record = value as Record<string, unknown>;
-      const texts: string[] = [];
-      if (typeof record.text === 'string') texts.push(record.text);
-      if (Array.isArray(record.content)) texts.push(...record.content.flatMap(textFromResponsesItem));
-      return texts;
-    };
-
-    const latestCollaborationModeFromTurns = (
-      turns: unknown,
-    ): 'plan' | 'default' | null => {
-      if (!Array.isArray(turns)) return null;
-      // Codex 0.142.5 thread/resume includes turns[].items. Only collaboration
-      // markers are authoritative here: ordinary non-Plan-Mode Codex turns can
-      // also persist native `type:'plan'` items.
-      let latestCollaborationMode: 'plan' | 'default' | null = null;
-      for (const turn of turns) {
-        if (!turn || typeof turn !== 'object') continue;
-        const items = (turn as { items?: unknown }).items;
-        if (!Array.isArray(items)) continue;
-        for (const item of items) {
-          if (!item || typeof item !== 'object') continue;
-          for (const text of textFromResponsesItem(item)) {
-            latestCollaborationMode = collaborationModeFromText(text) ?? latestCollaborationMode;
-          }
-        }
-      }
-      return latestCollaborationMode;
-    };
-
-    const resumeNeedsDefaultModeMarker = (response: ThreadResumeResponse): boolean => {
-      const page = response.initialTurnsPage;
-      if (page && Array.isArray(page.data)) {
-        // 请求方向是 desc；反转后再复用按时间正序扫描的 marker 判定。
-        const latestMode = latestCollaborationModeFromTurns([...page.data].reverse());
-        // 页面之外仍有更早历史且当前页没 marker 时，无法证明 server 的 sticky
-        // collaborationMode 已复位；保守发一次 default marker。
-        return latestMode === 'plan' || (latestMode === null && page.nextCursor !== null);
-      }
-      // 兼容旧 fake host / 不支持分页字段的 app-server response。
-      const turns = response.thread && typeof response.thread === 'object'
-        ? (response.thread as { turns?: unknown }).turns
-        : undefined;
-      return latestCollaborationModeFromTurns(turns) === 'plan';
-    };
-
     /**
      * 会话中途把单个设置 (serviceTier / model / effort) 立即推给 app-server,
      * 写入后续 turn 的 sticky context — 不必等下一个 turn/start 携带 (与官方
@@ -2471,7 +2411,6 @@ export class CodexAgent extends BaseAgent {
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
         excludeTurns: true,
-        initialTurnsPage: CODEX_RESUME_HISTORY_PAGE,
         cwd: opts.workingDir,
         ...currentThreadWorkspaceConfig(),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
@@ -2502,7 +2441,10 @@ export class CodexAgent extends BaseAgent {
         // that sticky state lives server-side, conservatively send mode:'default'
         // on future normal turns after any successful resume.
         threadTouchedPlanMode = true;
-        planModeDefaultMarkerNeeded = resumeNeedsDefaultModeMarker(resp);
+        // excludeTurns intentionally loads no history, so we cannot prove whether
+        // the persisted thread last used Plan Mode. Inject the official Default
+        // marker once; markCollaborationModeAccepted() suppresses repeats.
+        planModeDefaultMarkerNeeded = true;
         log.info('thread/resume ok', { threadId, model: resp.model, serviceTier: mutableServiceTier ?? null });
       } catch (e) {
         releaseHostBindingLeaseIfNeeded();
@@ -4174,17 +4116,16 @@ export class CodexAgent extends BaseAgent {
               const resumeParams: ThreadResumeParams = {
                 threadId,
                 excludeTurns: true,
-                initialTurnsPage: CODEX_RESUME_HISTORY_PAGE,
                 cwd: opts.workingDir,
                 ...currentThreadWorkspaceConfig(),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
               };
-              const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
+              await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
               if (collaborationMode?.mode === 'default') {
-                planModeDefaultMarkerNeeded = resumeNeedsDefaultModeMarker(resumeResp);
+                planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
-                  turnParams.collaborationMode.settings.developer_instructions = planModeDefaultMarkerNeeded ? null : '';
+                  turnParams.collaborationMode.settings.developer_instructions = null;
                 }
               }
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
