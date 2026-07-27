@@ -211,6 +211,19 @@ describe('花名册 / ghost_list 过滤', () => {
     expect((await deps.listAwakeGhosts()).map((g) => g.id)).toEqual(['art', 'other']);
   });
 
+  it('Codex 建线期空 workdir:任一目录停用过的意识保守不进花名册(两 harness 同口径)', () => {
+    setGhostDisabledForWorkdir('/proj/somewhere', 'art', true);
+    // 模拟 Codex 建线期:sessionCtx 为空 workingDir
+    const ctx = {
+      agentKind: 'codex',
+      workingDir: '',
+      vendorOptions: {},
+      sessionId: 's-codex',
+    } as unknown as LiziMcpSessionContext;
+    const roster = getCindyGhostsMcpDeps(ctx).getRosterItems?.() ?? [];
+    expect(roster.map((r) => r.id)).toEqual(['other']);
+  });
+
   it('投影 unknown(评估失败)的插件不派发工具,其余插件不受影响', async () => {
     lifecycleProjectionMock.mockReturnValue([
       { id: 'art', name: 'Ghost art', enabled: true, readiness: 'unknown' },

@@ -61,7 +61,10 @@ import {
 } from '../cindy-brain/index.js';
 import { readinessSummary } from '../cindy-brain/ghostLifecycle.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
-import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
+import {
+  isGhostDisabledForWorkdir,
+  listAllWorkdirDisabledGhostIds,
+} from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import { handleIncomingCindyFile } from '../cindy-brain/openFileInstall.js';
@@ -531,14 +534,19 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
     // 目录级禁用(ghostWorkdirPrefs):被用户在本会话 workdir 停用的意识
     // 不进花名册——语义召回从源头消失,"当它不存在"。装配时刻 ALS 未必
     // 生效,workdir 取 ALS 优先、建线闭包兜底;Codex 共享 bridge 建线期
-    // 语境是全局空值(workingDir=''),此时不过滤(已知限制:codex 会话的
-    // 描述花名册全量,运行期 ghost_list / ghost_call 仍按真实 workdir 拦)。
+    // 语境是全局空值(workingDir='')——此时**不能**当作「无例外」处理:
+    // workdir 空只是「还不知道在哪个目录」,不代表用户没有在任何目录停用
+    // 过它。统一口径(两个 harness 一致):空 workdir 时按「任一目录被停用
+    // 过」保守过滤,宁可花名册少一条召回线索,也不让 Codex 会话在描述层
+    // 看见 Claude 会话已经看不见的意识(运行期 ghost_list / ghost_call 仍
+    // 按真实 workdir 精确拦,误伤只在描述快照层,不产生能力差异)。
     getRosterItems() {
       const workdir = resolveSessionContext()?.workingDir ?? null;
       // 降级暴露(D1):未就绪的插件仍进花名册但带 readiness 标记,agent
       // 看得见「用户装了什么」却没有可派发工具——引导配置的正确动作靠
       // 标记 + 花名册头说明驱动,而不是盲调失败。
       const projection = new Map(getGhostLifecycleProjection().map((e) => [e.id, e]));
+      const disabledSomewhere = workdir ? null : new Set(listAllWorkdirDisabledGhostIds());
       return getGhostManager()
         .list()
         .filter(
@@ -547,7 +555,9 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
             isGhostAvailableForActiveSession(g.manifest.id) &&
             g.manifest.kind === 'chip' &&
             (g.manifest.tools?.length ?? 0) > 0 &&
-            !isGhostDisabledForWorkdir(g.manifest.id, workdir),
+            (workdir
+              ? !isGhostDisabledForWorkdir(g.manifest.id, workdir)
+              : !disabledSomewhere?.has(g.manifest.id)),
         )
         .map((g) => {
           const recall = g.manifest.whenToUse ?? g.manifest.description;

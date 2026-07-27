@@ -91,6 +91,11 @@ export function listDisabledGhostIdsForWorkdir(workdir: string | null | undefine
   return readPrefs().disabledByWorkdir[normalizeWorkdirKey(workdir)] ?? [];
 }
 
+/** 全部目录的禁用并集(Codex 建线期空 workdir 的保守花名册过滤用)。 */
+export function listAllWorkdirDisabledGhostIds(): string[] {
+  return [...new Set(Object.values(readPrefs().disabledByWorkdir).flat())];
+}
+
 /** 某意识在某目录是否被禁用(生效点统一走这一个谓词)。 */
 export function isGhostDisabledForWorkdir(ghostId: string, workdir: string | null | undefined): boolean {
   return listDisabledGhostIdsForWorkdir(workdir).includes(ghostId);
