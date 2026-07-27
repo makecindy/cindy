@@ -275,7 +275,8 @@ function projectRoutingForDisplay(
  * 解析非敏感 `logoKind`,再剥掉每个 provider 的 `routing` 执行字段(upstream /
  * authStrategy / 密钥策略 / 自定义供应商 endpoint 等)。执行细节(路由 / 密钥)不出被控端
  * (控制端只渲染、不执行,见设计文档 D3),但用户重命名 preset 后手机仍能按 logoKind 展示
- * 正确品牌。Fast 显隐由控制端从隧道带来的 `models[agent].supportsFastMode` 现查。
+ * 正确品牌。Fast 显隐由控制端从隧道带来的 `models[agent].supportsFastMode` 现查；
+ * 模型显示 override 快照同样属于非敏感展示状态，需随目录投影给控制端。
  * 其它通道原样返回。
  */
 function projectInvokeResultForTunnel(
@@ -284,7 +285,7 @@ function projectInvokeResultForTunnel(
   supportsFullLogoKinds = false,
 ): unknown {
   if (channel !== 'maker:provider:list') return result;
-  const r = result as { providers?: unknown };
+  const r = result as { providers?: unknown; modelVisibilityOverrides?: unknown };
   if (!Array.isArray(r.providers)) return result;
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
@@ -302,7 +303,18 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  return { providers };
+  const modelVisibilityOverrides = r.modelVisibilityOverrides
+    && typeof r.modelVisibilityOverrides === 'object'
+    && !Array.isArray(r.modelVisibilityOverrides)
+    ? Object.fromEntries(
+        Object.entries(r.modelVisibilityOverrides)
+          .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+      )
+    : undefined;
+  return {
+    providers,
+    ...(modelVisibilityOverrides !== undefined ? { modelVisibilityOverrides } : {}),
+  };
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */

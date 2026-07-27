@@ -35,10 +35,12 @@ import { __testing } from '../dispatch';
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
+    modelVisibilityOverrides?: Record<string, boolean>;
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
     providers: Record<string, unknown>[];
+    modelVisibilityOverrides?: Record<string, boolean>;
   };
 
 describe('controller capability metadata', () => {
@@ -122,6 +124,22 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
     const models = providers[0].models as Record<string, { id: string; supportsFastMode?: boolean }[]>;
     expect(models['claude-code'][0]).toMatchObject({ id: 'claude-opus-4-8', supportsFastMode: true });
+  });
+
+  it('保留模型显示 override 快照并过滤非布尔值', () => {
+    const projected = project({
+      providers: [xdProviderWithFullRouting()],
+      modelVisibilityOverrides: {
+        'claude-code:xd:claude-opus-4-8': false,
+        'codex:xd:gpt-5.4': true,
+        malformed: 'hidden',
+      },
+    });
+
+    expect(projected.modelVisibilityOverrides).toEqual({
+      'claude-code:xd:claude-opus-4-8': false,
+      'codex:xd:gpt-5.4': true,
+    });
   });
 
   it('provider 无 routing → 投影为 undefined（不报错）', () => {
