@@ -1,5 +1,6 @@
 import { isDeviceUnresponsiveRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { createMobileMakerTransport, type MobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
+import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { normalizeScheduleList, normalizeScheduleRuns } from '@/scheduler/scheduleModel';
 import type { RemoteScheduleRun } from '@/scheduler/types';
@@ -61,6 +62,8 @@ interface ScheduleIndexThrottleEntry {
   promise: Promise<Map<string, RemoteSessionScheduleInfo>>;
   /** 该轮加载失败的时刻;非 null 表示条目处于负缓存态。 */
   failedAt: number | null;
+  /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
+  failedUnresponsive: boolean;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
@@ -75,13 +78,22 @@ export function loadSessionScheduleIndexThrottled(
   const failureTtlMs = options.failureTtlMs ?? SCHEDULE_INDEX_FAILURE_TTL_MS;
   const existing = scheduleIndexThrottleEntries.get(key);
   if (!options.force && existing) {
+    // 熔断恢复旁路(review P1):DEVICE_UNRESPONSIVE 负缓存的存在意义是「open
+    // 期间别再压请求」,设备一旦恢复(移出 unresponsive 集合)就立刻失效——
+    // 否则熔断关闭触发的 reseed/重载会在失败 TTL 内吃到同一个 rejected
+    // promise,把索引替换成空集,且无任何定时器在 TTL 过期后补拉,徽标要等
+    // 无关触发源才回来。key 即 deviceId(两处调用方约定,见 devices 页注释)。
+    const failedUnresponsiveButRecovered =
+      existing.failedAt !== null
+      && existing.failedUnresponsive
+      && !unresponsiveDevicesStore.has(key);
     const withinTtl = existing.failedAt !== null
       ? now() - existing.failedAt < failureTtlMs
       : now() - existing.at < ttlMs;
-    if (withinTtl) return existing.promise;
+    if (withinTtl && !failedUnresponsiveButRecovered) return existing.promise;
   }
   const promise = load();
-  const entry: ScheduleIndexThrottleEntry = { at: now(), promise, failedAt: null };
+  const entry: ScheduleIndexThrottleEntry = { at: now(), promise, failedAt: null, failedUnresponsive: false };
   scheduleIndexThrottleEntries.set(key, entry);
   promise.then(
     () => {
@@ -90,8 +102,11 @@ export function loadSessionScheduleIndexThrottled(
       // 成功落定时把基准挪到 resolve 时刻;在途期间的复用由单飞(同一 promise)保证。
       if (scheduleIndexThrottleEntries.get(key) === entry) entry.at = now();
     },
-    () => {
-      if (scheduleIndexThrottleEntries.get(key) === entry) entry.failedAt = now();
+    (error) => {
+      if (scheduleIndexThrottleEntries.get(key) === entry) {
+        entry.failedAt = now();
+        entry.failedUnresponsive = isDeviceUnresponsiveRemoteError(error);
+      }
     },
   );
   return promise;

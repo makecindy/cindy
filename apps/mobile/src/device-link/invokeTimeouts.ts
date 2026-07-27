@@ -18,7 +18,10 @@ import { INVOKE_TIMEOUT_OVERRIDES_MS } from '@cindy/device-link';
  *    语音误超时就会错误打开设备级熔断;
  *  - maker:fork:桌面端 forkSessionAtMessage 载入完整可见消息前缀 + SDK fork +
  *    事务内批量拷贝,大会话可落在 15-30s;且该操作**非幂等**——误超时后桌面端
- *    仍会建出并广播新会话,用户重试会分叉出重复副本。
+ *    仍会建出并广播新会话,用户重试会分叉出重复副本;
+ *  - maker:rewind:commit:transcript/DB 读 + SDK/Codex 线程回滚 + Git 文件回退 +
+ *    收尾 SQLite 事务,同样非幂等——误超时后对话与文件已被回退,重试会作用在
+ *    已变更的历史上。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -27,6 +30,7 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'device-link:voice:transcribe': 30_000,
   'file-browser:remote-op': 30_000,
   'maker:fork': 30_000,
+  'maker:rewind:commit': 30_000,
 };
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;

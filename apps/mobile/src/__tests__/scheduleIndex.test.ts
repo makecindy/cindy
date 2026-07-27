@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import {
   loadSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
@@ -333,6 +334,39 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     await Promise.resolve();
     await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now, force: true })).resolves.toBeInstanceOf(Map);
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('DEVICE_UNRESPONSIVE 负缓存:熔断仍 open 时复用,恢复后立即旁路重拉(review P1)', async () => {
+    // 熔断关闭触发的 reseed/重载若在失败 TTL 内吃到同一个 rejected promise,
+    // 索引会被 catch 路径替换成空集,且无定时器在 TTL 过期后补拉——徽标要等
+    // 无关触发源才回来。恢复(设备移出 unresponsive 集合)必须使负缓存失效。
+    resetScheduleIndexThrottleForTesting();
+    const unresponsiveError = Object.assign(
+      new Error('target device dev-1 is unresponsive (circuit open)'),
+      { code: 'DEVICE_UNRESPONSIVE' },
+    );
+    const load = vi.fn()
+      .mockRejectedValueOnce(unresponsiveError)
+      .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
+    const now = () => 1000;
+    unresponsiveDevicesStore.markUnresponsive('dev-1');
+    try {
+      await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toMatchObject({
+        code: 'DEVICE_UNRESPONSIVE',
+      });
+      await Promise.resolve();
+      // 熔断仍 open:失败 TTL 内复用负缓存,不压请求
+      await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toMatchObject({
+        code: 'DEVICE_UNRESPONSIVE',
+      });
+      expect(load).toHaveBeenCalledTimes(1);
+      // 设备恢复(探测成功关熔断):TTL 未过也立即旁路重拉
+      unresponsiveDevicesStore.clearUnresponsive('dev-1');
+      await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).resolves.toBeInstanceOf(Map);
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      unresponsiveDevicesStore.clearUnresponsive('dev-1');
+    }
   });
 
   it('DEVICE_UNRESPONSIVE:批循环命中立即止损并上抛,不产出部分索引', async () => {

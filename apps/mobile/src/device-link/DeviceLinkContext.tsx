@@ -858,7 +858,11 @@ async function sendSubscribe(
     settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
     throw err;
   }
-  settleDeviceSend(deviceId, probe, 'responded');
+  // subscribe/unsubscribe 是控制帧,被控端 dispatch 在 runInvoke 之前特判应答
+  // (review P1):IPC/DB 卡死时照常回包,成功不能作为熔断恢复证据——探测窗口
+  // 到点时页面卸载恰好发的一条控制帧会抢占探测席位并误关熔断。与 openLink
+  // 同语义:成功按不定论,超时仍计失败(连控制帧都不应答 = 彻底无响应)。
+  settleDeviceSend(deviceId, probe, 'inconclusive');
   unwrapInvoke(result);
 }
 
@@ -884,7 +888,8 @@ async function sendUnsubscribe(
     settleDeviceSend(deviceId, probe, classifyDeviceSendFailure(err));
     throw err;
   }
-  settleDeviceSend(deviceId, probe, 'responded');
+  // 控制帧成功按不定论,不作熔断恢复证据(同 sendSubscribe,review P1)。
+  settleDeviceSend(deviceId, probe, 'inconclusive');
   unwrapInvoke(result);
 }
 
