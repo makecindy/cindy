@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { FileDiff, FolderTree, Globe, Terminal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -21,10 +22,14 @@ import { listGhostTabMenuMetas, useTabKindRegistryVersion } from './registry';
 import type { TabKindId, TabKindMenuMeta } from './types';
 
 const DROPDOWN_WIDTH = 220;
-/** 视口右边给 dropdown 留的呼吸空间;<8 就翻成 right-0 向左展开。 */
+/** 视口两侧给 dropdown 留的呼吸空间。 */
 const VIEWPORT_PADDING = 8;
+/** anchor 底边到 dropdown 顶边的间距(原 mt-1)。 */
+const ANCHOR_GAP = 4;
 
 interface AddTabDropdownProps {
+  /** 定位锚点:「+」按钮 wrapper。dropdown portal 到 body 后按它的 rect 摆位。 */
+  anchorRef: React.RefObject<HTMLElement | null>;
   /** 点 outside / Escape 关闭。 */
   onClose: () => void;
   /** 选 kind。调用方负责真创建 tab + 关闭 dropdown。单例 kind 已存在时
@@ -70,26 +75,37 @@ const MENU_ITEMS: TabKindMenuMeta[] = [
   },
 ];
 
-export function AddTabDropdown({ onClose, onSelect, existingKinds }: AddTabDropdownProps) {
+export function AddTabDropdown({ anchorRef, onClose, onSelect, existingKinds }: AddTabDropdownProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
-  // 视口边缘检测:默认 left-0 从 + 按钮往右展开;若右边空间不够 220 + 8,翻成
-  // right-0 向左展开。RSB 贴窗口右边时 + 按钮天然靠右,默认配置必然右溢出,所
-  // 以这里实测翻转,而不是预设一种方向。
+  // 定位:portal 到 body + fixed,按 anchor rect 摆位。原实现是「+」wrapper 内的
+  // absolute 元素,RSB 面板窄于 220px 时向左展开的部分会被 Shell 根容器的
+  // overflow-hidden 直接裁掉(左圆角/边框消失)。portal 出去后 dropdown 浮在面板
+  // 之上,只受视口约束 —— 与 radix DropdownMenuContent portal 到 body 的做法一致。
   //
-  // 用 useLayoutEffect 在 paint 之前同步切换,避免 1 帧"先冒出再缩回去"的闪烁。
-  const [alignRight, setAlignRight] = useState(false);
+  // 摆位规则:默认从 anchor 左边往右展开;右边装不下翻成右对齐(贴 anchor 右边
+  // 向左展开);最后整体 clamp 进视口(两侧留 VIEWPORT_PADDING)。
+  //
+  // 用 useLayoutEffect 在 paint 之前同步定位,避免 1 帧"先冒出再挪位"的闪烁。
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   useLayoutEffect(() => {
-    const anchor = ref.current?.parentElement;
-    if (!anchor) return;
-    const rect = anchor.getBoundingClientRect();
-    // rect.left = + 按钮 wrapper 左边 X;若从这里往右 220px 装不下(伸出窗口右
-    // 边),翻向左展开。判据用 left 而不是 right,因为我们看的是 dropdown 左对齐
-    // 时的展开起点是否够。
-    const rightSpace = window.innerWidth - rect.left;
-    setAlignRight(rightSpace < DROPDOWN_WIDTH + VIEWPORT_PADDING);
-  }, []);
+    const measure = () => {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const alignRight = window.innerWidth - rect.left < DROPDOWN_WIDTH + VIEWPORT_PADDING;
+      const raw = alignRight ? rect.right - DROPDOWN_WIDTH : rect.left;
+      const maxLeft = window.innerWidth - DROPDOWN_WIDTH - VIEWPORT_PADDING;
+      const left = Math.max(VIEWPORT_PADDING, Math.min(raw, maxLeft));
+      setPos({ top: rect.bottom + ANCHOR_GAP, left });
+    };
+    measure();
+    // 打开期间窗口 resize(如键盘触发缩放)时跟随重排;面板拖宽窄走 mousedown,
+    // 会先命中 outside-close,不需要额外监听。
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [anchorRef]);
 
   // 点 outside / Escape 关闭(模式参考 RolePillDropdown 的 click-outside 实现)
   useEffect(() => {
@@ -113,15 +129,18 @@ export function AddTabDropdown({ onClose, onSelect, existingKinds }: AddTabDropd
   useTabKindRegistryVersion();
   const ghostItems = listGhostTabMenuMetas();
 
-  return (
+  return createPortal(
     <div
       ref={ref}
       role="menu"
-      className={cn(
-        'absolute top-full z-50 mt-1 w-[220px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1',
-        alignRight ? 'right-0' : 'left-0',
-      )}
-      style={{ boxShadow: 'var(--shadow-menu)' }}
+      className="fixed z-50 w-[220px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+      style={{
+        boxShadow: 'var(--shadow-menu)',
+        top: pos?.top ?? 0,
+        left: pos?.left ?? 0,
+        // 首帧 pos 未测出前不可见,layoutEffect 同步定位后展示(paint 前,无闪烁)。
+        visibility: pos ? 'visible' : 'hidden',
+      }}
     >
       <GroupHeader label={t('rightSidebar.tabs.menu.addLabel')} />
       {enabled.map((m) => {
@@ -176,7 +195,8 @@ export function AddTabDropdown({ onClose, onSelect, existingKinds }: AddTabDropd
           ))}
         </>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
