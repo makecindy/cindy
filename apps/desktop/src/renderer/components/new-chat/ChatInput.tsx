@@ -985,7 +985,7 @@ export function ChatInput({
   const userHistoryRef = useRef(userHistory);
   userHistoryRef.current = userHistory;
   const historyIndexRef = useRef(-1); // -1 = current draft (not browsing)
-  const draftRef = useRef<JSONContent | null>(null); // saves draft when user starts browsing
+  const draftRef = useRef<JSONContent | null>(null); // saves draft doc JSON when user starts browsing (preserves marks)
   const hydratedHistoryDocumentRef = useRef<ProseMirrorNode | null>(null);
 
   // ── composer-draft-per-session ─────────────────────────────────────
@@ -1751,7 +1751,7 @@ export function ChatInput({
             // Only enter history browsing when the editor is empty or already browsing
             if (idx === -1 && !isEmpty) return false;
             if (idx === -1) {
-              // Save current draft before browsing
+              // Save current draft before browsing (full doc JSON preserves marks)
               draftRef.current = view.state.doc.toJSON();
             }
             const next = Math.min(idx + 1, history.length - 1);
@@ -1767,7 +1767,7 @@ export function ChatInput({
             historyIndexRef.current = next;
             const tr = view.state.tr;
             if (next === -1) {
-              // Restore draft
+              // Restore draft from saved doc JSON (preserves marks like quickStartPill)
               const draft = draftRef.current;
               if (draft) {
                 const draftDocument = view.state.schema.nodeFromJSON(draft);

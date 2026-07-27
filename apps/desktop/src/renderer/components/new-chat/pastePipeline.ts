@@ -51,7 +51,7 @@ export function isLongPasteText(text: string): boolean {
 
 /**
  * 剪贴板 HTML 是否带本编辑器自家的 chip 标记(mentionChip / pastedTextChip /
- * composerQuote)
+ * composerQuote / quickStartPill)
  * 的 toDOM 输出)。命中时 handlePaste 应把整个粘贴交回 ProseMirror 默认
  * HTML 解析(parseHTML 原样还原 chip 与周围文本),跳过全部文本变换管线:
  * atom chip 在 text/plain 里没有文本投影,任何「取 text/plain 处理」的分支
@@ -60,7 +60,7 @@ export function isLongPasteText(text: string): boolean {
  * 的 data-pasted-text 里)。标记是本产品 toDOM 专属,外部网页不会携带。
  */
 export function htmlCarriesOwnChipMarkup(html: string): boolean {
-  return /data-(?:mention-chip|pasted-text-chip|composer-quote)/.test(html);
+  return /data-(?:mention-chip|pasted-text-chip|composer-quote|quick-start-pill)/.test(html);
 }
 
 /** 粘贴文本的行数(chip 文案用)。 */
