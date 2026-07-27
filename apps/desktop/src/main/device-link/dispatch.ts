@@ -84,6 +84,7 @@ const REMOTE_INVOKE_FRAME_SAFETY_BYTES = 1024;
 // interactive activity would refresh the updater quiet period forever for sessions-only viewers.
 const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
+  'local-db:sessions:get',
 ]);
 const textEncoder = new TextEncoder();
 
@@ -258,6 +259,8 @@ let onControllersChanged: ControllersChangedListener | null = null;
 type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
 let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
+/** Controllers that have successfully demonstrated topic-subscription support on this link. */
+const topicSubscriptionControllers = new Set<string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -478,10 +481,15 @@ export function dropAllControllers(
   client: DeviceLinkClient,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
-  for (const dst of subscriptions.getControllerIds()) {
+  const controllerIds = new Set([
+    ...subscriptions.getControllerIds(),
+    ...topicSubscriptionControllers,
+  ]);
+  for (const dst of controllerIds) {
     client.closeLink(dst, reason);
   }
   subscriptions.clearAll();
+  topicSubscriptionControllers.clear();
   syncForwarding();
 }
 
@@ -491,6 +499,7 @@ export function dropAllControllers(
  * 后回收僵尸订阅的兜底信号(正常路径是控制端显式 unsubscribe / link-close)。
  */
 export function handleControllerOffline(deviceId: string): void {
+  topicSubscriptionControllers.delete(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
@@ -518,6 +527,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       return;
     case 'link-close':
       if (!src) return;
+      topicSubscriptionControllers.delete(src);
       if (subscriptions.clearController(src)) {
         syncForwarding();
       }
@@ -562,7 +572,12 @@ function handleLinkOpen(
       ? payload.controllerName.trim().slice(0, MAX_CONTROLLER_NAME_LEN)
       : src.slice(0, 8);
   // 老控制端无 subscribe 能力:link-open 视作订阅 legacy '*'(全量转发 + 横幅),向后兼容。
-  subscriptions.subscribe(src, [LEGACY_TOPIC], name);
+  // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
+  if (topicSubscriptionControllers.has(src)) {
+    subscriptions.updateControllerName(src, name);
+  } else {
+    subscriptions.subscribe(src, [LEGACY_TOPIC], name);
+  }
   syncForwarding();
   client.sendLinkAccept(src, requestId, {
     appVersion: app.getVersion(),
@@ -907,9 +922,13 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
       : undefined;
   const isSub = payload.channel === DL_SUBSCRIBE_CHANNEL;
   if (isSub) {
-    // link-open provisionally installs legacy '*' for old clients. A valid modern subscribe frame
-    // proves topic support, so replace that compatibility firehose instead of retaining it forever.
-    subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
+    // link-open provisionally installs legacy '*' for old clients. A non-empty modern subscribe
+    // proves topic support, so replace that compatibility firehose and remember the capability
+    // until disconnect. Empty/fully-filtered frames leave legacy compatibility intact.
+    if (topics.length > 0) {
+      topicSubscriptionControllers.add(src);
+      subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
+    }
     subscriptions.subscribe(src, topics, name);
   } else {
     subscriptions.unsubscribe(src, topics);
@@ -1116,6 +1135,7 @@ export const __testing = {
     onControllersChanged = null;
     onRemoteInvokeBusyChanged = null;
     inFlightRemoteInvokeCount = 0;
+    topicSubscriptionControllers.clear();
     onSessionsSubscribed = null;
     activeClient = null;
     setBroadcastTapListener(null);

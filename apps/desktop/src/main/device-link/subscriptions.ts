@@ -100,6 +100,12 @@ export function subscribe(deviceId: string, topics: readonly string[], name?: st
   notifySubscribed(topics);
 }
 
+/** 更新已有控制端展示名；不为尚无 topic 的连接创建 phantom registry entry。 */
+export function updateControllerName(deviceId: string, name: string): void {
+  const e = registry.get(deviceId);
+  if (e) e.name = name;
+}
+
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
 export function unsubscribe(deviceId: string, topics: readonly string[]): void {
   const e = registry.get(deviceId);

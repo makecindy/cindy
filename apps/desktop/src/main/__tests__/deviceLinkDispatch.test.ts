@@ -498,32 +498,35 @@ describe('被控端控制链路生命周期', () => {
     });
   });
 
-  it('后台 sessions:list reconciliation 不持有更新 busy lease', async () => {
-    remoteControlEnabled = true;
-    registry.register('local-db:sessions:list', () => []);
-    const busyChanges: boolean[] = [];
-    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
-    const { client, calls, feed } = makeFakeClient();
-    wireInboundDispatch(client);
+  it.each(['local-db:sessions:list', 'local-db:sessions:get'])(
+    '后台 %s reconciliation 不持有更新 busy lease',
+    async (channel) => {
+      remoteControlEnabled = true;
+      registry.register(channel, () => []);
+      const busyChanges: boolean[] = [];
+      setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
 
-    feed({
-      v: 1,
-      kind: 'invoke',
-      id: 'invoke-list',
-      src: 'ctrl-a',
-      payload: { channel: 'local-db:sessions:list', args: [] },
-    });
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `invoke-${channel}`,
+        src: 'ctrl-a',
+        payload: { channel, args: [] },
+      });
 
-    await vi.waitFor(() =>
-      expect(calls.invokeResult).toContainEqual({
-        dst: 'ctrl-a',
-        requestId: 'invoke-list',
-        payload: { ok: true, result: [] },
-      }),
-    );
-    expect(hasInFlightRemoteInvokes()).toBe(false);
-    expect(busyChanges).toEqual([]);
-  });
+      await vi.waitFor(() =>
+        expect(calls.invokeResult).toContainEqual({
+          dst: 'ctrl-a',
+          requestId: `invoke-${channel}`,
+          payload: { ok: true, result: [] },
+        }),
+      );
+      expect(hasInFlightRemoteInvokes()).toBe(false);
+      expect(busyChanges).toEqual([]);
+    },
+  );
 });
 
 // ─── 订阅 registry + topic-scoped fan-out + set-* 持久化回流(push 驱动重构)──────
@@ -628,7 +631,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     });
   });
 
-  it('现代 subscribe 会替换 link-open 安装的 legacy wildcard', () => {
+  it('空 subscribe 保留 legacy wildcard，现代有效 subscribe 替换它且重复 open 不恢复', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
@@ -648,8 +651,27 @@ describe('被控端订阅 registry + topic 转发', () => {
       { deviceId: 'ctrl-modern', name: 'Modern' },
     ]);
 
+    feed(subFrame('ctrl-modern', SUB, ['*', 'garbage', 'session:', 'fs-watch:']));
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-modern', name: 'Modern' },
+    ]);
+
     feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
 
+    expect(dispatchTesting.getActiveControllers()).toEqual([]);
+    expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern-again',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern renamed',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
     expect(dispatchTesting.getActiveControllers()).toEqual([]);
     expect(dispatchTesting.getUpdateRelaunchControllers()).toEqual([]);
 
@@ -661,6 +683,27 @@ describe('被控端订阅 registry + topic 转发', () => {
         channel: 'local-db:sessions:created',
         payload: { sessionId: 's1' },
       },
+    ]);
+
+    feed({
+      v: 1,
+      kind: 'link-close',
+      src: 'ctrl-modern',
+      payload: { reason: 'user' },
+    });
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-after-disconnect',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern reconnect',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    expect(getUpdateRelaunchControllers()).toEqual([
+      { deviceId: 'ctrl-modern', name: 'Modern reconnect' },
     ]);
   });
 
