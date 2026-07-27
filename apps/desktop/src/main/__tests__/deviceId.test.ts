@@ -7,7 +7,8 @@
  * 3. 首次取到的身份被冻结:硬件指纹成功持久化后,后续启动即使 machineIdSync 抛,
  *    也复用已持久化的硬件 ID,绝不改判成陌生 fallback(否则冷启动 refresh 可能登出);
  * 4. machineIdSync 抛(bare `ioreg` not found)时不上抛,回落到持久化 UUID,跨启动稳定;
- * 5. 磁盘已有身份时,直接复用,不被本次 machineIdSync 结果覆盖(并发首写的赢家值胜出);
+ * 5. reconcile 规则:硬件指纹可用时以其为准并回写旧的硬件 ID(修 userData 拷贝到新机),
+ *    但已确立的 fallback-* 身份予以保留、不被硬件 ID 覆盖(避免 DEVICE_MISMATCH 登出);
  * 6. userData 不可用(app 未 ready)时不崩溃,返回临时 fallback 且不因缺 whenReady 抛;
  * 7. ensureSystemBinPathForMachineId 在 darwin/linux 补齐 /usr/sbin:/sbin 且幂等。
  */

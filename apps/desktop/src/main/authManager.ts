@@ -1235,7 +1235,11 @@ export function getCurrentMembershipDisplayName(): string | undefined {
   return displayName || undefined;
 }
 
-/** SkillHub 跨设备识别：本机 deviceId（machineIdSync 结果），登录前后都可用 */
+/**
+ * SkillHub 跨设备识别：本机 deviceId,登录前后都可用。
+ * 通常是硬件指纹(machineIdSync),硬件取不到时是 userData 里持久化的 `fallback-*` UUID;
+ * 也可能是 dev 的 XDT_DEVICE_ID_OVERRIDE。取值逻辑见 resolveDeviceId()。
+ */
 export function getDeviceId(): string {
   return resolveDeviceId();
 }

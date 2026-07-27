@@ -25,8 +25,13 @@
  *      id (which cold-start refresh would send with the existing token, risking
  *      a definitive rejection and logout). Probing first (rather than trusting
  *      the stored file blindly) also means a `userData` copied/restored onto a
- *      different machine re-derives that machine's own id rather than cloning the
- *      source's — two live installs must not share one server-side (user, device).
+ *      different machine re-derives that machine's own hardware id rather than
+ *      cloning the source's — two live installs must not share one server-side
+ *      (user, device). The one exception is a stored `fallback-*` id: once minted
+ *      it may already be registered with the server, so `reconcileHardwareId`
+ *      keeps it even when hardware later becomes identifiable (switching would
+ *      trip DEVICE_MISMATCH and log the user out); a copied userData that already
+ *      holds a fallback will therefore reuse it.
  *      Only when hardware can't be identified at all do we mint a persisted UUID,
  *      created exclusively so processes sharing one userData (device-link
  *      double-launch) converge on a single value instead of racing.
