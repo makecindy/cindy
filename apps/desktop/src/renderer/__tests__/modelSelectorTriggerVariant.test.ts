@@ -365,6 +365,42 @@ describe('ModelSelector trigger variants', () => {
     expect(modelListMaxHeightForRows(100)).toBe(300);
   });
 
+  it('bounds the default-session trigger in narrow and ultra-narrow composers', () => {
+    const props = {
+      modelId: 'claude-opus-4-8',
+      effort: 'xhigh' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      compactToolbar: true,
+    };
+    const view = render(React.createElement(ModelSelector, props));
+
+    let trigger = screen.getByRole('button', {
+      name: /Current: Opus 4\.8, effort: 超高/,
+    });
+    expect(trigger.className).toContain('w-[148px]');
+    expect(trigger.className).toContain('min-w-[72px]');
+    expect(within(trigger).getByText('Opus 4.8').className).toContain('truncate');
+    expect(trigger.textContent).not.toContain('超高');
+
+    view.rerender(
+      React.createElement(ModelSelector, {
+        ...props,
+        ultraCompactToolbar: true,
+      }),
+    );
+    trigger = screen.getByRole('button', {
+      name: /Current: Opus 4\.8, effort: 超高/,
+    });
+    expect(trigger.className).toContain('w-[64px]');
+    expect(trigger.className).toContain('min-w-[64px]');
+    expect(within(trigger).getByText('Opus 4.8').className).toContain('hidden');
+    // 可及名仍保留完整模型 + effort，视觉仅收起文字，不丢选择能力。
+    expect(trigger.getAttribute('aria-label')).toContain('Opus 4.8');
+    expect(trigger.getAttribute('aria-label')).toContain('超高');
+  });
+
   it('shows the intent model and its default source after registering an agent switch', () => {
     const sessionId = 'model-selector-agent-switch-intent';
     providersRef.providers = [

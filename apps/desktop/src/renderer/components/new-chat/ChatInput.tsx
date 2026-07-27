@@ -518,7 +518,7 @@ interface ChatInputProps {
   onRememberedEffortChange?: (modelId: string, effort: Effort) => void;
   /** Enables wrapping for narrow split-pane layouts such as Orca. Defaults to false. */
   compactToolbar?: boolean;
-  /** 窄态新建对话时使用紧凑单行工具栏，保留所有操作入口。 */
+  /** 强制使用紧凑单行工具栏；容器测宽也会自动进入同一状态。 */
   narrowToolbar?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px, 协同 toggle 只剩 logo)。
@@ -4748,9 +4748,10 @@ export function ChatInput({
   const showTopSlot = !!topSlot;
   const showFusedWrapper = showQueuePanel || showTopSlot;
   const isCreateAgentVariant = visualVariant === 'create-agent';
-  const useNarrowToolbar =
-    isCreateAgentVariant &&
-    (narrowToolbar || (toolbarWidth != null && toolbarWidth < 600));
+  // split-pane 同时打开侧栏 / 会话 / 浏览器时，普通会话 composer 也会落到窄容器。
+  // 这里必须按 card 实际宽度统一切 compact，而不是只照顾 create-agent；否则普通
+  // 会话仍走两组 max-content flex，长模型名会把权限入口挤进语音 / 发送固定动作区。
+  const useNarrowToolbar = narrowToolbar || (toolbarWidth != null && toolbarWidth < 600);
   const useCompactMiddleToolbar =
     isCreateAgentVariant && (toolbarWidth == null ? narrowToolbar : toolbarWidth < 600);
   const useUltraCompactToolbar =
