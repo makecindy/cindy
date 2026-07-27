@@ -66,7 +66,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     const enterBlock = extractBetween(
       tiptapKeydownBlock,
-      "if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {",
+      "if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.repeat) {",
       'const wantsSteer =',
     );
 

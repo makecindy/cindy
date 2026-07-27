@@ -24,8 +24,8 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import History from '@tiptap/extension-history';
 import Placeholder from '@tiptap/extension-placeholder';
-import HardBreak from '@tiptap/extension-hard-break';
 import type { Editor } from '@tiptap/core';
+import { applyComposerHardBreak, ComposerHardBreak } from './ComposerHardBreak';
 import { CjkPunctDecoration } from './CjkPunctDecoration';
 import { ComposerListIndentDecoration } from './ComposerListIndentDecoration';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
@@ -152,7 +152,7 @@ import { Selection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
-import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';
+import { applyListBackspace } from '@/lib/composerListContinuation';
 import { scanAtResources, filterAtResources, type AtResourceItem } from '@/lib/atResourceService';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
@@ -213,14 +213,6 @@ const perfLog = createLogger('perf/session-switch');
 
 const VOICE_INPUT_LONG_PRESS_MS = 450;
 const VOICE_INPUT_SHORTCUT_DEDUPE_MS = 250;
-const ComposerHardBreak = HardBreak.extend({
-  addKeyboardShortcuts() {
-    return {
-      ...this.parent?.(),
-      'Alt-Enter': () => this.editor.commands.setHardBreak(),
-    };
-  },
-});
 
 // 工具行宽度自适应阈值（input card 像素宽）。低于阈值时自动收紧工具行，避免窄宽
 // 下换行 / 文字溢出，与 doc rail / orca 的显式 compactToolbar / denseToolbar 取 OR。
@@ -1800,6 +1792,14 @@ export function ChatInput({
         return true;
       },
       handleKeyDown(view, event) {
+        // Repeated Enter must be consumed before any palette bridge. Otherwise
+        // holding Enter while slash/@ results are open can confirm the same
+        // item repeatedly before the composer repeat guard runs.
+        if (event.key === 'Enter' && event.repeat) {
+          event.preventDefault();
+          return true;
+        }
+
         // Delegate panel navigation keys (↑ ↓ Enter Esc Tab) when a
         // palette is open. We can't read React state from here directly,
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
@@ -1931,28 +1931,25 @@ export function ChatInput({
           return true;
         }
 
-        // Shift/Alt+Enter — markdown 列表接续(纯文本):当前行以列表 / 待办 /
-        // 引用前缀开头时,换行后自动补下一个前缀(序号 +1);前缀后无内容时改为
-        // 清掉前缀退出列表。其余情况 return false 走 ComposerHardBreak 默认换行。
+        // Shift/Alt+Enter belongs to ComposerHardBreak, which owns list
+        // continuation and the ordinary hard-break fallback. Invoke its command
+        // here so the full extension stack cannot consume the key first.
         if (
           event.key === 'Enter' &&
           (event.shiftKey || event.altKey) &&
           !event.metaKey &&
           !event.ctrlKey &&
-          !event.isComposing
+          !event.repeat
         ) {
-          if (applyListContinuation(view)) {
-            event.preventDefault();
-            return true;
-          }
-          return false;
+          event.preventDefault();
+          return editorRef.current ? applyComposerHardBreak(editorRef.current) : false;
         }
 
         // Plain Enter keeps the existing queue semantics. Cmd/Ctrl+Enter is
         // only treated as 插话 while a turn is actually running; otherwise it
         // falls back to the normal send path so the shortcut never becomes a
         // "no active turn" footgun on an idle composer.
-        if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
+        if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.repeat) {
           event.preventDefault();
           const isEditorEnterTarget = event.target instanceof Node && view.dom.contains(event.target);
           if (
@@ -3233,6 +3230,15 @@ export function ChatInput({
     panelBridgeRef.current = {
       captureKey: (e) => {
         if (!slashOpen && !atOpen) return false;
+        // Modified Enter belongs to the composer (Shift/Alt = newline,
+        // Cmd/Ctrl = send/steer), and composition Enter belongs to the IME.
+        // Only bare Enter may confirm a palette item.
+        if (
+          e.key === 'Enter' &&
+          (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.isComposing)
+        ) {
+          return false;
+        }
         switch (e.key) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {

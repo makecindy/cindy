@@ -6,43 +6,56 @@ const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const hardBreakSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'new-chat', 'ComposerHardBreak.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
-/**
- * ChatInput 列表接续接线契约:
- * - Shift/Alt+Enter 换行前先尝试列表接续;
- * - 普通 Enter 一律保持"发送"语义,绝不被列表接续拦截(2026-07 产品定案:
- *   Enter=发送的肌肉记忆优先,不做 Claude 式"列表内 Enter 继续列表");
- * - 守住 IME composition 边界。
- * 接续行为本身的用例见 lib/__tests__/composerListContinuation*.test.ts
- * (纯前缀匹配 + 真实编辑器)。
- */
 describe('ChatInput list continuation wiring contract', () => {
-  it('imports the shared helper from lib/composerListContinuation', () => {
+  it('imports the composer extension and only the direct Backspace helper', () => {
     expect(chatInputSource).toContain(
-      "import { applyListBackspace, applyListContinuation } from '@/lib/composerListContinuation';",
+      "import { applyComposerHardBreak, ComposerHardBreak } from './ComposerHardBreak';",
     );
+    expect(chatInputSource).toContain(
+      "import { applyListBackspace } from '@/lib/composerListContinuation';",
+    );
+    expect(chatInputSource).toContain('applyComposerHardBreak(editorRef.current)');
+    expect(chatInputSource).not.toContain('applyListContinuation(view)');
   });
 
-  it('tries list continuation on Shift/Alt+Enter before the default hard break', () => {
+  it('keeps Shift/Alt+Enter semantics inside ComposerHardBreak', () => {
+    expect(hardBreakSource).toContain('export function applyComposerHardBreak(editor: Editor)');
+    expect(hardBreakSource).toContain('applyListContinuation(editor.view)');
+    expect(hardBreakSource).toContain('editor.commands.setHardBreak()');
+    expect(hardBreakSource).not.toContain('replaceSelectionWith');
+  });
+
+  it('routes first modified Enter through the ComposerHardBreak command', () => {
     const block = extractBetween(
       chatInputSource,
-      '// Shift/Alt+Enter — markdown 列表接续',
+      '// Shift/Alt+Enter belongs to ComposerHardBreak',
       '// Plain Enter keeps the existing queue semantics.',
     );
-    expect(block).toContain('(event.shiftKey || event.altKey) &&');
+    expect(block).toContain("event.key === 'Enter'");
+    expect(block).toContain('event.shiftKey || event.altKey');
     expect(block).toContain('!event.metaKey');
     expect(block).toContain('!event.ctrlKey');
-    expect(block).toContain('!event.isComposing');
-    expect(block).toContain('if (applyListContinuation(view)) {');
-    // 非列表行必须放行给 ComposerHardBreak 默认换行
-    expect(block).toContain('return false;');
+    expect(block).toContain('applyComposerHardBreak(editorRef.current)');
+  });
+
+  it('consumes repeated Enter before the palette bridge', () => {
+    const handler = extractBetween(chatInputSource, 'handleKeyDown(view, event) {', '      },\n    },');
+    const repeatGuard = handler.indexOf("event.key === 'Enter' && event.repeat");
+    const panelBridge = handler.indexOf('const bridge = panelBridgeRef.current;');
+    expect(repeatGuard).toBeGreaterThanOrEqual(0);
+    expect(panelBridge).toBeGreaterThan(repeatGuard);
   });
 
   it('intercepts bare Backspace for empty-item deletion, leaving modified backspace alone', () => {
     const block = extractBetween(
       chatInputSource,
       '// Backspace — 空列表项整体回删',
-      '// Shift/Alt+Enter — markdown 列表接续',
+      '// Shift/Alt+Enter belongs to ComposerHardBreak',
     );
     expect(block).toContain("event.key === 'Backspace'");
     expect(block).toContain('!event.metaKey');
@@ -53,13 +66,27 @@ describe('ChatInput list continuation wiring contract', () => {
     expect(block).toContain('applyListBackspace(view)');
   });
 
-  it('never intercepts plain Enter — send semantics stay untouched', () => {
+  it('lets modified and composing Enter bypass an open command palette', () => {
+    const block = extractBetween(
+      chatInputSource,
+      'captureKey: (e) => {',
+      'switch (e.key) {',
+    );
+    expect(block).toContain("e.key === 'Enter'");
+    expect(block).toContain('e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.isComposing');
+    expect(block).toContain('return false;');
+  });
+
+  it('never intercepts first plain Enter for list continuation', () => {
     const plainEnterBlock = extractBetween(
       chatInputSource,
       '// Plain Enter keeps the existing queue semantics.',
       "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
     );
     expect(plainEnterBlock).not.toContain('applyListContinuation');
+    expect(plainEnterBlock).toContain(
+      "event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.repeat",
+    );
   });
 
   it('keeps tabular-nums on the editor so multi-line list prefixes align', () => {
