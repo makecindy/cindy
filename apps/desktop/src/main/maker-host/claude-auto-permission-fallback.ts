@@ -126,7 +126,7 @@ export function createClaudeAutoClassifierFailureObserver(
   return (ctx: ResponseObserverCtx) => {
     // 分类器错误本身仍由 Claude Code fail-closed 为人工审批。这里只决定是否触发降级协调器：
     // 限流/过载/上游故障等瞬时错误直接短路，不切 runtime、不持久化 ask、也不广播降级。
-    if (ctx.status < 400 || ctx.status === 429 || ctx.status === 529 || ctx.status >= 500) {
+    if (ctx.status < 400 || ctx.status === 408 || ctx.status === 429 || ctx.status >= 500) {
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];

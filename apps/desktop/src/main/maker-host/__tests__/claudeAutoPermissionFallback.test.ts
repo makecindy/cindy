@@ -102,9 +102,10 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     setClaudeAutoClassifierUnavailableListener(listener);
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1');
 
+    expect(observer(ctx({ status: 408 }))).toBeUndefined();
     expect(observer(ctx({ status: 429 }))).toBeUndefined();
-    expect(observer(ctx({ status: 529 }))).toBeUndefined();
     expect(observer(ctx({ status: 503 }))).toBeUndefined();
+    expect(observer(ctx({ status: 529 }))).toBeUndefined();
 
     expect(listener).not.toHaveBeenCalled();
   });
