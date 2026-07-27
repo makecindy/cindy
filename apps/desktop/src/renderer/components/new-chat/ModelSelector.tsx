@@ -1282,11 +1282,16 @@ function ModelSelectorContentView({
                         <Tip text={t('settings.providers.models.subscription')}>
                           <span
                             data-model-subscription-badge="pill"
-                            aria-label={t('settings.providers.models.subscription')}
-                            className="inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full bg-black/[0.04] px-2 py-0.5 text-11 transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.14]"
+                            className="inline-flex h-[20px] shrink-0 items-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 transition-colors hover:bg-[var(--surface-hover)]"
                           >
-                            <BrandArrow size={12} className="shrink-0 text-[#FF3B30] dark:text-[#FF453A]" />
-                            <span className="sr-only">{t('settings.providers.models.subscription')}</span>
+                            <BrandArrow
+                              size={12}
+                              className="shrink-0 text-[var(--login-brand-accent)]"
+                            />
+                            {/* sr-only: 订阅语义进 option 可访问名;Tip 仅指针可见 */}
+                            <span className="sr-only">
+                              {t('settings.providers.models.subscription')}
+                            </span>
                             <span
                               data-model-price-stack={rowPrice.original ? 'true' : undefined}
                               className={cn(
@@ -1309,11 +1314,15 @@ function ModelSelectorContentView({
                         <Tip text={t('settings.providers.models.subscription')}>
                           <span
                             data-model-subscription-badge="compact"
-                            aria-label={t('settings.providers.models.subscription')}
-                            className="inline-flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full bg-black/[0.04] transition-colors hover:bg-black/[0.08] dark:bg-white/[0.08] dark:hover:bg-white/[0.14]"
+                            className="inline-flex h-[20px] w-[20px] shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] transition-colors hover:bg-[var(--surface-hover)]"
                           >
-                            <BrandArrow size={12} className="text-[#FF3B30] dark:text-[#FF453A]" />
-                            <span className="sr-only">{t('settings.providers.models.subscription')}</span>
+                            <BrandArrow
+                              size={12}
+                              className="text-[var(--login-brand-accent)]"
+                            />
+                            <span className="sr-only">
+                              {t('settings.providers.models.subscription')}
+                            </span>
                           </span>
                         </Tip>
                       ))}
@@ -1501,8 +1510,9 @@ function ModelSelectorContentView({
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
         ref={listRef}
-        // pr-1 保持内缩边距,使滚动条与左右内边距对称内嵌(避免贴死面板卡片外框);细滚动条见 globals.css
-        className="morph-panel-list-scroll flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1"
+        // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
+        // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
+        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         style={
           constrainedListMaxHeight === undefined
             ? undefined
