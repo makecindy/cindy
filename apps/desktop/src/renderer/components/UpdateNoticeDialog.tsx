@@ -242,7 +242,7 @@ function TopicList({ intro, topics }: { intro?: string; topics: ReleaseNoteTopic
             {topic.emoji && <span className="text-15 leading-none">{topic.emoji}</span>}
             <span
               className={cn(
-                'min-w-0 break-words text-15 font-semibold leading-tight tracking-tight',
+                'min-w-0 break-words text-15 font-medium leading-tight tracking-tight',
                 'text-[var(--msg-assistant-text)]',
               )}
             >

@@ -136,6 +136,11 @@ export async function fetchReleaseNotes(
       })),
     intro: typeof raw.intro === 'string' ? raw.intro : undefined,
   };
+  // A notice with no renderable content (e.g. a v2 payload whose topics were
+  // all malformed and dropped) must count as a failed fetch: caching it would
+  // open an empty dialog and, worse, advance lastReadVersion on dismiss so a
+  // corrected CDN payload would never be shown again.
+  if (notes.sections.length === 0 && notes.topics.length === 0) return null;
   cache.set(version, notes);
   return notes;
 }

@@ -89,4 +89,18 @@ describe('release-notes normalization', () => {
       { emoji: undefined, title: '正常主题', text: '正文。', contributors: ['A', 'B'] },
     ]);
   });
+
+  it('无任何可渲染内容(全部 topic 畸形且无 sections)按拉取失败处理', async () => {
+    const fetchReleaseNotes = stubFetch({
+      version: '0.1.20',
+      date: '2026-07-30',
+      contributors: ['A'],
+      topics: [{ title: '只有标题', body: '字段名写错了' }],
+    });
+    const mod = await import('@/release-notes');
+    expect(await mod.fetchReleaseNotes('0.1.20')).toBeNull();
+    // 不缓存失败结果:同版本再次调用要重新发起请求,修复后的 CDN payload 可以生效。
+    expect(await mod.fetchReleaseNotes('0.1.20')).toBeNull();
+    expect(fetchReleaseNotes).toHaveBeenCalledTimes(2);
+  });
 });
