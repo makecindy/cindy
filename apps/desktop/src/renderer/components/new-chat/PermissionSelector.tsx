@@ -219,7 +219,11 @@ export function PermissionSelector({
   );
 
   const optionsList = (
-      <div role="listbox" aria-label={t('newChat.permissionSelector.listAria')}>
+      <div
+        role="listbox"
+        aria-label={t('newChat.permissionSelector.listAria')}
+        className="flex flex-col gap-1"
+      >
         {options.map((option) => {
           const Icon = PERMISSION_ICONS[option.id] ?? Hand;
           const isSelected = effectiveMode === option.id;
@@ -234,6 +238,9 @@ export function PermissionSelector({
               contentClassName="max-w-[280px] whitespace-normal break-words text-left"
             >
               <button
+                // MorphPopover 打开后优先聚焦当前选中项；否则会聚焦列表首项，
+                // 触发“默认权限”的 focus tooltip，造成介绍与当前权限不一致。
+                data-morph-autofocus={isSelected ? '' : undefined}
                 onClick={() => {
                   onPermissionModeChange(option.id);
                   setOpen(false);
