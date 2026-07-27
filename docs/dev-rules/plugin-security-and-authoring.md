@@ -90,6 +90,12 @@
 - `network.secrets[].url` 可由 Host 作为 Setup 字段旁的辅助获取入口展示。该地址必须
   继续满足 manifest 安装期的 `https`、无内嵌凭证校验；它不是 Agent 文案或 plan
   的一部分，插件也不能通过 `settings.js` 动态替换 Setup 卡地址。
+- **就绪态是一等状态**：插件对 Agent 的暴露统一走 `ghostLifecycle.ts` 的生命周期
+  投影（ready / needs_setup / needs_reauth / degraded / blocked / unknown）。未就绪
+  插件**降级暴露**——花名册与 `ghost_list` 保留条目但不派发工具，Agent 的正确
+  动作是发起配置/重授权引导，不是盲调失败；评估失败按 `unknown` 处理（视同未
+  就绪），绝不折叠成 ready。secret 类凭证被服务端 401/403 拒绝后记入被拒台账，
+  投影折算为 needs_reauth；重存凭证即清账。
 - 模型调用一律走 Cindy 统一通道，不允许插件自建绕过通道的推理请求。
 - 附件、媒体、目录和保存路径通过归属校验后的 grant／deposit／ledger 交接，**禁止把
   宿主绝对路径或不必要的字节暴露给沙箱**。媒体字节须走

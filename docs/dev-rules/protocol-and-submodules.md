@@ -37,11 +37,17 @@
 
 ## 2. 插件来源
 
-- 客户端不包含内建插件种子 submodule，不在安装包中预置插件，启动期也没有播种
-  （provisioning）逻辑——预装机制已整体移除（2026-07）。
-- 插件运行时保留，用户通过 SkillHub 或手动安装 `.cindy` 包；没有任何插件时启动和
-  开发不应因此失败。
-- 不要重新引入预装／播种机制或私有种子 submodule；需要推荐插件时走 SkillHub 的
+- **第一方内置播种**：`builtinGhostProvisioner` 从随包种子 submodule
+  （official / xd 等 provisioning.json 声明）在启动期静默安装与覆盖更新第一方
+  插件——这是受信任的第一方通道，不经用户确认，属预期行为（2026-07-27 拍板）；
+  用户的 `.disabled` 停用标记与手动安装不受播种回收影响。
+- **市场 `defaultInstall`**：服务端策展的默认安装条目在 snapshot 内静默安装并
+  启用，不经确认弹窗——同样是预期行为；未配置的插件装完进入「已启用 · 待
+  配置」态（生命周期投影 needs_setup，工具不对 agent 派发，卡片带待配置徽章），
+  配置复杂度由产品承担而不是由确认弹窗承担。
+- 用户手动安装 `.cindy` 包一律走装入确认框；第三方插件不存在无确认通道。
+- 没有任何插件时启动和开发不应因此失败。
+- 不要引入**新**的无确认第三方分发通道；需要推荐第三方插件时走 SkillHub 的
   分发与安装确认流程。
 
 ## Review 清单
@@ -49,8 +55,8 @@
 1. 改动是否触及跨端 wire protocol？是否要同步 `cindy-protocol` 与服务端？
 2. 升级 submodule 指针时，是否确认了服务端同步、不会造成协议漂移？
 3. 客户端是否在 `packages/device-link` 之外另造了协议或绕过 relay 层定义？
-4. 插件能力是否通过 `.cindy` 包和 SkillHub／手动安装分发，而不是重新引入预装／播种
-   机制、私有种子 submodule 或绕过插件权限边界？
+4. 插件分发是否保持在三条既定通道内（第一方播种 / 市场策展 defaultInstall /
+   手动确认装入），没有为第三方新增无确认通道或绕过插件权限边界？
 
 协议改动按 [`desktop-development.md`](desktop-development.md) 跑相关测试，并与服务端确认
 兼容；submodule 相关操作见 [`environment-setup.md`](environment-setup.md)。
