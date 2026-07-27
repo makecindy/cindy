@@ -156,7 +156,7 @@ export function PermissionSelector({
       selectedOptionRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [open, options.length]);
+  }, [open, options.length, effectiveMode]);
 
   /** chip 内容行(icon + label + chevron) */
   const triggerContent = (
@@ -372,7 +372,7 @@ export function PermissionSelector({
             // 使 focus tooltip 的介绍与 field trigger 当前值一致。
             if (selectedOptionRef.current) {
               event.preventDefault();
-              selectedOptionRef.current.focus();
+              selectedOptionRef.current.focus({ preventScroll: true });
             }
           }}
           className={cn(
