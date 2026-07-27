@@ -65,7 +65,7 @@ import {
   stabilizeHookCommand,
 } from '../scheduler-host/hook-script-generator.js';
 import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capability-status.js';
-import { getGhostManager, getGhostSetupAssessment } from '../cindy-brain/index.js';
+import { getGhostLifecycleProjection } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -585,19 +585,14 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     // 查询型 handler(规则 13 例外):探测失败不该挡住表单——返回空列表,
     // renderer 视为"未知",不标警示也不报错。
     try {
-      const ghosts = getGhostManager()
-        .list()
-        .map((g) => {
-          // 配置就绪度纳入能力警示:评估失败按未就绪处理(显式传非 ready),
-          // 不让「判定失败」折叠成「可用」把任务放行到运行时必败。
-          let setupState: 'ready' | 'required' = 'ready';
-          try {
-            setupState = getGhostSetupAssessment(g.manifest.id).state;
-          } catch {
-            setupState = 'required';
-          }
-          return { id: g.manifest.id, name: g.manifest.name, enabled: g.enabled, setupState };
-        });
+      // 能力警示与发现层同一份生命周期投影:needs_setup / needs_reauth /
+      // degraded / unknown 都会标警示——任务运行时该能力必败,建任务时就看见。
+      const ghosts = getGhostLifecycleProjection().map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        enabled: entry.enabled,
+        readiness: entry.readiness,
+      }));
       return { statuses: resolveScriptCapabilityStatuses(ghosts) };
     } catch (err) {
       log.warn(`script capability status probe failed (non-fatal): ${String(err)}`);

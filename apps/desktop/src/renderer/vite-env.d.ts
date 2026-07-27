@@ -4378,7 +4378,17 @@ interface ElectronAPI {
       runNow: (id: string) => Promise<{ runId: string }>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
-        statuses: Array<{ capability: string; state: 'ok' | 'ghost-missing' | 'ghost-asleep'; ghostName?: string }>;
+        statuses: Array<{
+          capability: string;
+          state:
+            | 'ok'
+            | 'ghost-missing'
+            | 'ghost-asleep'
+            | 'ghost-needs-setup'
+            | 'ghost-needs-reauth'
+            | 'ghost-degraded';
+          ghostName?: string;
+        }>;
       }>;
       /** 表单「测试运行」:立即执行一次前置检查脚本,返回判定 / exit code / 输出 / 耗时。 */
       testPreRunHook: (params: {

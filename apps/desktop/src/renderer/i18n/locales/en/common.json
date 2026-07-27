@@ -5809,7 +5809,10 @@
         },
         "capabilityWarn": {
           "ghostMissing": "Requires the \"{{name}}\" plugin, which is not installed — this capability will fail at run time",
-          "ghostAsleep": "Requires the \"{{name}}\" plugin, which is disabled — this capability will fail at run time"
+          "ghostAsleep": "Requires the \"{{name}}\" plugin, which is disabled — this capability will fail at run time",
+          "ghostNeedsSetup": "Requires the \"{{name}}\" plugin, which is not configured — this capability will fail at run time",
+          "ghostNeedsReauth": "Requires the \"{{name}}\" plugin, whose authorization has expired — this capability will fail at run time",
+          "ghostDegraded": "Requires the \"{{name}}\" plugin, which is malfunctioning — this capability will fail at run time"
         }
       },
       "fields": {

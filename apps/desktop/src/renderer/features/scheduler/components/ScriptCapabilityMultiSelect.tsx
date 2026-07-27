@@ -23,7 +23,13 @@ interface Props {
   onChange: (next: ScriptCapability[]) => void;
 }
 
-type CapabilityRuntimeState = 'ok' | 'ghost-missing' | 'ghost-asleep';
+type CapabilityRuntimeState =
+  | 'ok'
+  | 'ghost-missing'
+  | 'ghost-asleep'
+  | 'ghost-needs-setup'
+  | 'ghost-needs-reauth'
+  | 'ghost-degraded';
 interface CapabilityRuntimeStatus {
   state: CapabilityRuntimeState;
   ghostName?: string;
@@ -167,9 +173,20 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
                   {warn && (
                     <span className="flex items-center gap-1 text-11 leading-[1.4] text-[var(--error-fg)]">
                       <AlertTriangle size={11} className="shrink-0" />
-                      {t(`scheduler.editor.script.capabilityWarn.${warn.state === 'ghost-missing' ? 'ghostMissing' : 'ghostAsleep'}`, {
-                        name: warn.ghostName ?? '',
-                      })}
+                      {t(
+                        `scheduler.editor.script.capabilityWarn.${
+                          warn.state === 'ghost-missing'
+                            ? 'ghostMissing'
+                            : warn.state === 'ghost-asleep'
+                              ? 'ghostAsleep'
+                              : warn.state === 'ghost-needs-reauth'
+                                ? 'ghostNeedsReauth'
+                                : warn.state === 'ghost-degraded'
+                                  ? 'ghostDegraded'
+                                  : 'ghostNeedsSetup'
+                        }`,
+                        { name: warn.ghostName ?? '' },
+                      )}
                     </span>
                   )}
                 </span>

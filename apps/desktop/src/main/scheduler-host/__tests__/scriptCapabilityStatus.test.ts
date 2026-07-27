@@ -54,4 +54,33 @@ describe('resolveScriptCapabilityStatuses', () => {
       ghostName: 'xd-atlassian',
     });
   });
+
+  it('生命周期投影的非 ready 态映射为对应能力警示', () => {
+    const cases: Array<{
+      readiness: 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
+      expected: 'ghost-needs-setup' | 'ghost-needs-reauth' | 'ghost-degraded';
+    }> = [
+      { readiness: 'needs_setup', expected: 'ghost-needs-setup' },
+      { readiness: 'needs_reauth', expected: 'ghost-needs-reauth' },
+      { readiness: 'degraded', expected: 'ghost-degraded' },
+      // blocked / unknown 按「需要用户处置」归类到 needs-setup 警示
+      { readiness: 'blocked', expected: 'ghost-needs-setup' },
+      { readiness: 'unknown', expected: 'ghost-needs-setup' },
+    ];
+    for (const { readiness, expected } of cases) {
+      const statuses = resolveScriptCapabilityStatuses([
+        { id: 'xd-atlassian', name: 'XD Atlassian', enabled: true, readiness },
+      ]);
+      expect(statuses.find((s) => s.capability === 'jira.read')).toEqual({
+        capability: 'jira.read',
+        state: expected,
+        ghostName: 'XD Atlassian',
+      });
+    }
+    // ready 与缺省(旧调用方)不受影响
+    const ok = resolveScriptCapabilityStatuses([
+      { id: 'xd-atlassian', name: 'XD Atlassian', enabled: true, readiness: 'ready' },
+    ]);
+    expect(ok.find((s) => s.capability === 'jira.read')?.state).toBe('ok');
+  });
 });

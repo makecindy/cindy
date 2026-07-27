@@ -25,7 +25,9 @@ export type ScriptCapabilityRuntimeState =
   | 'ok'
   | 'ghost-missing'
   | 'ghost-asleep'
-  | 'ghost-needs-setup';
+  | 'ghost-needs-setup'
+  | 'ghost-needs-reauth'
+  | 'ghost-degraded';
 
 export interface ScriptCapabilityStatus {
   capability: ScriptCapability;
@@ -40,11 +42,11 @@ export interface GhostStateSnapshot {
   /** InstalledGhost.enabled:false = 沉睡(能力不注册,broker 调用会失败)。 */
   enabled: boolean;
   /**
-   * 配置就绪态(host 现查注入):'ready' 之外的值把能力标为 ghost-needs-setup。
-   * 缺省视为 ready——不感知 setup 的旧调用方口径不变;评估失败时由调用方
-   * 显式传非 ready 值,绝不把「判定失败」折叠成「可用」。
+   * 生命周期投影就绪态(host 现查注入)。缺省视为 ready——不感知投影的
+   * 旧调用方口径不变;评估失败由调用方显式传 'unknown',绝不把
+   * 「判定失败」折叠成「可用」。
    */
-  setupState?: 'ready' | 'required';
+  readiness?: 'ready' | 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
 }
 
 export function resolveScriptCapabilityStatuses(
@@ -56,9 +58,18 @@ export function resolveScriptCapabilityStatuses(
     const ghost = ghosts.find((g) => g.id === depId);
     if (!ghost) return { capability, state: 'ghost-missing' as const, ghostName: depId };
     if (!ghost.enabled) return { capability, state: 'ghost-asleep' as const, ghostName: ghost.name };
-    if (ghost.setupState !== undefined && ghost.setupState !== 'ready') {
-      return { capability, state: 'ghost-needs-setup' as const, ghostName: ghost.name };
+    switch (ghost.readiness) {
+      case undefined:
+      case 'ready':
+        return { capability, state: 'ok' as const };
+      case 'needs_setup':
+      case 'blocked':
+      case 'unknown':
+        return { capability, state: 'ghost-needs-setup' as const, ghostName: ghost.name };
+      case 'needs_reauth':
+        return { capability, state: 'ghost-needs-reauth' as const, ghostName: ghost.name };
+      case 'degraded':
+        return { capability, state: 'ghost-degraded' as const, ghostName: ghost.name };
     }
-    return { capability, state: 'ok' as const };
   });
 }
