@@ -61,7 +61,7 @@ import type {
   HookTeamBindingView,
   SlackHookView,
 } from '../../shared/hookControlIpc.js';
-import type { SlackHookStore, TelegramBindingCacheEntry } from './store.js';
+import type { ProviderBindingCacheEntry, SlackHookStore } from './store.js';
 import type { HookDispatcher } from './dispatcher.js';
 import { buildQueryResponse, type AgentModelSource } from './queryResponder.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
@@ -437,7 +437,7 @@ interface NeutralProviderConfig {
   /** 从本地缓存恢复 confirmed 绑定视图(无缓存返回 null), 供冷启动/账号重激活。 */
   restoreCachedBinding: () => ProviderBindingView | null;
   /** confirmed 绑定缓存写入(null = 清缓存); 状态判定在通用 persistLaneBinding。 */
-  writeBindingCache: (entry: TelegramBindingCacheEntry | null) => void;
+  writeBindingCache: (entry: ProviderBindingCacheEntry | null) => void;
   /**
    * pending 帧的 connectUrl 校验与归一(provider 专属安全边界, 如 Telegram 的
    * t.me deep-link allowlist)。返回归一后的 payload; 非法时 throw(状态机置
