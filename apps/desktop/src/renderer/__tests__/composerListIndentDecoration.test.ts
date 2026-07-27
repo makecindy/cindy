@@ -96,6 +96,11 @@ describe('buildListIndentDecorations', () => {
     );
   });
 
+  it('advances indented tabs to deterministic 8ch tab stops', () => {
+    expect(listPrefixIndentStyle('  \t1. ')).toContain('--composer-list-hang:9.8ch;');
+    expect(listPrefixIndentStyle('\t\t1. ')).toContain('--composer-list-hang:17.8ch;');
+  });
+
   it('decorates the full content of a single-line item', () => {
     const ed = makeEditor(['1. test']);
     const found = buildListIndentDecorations(ed.state.doc).find();
@@ -709,7 +714,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(container).not.toBeNull();
     expect(unindentedRows).toHaveLength(1);
     expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数、占全部用户比例。');
-    expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(true);
+    expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(false);
     expect(unindentedRows?.[0]?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
   });
 
@@ -752,7 +757,43 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     const fallbackContainerRule = css.match(
       /\.ProseMirror \.composer-list-fallback-container \{([\s\S]*?)\n\}/,
     )?.[1];
-    expect(fallbackContainerRule).toContain('word-break: break-all;');
+    const fallbackLongRunRule = css.match(
+      /\.ProseMirror \.composer-list-fallback-long-run-body \{([\s\S]*?)\n\}/,
+    )?.[1];
+    expect(fallbackContainerRule).not.toContain('word-break: break-all;');
+    expect(fallbackLongRunRule).toContain('word-break: break-all;');
+
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '1. 中文标点。' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '2. abcdefghijklmnopqrstuvwxyz' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '3. alpha ordinaryword omega' },
+            ],
+          },
+        ],
+      },
+    });
+    const longRunBodies = editor.view.dom.querySelectorAll(
+      '.composer-list-fallback-long-run-body',
+    );
+    expect(longRunBodies).toHaveLength(1);
+    expect(longRunBodies[0]?.textContent).toBe('abcdefghijklmnopqrstuvwxyz');
   });
 
   it('keeps hanging indent for slash paths and unknown commands without pills', () => {
@@ -835,8 +876,8 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-long-run-marker');
     expect(css).toContain('.ProseMirror .composer-list-long-run-body');
     expect(css).toContain('.ProseMirror .composer-list-tab-indent');
-    expect(css).toContain('tab-size: 8;');
-    expect(css).toContain('white-space: nowrap;');
+    expect(css).toContain('tab-size: 8ch;');
+    expect(css).toContain('white-space: pre;');
     const fallbackPrefixRule = css.match(
       /\.ProseMirror \.composer-list-fallback-prefix \{([\s\S]*?)\n\}/,
     )?.[1];

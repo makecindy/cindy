@@ -367,15 +367,18 @@ html:lang(ko) {
   width: 100%;
   padding-left: calc(1em + var(--composer-list-fallback-indent, 1.25em));
   overflow-wrap: anywhere;
-  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-prefix {
   display: inline-block;
   box-sizing: border-box;
   width: var(--composer-list-fallback-indent, 1.25em);
   margin-left: calc(0px - var(--composer-list-fallback-indent, 1.25em));
-  white-space: nowrap;
+  white-space: pre;
   vertical-align: top;
+}
+.ProseMirror .composer-list-fallback-long-run-body {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .ProseMirror .composer-list-fallback-unindented {
   display: inline-block;
@@ -403,7 +406,7 @@ html:lang(ko) {
   /* Keep the browser's tab advance aligned with the deterministic prefix-width
      estimate. Do not measure and rewrite decoration DOM from a plugin view:
      ProseMirror's DOMObserver may restore that style and enter an update loop. */
-  tab-size: 8;
+  tab-size: 8ch;
 }
 .ProseMirror .composer-list-cjk-font {
   font-family:

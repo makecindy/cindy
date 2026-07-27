@@ -62,7 +62,9 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
     if (char >= '0' && char <= '9') {
       ch += 1;
     } else if (char === '\t') {
-      ch += TAB_SIZE;
+      // CSS uses `tab-size: 8ch`, so each tab advances to the next 8ch
+      // stop rather than adding eight space-glyph widths.
+      ch = (Math.floor(ch / TAB_SIZE) + 1) * TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
     } else {
@@ -231,15 +233,9 @@ export function buildListIndentDecorations(
       const match = matchListPrefix(line.text);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
-          const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
           decorations.push(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
-              class: [
-                'composer-list-fallback-unindented',
-                hasCjkPunctuation ? 'composer-list-cjk-font' : '',
-              ]
-                .filter(Boolean)
-                .join(' '),
+              class: 'composer-list-fallback-unindented',
             }),
           );
         }
@@ -270,6 +266,13 @@ export function buildListIndentDecorations(
             style: listPrefixIndentStyle(prefix),
           }),
         );
+        if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
+          decorations.push(
+            Decoration.inline(from + match.prefixLength, to, {
+              class: 'composer-list-fallback-long-run-body',
+            }),
+          );
+        }
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
