@@ -29,7 +29,9 @@ let mockWebview: MockWebview;
 
 const poolMocks = vi.hoisted(() => ({
   releaseListeners: new Set<(tabId: string) => void>(),
+  currentEntry: null as { wrapper: HTMLDivElement; webview: MockWebview } | null,
   fireRelease(tabId: string) {
+    this.currentEntry = null;
     for (const cb of [...this.releaseListeners]) cb(tabId);
   },
 }));
@@ -41,10 +43,15 @@ const bridgeMocks = vi.hoisted(() => ({
 
 vi.mock('../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
-    acquire: vi.fn(() => ({
-      wrapper: document.createElement('div'),
-      webview: mockWebview,
-    })),
+    acquire: vi.fn(() => {
+      const entry = poolMocks.currentEntry ?? {
+        wrapper: document.createElement('div'),
+        webview: mockWebview,
+      };
+      poolMocks.currentEntry = entry;
+      return entry;
+    }),
+    peek: vi.fn(() => poolMocks.currentEntry),
     onRelease: vi.fn((cb: (tabId: string) => void) => {
       poolMocks.releaseListeners.add(cb);
       return () => poolMocks.releaseListeners.delete(cb);
@@ -111,6 +118,7 @@ function HookProbe({
 describe('useBrowserWebview', () => {
   beforeEach(() => {
     mockWebview = makeMockWebview('https://www.taptap.cn/');
+    poolMocks.currentEntry = null;
   });
 
   afterEach(() => {
@@ -120,13 +128,43 @@ describe('useBrowserWebview', () => {
     bridgeMocks.resourceCb = null;
   });
 
+  it('does not materialize a tab without explicit visibility', async () => {
+    const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
+    const acquire = vi.mocked(browserWebviewPool.acquire);
+    let result: UseBrowserWebviewResult | null = null;
+
+    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+
+    expect(acquire).not.toHaveBeenCalled();
+    expect(result!.wrapper).toBeNull();
+  });
+
+  it('does not materialize a hidden tab until it becomes visible', async () => {
+    const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
+    const acquire = vi.mocked(browserWebviewPool.acquire);
+    let result: UseBrowserWebviewResult | null = null;
+    const view = render(
+      createElement(HookProbe, { visible: false, onResult: (next) => { result = next; } }),
+    );
+
+    expect(acquire).not.toHaveBeenCalled();
+    expect(result!.wrapper).toBeNull();
+
+    view.rerender(
+      createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }),
+    );
+
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(result!.wrapper).not.toBeNull();
+  });
+
   it('restores the real webview URL when an optimistic navigation is aborted', () => {
     let result: UseBrowserWebviewResult | null = null;
     const current = () => {
       if (result === null) throw new Error('hook result was not captured');
       return result;
     };
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     expect(current().url).toBe('https://www.taptap.cn/');
 
@@ -149,7 +187,7 @@ describe('useBrowserWebview', () => {
       if (result === null) throw new Error('hook result was not captured');
       return result;
     };
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     act(() => {
       mockWebview.dispatch('did-redirect-navigation', {
@@ -172,7 +210,7 @@ describe('useBrowserWebview', () => {
       if (result === null) throw new Error('hook result was not captured');
       return result;
     };
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     act(() => {
       for (let i = 0; i <= BROWSER_NAVIGATION_FUSE_LIMIT; i += 1) {
@@ -198,10 +236,14 @@ describe('useBrowserWebview', () => {
     const acquire = vi.mocked(browserWebviewPool.acquire);
     let result: UseBrowserWebviewResult | null = null;
     const view = render(
-      createElement(HookProbe, { visible: false, onResult: (next) => { result = next; } }),
+      createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }),
     );
     expect(acquire).toHaveBeenCalledTimes(1);
     const firstWrapper = result!.wrapper;
+
+    view.rerender(
+      createElement(HookProbe, { visible: false, onResult: (next) => { result = next; } }),
+    );
 
     // 后台淘汰(资源看门狗 / LRU):entry 被 release,不可见期间不得重建。
     act(() => poolMocks.fireRelease('tab-a'));
@@ -229,7 +271,7 @@ describe('useBrowserWebview', () => {
 
   it('marks a watchdog kill as resource-memory when the notice arrived first', () => {
     let result: UseBrowserWebviewResult | null = null;
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     bridgeMocks.consumePendingKillCause.mockReturnValueOnce('memory');
     act(() => {
@@ -240,7 +282,7 @@ describe('useBrowserWebview', () => {
 
   it('upgrades the crash when gone + late notice land in the same React batch', () => {
     let result: UseBrowserWebviewResult | null = null;
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     // 两个事件在同一次 act(同一批,React 尚未 commit)内先后到达 ——
     // 订阅回调必须能看到 crash 已发生(靠同步写 ref,不能等渲染期镜像)。
@@ -253,7 +295,7 @@ describe('useBrowserWebview', () => {
 
   it('upgrades an existing crash on a late kill-notice and consumes the pending cause', () => {
     let result: UseBrowserWebviewResult | null = null;
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     // crash 事件先到:此时还没有 pending cause,banner 是笼统的 killed。
     act(() => {
@@ -272,7 +314,7 @@ describe('useBrowserWebview', () => {
 
   it('shows and dismisses the cpu resource alert', () => {
     let result: UseBrowserWebviewResult | null = null;
-    render(createElement(HookProbe, { onResult: (next) => { result = next; } }));
+    render(createElement(HookProbe, { visible: true, onResult: (next) => { result = next; } }));
 
     act(() => {
       bridgeMocks.resourceCb?.({ tabId: 'tab-a', kind: 'cpu-alert', cpuPercent: 95 });

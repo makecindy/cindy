@@ -172,7 +172,11 @@ export function useBrowserWebview(
   }, []);
 
   useEffect(() => {
-    const entry = browserWebviewPool.acquire(tabId);
+    // Shell 会常驻挂载所有 TabBody；没有明确可见时，只复用已有 entry，不首次
+    // 物化 webview，避免恢复会话就在后台加载持久化 URL。
+    const existing = browserWebviewPool.peek(tabId);
+    if (!existing && visible !== true) return;
+    const entry = existing ?? browserWebviewPool.acquire(tabId);
     if (webviewRef.current && webviewRef.current !== entry.webview) {
       // 重新物化(淘汰后再激活):上一代 webview 的观测 state 全部失效。复位为
       // 空值,让 BrowserTabBody 的"按 wrapper 代际"首次导航重新驱动加载,否则
@@ -369,7 +373,7 @@ export function useBrowserWebview(
       // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
       // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
     };
-  }, [tabId, sessionId, setObservedUrl, entryEpoch]);
+  }, [tabId, sessionId, setObservedUrl, entryEpoch, visible]);
 
   const navigate = useCallback((nextUrl: string) => {
     const wv = webviewRef.current;
