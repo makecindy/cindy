@@ -66,6 +66,7 @@
       "awaitingQuestion": "等待你的回复",
       "awaitingPlan": "等待计划审阅",
       "permissionPromptTitle": "需要确认权限",
+      "permissionPromptTitleWithTool": "允许 {{toolName}}？",
       "allowOnce": "允许一次",
       "alwaysAllowForSession": "本对话总是允许",
       "deny": "拒绝"
@@ -4931,6 +4932,16 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "正在思考…",
+      "generating": "正在生成…",
+      "editingFiles": "正在编辑文件…",
+      "searchingWeb": "正在搜索网页…",
+      "generatingImage": "正在生成图片…",
+      "compacting": "正在压缩上下文…",
+      "done": "已完成",
+      "runningTool": "{{tool}} 运行中…"
+    },
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",

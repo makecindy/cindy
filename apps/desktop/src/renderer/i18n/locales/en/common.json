@@ -66,6 +66,7 @@
       "awaitingQuestion": "Awaiting your reply",
       "awaitingPlan": "Awaiting plan review",
       "permissionPromptTitle": "Confirm permission",
+      "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
       "alwaysAllowForSession": "Always allow",
       "deny": "Deny"
@@ -4941,6 +4942,16 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "Thinking…",
+      "generating": "Generating…",
+      "editingFiles": "Editing files…",
+      "searchingWeb": "Searching the web…",
+      "generatingImage": "Generating an image…",
+      "compacting": "Compacting context…",
+      "done": "Done",
+      "runningTool": "{{tool}} running…"
+    },
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
