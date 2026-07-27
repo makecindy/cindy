@@ -1,27 +1,27 @@
 /**
  * localOwnerDataAdoption.test — local 模式数据认领核心流程单测。
  *
- * 全部走内存 fs 假体(LocalAdoptionFsDeps 注入),不碰真实磁盘;electron 依赖经
- * vitest alias 落到 electron-stub(本文件只测纯 DI 入口 runLocalOwnerDataAdoption,
- * 不触发默认 electron 实现)。
+ * 全部走内存 fs 假体(LocalAdoptionFsDeps 注入),不碰真实磁盘;导入本身(SQL 语义)
+ * 由 localOwnerDataImport.test.ts 用真实 sqlite 覆盖,这里只注入其结果,专测流程:
+ * 前置门槛、marker 状态机、提交点前后的失败语义、收尾续跑。
+ * electron 依赖经 vitest alias 落到 electron-stub(本文件只测纯 DI 入口)。
  */
 
-import os from 'node:os';
 import path from 'node:path';
-import fsp from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
 
 import { LOCAL_DATA_OWNER_ID, dataOwnerStorageKey } from '../appSessionState';
+import { ownerSecretStoragePrefix } from '../secrets/providerSecretStore';
+import { ownerScopedImSecretPrefix } from '../im/ownerScopedStorage';
 import {
   LOCAL_OWNER_ADOPTION_MARKER_FILENAME,
   runLocalOwnerDataAdoption,
-  __testing,
   type LocalAdoptionDecision,
   type LocalAdoptionFsDeps,
   type LocalAdoptionPhase,
   type LocalOwnerAdoptionDeps,
 } from '../localOwnerDataAdoption';
+import type { LocalOwnerImportResult } from '../localDb/localOwnerDataImport';
 
 const USER_DATA = path.join(path.sep, 'base', 'Cindy');
 const PREFIX = 'cindy';
@@ -29,10 +29,10 @@ const USER_ID = 'user-123';
 const USER_KEY = dataOwnerStorageKey(USER_ID);
 const LOCAL_KEY = dataOwnerStorageKey(LOCAL_DATA_OWNER_ID);
 const LOCAL_DB = path.join(USER_DATA, `${PREFIX}-${LOCAL_DATA_OWNER_ID}.db`);
-const ACCOUNT_DB = path.join(USER_DATA, `${PREFIX}-${USER_ID}.db`);
 const MARKER = path.join(USER_DATA, LOCAL_OWNER_ADOPTION_MARKER_FILENAME);
 const LOCAL_OWNER_DIR = path.join(USER_DATA, 'owners', LOCAL_KEY);
 const ACCOUNT_OWNER_DIR = path.join(USER_DATA, 'owners', USER_KEY);
+const SECRETS_DIR = path.join(USER_DATA, 'safe-storage');
 
 type ErrnoLike = Error & { code?: string };
 
@@ -50,7 +50,7 @@ function createMemFs() {
 
   const addDir = (p: string): void => {
     let cur = norm(p);
-    while (true) {
+    for (;;) {
       dirs.add(cur);
       const parent = path.dirname(cur);
       if (parent === cur) break;
@@ -119,12 +119,14 @@ function createMemFs() {
     rmdir: async (dir) => {
       const nd = norm(dir);
       if (!dirs.has(nd)) throw errnoError('ENOENT', dir);
-      for (const f of files.keys()) if (f.startsWith(nd + path.sep)) throw errnoError('ENOTEMPTY', dir);
-      for (const d of dirs) if (d !== nd && d.startsWith(nd + path.sep)) throw errnoError('ENOTEMPTY', dir);
+      for (const f of files.keys()) {
+        if (f.startsWith(nd + path.sep)) throw errnoError('ENOTEMPTY', dir);
+      }
+      for (const d of dirs) {
+        if (d !== nd && d.startsWith(nd + path.sep)) throw errnoError('ENOTEMPTY', dir);
+      }
       dirs.delete(nd);
     },
-    // mem fs 的 rename 本就是「目标存在即 EEXIST」语义,与 renameNoReplace 一致。
-    renameNoReplace: async (src, dest) => fsDeps.rename(src, dest),
     replaceFile: async (src, dest) => {
       files.delete(norm(dest));
       await fsDeps.rename(src, dest);
@@ -134,19 +136,25 @@ function createMemFs() {
   return { files, dirs, addDir, addFile, fsDeps, exists };
 }
 
+const emptyImport: LocalOwnerImportResult = {
+  inserted: 0,
+  perTable: {},
+  missingInSource: [],
+  droppedRows: {},
+  unverifiedTables: [],
+  unimportableTables: [],
+};
+
 interface HarnessOverrides {
   decision?: LocalAdoptionDecision | (() => Promise<LocalAdoptionDecision>);
   /** local 库未删除会话数(默认 3)。 */
-  sessionCount?: number | (() => number);
-  /** 账号库是否被使用过(默认 false = 空置)。 */
-  accountUsed?: boolean;
-  accountDbOpen?: boolean;
+  sessionCount?: number;
+  countThrows?: boolean;
   passive?: boolean;
   concurrent?: () => boolean;
-  countThrows?: boolean;
-  accountProbeThrows?: boolean;
-  /** now() 每次调用递增的毫秒步长(默认 0 = 固定时钟)。 */
-  nowStepMs?: number;
+  /** 导入结果;要模拟失败用 importThrows。 */
+  importResult?: Partial<LocalOwnerImportResult>;
+  importThrows?: boolean;
   ownerStillCurrent?: () => boolean;
   fsOverrides?: Partial<LocalAdoptionFsDeps>;
 }
@@ -157,29 +165,24 @@ function createHarness(overrides: HarnessOverrides = {}) {
   const rawDecision = overrides.decision;
   const decisionFn: () => Promise<LocalAdoptionDecision> =
     typeof rawDecision === 'function' ? rawDecision : async () => rawDecision ?? 'adopt';
+  const importLocalData = vi.fn(async () => {
+    if (overrides.importThrows) throw new Error('SQLITE_BUSY: database is locked');
+    return { ...emptyImport, inserted: 5, ...overrides.importResult };
+  });
   const deps: LocalOwnerAdoptionDeps = {
     userDataDir: USER_DATA,
     dbFilePrefix: PREFIX,
     fs: { ...mem.fsDeps, ...overrides.fsOverrides },
     countLocalSessions: vi.fn(async () => {
       if (overrides.countThrows) throw new Error('SQLITE_CORRUPT: malformed');
-      const count = overrides.sessionCount;
-      return typeof count === 'function' ? count() : (count ?? 3);
+      return overrides.sessionCount ?? 3;
     }),
-    accountDbLooksUsed: vi.fn(async () => {
-      if (overrides.accountProbeThrows) throw new Error('SQLITE_CORRUPT: malformed');
-      return overrides.accountUsed ?? false;
-    }),
+    importLocalData,
     passiveSharedUserData: () => overrides.passive ?? false,
     hasConcurrentLiveInstances: overrides.concurrent ?? (() => false),
     closeLocalDbIfOpen: vi.fn(),
-    accountDbCurrentlyOpen: () => overrides.accountDbOpen ?? false,
     isOwnerStillCurrent: overrides.ownerStillCurrent ?? (() => true),
-    now: (() => {
-      let tick = 0;
-      const base = new Date('2026-07-24T00:00:00.000Z').getTime();
-      return () => new Date(base + (overrides.nowStepMs ?? 0) * tick++);
-    })(),
+    now: () => new Date('2026-07-27T00:00:00.000Z'),
     log: { info: vi.fn(), warn: vi.fn() },
     ui: {
       publish: (phase) => {
@@ -188,517 +191,353 @@ function createHarness(overrides: HarnessOverrides = {}) {
       waitForDecision: decisionFn,
     },
   };
-  return { mem, deps, phases };
+  return { mem, deps, phases, importLocalData };
 }
+
+const readMarker = (mem: ReturnType<typeof createMemFs>): Record<string, unknown> =>
+  JSON.parse(mem.files.get(path.normalize(MARKER)) ?? '{}') as Record<string, unknown>;
+
+const archivedDbNames = (mem: ReturnType<typeof createMemFs>): string[] =>
+  [...mem.files.keys()].filter((f) => f.startsWith(`${path.normalize(LOCAL_DB)}.adopted-`));
 
 describe('runLocalOwnerDataAdoption 前置探测(静默跳过,绝不弹窗)', () => {
   it('userId 为 local-v1 自身时跳过(防御 local 模式 ensureReady 误触发)', async () => {
     const { deps, phases } = createHarness();
-    const result = await runLocalOwnerDataAdoption(LOCAL_DATA_OWNER_ID, deps);
-    expect(result).toEqual({ status: 'skipped-local-owner' });
+    expect(await runLocalOwnerDataAdoption(LOCAL_DATA_OWNER_ID, deps)).toEqual({
+      status: 'skipped-local-owner',
+    });
     expect(phases).toEqual([]);
   });
 
   it('local 库不存在时返回 no-local-db,不写 marker', async () => {
     const { mem, deps, phases } = createHarness();
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'no-local-db' });
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'no-local-db' });
     expect(phases).toEqual([]);
     expect(mem.files.has(path.normalize(MARKER))).toBe(false);
   });
 
-  it('local 库存在但 0 条会话时返回 no-local-sessions,不弹窗、不写 marker(之后产生会话仍可认领)', async () => {
+  it('local 库 0 条会话时返回 no-local-sessions,不写 marker(之后产生会话仍可认领)', async () => {
     const { mem, deps, phases } = createHarness({ sessionCount: 0 });
     mem.addFile(LOCAL_DB);
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'no-local-sessions' });
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'no-local-sessions' });
     expect(phases).toEqual([]);
     expect(mem.files.has(path.normalize(MARKER))).toBe(false);
   });
 
-  it('账号库已有会话(真实使用过)时返回 account-db-exists(不做行级合并,local 数据原地保留)', async () => {
-    const { mem, deps, phases } = createHarness({ accountUsed: true });
-    mem.addFile(LOCAL_DB);
-    mem.addFile(ACCOUNT_DB);
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'account-db-exists' });
-    expect(phases).toEqual([]);
-    expect(mem.files.has(path.normalize(LOCAL_DB))).toBe(true);
-  });
-
-  it('账号库正被本进程打开(同账号 ensure-ready 重入)时跳过,不动文件', async () => {
-    const { mem, deps, phases } = createHarness({ accountDbOpen: true });
-    mem.addFile(LOCAL_DB);
-    mem.addFile(ACCOUNT_DB);
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'account-db-in-use' });
-    expect(phases).toEqual([]);
-  });
-
-  it('账号库不可读时返回 account-db-unreadable,不弹窗、不动文件', async () => {
-    const { mem, deps, phases } = createHarness({ accountProbeThrows: true });
-    mem.addFile(LOCAL_DB);
-    mem.addFile(ACCOUNT_DB, 'corrupt');
-    mem.addFile(MARKER, JSON.stringify({ version: 1, pendingOwnerKeys: [USER_KEY] }));
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('account-db-unreadable');
-    expect(phases).toEqual([]);
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('corrupt');
-  });
-
-  it('账号库 wal 残留(被 worker/其它进程持有)时推迟', async () => {
-    const { mem, deps, phases } = createHarness();
-    mem.addFile(LOCAL_DB);
-    mem.addFile(ACCOUNT_DB);
-    mem.addFile(`${ACCOUNT_DB}-wal`);
-    mem.addFile(MARKER, JSON.stringify({ version: 1, pendingOwnerKeys: [USER_KEY] }));
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'deferred', reason: 'account-db-busy' });
-    expect(phases).toEqual([]);
-  });
-
-  it('local 库不可读(count 抛错)时返回 local-db-unreadable,不弹窗', async () => {
-    const { mem, deps, phases } = createHarness({ countThrows: true });
+  it('local 库不可读时返回 local-db-unreadable,不弹窗、不导入', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness({ countThrows: true });
     mem.addFile(LOCAL_DB);
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result.status).toBe('local-db-unreadable');
     expect(phases).toEqual([]);
+    expect(importLocalData).not.toHaveBeenCalled();
+  });
+
+  it('local 库 wal 残留(仍被别的进程持有)时推迟,不写 marker', async () => {
+    const { mem, deps, phases } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(`${LOCAL_DB}-wal`);
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({
+      status: 'deferred',
+      reason: 'local-db-busy',
+    });
+    expect(phases).toEqual([]);
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+  });
+
+  it('passive 共享 userData 实例只推迟,绝不动数据', async () => {
+    const { mem, deps, importLocalData } = createHarness({ passive: true });
+    mem.addFile(LOCAL_DB);
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({
+      status: 'deferred',
+      reason: 'passive-shared-user-data',
+    });
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+  });
+
+  it('存在并发活实例时只推迟(不写 marker,下次登录前提同样成立)', async () => {
+    const { mem, deps, importLocalData } = createHarness({ concurrent: () => true });
+    mem.addFile(LOCAL_DB);
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({
+      status: 'deferred',
+      reason: 'concurrent-live-instances',
+    });
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+  });
+
+  it('账号库已有数据不再是障碍:认领照常进行(合并语义)', async () => {
+    const { mem, deps, importLocalData } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(USER_DATA, `${PREFIX}-${USER_ID}.db`));
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+    expect(result.status).toBe('adopted');
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
   });
 });
 
 describe('runLocalOwnerDataAdoption marker 终态', () => {
-  it('已认领过(claimedOwnerKey 存在)时直接返回,不再探测', async () => {
+  it('已认领过(claimedOwnerKey)时永久跳过', async () => {
     const { mem, deps, phases } = createHarness();
     mem.addFile(LOCAL_DB);
-    mem.addFile(MARKER, JSON.stringify({ version: 1, claimedOwnerKey: 'someone-else' }));
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'already-claimed' });
+    mem.addFile(MARKER, JSON.stringify({ version: 1, claimedOwnerKey: 'whatever' }));
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'already-claimed' });
     expect(phases).toEqual([]);
   });
 
-  it('本账号拒绝过时返回 declined-before,不再询问', async () => {
+  it('本账号此前拒绝过时不再询问', async () => {
     const { mem, deps, phases } = createHarness();
     mem.addFile(LOCAL_DB);
     mem.addFile(MARKER, JSON.stringify({ version: 1, declinedOwnerKeys: [USER_KEY] }));
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'declined-before' });
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'declined-before' });
     expect(phases).toEqual([]);
   });
 
-  it('其它账号拒绝过不影响本账号认领', async () => {
-    const { mem, deps } = createHarness({ decision: 'adopt' });
+  it('别的账号拒绝过不影响本账号(数据仍可被认领),且保留它的记录', async () => {
+    const { mem, deps } = createHarness();
     mem.addFile(LOCAL_DB);
     mem.addFile(MARKER, JSON.stringify({ version: 1, declinedOwnerKeys: ['other-key'] }));
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
     expect(result.status).toBe('adopted');
-    // 认领成功后保留历史拒绝记录。
-    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      claimedOwnerKey: string;
-      declinedOwnerKeys: string[];
-    };
-    expect(marker.claimedOwnerKey).toBe(USER_KEY);
-    expect(marker.declinedOwnerKeys).toEqual(['other-key']);
+    expect(readMarker(mem).declinedOwnerKeys).toEqual(['other-key']);
   });
 
-  it('marker 损坏时按缺失处理(前置检查兜底,不 crash)', async () => {
-    const { mem, deps } = createHarness({ decision: 'keep' });
+  it('marker 损坏时当作缺失(导入幂等,最坏是再问一次)', async () => {
+    const { mem, deps } = createHarness();
     mem.addFile(LOCAL_DB);
-    mem.addFile(MARKER, 'not-json{{{');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('declined');
+    mem.addFile(MARKER, '{ not json');
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
   });
 });
 
-describe('runLocalOwnerDataAdoption 独占推迟(不取消,下次登录重来)', () => {
-  it('passive shared userData 实例推迟,但仍登记 pending(否则占位库永久堵死重试)', async () => {
-    const { mem, deps, phases } = createHarness({ passive: true });
+describe('runLocalOwnerDataAdoption 用户拒绝', () => {
+  it('选「保留在本机模式」时记录该账号、不导入、不动任何文件', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness({ decision: 'keep' });
     mem.addFile(LOCAL_DB);
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'deferred', reason: 'passive-shared-user-data' });
-    expect(phases).toEqual([]);
-    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      pendingOwnerKeys?: string[];
-    };
-    expect(marker.pendingOwnerKeys).toEqual([USER_KEY]);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'));
+
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'declined' });
+
+    expect(phases).toEqual(['confirm', 'done']);
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(readMarker(mem)).toEqual({ version: 1, declinedOwnerKeys: [USER_KEY] });
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
   });
 
-  it('存在并发活实例时推迟', async () => {
-    const { mem, deps, phases } = createHarness({ concurrent: () => true });
-    mem.addFile(LOCAL_DB);
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'deferred', reason: 'concurrent-live-instances' });
-    expect(phases).toEqual([]);
-  });
-
-  it('wal/shm 残留(库仍被持有)时推迟', async () => {
-    const { mem, deps, phases } = createHarness();
-    mem.addFile(LOCAL_DB);
-    mem.addFile(`${LOCAL_DB}-wal`);
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'deferred', reason: 'local-db-busy' });
-    expect(phases).toEqual([]);
-  });
-
-  it('确认窗停留期间出现并发实例:中断,failed 弹窗,local 库不动', async () => {
-    let concurrentNow = false;
+  it('拒绝记录写失败时仍要解除弹窗(否则 phase 卡在 confirm)', async () => {
     const { mem, deps, phases } = createHarness({
-      concurrent: () => concurrentNow,
-      decision: async () => {
-        concurrentNow = true; // 用户点按钮时另一实例已启动
-        return 'adopt';
+      decision: 'keep',
+      fsOverrides: {
+        writeFile: async () => {
+          throw errnoError('ENOSPC', MARKER);
+        },
       },
     });
     mem.addFile(LOCAL_DB);
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'declined' });
+    expect(phases).toEqual(['confirm', 'done']);
+  });
+});
+
+describe('runLocalOwnerDataAdoption 并入全流程', () => {
+  it('导入 → 归档 local 库 → 搬 owners(dialogues 除外)→ 搬凭证 → 写终态', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness({
+      importResult: { inserted: 7, perTable: { sessions: 3, messages: 4 } },
+    });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'dialogues', '2026-07-27', 's1', 'note.txt'), 'dlg');
+    mem.addFile(
+      path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}anthropic.enc`),
+      'k1',
+    );
+    mem.addFile(
+      path.join(SECRETS_DIR, `${ownerScopedImSecretPrefix(LOCAL_DATA_OWNER_ID)}feishu.enc`),
+      'k2',
+    );
+
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'deferred', reason: 'concurrent-live-instances' });
-    expect(phases).toEqual(['confirm', 'running', 'failed']);
-    expect(mem.files.has(path.normalize(LOCAL_DB))).toBe(true);
-    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      pendingOwnerKeys?: string[];
-    };
-    expect(marker.pendingOwnerKeys).toEqual([USER_KEY]);
+
+    expect(result).toEqual({ status: 'adopted', imported: 7, resumed: false });
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    expect(importLocalData).toHaveBeenCalledWith(path.normalize(LOCAL_DB));
+
+    // local 库归档保留(不删),原名消失 → 回到 local 模式是全新空间。
+    expect(mem.exists(LOCAL_DB)).toBe(false);
+    expect(archivedDbNames(mem)).toHaveLength(1);
+
+    // owners 下非 dialogues 项搬到账号命名空间。
+    expect(mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'learn', 'runs.json')))).toBe(
+      'learn',
+    );
+    expect(
+      mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'maker-memory', 'MEMORY.md'))),
+    ).toBe('mem');
+
+    // dialogues 故意留在原地:working_dir 改写与内容搬运由 sweep 逐行负责。
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'dialogues', '2026-07-27', 's1', 'note.txt'))).toBe(
+      true,
+    );
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'dialogues'))).toBe(false);
+
+    // 凭证按 owner 前缀改名。
+    expect(
+      mem.files.get(
+        path.normalize(path.join(SECRETS_DIR, `${ownerSecretStoragePrefix(USER_ID)}anthropic.enc`)),
+      ),
+    ).toBe('k1');
+    expect(
+      mem.files.get(
+        path.normalize(path.join(SECRETS_DIR, `${ownerScopedImSecretPrefix(USER_ID)}feishu.enc`)),
+      ),
+    ).toBe('k2');
+
+    expect(readMarker(mem)).toEqual({
+      version: 1,
+      claimedOwnerKey: USER_KEY,
+      adoptedAt: '2026-07-27T00:00:00.000Z',
+    });
   });
 
-  it('确认窗停留期间账号库出现:中断,绝不覆盖', async () => {
-    const { mem, deps, phases } = createHarness({
-      decision: async () => {
-        mem.addFile(ACCOUNT_DB, 'account-data');
-        return 'adopt';
-      },
+  it('账号侧已有同名凭证时跳过不覆盖', async () => {
+    const { mem, deps } = createHarness();
+    const localSecret = path.join(
+      SECRETS_DIR,
+      `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}anthropic.enc`,
+    );
+    const accountSecret = path.join(
+      SECRETS_DIR,
+      `${ownerSecretStoragePrefix(USER_ID)}anthropic.enc`,
+    );
+    mem.addFile(LOCAL_DB);
+    mem.addFile(localSecret, 'local-key');
+    mem.addFile(accountSecret, 'account-key');
+
+    await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(mem.files.get(path.normalize(accountSecret))).toBe('account-key');
+    expect(mem.files.get(path.normalize(localSecret))).toBe('local-key');
+  });
+
+  it('确认窗停留期间 owner 变了(登出/切号)时中止,绝不并进失效账号', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness({
+      ownerStillCurrent: () => false,
     });
-    mem.addFile(LOCAL_DB, 'local-data');
+    mem.addFile(LOCAL_DB);
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'stale-owner' });
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+  });
+
+  it('确认窗停留期间出现并发实例时推迟,不导入不动文件', async () => {
+    let calls = 0;
+    const { mem, deps, importLocalData } = createHarness({
+      // 第一次(前置)无并发,确认后复查时出现。
+      concurrent: () => calls++ > 0,
+    });
+    mem.addFile(LOCAL_DB);
+    expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({
+      status: 'deferred',
+      reason: 'concurrent-live-instances',
+    });
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+  });
+});
+
+describe('runLocalOwnerDataAdoption 提交点语义', () => {
+  it('导入失败(提交点未过)时不写任何 marker,local 数据分毫未动', async () => {
+    const { mem, deps, phases } = createHarness({ importThrows: true });
+    mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+
     const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
     expect(result.status).toBe('failed');
     expect(phases).toEqual(['confirm', 'running', 'failed']);
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('account-data');
-    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
-  });
-});
-
-describe('runLocalOwnerDataAdoption 用户裁决', () => {
-  it('拒绝:记录该账号 declined,local 数据原样保留,弹窗按 done 解除', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'keep' });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'));
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'declined' });
-    expect(phases).toEqual(['confirm', 'done']);
-    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
-    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'))).toBe(true);
-    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      declinedOwnerKeys: string[];
-      claimedOwnerKey?: string;
-    };
-    expect(marker.declinedOwnerKeys).toEqual([USER_KEY]);
-    expect(marker.claimedOwnerKey).toBeUndefined();
-  });
-
-  it('并入:owners 命名空间先合并搬移,库最后改名,marker 记 claimedOwnerKey', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'adopt', sessionCount: 5 });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'dialogues', '2026-07-20', 'sess-1', 'f.txt'), 'd');
-    // 目标侧已有同名文件 → 冲突跳过,双方内容都不丢。
-    mem.addFile(path.join(ACCOUNT_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'account-mem');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('adopted');
-    if (result.status === 'adopted') {
-      expect(result.ownersMoved).toBeGreaterThan(0);
-      expect(result.ownersConflicts).toBe(1);
-    }
-    expect(phases).toEqual(['confirm', 'running', 'done']);
-    // 库改名到账号命名空间。
-    expect(mem.files.has(path.normalize(LOCAL_DB))).toBe(false);
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
-    // owners 内容并入;冲突文件保留账号侧,local 侧原文件留在原地(不覆盖)。
-    expect(
-      mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'dialogues', '2026-07-20', 'sess-1', 'f.txt'))),
-    ).toBe('d');
-    expect(mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'maker-memory', 'MEMORY.md')))).toBe(
-      'account-mem',
-    );
-    expect(mem.files.get(path.normalize(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md')))).toBe('mem');
-    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      claimedOwnerKey: string;
-      adoptedAt: string;
-    };
-    expect(marker.claimedOwnerKey).toBe(USER_KEY);
-    expect(marker.adoptedAt).toBe('2026-07-24T00:00:00.000Z');
-  });
-
-  it('并入时 safe-storage 的 owner 前缀凭证(含 IM 前缀)一并改名到账号命名空间(冲突跳过)', async () => {
-    const { mem, deps } = createHarness({ decision: 'adopt' });
-    const secretsDir = path.join(USER_DATA, 'safe-storage');
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(path.join(secretsDir, `im_owner_${LOCAL_KEY}_feishu.enc`), 'im-secret');
-    mem.addFile(path.join(secretsDir, `owner_${LOCAL_KEY}_provider_key_x.enc`), 'secret-x');
-    mem.addFile(path.join(secretsDir, `owner_${LOCAL_KEY}_custom_mcp_y.enc`), 'secret-y');
-    // 账号侧已有同逻辑键 → 冲突跳过,双方都保留。
-    mem.addFile(path.join(secretsDir, `owner_${USER_KEY}_custom_mcp_y.enc`), 'account-y');
-    // 其它 owner 与非 .enc 文件不受影响。
-    mem.addFile(path.join(secretsDir, 'owner_other_provider_key_z.enc'), 'other');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('adopted');
-    expect(
-      mem.files.get(path.normalize(path.join(secretsDir, `owner_${USER_KEY}_provider_key_x.enc`))),
-    ).toBe('secret-x');
-    expect(
-      mem.files.get(path.normalize(path.join(secretsDir, `owner_${USER_KEY}_custom_mcp_y.enc`))),
-    ).toBe('account-y');
-    expect(
-      mem.files.get(path.normalize(path.join(secretsDir, `owner_${LOCAL_KEY}_custom_mcp_y.enc`))),
-    ).toBe('secret-y');
-    expect(
-      mem.files.get(path.normalize(path.join(secretsDir, 'owner_other_provider_key_z.enc'))),
-    ).toBe('other');
-    expect(
-      mem.files.has(path.normalize(path.join(secretsDir, `owner_${LOCAL_KEY}_provider_key_x.enc`))),
-    ).toBe(false);
-    expect(
-      mem.files.get(path.normalize(path.join(secretsDir, `im_owner_${USER_KEY}_feishu.enc`))),
-    ).toBe('im-secret');
-    expect(
-      mem.files.has(path.normalize(path.join(secretsDir, `im_owner_${LOCAL_KEY}_feishu.enc`))),
-    ).toBe(false);
-  });
-
-  it('确认窗停留期间 owner 失效(另一窗口登出/切号):中止,不搬任何文件', async () => {
-    let ownerCurrent = true;
-    const { mem, deps, phases } = createHarness({
-      ownerStillCurrent: () => ownerCurrent,
-      decision: async () => {
-        ownerCurrent = false; // 用户点按钮前,另一窗口已把 owner 切走
-        return 'adopt';
-      },
-    });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'stale-owner' });
-    expect(phases).toEqual(['confirm', 'running', 'done']);
-    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
-    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'))).toBe(true);
-    expect(mem.files.has(path.normalize(ACCOUNT_DB))).toBe(false);
-  });
-
-  it('并入时 local 无 owners 目录也成立(只搬库)', async () => {
-    const { mem, deps } = createHarness({ decision: 'adopt' });
-    mem.addFile(LOCAL_DB, 'local-data');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('adopted');
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
-  });
-
-  it('账号库存在但无 pending:无论多空一律跳过,不做任何探测让位(v1 契约)', async () => {
-    const { mem, deps, phases } = createHarness({ accountUsed: false });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(ACCOUNT_DB, 'existing-account-db');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'account-db-exists' });
-    expect(phases).toEqual([]);
-    expect(deps.accountDbLooksUsed).not.toHaveBeenCalled();
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('existing-account-db');
-  });
-
-  it('pending 重试场景:空占位账号库改名备份让位后并入(Greptile 场景)', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'adopt', accountUsed: false });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(ACCOUNT_DB, 'empty-account-db');
-    mem.addFile(MARKER, JSON.stringify({ version: 1, pendingOwnerKeys: [USER_KEY] }));
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('adopted');
-    expect(phases).toEqual(['confirm', 'running', 'done']);
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
-    // 空库不删,时间戳+序号备份保留(前缀匹配,序号随进程内计数递增)。
-    const backupEntry = [...mem.files.entries()].find(([f]) =>
-      f.startsWith(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`)),
-    );
-    expect(backupEntry?.[1]).toBe('empty-account-db');
-  });
-});
-
-describe('runLocalOwnerDataAdoption 失败与幂等重试', () => {
-  it('库改名失败:failed 弹窗、不写 marker;下次登录续跑完成剩余搬移', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'adopt' });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
-    const realRenameNoReplace = deps.fs.renameNoReplace;
-    let failNext = true;
-    deps.fs = {
-      ...deps.fs,
-      renameNoReplace: async (src, dest) => {
-        if (failNext && path.normalize(src) === path.normalize(LOCAL_DB)) {
-          throw errnoError('EPERM', src);
-        }
-        return realRenameNoReplace(src, dest);
-      },
-    };
-    const first = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(first.status).toBe('failed');
-    expect(phases).toEqual(['confirm', 'running', 'failed']);
-    // 失败只登记 pending(重试凭据),不写终态。
-    const firstMarker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      pendingOwnerKeys?: string[];
-      claimedOwnerKey?: string;
-    };
-    expect(firstMarker.pendingOwnerKeys).toEqual([USER_KEY]);
-    expect(firstMarker.claimedOwnerKey).toBeUndefined();
-    // 失败后登录照常继续,ensureReady 会创建空账号库(Greptile 指出的堵死场景)
-    // ——重试凭 pending 仍能进来:占位库让位,认领续跑完成。
-    mem.addFile(ACCOUNT_DB, 'auto-created-empty-db');
-    failNext = false;
-    const second = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(second.status).toBe('adopted');
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
-    const retryBackup = [...mem.files.entries()].find(([f]) =>
-      f.startsWith(path.normalize(`${ACCOUNT_DB}.pre-adoption-20260724000000`)),
-    );
-    expect(retryBackup?.[1]).toBe('auto-created-empty-db');
-    expect(mem.files.get(path.normalize(path.join(ACCOUNT_OWNER_DIR, 'maker-memory', 'MEMORY.md')))).toBe(
-      'mem',
-    );
-  });
-
-  it('owners 递归合并期间发现并发实例:中断为 deferred,下次登录续跑', async () => {
-    let scans = 0;
-    const { mem, deps, phases } = createHarness({
-      decision: 'adopt',
-      nowStepMs: 600, // 每次取时钟都跨过 500ms 节流窗,abortCheck 每个子项都真扫
-      concurrent: () => {
-        scans += 1;
-        return scans >= 3; // 第 1/2 次(步骤 2 与确认后复查)无并发,合并中途出现
-      },
-    });
-    mem.addFile(LOCAL_DB, 'local-data');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'maker-memory', 'MEMORY.md'), 'mem');
-    mem.addFile(path.join(LOCAL_OWNER_DIR, 'cindy-brain', 'b.json'), 'brain');
-    // 目标 owners 目录已有内容 → 走逐子项合并路径(整棵 rename 快路径没有中断窗口)。
-    mem.addFile(path.join(ACCOUNT_OWNER_DIR, 'existing.txt'), 'e');
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'deferred', reason: 'concurrent-live-instances' });
-    expect(phases).toEqual(['confirm', 'running', 'failed']);
-    // 库改名(提交点)未发生,local 模式数据完好;已搬部分下次续跑。
-    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
-    // 推迟登记 pending(重试凭据),不写终态。
-    const marker = JSON.parse(mem.files.get(path.normalize(MARKER))!) as {
-      pendingOwnerKeys?: string[];
-      claimedOwnerKey?: string;
-    };
-    expect(marker.pendingOwnerKeys).toEqual([USER_KEY]);
-    expect(marker.claimedOwnerKey).toBeUndefined();
-  });
-
-  it('拒绝记录写失败:本次拒绝仍生效,弹窗按 done 解除不卡 confirm', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'keep' });
-    mem.addFile(LOCAL_DB, 'local-data');
-    const realWrite = mem.fsDeps.writeFile;
-    deps.fs = {
-      ...deps.fs,
-      writeFile: async (p, content) => {
-        if (path.normalize(p).startsWith(path.normalize(MARKER))) throw errnoError('ENOSPC', p);
-        return realWrite(p, content);
-      },
-    };
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result).toEqual({ status: 'declined' });
-    expect(phases).toEqual(['confirm', 'done']);
-    expect(mem.files.get(path.normalize(LOCAL_DB))).toBe('local-data');
-  });
-
-  it('库改名(提交点)已过后 marker 写失败:按成功收尾,不误报 failed', async () => {
-    const { mem, deps, phases } = createHarness({ decision: 'adopt' });
-    mem.addFile(LOCAL_DB, 'local-data');
-    const realWrite = mem.fsDeps.writeFile;
-    deps.fs = {
-      ...deps.fs,
-      writeFile: async (p, content) => {
-        if (path.normalize(p).startsWith(path.normalize(MARKER))) throw errnoError('ENOSPC', p);
-        return realWrite(p, content);
-      },
-    };
-    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(result.status).toBe('adopted');
-    expect(phases).toEqual(['confirm', 'running', 'done']);
-    expect(mem.files.get(path.normalize(ACCOUNT_DB))).toBe('local-data');
     expect(mem.files.has(path.normalize(MARKER))).toBe(false);
+    expect(mem.exists(LOCAL_DB)).toBe(true);
+    // 收尾一步都不能提前发生(#314 codex review:文件不得先于提交点搬走)。
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
   });
 
-  it('弹窗前先关闭本进程持有的 local 库(closeLocalDbIfOpen 在 count 前被调用)', async () => {
-    const { mem, deps } = createHarness({ decision: 'keep' });
+  it('收尾失败时 marker 停在 importedOwnerKey(会话已可见,下次登录续跑)', async () => {
+    const { mem, deps, phases } = createHarness({
+      fsOverrides: {
+        // 归档与 owners 搬移都走 rename;让它一律失败模拟只读盘。
+        rename: async (_src, dest) => {
+          throw errnoError('EPERM', dest);
+        },
+      },
+    });
     mem.addFile(LOCAL_DB);
-    await runLocalOwnerDataAdoption(USER_ID, deps);
-    expect(deps.closeLocalDbIfOpen).toHaveBeenCalledTimes(1);
-    const closeOrder = (deps.closeLocalDbIfOpen as ReturnType<typeof vi.fn>).mock
-      .invocationCallOrder[0];
-    const countOrder = (deps.countLocalSessions as ReturnType<typeof vi.fn>).mock
-      .invocationCallOrder[0];
-    expect(closeOrder).toBeLessThan(countOrder);
-  });
-});
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
 
-describe('默认 sqlite 探针(真实 better-sqlite3 临时库)', () => {
-  async function withTempDb(
-    setup: (db: InstanceType<typeof Database>) => void,
-    run: (dbPath: string) => Promise<void>,
-  ): Promise<void> {
-    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-adoption-test-'));
-    const dbPath = path.join(dir, 'probe.db');
-    const db = new Database(dbPath);
-    try {
-      setup(db);
-    } finally {
-      db.close();
-    }
-    try {
-      await run(dbPath);
-    } finally {
-      await fsp.rm(dir, { recursive: true, force: true });
-    }
-  }
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
 
-  it('countSessionsInClosedDb 只数未删除会话(触发门槛)', async () => {
-    await withTempDb(
-      (db) => {
-        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
-        db.exec("INSERT INTO sessions VALUES ('a','active'),('b','archived'),('c','deleted')");
-      },
-      async (dbPath) => {
-        await expect(__testing.countSessionsInClosedDb(dbPath)).resolves.toBe(2);
-      },
-    );
+    expect(result.status).toBe('adopted');
+    expect(phases).toEqual(['confirm', 'running', 'done']);
+    const marker = readMarker(mem);
+    expect(marker.importedOwnerKey).toBe(USER_KEY);
+    expect(marker.claimedOwnerKey).toBeUndefined();
   });
 
-  it('accountDbLooksUsedInClosedDb:软删除会话也算「使用过」,绝不让位(Greptile 场景)', async () => {
-    await withTempDb(
-      (db) => {
-        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
-        db.exec("INSERT INTO sessions VALUES ('a','deleted')");
-      },
-      async (dbPath) => {
-        await expect(__testing.accountDbLooksUsedInClosedDb(dbPath)).resolves.toBe(true);
-      },
-    );
+  it('凭 importedOwnerKey 续跑时静默收尾,不再弹窗询问', async () => {
+    const { mem, deps, phases, importLocalData } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: USER_KEY }));
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(result).toMatchObject({ status: 'adopted', resumed: true });
+    // 没有 confirm:用户已经批准过一次,导入也已提交。
+    expect(phases).toEqual(['running', 'done']);
+    // 续跑仍会重跑导入(幂等),把可能漏掉的行补上。
+    expect(importLocalData).toHaveBeenCalledTimes(1);
+    expect(archivedDbNames(mem)).toHaveLength(1);
+    expect(readMarker(mem).claimedOwnerKey).toBe(USER_KEY);
   });
 
-  it('accountDbLooksUsedInClosedDb:零会话但有 schedules 也算使用过;全空才空置', async () => {
-    await withTempDb(
-      (db) => {
-        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
-        db.exec('CREATE TABLE schedules (id TEXT PRIMARY KEY)');
-        db.exec("INSERT INTO schedules VALUES ('s1')");
-      },
-      async (dbPath) => {
-        await expect(__testing.accountDbLooksUsedInClosedDb(dbPath)).resolves.toBe(true);
-      },
+  it('续跑时本账号的旧拒绝记录不再拦路(导入已提交,认领事实成立)', async () => {
+    const { mem, deps } = createHarness();
+    mem.addFile(LOCAL_DB);
+    mem.addFile(
+      MARKER,
+      JSON.stringify({ version: 1, importedOwnerKey: USER_KEY, declinedOwnerKeys: [USER_KEY] }),
     );
-    await withTempDb(
-      (db) => {
-        db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
-      },
-      async (dbPath) => {
-        // 其余用量表不存在(老 schema)= 不可能有数据,不算使用过。
-        await expect(__testing.accountDbLooksUsedInClosedDb(dbPath)).resolves.toBe(false);
-      },
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+  });
+
+  it('续跑时 local 库已不在(归档其实成功过)→ 补写终态,不再每次登录白跑', async () => {
+    const { mem, deps, importLocalData } = createHarness();
+    mem.addFile(MARKER, JSON.stringify({ version: 1, importedOwnerKey: USER_KEY }));
+
+    const result = await runLocalOwnerDataAdoption(USER_ID, deps);
+
+    expect(result).toEqual({ status: 'adopted', imported: 0, resumed: true });
+    expect(importLocalData).not.toHaveBeenCalled();
+    expect(readMarker(mem).claimedOwnerKey).toBe(USER_KEY);
+  });
+
+  it('导入丢了行(两库 schema 不兼容)时 warn 出来,local 库仍归档保留可找回', async () => {
+    const { mem, deps } = createHarness({
+      importResult: { inserted: 2, droppedRows: { messages: 3 } },
+    });
+    mem.addFile(LOCAL_DB);
+
+    expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
+
+    expect(deps.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not be imported'),
+      3,
+      'messages=3',
     );
+    expect(archivedDbNames(mem)).toHaveLength(1);
   });
 });

@@ -5304,7 +5304,7 @@ app.on('ready', async () => {
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
   // local 模式数据认领(local-v1 → 登录账号)的确认弹窗 IPC:同 mToc,必须先于
-  // registerLocalDbIpc 注册,beforeEnsureReady 推送 confirm 态时 renderer 才能应答。
+  // registerLocalDbIpc 注册,onReady 里推送 confirm 态时 renderer 才能应答。
   registerLocalOwnerAdoptionIpc();
   registerLocalDbIpc({
     isOwnerCurrent: (userId) =>
@@ -5317,10 +5317,6 @@ app.on('ready', async () => {
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
       // 全量兜底,绝不 throw,失败不阻塞登录(ensureReady 照常建新库)。
       await runLegacyUserDataMigrationForUser(user.id);
-      // local 模式数据认领(local-v1 → 账号):必须排在 mToc 之后——mToc 若为该
-      // 账号迁入了老库,认领的「账号库已存在」前置检查会自然跳过,不做行级合并。
-      // 同样绝不 throw、失败不阻塞登录。
-      await runLocalOwnerDataAdoptionForUser(user.id);
     },
     onReady: async (userId) => {
       // 必须先 await ensureLifecycleDbClient(内部 await createDbClient → worker
@@ -5362,6 +5358,16 @@ app.on('ready', async () => {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      // local 模式数据认领(local-v1 → 账号):账号库此刻已 ready(schema 最新),
+      // 认领把 local 库的业务行经单事务 INSERT OR IGNORE 并进来。必须排在这里:
+      //  - 在 ensureLifecycleDbClient 之后 —— 导入要写的是已 ready 的账号库;
+      //  - 在下面 sweepLegacyDialogueWorkingDirs 之前 —— 导入进来的 dialogue 会话
+      //    working_dir 还指向 local 命名空间,靠那趟 sweep 改写(它自带「先复制
+      //    内容再改写、失败跳过下次重试」的保护);
+      //  - 都在 ensure-ready IPC 返回之前 —— renderer 之后才拉会话列表,用户不会
+      //    看到「先空一下再冒出来」。
+      // 内部自带 marker 防重入,绝不 throw,失败不阻塞登录(下次登录重试)。
+      await runLocalOwnerDataAdoptionForUser(userId);
       // 身份翻转遗留的 dialogue 工作目录自愈:把 legacy userData 前缀的
       // sessions.working_dir 批量改写到当前 userData(详见 dialogueWorkdirSelfHeal.ts)。
       // 必须 await:ensure-ready IPC 返回后 renderer 才拉会话列表,在此之前改写完
@@ -5372,10 +5378,11 @@ app.on('ready', async () => {
           userDataDir: app.getPath('userData'),
           legacyUserDataDirNames: BRAND_IDENTITY.legacyUserDataDirNames,
           currentDialoguesRoot: ownerScopedUserDataPath('dialogues'),
-          // local 模式数据认领(localOwnerDataAdoption)把 owners/<localKey> 搬进
-          // 账号命名空间后,DB 里 dialogue 会话的 working_dir 仍是 local 前缀,
-          // 靠这里改写到账号 dialogues 根(sweep 自身会滤掉等于 currentRoot 的项,
-          // local 模式下运行时该根即 currentRoot,天然 no-op)。
+          // 上面的认领把 local 库的 dialogue 会话行导入了账号库,但它们的
+          // working_dir 仍指向 owners/<localKey>/dialogues。认领**故意不搬**这棵
+          // 子树:这趟 sweep 是逐行处理的(新位置缺失且老位置在 → 先复制内容再
+          // 改写,单行失败只跳过它、下次启动重试),比整树搬移更不容易丢内容。
+          // local 模式下运行时该根即 currentRoot,sweep 自会滤掉,天然 no-op。
           additionalLegacyDialogueRoots: [
             path.join(app.getPath('userData'), 'dialogues'),
             path.join(

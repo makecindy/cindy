@@ -1,3 +1,5 @@
+import type { LocalOwnerImportResult } from '../../localOwnerDataImport.js';
+
 export type DbTxName =
   | 'codex.importMessages'
   | 'claude.importMessages'
@@ -20,7 +22,8 @@ export type DbTxName =
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
-  | 'session.importShare';
+  | 'session.importShare'
+  | 'localOwner.importData';
 
 export interface CodexImportMessagesArgs {
   sessionId: string;
@@ -356,6 +359,16 @@ export interface ImDeleteBindingsArgs {
   }>;
 }
 
+/**
+ * local 模式(local-v1)库的数据行导入当前账号库(登录后的一次性认领)。事务体
+ * 只做 ATTACH + 逐表 `INSERT OR IGNORE`,清单与列交集规则见
+ * localDb/localOwnerDataImport.ts。
+ */
+export interface LocalOwnerImportDataArgs {
+  /** 已关闭的 local-v1 库文件绝对路径。 */
+  localDbPath: string;
+}
+
 export type DbTxArgsByName = {
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
@@ -379,6 +392,7 @@ export type DbTxArgsByName = {
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
   'session.importShare': SessionImportShareArgs;
+  'localOwner.importData': LocalOwnerImportDataArgs;
 };
 
 export type DbTxResultByName = {
@@ -404,4 +418,6 @@ export type DbTxResultByName = {
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
   'session.importShare': { messageCount: number };
+  // 结构以 localOwnerDataImport.ts 的返回类型为唯一正本,避免两处 drift。
+  'localOwner.importData': LocalOwnerImportResult;
 };

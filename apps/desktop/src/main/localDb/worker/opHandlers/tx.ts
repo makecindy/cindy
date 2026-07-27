@@ -5,6 +5,10 @@ import type Database from 'better-sqlite3';
 
 import type { DbTxName } from '../../client/tx/types.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
+import {
+  importLocalOwnerData,
+  type LocalOwnerImportResult,
+} from '../../localOwnerDataImport.js';
 
 const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -60,6 +64,8 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return imReplaceBinding(db, txArgs);
     case 'session.importShare':
       return sessionImportShare(db, txArgs);
+    case 'localOwner.importData':
+      return localOwnerImportData(db, txArgs);
     default:
       throw Object.assign(new Error(`unknown tx: ${name}`), { code: 'UNKNOWN_TX' });
   }
@@ -763,6 +769,17 @@ function sanitizeForkedMessageContent(
   } catch {
     return message.content;
   }
+}
+
+// local 模式数据认领的导入事务:ATTACH 只读 local-v1 库,单事务把业务行
+// INSERT OR IGNORE 进账号库。清单二分与列交集规则都在 localOwnerDataImport.ts
+// (正本);这里只做参数校验后转调,避免逻辑出现第二份实现。
+function localOwnerImportData(
+  db: Database.Database,
+  args: unknown,
+): LocalOwnerImportResult {
+  const payload = asRecord(args, 'localOwner.importData args');
+  return importLocalOwnerData(db, expectString(payload.localDbPath, 'localDbPath'));
 }
 
 // 会话分享(.xdtshare)导入落库:单事务插 session 行 + 全量 messages(含 rewind 链)。

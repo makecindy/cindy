@@ -312,6 +312,8 @@ function dispatchTx(readyDb, payload) {
       return imReplaceBinding(readyDb, request.args);
     case 'session.importShare':
       return sessionImportShare(readyDb, request.args);
+    case 'localOwner.importData':
+      return localOwnerImportData(readyDb, request.args);
     default:
       throw Object.assign(new Error('unknown tx: ' + name), { code: 'UNKNOWN_TX' });
   }
@@ -641,6 +643,99 @@ function sessionImportShare(readyDb, args) {
     return messages.length;
   })();
   return { messageCount };
+}
+
+// local 模式数据认领的导入事务: 与 localDb/localOwnerDataImport.ts 保持一致
+// (那里是正本, 含表清单二分的理由与列交集规则; 这段是 inline worker 回滚口的
+// 等价 JS 实现)。ATTACH 只读 local 库 + 单事务 INSERT OR IGNORE, 只写账号库。
+const LOCAL_OWNER_IMPORTED_TABLES = [
+  'sessions', 'messages', 'session_pr_refs', 'session_goals',
+  'orca_teams', 'orca_workers', 'schedules', 'schedule_runs',
+  'recent_workdirs', 'project_aliases', 'project_automation_consents',
+  'right_sidebar_tabs', 'agent_input_queue_snapshots',
+  'custom_providers', 'custom_mcp_servers', 'im_bindings',
+  'media_blobs', 'media_refs', 'ghost_cards',
+  'daily_spend', 'daily_model_usage', 'skill_usage_sources', 'skill_usage_exposures',
+];
+
+function localOwnerImportData(readyDb, args) {
+  const payload = asRecord(args, 'localOwner.importData args');
+  const localDbPath = expectString(payload.localDbPath, 'localDbPath');
+  const quoteId = (name) => '"' + String(name).replaceAll('"', '""') + '"';
+  const columns = (schema, table) =>
+    new Set(readyDb.pragma(schema + '.table_info(' + quoteId(table) + ')').map((row) => row.name));
+  const detach = () => {
+    try {
+      readyDb.prepare('DETACH DATABASE adopt_src').run();
+    } catch {
+      /* 未 attach 时报错属正常路径 */
+    }
+  };
+  detach();
+  readyDb.prepare('ATTACH DATABASE ? AS adopt_src').run(localDbPath);
+  try {
+    const sourceTables = new Set(
+      readyDb
+        .prepare("SELECT name FROM adopt_src.sqlite_master WHERE type = 'table'")
+        .all()
+        .map((row) => row.name),
+    );
+    const perTable = {};
+    const missingInSource = [];
+    const droppedRows = {};
+    const unverifiedTables = [];
+    const unimportableTables = [];
+    let inserted = 0;
+    readyDb.transaction(() => {
+      readyDb.pragma('defer_foreign_keys = ON');
+      for (const table of LOCAL_OWNER_IMPORTED_TABLES) {
+        if (!sourceTables.has(table)) {
+          missingInSource.push(table);
+          continue;
+        }
+        const targetCols = columns('main', table);
+        const shared = [...columns('adopt_src', table)].filter((col) => targetCols.has(col));
+        if (shared.length === 0) {
+          unimportableTables.push(table);
+          continue;
+        }
+        const colList = shared.map(quoteId).join(', ');
+        const result = readyDb
+          .prepare(
+            'INSERT OR IGNORE INTO main.' + quoteId(table) + ' (' + colList + ')' +
+              ' SELECT ' + colList + ' FROM adopt_src.' + quoteId(table),
+          )
+          .run();
+        const changes = Number(result.changes);
+        if (changes > 0) {
+          perTable[table] = changes;
+          inserted += changes;
+        }
+        // OR IGNORE 对所有约束违规都静默跳过 → 核验真正没并过来的行数。
+        const pkCols = readyDb
+          .pragma('main.table_info(' + quoteId(table) + ')')
+          .filter((row) => row.pk > 0)
+          .sort((a, b) => a.pk - b.pk)
+          .map((row) => row.name);
+        if (pkCols.length === 0 || !pkCols.every((col) => shared.includes(col))) {
+          unverifiedTables.push(table);
+          continue;
+        }
+        const pkMatch = pkCols.map((col) => 't.' + quoteId(col) + ' IS s.' + quoteId(col)).join(' AND ');
+        const dropped = readyDb
+          .prepare(
+            'SELECT COUNT(*) AS c FROM adopt_src.' + quoteId(table) + ' s WHERE NOT EXISTS (' +
+              ' SELECT 1 FROM main.' + quoteId(table) + ' t WHERE ' + pkMatch + ')',
+          )
+          .get();
+        const droppedCount = Number(dropped?.c ?? 0);
+        if (droppedCount > 0) droppedRows[table] = droppedCount;
+      }
+    })();
+    return { inserted, perTable, missingInSource, droppedRows, unverifiedTables, unimportableTables };
+  } finally {
+    detach();
+  }
 }
 
 // ⚠️ F-COLLAB orca 事务: 与 worker/opHandlers/tx.ts 的同名 handler 必须逐字保持一致。
