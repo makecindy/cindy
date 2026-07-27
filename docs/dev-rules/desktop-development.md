@@ -102,6 +102,9 @@ pnpm test:unit
 
 - 改 TypeScript 至少运行相关类型检查和定向测试。
 - 跨模块、共享 package、构建链或广泛重构再扩大到 Desktop 全量测试、构建或根级单测。
+- 调整 Desktop Vitest worker 或测试分池前，先读取
+  [`desktop-unit-test-performance.md`](desktop-unit-test-performance.md)，并用其中的
+  benchmark 在相同测试范围下做前后对比。
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。

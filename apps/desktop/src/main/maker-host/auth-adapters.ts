@@ -53,7 +53,11 @@ import {
   terminateCodexLoginProcess,
 } from './codex-auth-state.js';
 import { CODEX_GATEWAY_ENV_KEY, CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from './codex-gateway-config.js';
-import { clearClaudeAiOAuth, hasClaudeAiOAuth } from './claude-credentials-store.js';
+import {
+  clearClaudeAiOAuth,
+  hasClaudeAiOAuth,
+  hasClaudeAiOAuthUnbound,
+} from './claude-credentials-store.js';
 import {
   disconnectClaudeAiOAuth,
   getClaudeAiOAuthForSpawn,
@@ -310,7 +314,18 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     invalidateClaudeOAuthRefresh();
     try {
       if (hasClaudeAiOAuth()) clearClaudeAiOAuth();
-      unbindNativeProviderAuth('anthropic');
+      // 凭证删除是 best-effort 的(clearClaudeAiOAuth 的 unlink 失败静默吞掉)。删干净了就
+      // **不**留抑制标记 —— 服务端作废不是用户意图,本机 CLI 重新登录后仍应享有设计内的自动
+      // 继承;可一旦没删掉,slot 空 + 凭证还在,下一次可信读取就会把这份刚被作废的凭证认领
+      // 回来、拿它重启发现,再 401、再 invalidate,在「已连接 / 失效」之间打转
+      // (PR #548 review)。所以按残留与否分流。
+      const residual = hasClaudeAiOAuthUnbound();
+      unbindNativeProviderAuth('anthropic', residual ? { revoked: true } : undefined);
+      if (residual) {
+        log.warn('claude credential still present after invalidate; suppressing auto-claim', {
+          reason,
+        });
+      }
     } catch (e) {
       log.warn('clear claude oauth on invalidate failed', {
         error: e instanceof Error ? e.message : String(e),
@@ -398,7 +413,9 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       // disconnect = 先失效刷新器再清凭证(唯一正确入口,见 claude-oauth-refresh 文档)
       // —— 否则「已断开」状态下在途刷新回写会让凭证复活。
       disconnectClaudeAiOAuth();
-      unbindNativeProviderAuth('anthropic');
+      // 用户显式登出:留撤销标记。凭证删除是 best-effort(文件删除吞错),残留凭证不该在
+      // 下一次读连接态时被自动认领回来(PR #548 review)。
+      unbindNativeProviderAuth('anthropic', { revoked: true });
       return;
     }
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
@@ -1344,7 +1361,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 降低 Windows 文件锁概率；删失败仍由 disconnect marker + 内存快照清空保证 fail-closed，
     // 下次登录前会再次清理并在锁未释放时拒绝继续。
     await removeDesktopCodexModelsCache(this.codexHome);
-    unbindNativeProviderAuth('openai');
+    // 用户显式登出:除既有的 disconnect marker 外,再留一道跨 provider 统一的撤销标记。
+    unbindNativeProviderAuth('openai', { revoked: true });
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
@@ -1381,6 +1399,25 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   async hasCodexOAuthLogin(): Promise<boolean> {
     return (await this.getAccessToken()) != null;
+  }
+
+  /**
+   * 纯读版连接态 —— 不触发 reconcile,因此不建硬链、不写绑定文件、不碰 invalidation marker。
+   *
+   * 给 `maker:provider:list` 里「sender 不可信」的那条降级路径用:hasCodexOAuthLogin() 会经
+   * getAccessToken 走一次 reconcileWithSystemCodex,那里既会把本机 CLI 凭证硬链进 codex-home,
+   * 又会为首个 owner 补写 openai 绑定 —— 一个本该只读的查询,不该被子 frame / WebView 或
+   * device-link 合成 event 用来触发这种特权变更(PR #548 review)。
+   *
+   * 判定只会比自愈版**更保守**:durable 登出标记、内存 invalidation、未绑定当前 owner 一律
+   * 返回 false;差别仅在于「本来会被这次 reconcile 补上的绑定」这里看不到,于是显示未连接。
+   */
+  hasCodexOAuthLoginReadOnly(): boolean {
+    if (this.oauthInvalidatedReason) return false;
+    if (!isNativeProviderAuthBound('openai')) return false;
+    const authPath = path.join(this.codexHome, 'auth.json');
+    if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return false;
+    return this.hasCodexOAuthLoginUnbound();
   }
 
   /** Legacy upgrade probe; only used while claiming the first verified owner. */

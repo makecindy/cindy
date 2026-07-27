@@ -10,6 +10,7 @@ import type {
 let cache: ModelPricingCatalog | null = null;
 let cacheLoaded = false;
 let inflight: Promise<ModelPricingCatalog | null> | null = null;
+let cacheRevision = 0;
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -54,14 +55,20 @@ function isValidCatalog(v: unknown): v is ModelPricingCatalog {
 function load(): Promise<ModelPricingCatalog | null> {
   if (cacheLoaded) return Promise.resolve(cache);
   if (!inflight) {
+    const revisionAtStart = cacheRevision;
     inflight = window.electronAPI.maker.usage
       .getModelPricing()
       .then((res) => {
+        // A push received after this read started is newer than its snapshot.
+        // Keep the pushed value instead of letting a stale startup `null`
+        // remove prices until the next application restart.
+        if (cacheRevision !== revisionAtStart) return cache;
         cacheLoaded = true;
         cache = isValidCatalog(res) ? res : null;
         return cache;
       })
       .catch(() => {
+        if (cacheRevision !== revisionAtStart) return cache;
         cacheLoaded = true;
         cache = null;
         return null;
@@ -80,6 +87,7 @@ export function useModelPricing(): ModelPricingCatalog | null {
     let active = true;
     const unsubscribe =
       window.electronAPI.maker.usage.onModelPricingChanged((next) => {
+        cacheRevision += 1;
         cacheLoaded = true;
         cache = isValidCatalog(next) ? next : null;
         if (active) setPricing(cache);

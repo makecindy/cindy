@@ -66,6 +66,7 @@
       "awaitingQuestion": "返信待ち",
       "awaitingPlan": "プランの確認待ち",
       "permissionPromptTitle": "権限の確認",
+      "permissionPromptTitleWithTool": "{{toolName}} を許可しますか?",
       "allowOnce": "一度だけ許可",
       "alwaysAllowForSession": "このセッションで常に許可",
       "deny": "拒否"
@@ -307,9 +308,9 @@
         "confirmTitle": "Codex 認証情報をリモートに送りますか?",
         "confirmPush": "送信",
         "confirmOverwrite": "上書き",
-        "descFirstPush": "ローカルの Codex 認証情報を {{hostId}} の ~/.codex/auth.json にインストールします。",
-        "descOverwrite": "{{hostId}} 上の既存の Codex ログインを上書きします。",
-        "descOverwriteWithAge": "{{hostId}} 上の既存の Codex ログインを上書きします(最終更新: {{when}})。",
+        "descFirstPush": "ローカルの Codex 認証情報を {{hostId}} の Cindy Codex home（~/.xdt-server/v1/codex-home/auth.json）にインストールします。",
+        "descOverwrite": "{{hostId}} の Cindy Codex home にある既存の Codex ログインを上書きします。",
+        "descOverwriteWithAge": "{{hostId}} の Cindy Codex home にある既存の Codex ログインを上書きします(最終更新: {{when}})。",
         "warnOverwrite": "リモートの既存ログインは失われます。誰かが今 Codex を使っていれば、ログアウトされます。",
         "warnShared": "{{hostId}} に SSH できる人はこのファイルを読めて、あなたの OpenAI アカウントを使えてしまいます。",
         "daysAgo": "{{n}} 日前",
@@ -1137,7 +1138,9 @@
         "logout": "ログアウト",
         "connect": "接続",
         "disconnect": "切断",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "retry": "モデル一覧を再取得",
+        "retrying": "再取得中…"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1342,7 +1345,27 @@
         "singleAgentNote": "{{agent}} のみ対応",
         "emptyModels": "認証すると利用可能なモデルが自動的に検出されます",
         "emptyList": "左下の「プロバイダーを追加」から最初のモデルソースを接続してください",
-        "emptyModelsConnected": "接続済み — 利用可能なモデルを検出中です。空のままの場合は、しばらくしてから再度お試しください。"
+        "emptyModelsConnected": "接続済み — 利用可能なモデルを検出中です。空のままの場合は、しばらくしてから再度お試しください。",
+        "discoveryFailed": {
+          "network": "このプロバイダーに接続できないため、モデル一覧を取得できません。ネットワークまたはプロキシ設定を確認してから再試行してください。",
+          "timeout": "このプロバイダーへの接続がタイムアウトしたため、モデル一覧を取得できません。ネットワークを確認してから再試行してください。",
+          "upstream": "このプロバイダーは現在モデル一覧を返せません。しばらくしてから再試行してください。",
+          "regionBlocked": "このプロバイダーは現在の地域でサービスを提供していないため、モデル一覧を取得できません。別のプロバイダーをご利用ください。",
+          "unauthorized": "このプロバイダーが現在の認証を拒否したため、モデル一覧を取得できません。切断してから接続し直してください。",
+          "forbidden": "このプロバイダーがリクエストを拒否したため、モデル一覧を取得できません。プロキシまたは VPN をご利用の場合は、出口を変えてから再試行してください。",
+          "rejected": "このプロバイダーがリクエストを拒否したため、モデル一覧を取得できません。しばらくしてから再試行するか、別のプロバイダーをご利用ください。",
+          "empty": "このプロバイダーから利用可能なモデルが返されませんでした。アカウントの権限を確認してから再試行してください。"
+        },
+        "discoveryFailedStale": {
+          "network": "このプロバイダーに接続できません。以下は前回取得したモデル一覧です。ネットワークまたはプロキシ設定を確認してから再試行してください。",
+          "timeout": "このプロバイダーへの接続がタイムアウトしました。以下は前回取得したモデル一覧です。ネットワークを確認してから再試行してください。",
+          "upstream": "このプロバイダーは現在モデル一覧を返せません。以下は前回取得した一覧です。しばらくしてから再試行してください。",
+          "regionBlocked": "このプロバイダーは現在の地域でサービスを提供していません。以下は前回取得したモデル一覧です。別のプロバイダーをご利用ください。",
+          "unauthorized": "このプロバイダーが現在の認証を拒否しました。以下は前回取得したモデル一覧です。切断してから接続し直してください。",
+          "forbidden": "このプロバイダーがリクエストを拒否しました。以下は前回取得したモデル一覧です。プロキシまたは VPN をご利用の場合は、出口を変えてから再試行してください。",
+          "rejected": "このプロバイダーがリクエストを拒否しました。以下は前回取得したモデル一覧です。しばらくしてから再試行するか、別のプロバイダーをご利用ください。",
+          "empty": "今回このプロバイダーから利用可能なモデルが返されませんでした。以下は前回取得した一覧です。アカウントの権限を確認してから再試行してください。"
+        }
       },
       "detect": {
         "groupLabel": "このデバイスで検出",
@@ -2379,10 +2402,11 @@
           "invalidPackage": "このプラグインパッケージは無効か、現在の Cindy バージョンではサポートされていません。"
         },
         "securityTitle": "インストールと権限",
-        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。権限を確認して有効にするまで、新規プラグインは無効のままです。",
+        "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。初回インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持されます。",
         "noPermissions": "このプラグインは追加機能を宣言していません。",
         "installConfirmTitle": "「{{name}}」をインストールしますか？",
-        "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認し、無効の状態でインストールします。設定を確認してから有効にできます。"
+        "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してからインストールします。インストール完了後は自動的に有効になり、いつでも無効化や設定の変更ができます。",
+        "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。"
       },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
@@ -2475,6 +2499,7 @@
       "perm": {
         "grantsTitle": "インストール後に持つ権限:",
         "toolsGroup": "登録ツール",
+        "toolsDiffGroup": "登録ツールの変更",
         "itemCount": "{{count}} 件",
         "cindyImageGenerate": "画像生成(Cindy に代行依頼)",
         "cindyImageEdit": "画像編集(Cindy に代行依頼、自身が生成した画像のみ)",
@@ -3675,7 +3700,7 @@
       "title": "更新情報",
       "newFeatures": "新機能",
       "bugFixes": "不具合修正",
-      "craftedBy": "制作",
+      "thanksTo": "感謝",
       "gotIt": "了解しました",
       "ariaDescription": "バージョン {{version}} のリリースノート",
       "ariaDescriptionSpan": "v{{from}} 以降 {{count}} バージョン分のリリースノート",
@@ -3829,6 +3854,8 @@
         "ACTION_STALE": "設定内容が更新されました。設定操作を選び直してください。",
         "AUTH_CANCELLED": "認証がキャンセルされました。必要に応じてもう一度認証してください。",
         "AUTH_FAILED": "認証を完了できませんでした。もう一度お試しください。",
+        "AUTH_NETWORK": "認証サービスに接続できませんでした。ネットワーク接続を確認して、もう一度お試しください。",
+        "AUTH_SERVICE_UNAVAILABLE": "認証サービスは一時的に利用できません。しばらくしてからもう一度お試しください。",
         "INLINE_INVALID": "設定内容が無効です。内容を確認してもう一度お試しください。",
         "INLINE_UNAVAILABLE": "このバージョンの Cindy ではチャット内でこの設定を保存できません。Cindy を更新してもう一度お試しください。",
         "SAVE_FAILED": "設定を保存できませんでした。もう一度お試しください。",
@@ -4407,7 +4434,7 @@
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、この会話で選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。この会話は続行できません。新しい会話を開始してください。",
       "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
-      "codexAuthMissing": "リモートの codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの ~/.codex/auth.json をリモートにプッシュし、再試行してください。",
+      "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
       "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しい会話を開始してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
       "codexSessionExpiredDialog": {
@@ -4419,7 +4446,7 @@
       "codexAuthSynced": "認証情報が同期されました。「再試行」をクリックして再送信してください。",
       "syncAuth": "認証情報を同期",
       "syncAuthSyncing": "同期中…",
-      "syncAuthTitle": "ローカルの ~/.codex/auth.json をリモートの codex-home に同期",
+      "syncAuthTitle": "ローカルの Codex 認証情報をリモートの Cindy Codex home に同期",
       "syncAuthSuccess": "同期しました — 「再試行」をクリックして再送信してください",
       "syncAuthFailed": "同期に失敗しました：{{msg}}",
       "syncAuthDaemonRestartFailed": "認証情報はリモートに送信されましたが、古い daemon が再起動されませんでした — リモートに再接続してから再試行してください",
@@ -4949,6 +4976,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "考え中…",
+      "generating": "生成中…",
+      "editingFiles": "ファイルを編集中…",
+      "searchingWeb": "ウェブを検索中…",
+      "generatingImage": "画像を生成中…",
+      "compacting": "コンテキストを圧縮中…",
+      "done": "完了",
+      "waiting": "少々お待ちください…",
+      "working": "作業中…",
+      "running": "実行中…",
+      "turnStart": "{{name}} さん、対応中です…",
+      "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
+      "runningTool": "{{tool}} を実行中…"
+    },
     "remoteSession": {
       "reconnecting": "被制御デバイスとの接続が切れました。再接続中…",
       "hostOffline": "被制御デバイスがオフラインのため、現在は同期できません",
@@ -7377,7 +7419,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "カード"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "現在のサブスクリプション",

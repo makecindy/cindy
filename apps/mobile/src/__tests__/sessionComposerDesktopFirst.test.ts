@@ -182,10 +182,12 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inputStyle).toContain('borderWidth: 0');
     expect(inputStyle).not.toContain('borderColor: colors.border');
     expect(inputStyle).not.toContain('borderRadius: radius.pill');
-    expect(inputStyle).toContain('lineHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT');
+    // 字号 / 行高 / 水平内边距走 composerTextMetrics:WebView 富文本编辑器与语音听写
+    // 覆盖层共用同一份度量,三边换行位置必须逐字一致(见 composerVoiceDraftMetrics.test.ts)。
+    expect(inputStyle).toContain('...COMPOSER_TEXT_STYLE');
     expect(inputStyle).toContain('maxHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT');
     expect(inputStyle).toContain('minHeight: MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT');
-    expect(inputStyle).toContain('paddingHorizontal: spacing.xs');
+    expect(inputStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
     expect(inputStyle).toContain('paddingVertical: MOBILE_COMPOSER_INPUT_VERTICAL_PADDING');
     expect(inputStyle).toContain("textAlignVertical: 'top'");
     // Composer input is a single stable, always-multiline, always-inline instance (no compact↔expanded
@@ -321,13 +323,13 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
     expect(source).toContain("placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}");
     expect(source).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(source).toContain('voiceIsListening && styles.inputVoiceHidden');
+    expect(source).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
     expect(source).toContain('styles.voiceDraftOverlay');
     expect(voiceDraftOverlayStyle).toContain('...StyleSheet.absoluteFill');
     expect(voiceDraftOverlayStyle).toContain("overflow: 'hidden'");
     expect(voiceDraftOverlayContentStyle).not.toContain('minHeight: COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT');
     expect(voiceDraftOverlayContentStyle).not.toContain("alignItems: 'flex-start'");
-    expect(voiceDraftOverlayContentStyle).toContain('paddingHorizontal: spacing.xs');
+    expect(voiceDraftOverlayContentStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
     expect(voiceDraftOverlayContentStyle).toContain('paddingVertical: COMPOSER_INPUT_VERTICAL_PADDING');
     expect(voiceDraftOverlayContentStyle).not.toContain("width: '100%'");
     expect(voiceDraftMeasuredBlockStyle).not.toContain("alignSelf: 'flex-start'");

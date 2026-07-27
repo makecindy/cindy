@@ -8,7 +8,8 @@
  * decoration；连续数字/字母正文使用 marker/body 两个盒子，避免长串把
  * 列表标记单独挤到上一行。包含 inline atom/pill 的段落使用段落级 fallback
  * 容器和每行前缀槽位，避免 inline decoration 在 atom 边界被拆成多个 block。
- * 所有路径都把前缀的估算宽度写入 CSS 变量。
+ * 所有路径都把前缀的确定性估算宽度写入 CSS 变量，不在 plugin view
+ * 阶段读取布局或回写 decoration DOM。
  * CSS 将列表行作为独立的换行容器:首行用负 text-indent 把标记悬挂在左侧,
  * 自动换行后的续行则从正文起点开始。用户打完 `1. `(空格落下)那一刻
  * 缩进立即出现,即"已进入列表状态"的视觉信号;空项退出(前缀被删)时缩进
@@ -18,7 +19,8 @@
  * - decoration 只是渲染层,doc JSON / 草稿存储 / 发送内容里没有任何痕迹;
  * - doc 没变直接复用 DecorationSet,变了全量重扫(chat input 文本量小,
  *   全量成本可忽略,不值得做增量映射);
- * - 只在 doc 发生变化时重算,view.update 不参与 decoration 计算;
+ * - IME composition 开始前临时移除 decoration,结束后的下一轮 task 再按
+ *   当前 doc 补算,避免微软拼音输入时改写 composition DOM;
  * - 这是纯文本编辑器的视觉缩进,不改变 doc JSON / 发送文本。
  */
 import { Extension } from '@tiptap/core';
@@ -38,8 +40,18 @@ import {
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
 
-const PLUGIN_KEY = new PluginKey<DecorationSet>('composerListIndentDecoration');
 const TAB_SIZE = 8;
+
+type ListDecorationPluginState = {
+  decorations: DecorationSet;
+  suspendedForComposition: boolean;
+};
+
+type CompositionMeta = 'suspend' | 'resume';
+
+const PLUGIN_STATE_KEY = new PluginKey<ListDecorationPluginState>(
+  'composerListIndentDecorationState',
+);
 
 /** 行内一个非文本 inline 节点(mention chip 等)的占位符,与 applyListContinuation 一致。 */
 const ATOM_PLACEHOLDER = '\uFFFC';
@@ -61,6 +73,10 @@ function listPrefixIndentValues(prefix: string): ListIndentValues {
     if (char >= '0' && char <= '9') {
       ch += 1;
     } else if (char === '\t') {
+      // Reserve a full 8ch slot for each tab. The browser's native tab advance
+      // is at most 8ch, so this remains safe when an earlier full-width marker
+      // contributes `em` that cannot participate in deterministic ch-only
+      // tab-stop arithmetic.
       ch += TAB_SIZE;
     } else if (char === '、' || char === '\u3000') {
       em += 1;
@@ -112,8 +128,9 @@ function addLongRunDecoration(
  *
  * ChatInput 已启用 tabular-nums,所以数字直接用 1ch;句点、空格、方括号等
  * 窄字符按 0.4ch 估算;中文顿号按全角 1em。这里只生成数字和 CSS 单位,
- * 不会透传用户文本。Tab 先用固定 tab stop 做首帧回退，插件 view 在布局
- * 完成后用 Range 实测并覆盖变量，避免比例字体下的 ch 近似误差。
+ * 不会透传用户文本。Tab 使用固定 tab stop 估算，不再用 Range 实测后
+ * 直接改 decoration DOM：ProseMirror 的 DOMObserver 会尝试恢复这类外部
+ * style 变更，在 Chromium 中可能与 plugin view 形成更新循环并卡死 renderer。
  */
 export function listPrefixIndentStyle(prefix: string): string {
   const { ch, em } = listPrefixIndentValues(prefix);
@@ -229,9 +246,15 @@ export function buildListIndentDecorations(
       const match = matchListPrefix(line.text);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
+          const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
           decorations.push(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
-              class: 'composer-list-fallback-unindented',
+              class: [
+                'composer-list-fallback-unindented',
+                hasCjkPunctuation ? 'composer-list-cjk-punctuation-font' : '',
+              ]
+                .filter(Boolean)
+                .join(' '),
             }),
           );
         }
@@ -262,6 +285,13 @@ export function buildListIndentDecorations(
             style: listPrefixIndentStyle(prefix),
           }),
         );
+        if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
+          decorations.push(
+            Decoration.inline(from + match.prefixLength, to, {
+              class: 'composer-list-fallback-long-run-body',
+            }),
+          );
+        }
         return;
       }
       if (LONG_ALPHANUMERIC_BODY_RE.test(body) && !hasTabPrefix) {
@@ -290,7 +320,6 @@ export function buildListIndentDecorations(
       const prefix = match ? line.text.slice(0, match.prefixLength) : '';
       const body = line && match ? line.text.slice(match.prefixLength) : '';
       const from = line ? contentBase + line.start : contentBase;
-      const to = line ? contentBase + line.end : contentBase;
       const hasLongAlphanumericBody = LONG_ALPHANUMERIC_BODY_RE.test(body);
       const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
       const hasTabPrefix = prefix.includes('\t');
@@ -373,108 +402,102 @@ export const ComposerListIndentDecoration = Extension.create({
   name: 'composerListIndentDecoration',
 
   addProseMirrorPlugins() {
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+
     return [
-      new Plugin<DecorationSet>({
-        key: PLUGIN_KEY,
+      new Plugin<ListDecorationPluginState>({
+        key: PLUGIN_STATE_KEY,
         state: {
           init(_config, state: EditorState) {
             const roster = getSlashCommandRoster(state);
-            return buildListIndentDecorations(
-              state.doc,
-              findSlashCommandMatches(state.doc, roster),
-            );
+            return {
+              decorations: buildListIndentDecorations(
+                state.doc,
+                findSlashCommandMatches(state.doc, roster),
+              ),
+              suspendedForComposition: false,
+            };
           },
-          apply(tr: Transaction, old: DecorationSet, oldState: EditorState) {
+          apply(tr: Transaction, old: ListDecorationPluginState, oldState: EditorState) {
+            const compositionMeta = tr.getMeta(PLUGIN_STATE_KEY) as CompositionMeta | undefined;
+            if (compositionMeta === 'suspend') {
+              return {
+                decorations: DecorationSet.empty,
+                suspendedForComposition: true,
+              };
+            }
+
             const rosterUpdate = getSlashCommandRosterUpdate(tr);
             const voiceReplacement = resolveVoiceInputReplacementRange(tr, oldState);
-            if (!tr.docChanged && rosterUpdate === undefined && !voiceReplacement.changed) {
+            if (old.suspendedForComposition && compositionMeta !== 'resume') {
+              return old;
+            }
+            if (
+              compositionMeta !== 'resume' &&
+              !tr.docChanged &&
+              rosterUpdate === undefined &&
+              !voiceReplacement.changed
+            ) {
               return old;
             }
             const roster = rosterUpdate ?? getSlashCommandRoster(oldState);
-            return buildListIndentDecorations(
-              tr.doc,
-              findSlashCommandMatches(tr.doc, roster),
-              voiceReplacement.range,
-            );
+            return {
+              decorations: buildListIndentDecorations(
+                tr.doc,
+                findSlashCommandMatches(tr.doc, roster),
+                voiceReplacement.range,
+              ),
+              suspendedForComposition: false,
+            };
           },
         },
         props: {
           decorations(state) {
-            return this.getState(state) ?? DecorationSet.empty;
+            return this.getState(state)?.decorations ?? DecorationSet.empty;
+          },
+          handleDOMEvents: {
+            compositionstart(view) {
+              if (resumeTimer !== null) {
+                clearTimeout(resumeTimer);
+                resumeTimer = null;
+              }
+              if (!PLUGIN_STATE_KEY.getState(view.state)?.suspendedForComposition) {
+                view.dispatch(
+                  view.state.tr
+                    .setMeta(PLUGIN_STATE_KEY, 'suspend' satisfies CompositionMeta)
+                    .setMeta('addToHistory', false),
+                );
+              }
+              return false;
+            },
+            compositionend(view) {
+              if (resumeTimer !== null) clearTimeout(resumeTimer);
+              // ProseMirror's own compositionend handler runs after custom
+              // handlers and flushes pending DOM records in a microtask.
+              // A timer restores decorations after that flush, never while
+              // EditorView.composing still owns the native IME DOM.
+              resumeTimer = setTimeout(() => {
+                resumeTimer = null;
+                if (view.isDestroyed || view.composing) return;
+                if (!PLUGIN_STATE_KEY.getState(view.state)?.suspendedForComposition) return;
+                view.dispatch(
+                  view.state.tr
+                    .setMeta(PLUGIN_STATE_KEY, 'resume' satisfies CompositionMeta)
+                    .setMeta('addToHistory', false),
+                );
+              }, 0);
+              return false;
+            },
           },
         },
         view() {
           return {
-            update(view) {
-              const measurablePrefixes = view.dom.querySelectorAll<HTMLElement>(
-                '.composer-list-tab-indent, .composer-list-fallback-prefix',
-              );
-              const fallbackWidths = new Map<HTMLElement, number>();
-              measurablePrefixes.forEach((span) => {
-                const prefixLength = Number(span.dataset.composerListPrefixLength ?? Number.NaN);
-                if (!Number.isFinite(prefixLength) || prefixLength <= 0) return;
-                // Once Chromium measurement has replaced the deterministic
-                // fallback with pixels, the same span no longer needs a
-                // synchronous Range/layout read on every editor update.
-                const existingWidth = span.style.getPropertyValue('--composer-list-hang').trim();
-                let width = existingWidth.endsWith('px')
-                  ? Number.parseFloat(existingWidth.slice(0, -2))
-                  : Number.NaN;
-                if (!Number.isFinite(width)) {
-                  const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
-                  let remaining = prefixLength;
-                  let startNode: Text | null = null;
-                  let endNode: Text | null = null;
-                  let endOffset = 0;
-                  while (remaining > 0) {
-                    const node = walker.nextNode() as Text | null;
-                    if (!node) break;
-                    const length = node.data.length;
-                    if (!startNode) startNode = node;
-                    endNode = node;
-                    if (length >= remaining) {
-                      endOffset = remaining;
-                      remaining = 0;
-                      break;
-                    }
-                    remaining -= length;
-                  }
-                  if (!startNode || !endNode || remaining > 0) return;
-                  const range = document.createRange();
-                  range.setStart(startNode, 0);
-                  range.setEnd(endNode, endOffset);
-                  if (typeof range.getBoundingClientRect !== 'function') return;
-                  width = range.getBoundingClientRect().width;
-                  if (!Number.isFinite(width) || width <= 0) return;
-                  span.style.setProperty('--composer-list-hang', `${width}px`);
-                  span.style.setProperty('--composer-list-hang-negative', `-${width}px`);
-                }
-                const fallbackContainer = span.closest<HTMLElement>(
-                  '.composer-list-fallback-container',
-                );
-                if (fallbackContainer) {
-                  fallbackWidths.set(
-                    fallbackContainer,
-                    Math.max(fallbackWidths.get(fallbackContainer) ?? 0, width),
-                  );
-                }
-              });
-              fallbackWidths.forEach((width, fallbackContainer) => {
-                const nextWidth = `${width}px`;
-                if (
-                  fallbackContainer.style.getPropertyValue('--composer-list-fallback-indent') !==
-                  nextWidth
-                ) {
-                  fallbackContainer.style.setProperty('--composer-list-fallback-indent', nextWidth);
-                }
-              });
+            destroy() {
+              if (resumeTimer !== null) clearTimeout(resumeTimer);
+              resumeTimer = null;
             },
           };
         },
-        // 注:曾有一个 view().update 里 `if (view.composing) return` 的"IME 保护",
-        // 但重算发生在上面的 state.apply(只看 tr.docChanged),view.update 在视图更新
-        // 之后才跑、DecorationSet 早已算好,该钩子等价 no-op(greptile P2)——已删除。
-        // 真要在 IME 期跳过重算,应在 apply 里按 composition 事务标记判断,而非此处。
       }),
     ];
   },

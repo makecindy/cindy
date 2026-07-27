@@ -335,6 +335,27 @@ describe('PluginSetupPrompt', () => {
     expect(screen.queryByText('等待超时')).toBeNull();
   });
 
+  it.each([
+    ['AUTH_NETWORK', "Couldn't reach the authorization service. Check your network and try again."],
+    ['AUTH_SERVICE_UNAVAILABLE', 'The authorization service is temporarily unavailable. Try again later.'],
+  ] as const)('renders an actionable OAuth error for %s', (errorCode, expectedCopy) => {
+    render(
+      <PluginSetupPrompt
+        pending={{
+          ...pending,
+          steps: [{ ...pending.steps[0], phase: 'failed', errorCode }],
+        }}
+        viewerState="expanded"
+        commandInFlight={null}
+        remote={false}
+        onViewerStateChange={vi.fn()}
+        onCommand={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(expectedCopy)).toBeTruthy();
+  });
+
   it('hides actions after a partially satisfied setup is cancelled', () => {
     render(
       <PluginSetupPrompt

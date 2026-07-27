@@ -1552,6 +1552,12 @@ private let expandedIslandCenterSnapDistance: CGFloat = 30
 private let expandedIslandLayoutEmitInterval: TimeInterval = 0.033
 private let hardwareNotchTextRevealStartSideWidth: CGFloat = 44
 private let hardwareNotchTextRevealDistance: CGFloat = 38
+// Upper bound of `hardwareNotchSideInset`, i.e. the trailing gap the notch layout keeps
+// beside the count badge. Reserving this much guarantees the badge is never clipped at
+// the default compact width.
+private let hardwareNotchBadgeReservedInset: CGFloat = 9
+// How close a compact width must be to a snap point to count as sitting on it.
+private let compactWidthSnapTolerance: CGFloat = 1.5
 private let agentIslandTopDragHitSlop: CGFloat = 2
 private let agentIslandClickDragTolerance: CGFloat = 4
 private let hardwareNotchCenterTolerance: CGFloat = 2
@@ -1951,12 +1957,18 @@ struct AgentIslandLayout: Equatable {
     let layoutScreenMetrics = hardwareNotchLayoutEnabled
       ? screenMetrics
       : screenMetrics.disablingHardwareNotchLayout()
+    // Only the compact hardware-notch layout reserves room for the badge; skip the font
+    // measurement on every other layout tick.
+    let compactBadgeWidth = !expanded && layoutScreenMetrics.hasNotch && hasSession
+      ? PillBadge.intrinsicWidth(pillSnapshot: state.pillSnapshot, compact: true)
+      : 0
     let width = computeWidth(
       expanded: expanded,
       hasSession: hasSession,
       availableFrameWidth: availableFrameWidth,
       screenMetrics: layoutScreenMetrics,
-      preferredContentWidth: preferredContentWidth
+      preferredContentWidth: preferredContentWidth,
+      compactBadgeWidth: compactBadgeWidth
     )
     let height = computeHeight(state: state, expanded: expanded, notchBaselineHeight: notchBaselineHeight)
     let shape = shapeForStatus(notchStatus)
@@ -1983,7 +1995,8 @@ struct AgentIslandLayout: Equatable {
     hasSession: Bool,
     availableFrameWidth: CGFloat,
     screenMetrics: AgentIslandScreenMetrics,
-    preferredContentWidth: CGFloat?
+    preferredContentWidth: CGFloat?,
+    compactBadgeWidth: CGFloat
   ) -> CGFloat {
     let idleExpandedWidth: CGFloat = 340
     let carrierInset = expanded ? expandedIslandCarrierExpandedInset : compactIslandCarrierInset
@@ -2003,10 +2016,15 @@ struct AgentIslandLayout: Equatable {
         clampedWidth: clampedWidth,
         maxWidth: maxWidth,
         hasSession: hasSession,
-        screenMetrics: screenMetrics
+        screenMetrics: screenMetrics,
+        compactBadgeWidth: compactBadgeWidth
       )
     }
-    let defaultWidth = defaultCompactWidth(hasSession: hasSession, screenMetrics: screenMetrics)
+    let defaultWidth = defaultCompactWidth(
+      hasSession: hasSession,
+      screenMetrics: screenMetrics,
+      compactBadgeWidth: compactBadgeWidth
+    )
     return min(preferred ?? defaultWidth, availableWidth)
   }
 
@@ -2028,12 +2046,29 @@ struct AgentIslandLayout: Equatable {
     return compactIslandMinContentWidth
   }
 
-  static func defaultCompactWidth(hasSession: Bool, screenMetrics: AgentIslandScreenMetrics) -> CGFloat {
+  /// Side width the trailing notch content needs so `compactBadgeWidth` survives
+  /// `hardwareNotchTrailingContent`'s `.clipped()` frame. Mirrors the largest inset
+  /// `hardwareNotchSideInset` can return, so a two-digit count stays readable.
+  static func hardwareNotchBadgeSideWidth(compactBadgeWidth: CGFloat) -> CGFloat {
+    compactBadgeWidth + hardwareNotchBadgeReservedInset
+  }
+
+  static func defaultCompactWidth(
+    hasSession: Bool,
+    screenMetrics: AgentIslandScreenMetrics,
+    compactBadgeWidth: CGFloat = 0
+  ) -> CGFloat {
     let notchWidth = CGFloat(screenMetrics.notchWidth)
     if screenMetrics.hasNotch {
-      let extra = hasSession
+      let baseExtra = hasSession
         ? AgentIslandScreenMetricsConfig.compactHardwareActiveExtraWidth
         : AgentIslandScreenMetricsConfig.compactHardwareIdleExtraWidth
+      // A wide badge (multi-digit counts) must widen the island rather than get
+      // clipped: both notch sides are symmetric, hence the doubling.
+      let badgeExtra = hasSession
+        ? hardwareNotchBadgeSideWidth(compactBadgeWidth: compactBadgeWidth) * 2
+        : 0
+      let extra = max(baseExtra, badgeExtra)
       return max(compactIslandBaseWidth, notchWidth + extra)
     }
     let extra = hasSession ? AgentIslandScreenMetricsConfig.compactSimulatedActiveExtraWidth : 0
@@ -2045,21 +2080,36 @@ struct AgentIslandLayout: Equatable {
     clampedWidth: CGFloat,
     maxWidth: CGFloat,
     hasSession: Bool,
-    screenMetrics: AgentIslandScreenMetrics
+    screenMetrics: AgentIslandScreenMetrics,
+    compactBadgeWidth: CGFloat = 0
   ) -> CGFloat {
     guard screenMetrics.hasNotch else {
       return clampedWidth
     }
     let hiddenWidth = min(maxWidth, max(1, CGFloat(screenMetrics.notchWidth)))
-    let basicWidth = min(
+    // The hidden/basic classification stays anchored to the badge-independent basic
+    // width. Otherwise a persisted basic width silently falls below the hidden
+    // threshold once a wider badge enlarges `basicWidth`, collapsing the whole island.
+    let baseBasicWidth = min(
       maxWidth,
       max(hiddenWidth, defaultCompactWidth(hasSession: hasSession, screenMetrics: screenMetrics))
     )
-    let gap = basicWidth - hiddenWidth
+    let basicWidth = min(
+      maxWidth,
+      max(
+        hiddenWidth,
+        defaultCompactWidth(
+          hasSession: hasSession,
+          screenMetrics: screenMetrics,
+          compactBadgeWidth: compactBadgeWidth
+        )
+      )
+    )
+    let gap = baseBasicWidth - hiddenWidth
     guard gap > 8 else {
       return hiddenWidth
     }
-    let hiddenThreshold = basicWidth - min(
+    let hiddenThreshold = baseBasicWidth - min(
       AgentIslandScreenMetricsConfig.compactHardwareHiddenPullDistance,
       max(24, gap * 0.5)
     )
@@ -2416,11 +2466,13 @@ struct CompactSessionView: View {
         )
           .lineLimit(1)
           .truncationMode(.tail)
-          .fixedSize(horizontal: true, vertical: false)
+          // No fixedSize here: the subtitle must yield width (and truncate) so the
+          // count badge keeps its full intrinsic width instead of being clipped.
           .opacity(textOpacity)
       }
 
       PillBadge(pillSnapshot: pillSnapshot, compact: true)
+        .layoutPriority(1)
     }
     .padding(.trailing, hardwareNotchSideInset(sideWidth: sideWidth, compactWidth: 22))
     .frame(width: sideWidth, alignment: .trailing)
@@ -2864,6 +2916,60 @@ struct PillBadge: View {
   let pillSnapshot: AgentIslandPillSnapshot
   var compact: Bool = false
 
+  /// Text runs and minimum capsule width for the badge variant a snapshot renders.
+  /// Shared by `body` and `intrinsicWidth` so reserved layout width can never
+  /// drift away from what actually gets drawn.
+  struct Metrics {
+    /// One entry per rendered `Text`; each is laid out (and rounded) separately.
+    let segments: [String]
+    let minWidth: CGFloat
+    let fontSize: CGFloat
+  }
+
+  static func metrics(pillSnapshot: AgentIslandPillSnapshot, compact: Bool) -> Metrics {
+    let fontSize: CGFloat = compact ? 10 : 11
+    if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
+      return Metrics(
+        segments: ["\(pillSnapshot.activeSessionCount)", "/", "\(pillSnapshot.sessionCount)"],
+        minWidth: compact ? 30 : 34,
+        fontSize: fontSize
+      )
+    }
+    return Metrics(
+      segments: ["\(max(1, pillSnapshot.sessionCount))"],
+      minWidth: compact ? 22 : 24,
+      fontSize: fontSize
+    )
+  }
+
+  /// Width the hardware-notch layout reserves for the capsule so a multi-digit count is
+  /// never clipped.
+  ///
+  /// This is deliberately a *nominal* width computed from digit counts, not an `NSFont`
+  /// measurement: main computes the carrier width from the very same formula in
+  /// `getAgentIslandCompactBadgeWidth` (`shared/agentIsland.ts`), and the two must agree
+  /// exactly. A measured value here would sit a few points below the TS estimate, and
+  /// every snap comparison against the delivered width would silently miss.
+  /// `nominalCharWidth` is an upper bound on the real advance, so the reserved width is
+  /// always at least what SwiftUI draws — `badge-probe` harness asserts that.
+  static func intrinsicWidth(pillSnapshot: AgentIslandPillSnapshot, compact: Bool) -> CGFloat {
+    let metrics = metrics(pillSnapshot: pillSnapshot, compact: compact)
+    let segmentsWidth = metrics.segments.reduce(CGFloat(0)) { total, segment in
+      total + CGFloat(segment.count) * nominalCharWidth + segmentRoundingSlack
+    }
+    let spacing = activeTotalSpacing * CGFloat(max(0, metrics.segments.count - 1))
+    return max(metrics.minWidth, segmentsWidth + spacing + contentInset * 2)
+  }
+
+  private static let activeTotalSpacing: CGFloat = 1
+  private static let contentInset: CGFloat = 2
+  /// Upper bound for one monospaced 10pt digit (real advance is ~6pt). Mirrors
+  /// `AGENT_ISLAND_COMPACT_BADGE_CHAR_WIDTH_BOUND` on the TS side.
+  private static let nominalCharWidth: CGFloat = 7
+  /// Per-segment rounding slack; SwiftUI lays out and rounds every `Text` run
+  /// separately. Mirrors `AGENT_ISLAND_COMPACT_BADGE_SEGMENT_ROUNDING_SLACK`.
+  private static let segmentRoundingSlack: CGFloat = 1
+
   var body: some View {
     if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
       activeTotalBadge(
@@ -2878,15 +2984,19 @@ struct PillBadge: View {
 
   private func badge(_ text: String, emphasized: Bool) -> some View {
     Text(text)
-      .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .monospaced))
+      .font(badgeFont)
       .foregroundColor(Color.white.opacity(0.92))
-      .frame(minWidth: compact ? 22 : 24, minHeight: compact ? 18 : 20)
+      // Multi-digit counts must widen the capsule instead of wrapping into two lines.
+      .lineLimit(1)
+      .fixedSize(horizontal: true, vertical: false)
+      .padding(.horizontal, Self.contentInset)
+      .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
       .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
       .clipShape(Capsule())
   }
 
   private func activeTotalBadge(active: Int, total: Int, emphasized: Bool) -> some View {
-    HStack(spacing: 1) {
+    HStack(spacing: Self.activeTotalSpacing) {
       Text("\(active)")
         .foregroundColor(emphasized ? agentIslandBlue : agentIslandOrange)
       Text("/")
@@ -2894,10 +3004,22 @@ struct PillBadge: View {
       Text("\(total)")
         .foregroundColor(Color.white.opacity(0.92))
     }
-    .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .monospaced))
-    .frame(minWidth: compact ? 30 : 34, minHeight: compact ? 18 : 20)
+    .font(badgeFont)
+    // Multi-digit counts must widen the capsule instead of wrapping into two lines.
+    .lineLimit(1)
+    .fixedSize(horizontal: true, vertical: false)
+    .padding(.horizontal, Self.contentInset)
+    .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
     .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
     .clipShape(Capsule())
+  }
+
+  private var metrics: Metrics {
+    Self.metrics(pillSnapshot: pillSnapshot, compact: compact)
+  }
+
+  private var badgeFont: Font {
+    .system(size: metrics.fontSize, weight: .semibold, design: .monospaced)
   }
 
   private var isEmphasized: Bool {
@@ -5342,18 +5464,18 @@ final class AgentIslandController {
         hiddenWidth,
         AgentIslandLayout.defaultCompactWidth(
           hasSession: model.state.totalCount > 0,
-          screenMetrics: model.screenMetrics
+          screenMetrics: model.screenMetrics,
+          compactBadgeWidth: compactBadgeWidth
         )
       )
     )
     guard basicWidth - hiddenWidth > 8 else {
       return .hidden
     }
-    let tolerance: CGFloat = 1.5
-    if abs(contentWidth - hiddenWidth) <= tolerance {
+    if abs(contentWidth - hiddenWidth) <= compactWidthSnapTolerance {
       return .hidden
     }
-    if abs(contentWidth - basicWidth) <= tolerance {
+    if abs(contentWidth - basicWidth) <= compactWidthSnapTolerance {
       return .basic
     }
     return .free
@@ -5423,6 +5545,50 @@ final class AgentIslandController {
       clampedWidth: clampedWidth,
       maxWidth: maxWidth,
       hasSession: model.state.totalCount > 0,
+      screenMetrics: model.screenMetrics,
+      compactBadgeWidth: compactBadgeWidth
+    )
+  }
+
+  /// Width reserved for the compact count badge in the current snapshot, used to keep
+  /// drag snapping aligned with the reserved default width. Only the centered hardware
+  /// notch layout reserves room for the badge.
+  private var compactBadgeWidth: CGFloat {
+    guard model.hardwareNotchLayoutEnabled,
+      model.screenMetrics.hasNotch,
+      model.state.totalCount > 0
+    else {
+      return 0
+    }
+    return PillBadge.intrinsicWidth(pillSnapshot: model.state.pillSnapshot, compact: true)
+  }
+
+  /// Width persisted as the user's compact preference. At the badge-aware basic snap we
+  /// store the badge-independent basic width instead: the stored scalar must not encode
+  /// the current count, otherwise the island keeps a wide preference after the count
+  /// drops (and the snap can no longer contract).
+  ///
+  /// Gated on `hardwareNotchLayoutEnabled` as well as `hasNotch`: once the island is
+  /// moved off the notch, the emitted frame uses the plain compact layout and its width
+  /// must be persisted verbatim — rewriting it there would shrink the island mid-move.
+  private func persistedCompactContentWidth(_ contentWidth: CGFloat) -> CGFloat {
+    guard !lastLayout.expanded,
+      model.hardwareNotchLayoutEnabled,
+      model.screenMetrics.hasNotch
+    else {
+      return contentWidth
+    }
+    let hasSession = model.state.totalCount > 0
+    let badgeAwareBasicWidth = AgentIslandLayout.defaultCompactWidth(
+      hasSession: hasSession,
+      screenMetrics: model.screenMetrics,
+      compactBadgeWidth: compactBadgeWidth
+    )
+    guard abs(contentWidth - badgeAwareBasicWidth) <= compactWidthSnapTolerance else {
+      return contentWidth
+    }
+    return AgentIslandLayout.defaultCompactWidth(
+      hasSession: hasSession,
       screenMetrics: model.screenMetrics
     )
   }
@@ -5480,7 +5646,9 @@ final class AgentIslandController {
       "type": "layout",
       "displayId": AgentIslandScreenMetricsProvider.displayId(for: screen),
       "centerXRatio": Double(min(1, max(0, ratio))),
-      "contentWidth": Double(constrainedContentWidth(contentWidth, expanded: lastLayout.expanded)),
+      "contentWidth": Double(persistedCompactContentWidth(
+        constrainedContentWidth(contentWidth, expanded: lastLayout.expanded)
+      )),
       "expanded": lastLayout.expanded,
     ])
   }

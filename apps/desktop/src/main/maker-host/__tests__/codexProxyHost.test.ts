@@ -24,6 +24,7 @@ const mockState = vi.hoisted(() => {
       error: vi.fn(),
     },
     createAnthropicCompatProxy: vi.fn(),
+    createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     stripNonAnthropicFields: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     recordXaiRateLimitSnapshot: vi.fn(),
@@ -99,9 +100,14 @@ vi.mock('@cindy/anthropic-compat-proxy', () => ({
   },
 }));
 
+vi.mock('@cindy/responses-chat-bridge', () => ({
+  createResponsesChatHandler: mockState.createResponsesChatHandler,
+}));
+
 async function freshCodexProxyHost() {
   vi.resetModules();
   mockState.createAnthropicCompatProxy.mockReset();
+  mockState.createResponsesChatHandler.mockClear();
   mockState.createInstructionsInjectionTransform.mockClear();
   mockState.injectionTransform.mockReset();
   mockState.injectionTransform.mockReturnValue(null);
@@ -264,6 +270,82 @@ describe('decideCodexRoute', () => {
   it('空 model → null', async () => {
     const { decideCodexRoute } = await import('../codex-proxy-host.js');
     expect(decideCodexRoute({ model: '', authInjection: 'oauth-bearer', gatewayKey: 'gw' })).toBeNull();
+  });
+});
+
+describe('chatBridgeCapabilitiesForRoute', () => {
+  it.each([
+    'https://api.moonshot.cn/v1',
+    'https://api.moonshot.ai/v1/',
+  ])('enables image_url only for Kimi K3 on official Moonshot host: %s', async (upstream) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, 'kimi-k3').imageInput).toBe('image_url');
+  });
+
+  it.each([
+    ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
+    ['https://api.deepseek.com/v1', 'kimi-k3'],
+    ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
+    ['http://api.moonshot.cn/v1', 'kimi-k3'],
+    ['not-a-url', 'kimi-k3'],
+  ])('keeps image input disabled for non-matching route %s / %s', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBeUndefined();
+  });
+
+  it('passes image support into the handler for a preset-derived custom Kimi route', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'kimi-moonshot',
+        name: 'Kimi (Moonshot 中国大陆)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.moonshot.cn/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'moonshot-key');
+    host.registerComposed('session-kimi-image', 'thread-kimi-image', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-image', 'kimi-moonshot');
+    host.setCodexProxyAuthInjection('env-key');
+
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'kimi-k3',
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: 'data:image/png;base64,eA==' }],
+        }],
+      },
+      {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-kimi-image' },
+      },
+    ));
+
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(mockState.createResponsesChatHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upstreamBase: 'https://api.moonshot.cn/v1',
+        capabilities: expect.objectContaining({ imageInput: 'image_url' }),
+      }),
+      expect.anything(),
+    );
+
+    clearSessionProvider('session-kimi-image');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
   });
 });
 

@@ -68,7 +68,10 @@ import {
   getGhostSetupAssessment,
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererEvent,
+} from '../security/trustedAppRenderer.js';
 import {
   initRenameSessionsConfirm,
   RenameSessionsConfirmBridge,
@@ -378,7 +381,10 @@ import { registerStopSessionBackgroundTasksHandler } from './stopSessionBackgrou
 import { registerProviderHandlers } from './providerHandlers.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
-import { refreshCustomMcpProviders } from '../mcp-integrations/custom-mcp-registry.js';
+import {
+  getBuiltinMcpServerNames,
+  refreshCustomMcpProviders,
+} from '../mcp-integrations/custom-mcp-registry.js';
 import {
   getDesktopProviderService,
   refreshCustomProvidersIntoCatalog,
@@ -389,6 +395,10 @@ import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/act
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
 import { beginProviderRouteMutation } from '../maker-host/provider-route.js';
+import {
+  getAnthropicModelDiscoveryFailure,
+  refreshAnthropicModelsFromHttp,
+} from '../maker-host/model-discovery/anthropic.js';
 import { setProviderUpstreamErrorBroadcaster } from '../maker-host/provider-upstream-error-observer.js';
 import {
   createClaudeAutoPermissionFallbackCoordinator,
@@ -1849,10 +1859,11 @@ function handleAgentIslandEventAfterBroadcast(
 }
 
 function isRemoteAuthRetryErrorEvent(
-  session: { remoteHostId?: unknown },
+  session: { agentKind?: unknown; remoteHostId?: unknown },
   event: AgentEvent,
 ): boolean {
   if (!session.remoteHostId || event.type !== 'error' || !isTerminalTurnErrorEvent(event)) return false;
+  if (session.agentKind === 'codex') return false;
   const data = event.data as { message?: unknown; sdkError?: unknown; errorStatus?: unknown } | undefined;
   return data?.sdkError === 'authentication_failed' ||
     data?.errorStatus === 401 ||
@@ -2476,7 +2487,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       isPlannedUpgradeClose =
         errData?.reason === 'remote_daemon_closed' &&
         isCcMgrUpgradeInFlight(session.id);
-      // 远程 auth 错误跳过持久化：renderer 会静默 auto-retry（makerChatStore 在 reducer
+      // Legacy CC/XD 远程 auth 错误跳过持久化：renderer 会静默 auto-retry（makerChatStore 在 reducer
       // 前拦截、关闭旧会话、重发消息，不显示 ErrorBanner）；若 main 已落库，retry 成功后
       // 重开会话会看到虚假错误卡。判定与 renderer 的 isAuthError 保持一致，覆盖
       // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
@@ -3421,7 +3432,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   // 便于脱 Electron + 内存 db 单测。CRUD 成功后刷新 active-catalog 并广播 PROVIDER_CHANGED，
   // 让设置页列表 + 对话模型选择器（各 useProviders 实例）live 刷新。
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
-    listProviders: () => getDesktopProviderService().listProviders(),
+    listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
@@ -3429,6 +3440,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
     fetchModels: (spec) => fetchProviderModels(spec),
+    // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
+    assertTrustedSender: (event) =>
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    // provider:list 是只读通道且要服务 device-link（合成 event），不能加会抛的 guard；
+    // 改用不抛的判定决定「这次读取要不要放行本机绑定自愈 + 清单拉取」。
+    isTrustedSender: (event) =>
+      isTrustedAppRendererEvent(event as Parameters<typeof isTrustedAppRendererEvent>[0]),
+    // 动态清单重新发现：目前只有 anthropic 订阅是「清单唯一来源是动态发现」的供应商。
+    // 拉取内部只记账不抛，完成后现读一次失败归因回给 renderer。
+    rediscoverModels: async (providerId) => {
+      if (providerId !== 'anthropic') return null;
+      await refreshAnthropicModelsFromHttp();
+      return getAnthropicModelDiscoveryFailure();
+    },
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
@@ -3527,6 +3552,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
     refreshProviders: () => refreshCustomMcpProviders(),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.MCP_CHANGED, {}),
+    // 内置 server 名对自定义 MCP 是保留名：撞名会在装配层顶替内置 server 并继承
+    // 它在 MCP 审批策略里的信任，所以 CRUD 阶段就拒收。
+    getReservedMcpIds: () => getBuiltinMcpServerNames(),
     // Codex 的 MCP flags 冻在 codexEnvironment 的 cached spawn 配置里,清缓存 + dispose app-server,
     // 让下个 codex 会话按新 MCP 配置重 spawn(与 slack 变更同款 best-effort;busy 会话软重启失败只告警)。
     // 顺序：先 dispose app-server（含 busy 检查），成功后再关 bridge/cache。
@@ -5563,7 +5591,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext: async () => {
-      const views = await getDesktopProviderService().listProviders();
+      const views = await getDesktopProviderService().listProviders({ allowSideEffects: true });
       return {
         availability: {
           'claude-code': connectedProvidersForAgent(views, 'claude-code').map((provider) => ({

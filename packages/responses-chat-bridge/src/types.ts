@@ -80,9 +80,28 @@ export interface ResponsesRequest {
   [key: string]: unknown;
 }
 
+export interface ChatTextContentPart {
+  type: 'text';
+  text: string;
+}
+
+export interface ChatImageUrlContentPart {
+  type: 'image_url';
+  image_url: {
+    url: string;
+  };
+}
+
+export type ChatUserContentPart = ChatTextContentPart | ChatImageUrlContentPart;
+
 export interface ChatTextMessage {
-  role: 'system' | 'developer' | 'user';
+  role: 'system' | 'developer';
   content: string;
+}
+
+export interface ChatUserMessage {
+  role: 'user';
+  content: string | ChatUserContentPart[];
 }
 
 export interface ChatAssistantMessage {
@@ -105,7 +124,7 @@ export interface ChatToolMessage {
   content: string;
 }
 
-export type ChatMessage = ChatTextMessage | ChatAssistantMessage | ChatToolMessage;
+export type ChatMessage = ChatTextMessage | ChatUserMessage | ChatAssistantMessage | ChatToolMessage;
 
 export interface ChatCompletionsRequest {
   model: string;
@@ -131,6 +150,7 @@ export interface ChatCompletionsRequest {
 export type ChatDeveloperRole = 'developer' | 'system';
 export type ChatMaxTokensField = 'max_tokens' | 'max_completion_tokens' | 'omit';
 export type ChatReasoningField = 'reasoning_effort' | 'none';
+export type ChatImageInput = 'image_url';
 
 /** 同协议族内的上游差异，全部由数据表达（对齐 cc-switch / opencodex 的 per-provider 处理）。 */
 export interface ChatBridgeCapabilities {
@@ -139,6 +159,11 @@ export interface ChatBridgeCapabilities {
   maxTokensField?: ChatMaxTokensField;
   reasoningField?: ChatReasoningField;
   streamUsage?: boolean;
+  /**
+   * Responses `input_image` 的上游等价形态。默认未声明 = fail closed；只有已确认支持
+   * Chat Completions 视觉输入的运行时才开启，避免把图片静默丢掉或误发给纯文本上游。
+   */
+  imageInput?: ChatImageInput;
   /**
    * thinking 模型(DeepSeek/Kimi/Moonshot)要求每个带 tool_calls 的 assistant 消息携带非空
    * reasoning_content,否则上游报 `reasoning_content is missing in assistant tool call message`。

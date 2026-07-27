@@ -75,6 +75,18 @@ describe('iOS app distribution Expo module', () => {
       resolve(process.cwd(), 'src/config/useStartupEndpointGate.ts'),
       'utf8',
     );
+    const startupBundleCheck = readFileSync(
+      resolve(process.cwd(), 'src/update/useBundleUpdatePrompt.ts'),
+      'utf8',
+    );
+    const resumeUpdateCheck = readFileSync(
+      resolve(process.cwd(), 'src/update/useResumeUpdateCheck.ts'),
+      'utf8',
+    );
+    const settings = readFileSync(
+      resolve(process.cwd(), 'app/settings.tsx'),
+      'utf8',
+    );
 
     expect(swift).toContain('try await AppTransaction.shared');
     expect(swift).toContain('case .verified(let transaction)');
@@ -85,5 +97,10 @@ describe('iOS app distribution Expo module', () => {
     // The async StoreKit lookup must complete inside the endpoint gate, before
     // REVIEW_MODE is consumed by any update hook or settings screen.
     expect(endpointGate).toContain('resolveIsTestFlight: isTestFlightBuild');
+    // Startup, settings, and resume must all consume the resolved TestFlight
+    // state before deciding whether the full-package channel is available.
+    for (const source of [startupBundleCheck, settings, resumeUpdateCheck]) {
+      expect(source).toContain('isTestFlightBuild: IS_TESTFLIGHT_BUILD');
+    }
   });
 });

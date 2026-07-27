@@ -280,6 +280,47 @@ describe('right-sidebar-window IPC', () => {
     ).rejects.toThrow(/command.sessionId required/);
   });
 
+  it('forwards userInitiated when present and omits it when absent', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-web-browser', sessionId: 's1', url: 'https://x.test/' };
+
+    await handler({ sender: mainWebContents }, { command, allowOpen: true, userInitiated: false });
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(1, {
+      command,
+      allowOpen: true,
+      userInitiated: false,
+    });
+    // 缺省不注入字段 —— controller 侧自己按 "!== false" 兜到用户手势语义。
+    expect(controller.routeCommand).toHaveBeenNthCalledWith(2, { command, allowOpen: true });
+
+    await expect(
+      handler({ sender: mainWebContents }, { command, allowOpen: true, userInitiated: 'yes' }),
+    ).rejects.toThrow(/request.userInitiated/);
+  });
+
+  it('open payload:缺省/空 = 用户手势;显式 false 透传;野值拒绝', async () => {
+    const controller = makeController();
+    registerController(controller);
+    const handlers = (
+      ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> }
+    ).__handlers;
+    const open = handlers.get(MAKER_INVOKE.RSB_WINDOW_OPEN);
+    if (!open) throw new Error('RSB_WINDOW_OPEN handler not registered');
+
+    open({}, undefined);
+    open({}, {});
+    open({}, { userInitiated: false });
+
+    expect(controller.open).toHaveBeenNthCalledWith(1, { userInitiated: true });
+    expect(controller.open).toHaveBeenNthCalledWith(2, { userInitiated: true });
+    expect(controller.open).toHaveBeenNthCalledWith(3, { userInitiated: false });
+
+    expect(() => open({}, { userInitiated: 1 })).toThrow(/options.userInitiated/);
+  });
+
   it('requires an explicit allowOpen boolean in the IPC envelope', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);

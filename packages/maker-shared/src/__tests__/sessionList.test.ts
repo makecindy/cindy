@@ -91,6 +91,23 @@ describe('sessionList', () => {
     ]);
   });
 
+  it('groups worktree sessions under their base repo instead of the random worktree name', () => {
+    const sections = buildRemoteSessionSections([
+      session('main-repo', { updatedAt: '2026-01-01T00:01:00.000Z' }),
+      session('worktree', {
+        updatedAt: '2026-01-01T00:02:00.000Z',
+        workingDir: '/repo/app/.cindy-worktrees/serene-lovelace',
+        worktreePath: '/repo/app/.cindy-worktrees/serene-lovelace',
+      }),
+    ], new Date('2026-01-01T00:10:00.000Z').getTime());
+
+    expect(sections.map((section) => [section.key, section.title, section.data.map((item) => item.session.id)])).toEqual([
+      ['project:/repo/app', 'app', ['worktree', 'main-repo']],
+    ]);
+    // worktree 身份不丢:仍由会话行副标题标出。
+    expect(sections[0].data[0].worktreeLabel).toBe('Worktree serene-lovelace');
+  });
+
   it('builds compact display metadata for a session row', () => {
     const item = toRemoteSessionListItem(session('s1', {
       title: '',
@@ -524,6 +541,21 @@ describe('sessionList', () => {
     expect(remoteSessionFilterLabel('all', overview)).toBe('全部 5');
     expect(remoteSessionControlsSummary('automation', 'date', overview)).toBe('自动化 2 · 时间分组');
     expect(remoteSessionOverviewCopy(overview)).toBe('1 个置顶 · 3 个项目 · 1 个自动化执行中');
+  });
+
+  it('counts a worktree session under its base repo so the overview matches the project sections', () => {
+    const sessions = [
+      session('main-repo', { workingDir: '/repo/app' }),
+      session('worktree', {
+        workingDir: '/repo/app/.cindy-worktrees/serene-lovelace',
+        worktreePath: '/repo/app/.cindy-worktrees/serene-lovelace',
+      }),
+    ];
+    const overview = summarizeRemoteSessionOverview(sessions, new Map(), new Map());
+    const sections = buildRemoteSessionSections(sessions, new Date('2026-01-01T00:10:00.000Z').getTime());
+
+    expect(overview.projectCount).toBe(1);
+    expect(sections.filter((section) => section.key.startsWith('project:'))).toHaveLength(1);
   });
 
   it('builds mobile list context for search and grouped automation rows', () => {

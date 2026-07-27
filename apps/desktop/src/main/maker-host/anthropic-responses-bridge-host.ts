@@ -26,6 +26,7 @@ import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridge
 
 import { createMakerLogger } from './logger-adapter.js';
 import { getGrokAccessToken } from './grok-oauth-login.js';
+import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
 import { chatgptAccountIdFromIdToken, desktopCodexAuthAdapter } from './auth-adapters.js';
 import {
   bearerAccessTokenFromHeaders,
@@ -285,6 +286,14 @@ function xaiProviderConfig(): BridgeProviderConfig {
     // api.x.ai 无 ChatGPT 那种订阅窗口端点;尽力抓响应头 x-ratelimit-* 给底部 chip 展示,
     // 拿不到(上游不返头)则 renderer 诚实降级为仅价值估算。
     onRateLimit: (info) => recordXaiRateLimitSnapshot(info),
+    // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
+    // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还
+    // 一直显示已连接,用户没有任何线索该去重连。
+    onUpstreamError: async ({ status, body, requestHeaders }) => {
+      const failedAccessToken = bearerAccessTokenFromHeaders(requestHeaders);
+      if (!failedAccessToken) return;
+      await invalidateXaiBridgeAuth({ status, body, failedAccessToken });
+    },
   };
 }
 

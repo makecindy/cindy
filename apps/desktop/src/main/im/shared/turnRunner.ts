@@ -918,7 +918,7 @@ export function createTurnRunner(
       readXdGatewayApiKey,
       hasCustomProviderKey,
       getAgentAuthState: (agentKind) => getMaker().getAgentAuthState(agentKind),
-      listProviders: () => getDesktopProviderService().listProviders(),
+      listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: true }),
       warn: (message) => log.warn(message),
     };
   }

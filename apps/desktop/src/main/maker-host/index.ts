@@ -68,8 +68,12 @@ import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-
 import {
   getDesktopSelectableCatalog,
   refreshDiscoveredCodexModels,
+  setNativeProviderClaimListener,
 } from './createDesktopProviderService.js';
-import { clearAnthropicDiscoveredModels } from './model-discovery/anthropic.js';
+import {
+  clearAnthropicDiscoveredModels,
+  setAnthropicDiscoveryFailureListener,
+} from './model-discovery/anthropic.js';
 import {
   buildDesktopClaudeRuntimeConfig,
   desktopCodexRuntimeConfig,
@@ -155,6 +159,42 @@ setActiveCatalogChangedListener((revision) => {
       error: error instanceof Error ? error.message : String(error),
     });
     return;
+  }
+});
+
+/**
+ * anthropic 清单发现的失败态变化 → 广播 PROVIDER_CHANGED。
+ *
+ * 归因不进 active catalog(清单没变,没有 revision 可言),但 renderer 往往在拉取失败
+ * **之前**就取走了 provider 快照(15s 超时那条路径尤其明显)。不主动通知,设置页会一直
+ * 停在「正在发现」而不是讲明失败理由(PR #548 review)。
+ */
+setAnthropicDiscoveryFailureListener(() => {
+  try {
+    // 复用既有的「刷 capabilities + 广播」收口:清单确实没变,这一步只是把 provider
+    // 快照重新推给 renderer,让它重取带上失败归因的 listProviders。
+    refreshSelectableModelsAndBroadcast({});
+  } catch (error) {
+    desktopMakerLogger.warn('anthropic discovery failure broadcast failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+/**
+ * 本机凭证绑定自愈成功 → 广播 PROVIDER_CHANGED。
+ *
+ * 连接态刚从 false 翻成 true，但只有触发那次读取的调用方拿到了新快照。其它窗口留在
+ * 「未连接」，配对的手机 / 控制端更是只认这条推送来失效缓存（PR #548 review）。
+ * anthropic 那条链路碰巧能在清单变化时顺带广播，xAI 则完全没有出口 —— 统一在这里补。
+ */
+setNativeProviderClaimListener(() => {
+  try {
+    refreshSelectableModelsAndBroadcast({});
+  } catch (error) {
+    desktopMakerLogger.warn('native provider claim broadcast failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 });
 
@@ -339,6 +379,10 @@ export function getMaker(): Maker {
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
+      // MCP 工具审批与 Codex 共用同一份策略(mcp-tool-approval-policy.ts)。没有这一
+      // 行时, Claude 只剩上面那份静态只读白名单, 可信第一方 server 的 call_tool
+      // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
+      getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
       // （含 claude 订阅模型 + XD 网关路由的 gpt / 国产 / gemini 等）。active catalog 已在 splash 期
@@ -533,7 +577,8 @@ export function getMaker(): Maker {
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider
-      // 默认仍弹审批，必须显式加入 allowlist。
+      // 默认仍弹审批，必须显式加入 allowlist。同一份策略也注入 Claude Code
+      // (见上方 claudeAgent 构造)，两端对同一个 MCP 工具必须给出同一个答案。
       // 例外:`cindy_ssh` 显式排除——它的 ssh_exec 在远端机器上执行任意命令,
       // 属于跨机器写操作,必须保留 Codex MCP elicitation 审批(PR #874 review)。
       // cindy_contacts 是渐进式 list_tools/call_tool server：不能按 serverName

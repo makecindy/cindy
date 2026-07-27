@@ -386,7 +386,7 @@ describe('Ghost plugin detail sections', () => {
     );
   });
 
-  it('renders every detail fact in a three-column flat grid and copies the install location', async () => {
+  it('lets the install location use the full details row and preserves its actions', async () => {
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100);
     vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(300);
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -409,6 +409,7 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('Panel')).toBeTruthy();
     expect(screen.getByText('Install Location')).toBeTruthy();
     const installLocation = screen.getByText('/tmp/cindy-brain/builtin.example');
+    expect(installLocation.closest('.col-span-full')).toBeTruthy();
     expect(installLocation.className).toContain('truncate');
     expect(installLocation.className).toContain('whitespace-nowrap');
     expect(screen.queryByRole('button', { name: 'See All' })).toBeNull();

@@ -19,6 +19,7 @@ import {
   isProviderRequestPath,
   type AgentKind,
   type CustomProviderConfig,
+  type ProviderModelDiscoveryFailure,
   type ProviderPreset,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -44,10 +45,11 @@ import type {
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
+const log = createLogger('maker-ipc:provider');
+
 const VALID_AGENTS: readonly string[] = ['claude-code', 'codex'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
-const log = createLogger('maker-ipc:providerHandlers');
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
 
 type ProviderOAuthRendererSender = {
@@ -152,8 +154,14 @@ function oauthDescriptorSignature(config: CustomProviderConfig | null): string |
 }
 
 export interface ProviderHandlerDeps {
-  /** 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。 */
-  listProviders(): Promise<ProviderView[]>;
+  /**
+   * 当前供应商视图（含实时连接状态）；见 createDesktopProviderService。
+   *
+   * `allowSideEffects` 控制是否允许顺带做本机绑定自愈与随之而来的清单拉取。这条通道同时
+   * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
+   * 是本机主页面时才放行副作用（PR #548 review）。
+   */
+  listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
@@ -175,6 +183,26 @@ export interface ProviderHandlerDeps {
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /**
+   * 重新发现某供应商的动态清单（生产 = anthropic 的 refreshAnthropicModelsFromHttp）。
+   * 返回本次结束后的失败归因，成功为 null。不认识的 providerId 直接返回 null（没有
+   * 动态发现通道 = 没什么可重试的），不抛错。
+   */
+  rediscoverModels(providerId: string): Promise<ProviderModelDiscoveryFailure | null>;
+  /**
+   * sender 归属校验（生产 = security/trustedAppRenderer 的 assertTrustedAppRendererEvent，
+   * 不通过时抛 PERMISSION_DENIED）。经 deps 注入而非直接 import：本文件的 handler body
+   * 刻意不依赖 Electron，好让内存 registry 直接 invoke 单测（规则 14）。
+   *
+   * 类型上可选、语义上必需：未注入时 rediscover 直接拒绝，而不是放行。
+   */
+  assertTrustedSender?(event: unknown): void;
+  /**
+   * sender 是否是本机主页面（生产 = isTrustedAppRendererEvent）。与 assertTrustedSender
+   * 的区别：**不抛**，只用于决定「这次读取要不要放行本机副作用」。device-link 的合成
+   * event 与不受信的子 frame 都会得到 false，于是退化为纯读。缺省视为不可信。
+   */
+  isTrustedSender?(event: unknown): boolean;
   /**
    * 通用 OAuth 登录 / 登出 / 取消（生产接 generic-oauth Runner + 目录描述符解析；
    * login 成功后由生产 deps 负责模型发现与 PROVIDER_CHANGED 广播）。
@@ -523,11 +551,16 @@ export function registerProviderHandlers(
   // 只读聚合：loadCatalog 永不抛（最差回退内置目录），故无需 throwIpcError 包裹。
   registry.handle(
     MAKER_INVOKE.PROVIDER_LIST,
-    async (): Promise<{
+    async (
+      event,
+    ): Promise<{
       providers: ProviderView[];
       modelVisibilityOverrides: Record<string, boolean>;
     }> => {
-      const providers = await deps.listProviders();
+      // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
+      // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
+      const allowSideEffects = deps.isTrustedSender?.(event) === true;
+      const providers = await deps.listProviders({ allowSideEffects });
       return { providers, modelVisibilityOverrides: deps.getModelVisibilityOverrides() };
     },
   );
@@ -712,6 +745,49 @@ export function registerProviderHandlers(
     } catch {
       return { detections: [] as LocalCliDetection[] };
     }
+  });
+
+  // 动态清单重新发现（用户在失败态下点「重试」）：查询型返回,把最新失败归因回给 renderer
+  // 渲染分类文案;成功则 failure 缺席。
+  //
+  // 意外异常转 INTERNAL(规则 13:IPC 错误必须是结构化 IpcErrorCode)。发现流程内部只记账
+  // 不抛穿,但那是多层实现细节共同保证的(缓存写入的 catch、广播收口的 catch);哪天有一层
+  // 变了,裸 Error 会以非结构化形态漏给 renderer —— 在边界上收口一次,代价可忽略。
+  //
+  // **不**在这里广播:发现流程自己已经收口了两条路径 —— 成功经 active-catalog 的
+  // markChanged、失败经 setAnthropicDiscoveryFailureListener,重复广播只会让 renderer 白
+  // refetch 一次。
+  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, async (event, input: unknown) => {
+    // sender 归属校验:这条通道会用订阅凭证发起真实上游请求并重启退避,不该被子 frame /
+    // WebView 触发。经 deps 注入(生产 = assertTrustedAppRendererEvent),既保住本文件
+    // 「不依赖 Electron、可用内存 registry 直测」的设计,又不让新通道继承既有缺口。
+    //
+    // 守卫缺席按拒绝处理:可选依赖用 `?.()` 调用时,漏接线会静默退化成「无守卫」,而这种
+    // 退化没有任何编译期或运行期信号。宁可在接线回归时把功能打死,也不要让它悄悄敞开
+    // (PR #548 review)。
+    if (!deps.assertTrustedSender) {
+      throwIpcError('PERMISSION_DENIED', 'sender trust guard unavailable');
+    }
+    deps.assertTrustedSender(event);
+    const providerId = requireProviderId(input);
+    let failure: ProviderModelDiscoveryFailure | null;
+    try {
+      failure = await deps.rediscoverModels(providerId);
+    } catch (err) {
+      // 原文只进 Main 日志:凭证读取 / token 刷新等依赖抛出的消息可能含内部路径或上游
+      // 敏感文本,throwIpcError 只加结构化 code、不做脱敏,原样回传等于把它送给 renderer
+      // (以及 device-link 对端)。renderer 只需要知道「失败了」——分类文案走 failure.kind。
+      log.warn('rediscover models failed', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'rediscover models failed');
+    }
+    // 与 buildRegistry 的投影同口径:detail 可能是上游原始响应体,不能过 IPC 边界。
+    // 这是独立于 provider 列表的第二条返回路径,必须各自剥离(PR #548 review)。
+    if (!failure) return { ok: true };
+    const { detail: _detail, ...failureView } = failure;
+    return { ok: false, failure: failureView };
   });
 
   // 通用 OAuth 登录 / 登出 / 取消。login 是查询型返回（{ok, reason}——取消/超时是正常流程

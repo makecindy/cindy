@@ -405,7 +405,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
       const { getDesktopProviderService } = await import('../maker-host/createDesktopProviderService.js');
-      const providers = await getDesktopProviderService().listProviders();
+      const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
       const route = resolveBoundSessionGenerationRoute({
         session,
         sessionProviderId: getSessionProvider(targetSessionId),

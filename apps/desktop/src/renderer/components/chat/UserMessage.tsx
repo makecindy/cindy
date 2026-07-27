@@ -220,7 +220,9 @@ function UserFileChip({
   refText: string;
   fileName: string;
   workingDir: string;
-  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void | Promise<void>;
+  // chip 由 InlineReferenceChip 渲染成 `<span role="button">`(见其剪贴板契约),
+  // 不再是原生 `<button>`;这里标 HTMLElement 与实际 currentTarget 对齐。
+  onClick: (e: React.MouseEvent<HTMLElement>) => void | Promise<void>;
 }) {
   // remote 会话:fs:resolve-path 打的是本机 fs,对远程 workdir 恒 none——
   // 按 workdir 风格直接 join(与 useResolvedMarkdownTarget 的 remote 分支同策)。
@@ -371,27 +373,29 @@ function looksLikeCommand(word: string): boolean {
  * Chip patterns:
  *   @.claude/agents/name.md  → agent chip (sparkles + name)
  *   @path/to/dir/            → dir chip (folder + dirname/)
- *   @path/to/file.ext        → file chip (file + basename) — clickable button
+ *   @path/to/file.ext        → file chip (file + basename) — clickable
  *   /command (at line start) → slash chip (no icon, /command)
  *
  * Plain text segments are further scanned for URLs, which are rendered as
  * clickable links that open in the system default browser.
  *
- * F2: file chips are rendered as `<button>` (not `<span>`) so they can open
- * TextLightbox on click. The dir/agent/slash chips remain `<span>` — they
- * have no click target in this iteration.
+ * F2: file chips are clickable (they open TextLightbox); dir/agent/slash chips
+ * are inert — no click target in this iteration. Both render through
+ * InlineReferenceChip, whose interactive shell is a `<span role="button">`
+ * rather than a native `<button>` so copied messages survive an external
+ * paste (see the clipboard contract on InlineReferenceChip).
  *
  * @param content       The user message content to parse.
  * @param workingDir    Session cwd; used to resolve relative refs.
  * @param onFileChipClick  Called when a file chip is clicked. Receives the
  *                          resolved abs path, the displayed file name, and
- *                          the clicked button element (for focus restoration
+ *                          the clicked chip element (for focus restoration
  *                          when the lightbox closes — F6).
  */
 function renderContentWithoutPastedText(
   content: string,
   workingDir: string,
-  onFileChipClick: (abs: string, name: string, btn: HTMLButtonElement) => void | Promise<void>,
+  onFileChipClick: (abs: string, name: string, chip: HTMLElement) => void | Promise<void>,
   onImageClick: (xdtFileUrl: string) => void,
   t: TFunction,
   sessionId?: string,
@@ -484,13 +488,16 @@ function renderContentWithoutPastedText(
               fileName={fileName}
               workingDir={workingDir}
               onClick={async (e) => {
-                // Capture currentTarget before await — React pools events and
-                // by the time the IPC resolves, currentTarget is null.
-                const btn = e.currentTarget;
+                // Capture currentTarget before the await: `currentTarget` is only
+                // set while the DOM event is being dispatched, so it reads back as
+                // null once the IPC resolves. (Not React event pooling — that was
+                // removed in React 17; this is plain DOM Event semantics.) The
+                // element is needed later to restore focus when the lightbox closes.
+                const chip = e.currentTarget;
                 if (remoteJoin) {
                   // remote:本机 BFS 无意义,join 出远端绝对路径,存在性由
                   // 点击后的远程取回链路兜底。
-                  await onFileChipClick(resolveLocalPath(ref, workingDir), fileName, btn);
+                  await onFileChipClick(resolveLocalPath(ref, workingDir), fileName, chip);
                   return;
                 }
                 // markdown-monorepo-resolve: smart resolve so a chip like
@@ -504,7 +511,7 @@ function renderContentWithoutPastedText(
                   return;
                 }
                 const abs = result.status === 'unique' ? result.absPath : result.fallbackAbsPath;
-                await onFileChipClick(abs, fileName, btn);
+                await onFileChipClick(abs, fileName, chip);
               }}
             />,
           );
@@ -597,7 +604,7 @@ export function projectSentRanges<T extends { start: number; end: number }>(
 function renderContent(
   content: string,
   workingDir: string,
-  onFileChipClick: (abs: string, name: string, btn: HTMLButtonElement) => void | Promise<void>,
+  onFileChipClick: (abs: string, name: string, chip: HTMLElement) => void | Promise<void>,
   onImageClick: (xdtFileUrl: string) => void,
   t: TFunction,
   sessionId?: string,
@@ -719,7 +726,7 @@ export function UserMessage({
   const [longMessageExpanded, setLongMessageExpanded] = useState(false);
   // text-lightbox F6: ref to the chip currently driving the lightbox so
   // close can return focus to it (only one lightbox at a time per message).
-  const activeFileChipRef = useRef<HTMLButtonElement | null>(null);
+  const activeFileChipRef = useRef<HTMLElement | null>(null);
 
   // text-lightbox F1 replaces the old `@path` inline prepend. Files are now
   // rendered as a dedicated Chip-Row above the text bubble (per cc-agent-view
@@ -1050,9 +1057,9 @@ export function UserMessage({
                   await saveChatAttachmentWithToasts(sessionFileCtx, f);
                   return;
                 }
-                const btn = e.currentTarget;
+                const chip = e.currentTarget;
                 if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, f.path))) return;
-                activeFileChipRef.current = btn;
+                activeFileChipRef.current = chip;
                 setTextLightboxFile({ path: f.path, name: f.name });
               }}
               className={cn(
@@ -1278,7 +1285,7 @@ export function UserMessage({
                                 : renderContent(
                                     segment.text,
                                     workingDir,
-                                    async (abs, name, btn) => {
+                                    async (abs, name, chip) => {
                                       if (
                                         !(await shouldOpenTextLightboxForOrigin(
                                           sessionFileCtx,
@@ -1286,7 +1293,7 @@ export function UserMessage({
                                         ))
                                       )
                                         return;
-                                      activeFileChipRef.current = btn;
+                                      activeFileChipRef.current = chip;
                                       setTextLightboxFile({ path: abs, name });
                                     },
                                     (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
@@ -1332,13 +1339,13 @@ export function UserMessage({
                           : renderContent(
                               bubbleBody,
                               workingDir,
-                              async (abs, name, btn) => {
+                              async (abs, name, chip) => {
                                 if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
                                   return;
-                                // F2 / F6: stash the clicked button so the lightbox can
+                                // F2 / F6: stash the clicked chip so the lightbox can
                                 // return focus on close. State + ref are shared with the
                                 // Chip-Row above ("most recent trigger wins" semantics).
-                                activeFileChipRef.current = btn;
+                                activeFileChipRef.current = chip;
                                 setTextLightboxFile({ path: abs, name });
                               },
                               (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
@@ -1402,10 +1409,10 @@ export function UserMessage({
                         ? renderContent(
                             ghostCardPromptBody,
                             workingDir,
-                            async (abs, name, btn) => {
+                            async (abs, name, chip) => {
                               if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
                                 return;
-                              activeFileChipRef.current = btn;
+                              activeFileChipRef.current = chip;
                               setTextLightboxFile({ path: abs, name });
                             },
                             (xdtFileUrl) => setLightboxSrc(xdtFileUrl),

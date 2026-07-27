@@ -40,6 +40,7 @@ import {
   AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
   type AgentIslandDisplayOption,
   type AgentIslandDisplayState,
+  type AgentIslandPillSnapshot,
   type AgentIslandSessionActivity,
   type AgentIslandDisplayTarget,
   type AgentIslandMascotSkin,
@@ -1606,6 +1607,9 @@ export class AgentIslandService {
       hasSession,
       displayWidth: display.bounds.width,
       screenMetrics,
+      // Keep the carrier wide enough for the native count badge; without this the
+      // native side's own reservation gets clamped away and the badge is clipped.
+      pillSnapshot: displayState.pillSnapshot,
     });
     const minimumContentWidth = getAgentIslandMinimumContentWidth({
       expanded,
@@ -1619,6 +1623,7 @@ export class AgentIslandService {
         display,
         screenMetrics,
         minimumContentWidth,
+        pillSnapshot: displayState.pillSnapshot,
       })
       : null;
     const contentWidth = preferredContentWidth !== null
@@ -1751,6 +1756,7 @@ export class AgentIslandService {
     display: Display;
     screenMetrics: AgentIslandScreenLayoutMetrics | null;
     minimumContentWidth: number;
+    pillSnapshot?: AgentIslandPillSnapshot | null;
   }): number {
     if (input.expanded) {
       return input.desiredWidth;
@@ -1767,6 +1773,7 @@ export class AgentIslandService {
       maxWidth,
       hasSession: input.hasSession,
       screenMetrics: input.screenMetrics,
+      pillSnapshot: input.pillSnapshot,
     });
   }
 

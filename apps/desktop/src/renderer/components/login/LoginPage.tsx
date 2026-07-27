@@ -53,9 +53,11 @@ import {
   DRAG_BAR_HEIGHT,
   LOADING_RING,
   LOGIN_COLORS,
+  LOGIN_DELETION_BUBBLE,
   LOGIN_LOCAL_MODE,
   SSO_ORG_HINT,
 } from './loginDesignTokens';
+import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
 
 /**
@@ -1047,17 +1049,21 @@ function SocialProviderIcon({ provider }: { provider: SocialProvider }) {
 }
 
 /**
- * 注销状态提示气泡(figma 678:1075「注销状态」组件集,2026-07-25 用户拍板规格):
+ * 注销状态提示气泡(figma 678:1075「注销状态」组件集)。
+ *
  * 浮层组件——absolute 定位、不占布局流、盖在登录页一切元素(立绘/字标/面板/社交行)之上。
- * 宽 670 恒定(窗口过窄 clamp `min(670px, 100vw-48px)`)、顶 72 恒定、水平居中,
- * 均不随 loginScale 缩放;圆角 22、四边 padding 20、1px 描边,无图标/阴影/动画。
- * 排版全居中:标题=正文同 20px/23px/Regular 400,仅以颜色区分
- * (标题 login-control-text / 正文 login-secondary-text);标题↔正文 5px、
- * 正文↔「我知道了」22px、「我知道了」↔气泡底 20px(=下 padding,文案拉长不变)。
- * 「我知道了」= 下划线文字链(login-link-text 既有形态),视觉不变但点击热区
- * 经 ±11px padding/负 margin 扩到 ≥44×44。状态:pending/processing 无按钮、
- * completed 带「我知道了」;颜色全走 token(气泡底 login-deletion-bubble-bg,
- * 描边 login-deletion-bubble-border,均为固定亮/暗值、不随扩展主题)。
+ * 几何**全部用设计单位书写**(`LOGIN_DELETION_BUBBLE`,1819×2098 的 2x 稿),由外层
+ * wrapper 施加与登录组同一个 `PANEL_FIXED_SCALE`(=0.5)缩放 —— 与 LoginStage 对面板的
+ * 做法一致,故 Figma 数值可逐字落码:屏幕上宽 335 / 顶距 36 CSS px,与面板 340 基本同宽。
+ * (2026-07-26 修正:初版把设计单位当 CSS px 用,气泡在屏幕上宽了整一倍。)
+ *
+ * 排版全居中,标题与正文同字号(20/23 设计单位)仅以颜色区分(标题 login-control-text /
+ * 正文 login-secondary-text);间距 标题↔正文 5、正文↔「我知道了」22、「我知道了」↔气泡底
+ * 20(= 下 padding,文案拉长不变)。「我知道了」为下划线文字链,上下各 11 设计单位 padding
+ * 撑热区、等量负 margin 抵消视觉间距(缩放后约 22 CSS px 高,桌面鼠标指针足够;
+ * 触摸端的 ≥44 物理热区由 mobile 侧 hitSlop 负责)。
+ * 状态:pending/processing 无按钮、completed 带「我知道了」;颜色全走 token
+ * (气泡底 login-deletion-bubble-bg、描边 login-deletion-bubble-border,固定亮/暗值)。
  */
 function AccountDeletionStatusPanel({
   status,
@@ -1083,34 +1089,82 @@ function AccountDeletionStatusPanel({
         ? 'accountDeletion.status.processingCopy'
         : 'accountDeletion.status.completedCopy';
 
+  const B = LOGIN_DELETION_BUBBLE;
   return (
-    <section
-      aria-label={t(titleKey)}
-      className="absolute left-1/2 top-[72px] z-30 w-[min(670px,calc(100vw-48px))] -translate-x-1/2 break-words rounded-[22px] border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] p-5 text-center"
-      style={style}
+    // 定位 + 缩放层(同 LoginStage 对面板的做法):transformOrigin 取 top center,
+    // 使 `translateX(-50%) scale(k)` 的可视框以 left:50% 为中心、顶边落在 top 值上。
+    // 宽度写设计单位,窄窗时按「可视宽 ≤ 100vw-24」反算(可视宽 = 设计宽 × k)。
+    <div
+      data-testid="login-deletion-bubble-scale"
+      className="absolute left-1/2 z-30"
+      style={{
+        top: B.top * PANEL_FIXED_SCALE,
+        width: B.width,
+        // 窄窗钳制:可视宽 = 设计宽 × k,要求可视宽 ≤ 100vw-24 → 设计宽上限按 1/k 反算
+        maxWidth: `calc(${100 / PANEL_FIXED_SCALE}vw - ${24 / PANEL_FIXED_SCALE}px)`,
+        transform: `translateX(-50%) scale(${PANEL_FIXED_SCALE})`,
+        transformOrigin: 'top center',
+        opacity: style?.opacity,
+        pointerEvents: style?.pointerEvents,
+        transition: style?.transition,
+      }}
     >
-      <h2 className="text-[20px] font-normal leading-[23px] text-[var(--login-control-text)]">{t(titleKey)}</h2>
-      <p className="mt-[5px] text-[20px] font-normal leading-[23px] text-[var(--login-secondary-text)]">
-        {t(copyKey, {
-          date: formatAccountDeletionDate(status.deleteAfter),
-        })}
-      </p>
-      {onDismiss && (
-        <button
-          type="button"
-          onClick={onDismiss}
-          className={cn(
-            // 热区扩容:py 11px(11+23+11=45≥44)+ -mb 抵消,视觉间距保持 上22/下20 不变
-            'mt-[11px] -mb-[11px] border-0 bg-transparent px-3 py-[11px]',
-            'text-[20px] font-normal leading-[23px] text-[var(--login-control-text)] underline',
-            'hover:enabled:[color:var(--login-link-hover)] active:enabled:[color:var(--login-link-pressed)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          )}
+      <section
+        aria-label={t(titleKey)}
+        className="w-full break-words border border-[var(--login-deletion-bubble-border)] bg-[var(--login-deletion-bubble-bg)] text-center"
+        style={{
+          borderRadius: B.radius,
+          padding: B.padding,
+          // 描边保持 1 物理 px(DESIGN.md §16.4):wrapper 的 scale 会把 1px 缩成
+          // 0.5px(DPR=1 下变虚/消失),按 1/k 设计单位补偿,缩放后恰为 1 CSS px
+          borderWidth: 1 / PANEL_FIXED_SCALE,
+        }}
+      >
+        <h2
+          className="font-normal text-[var(--login-control-text)]"
+          style={{ fontSize: B.font, lineHeight: `${B.lineHeight}px` }}
         >
-          {t('accountDeletion.status.dismissButton')}
-        </button>
-      )}
-    </section>
+          {t(titleKey)}
+        </h2>
+        <p
+          className="font-normal text-[var(--login-secondary-text)]"
+          style={{
+            fontSize: B.font,
+            lineHeight: `${B.lineHeight}px`,
+            marginTop: B.titleBodyGap,
+          }}
+        >
+          {t(copyKey, {
+            date: formatAccountDeletionDate(status.deleteAfter),
+          })}
+        </p>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className={cn(
+              'border-0 bg-transparent font-normal text-[var(--login-control-text)] underline',
+              'hover:enabled:[color:var(--login-link-hover)] active:enabled:[color:var(--login-link-pressed)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+            style={{
+              fontSize: B.font,
+              lineHeight: `${B.lineHeight}px`,
+              // 热区:上下各 linkHitPadding 撑开,等量负 margin 抵消,
+              // 视觉间距仍是 上 bodyLinkGap / 下 padding
+              marginTop: B.bodyLinkGap - B.linkHitPadding,
+              marginBottom: -B.linkHitPadding,
+              paddingTop: B.linkHitPadding,
+              paddingBottom: B.linkHitPadding,
+              paddingLeft: B.padding,
+              paddingRight: B.padding,
+            }}
+          >
+            {t('accountDeletion.status.dismissButton')}
+          </button>
+        )}
+      </section>
+    </div>
   );
 }
 

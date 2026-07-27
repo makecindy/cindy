@@ -8,6 +8,7 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
 import { listCustomProviders } from '../../maker-host/custom-provider-store.js';
+import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
@@ -65,6 +66,10 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
+    rediscoverModels: vi.fn(async () => null),
+    // 生产恒定接线（register.ts）。默认桩 = 已接线且信任，好让其余用例只关心自己的分支；
+    // 「漏接线」是独立用例，显式不传这个 dep。
+    assertTrustedSender: vi.fn(() => {}),
     oauthLogin: vi.fn(async () => ({ ok: true })),
     oauthLogout: vi.fn(async () => {}),
     oauthCancel: vi.fn(() => {}),
@@ -111,6 +116,83 @@ describe('provider:list IPC handler', () => {
       }),
     );
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_LIST)).rejects.toThrow('boom');
+  });
+});
+
+describe('provider:models-rediscover handler', () => {
+  it('校验 sender 后才发起重新发现;不可信 sender 直接拒绝', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn((_event: unknown) => {
+      throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
+    });
+    const deps = makeDeps({ assertTrustedSender });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    // 拒绝发生在任何上游动作之前:绝不让不可信 sender 触发带凭证的请求。
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
+  });
+
+  it('守卫未接线时 fail-closed,不靠可选链静默放行', async () => {
+    // 可选依赖漏接是没有任何信号的退化:`deps.assertTrustedSender?.()` 会让这条带凭证的
+    // 通道退回无守卫状态。缺守卫即拒绝(PR #548 review)。
+    const harness = new IpcHarness();
+    const deps = makeDeps({ assertTrustedSender: undefined });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
+  });
+
+  it('成功时返回 ok 且不重复广播(发现流程自己收口)', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic')).resolves.toEqual({
+      ok: true,
+    });
+    expect(deps.rediscoverModels).toHaveBeenCalledWith('anthropic');
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('回传失败归因供 renderer 渲染分类文案,但剥掉 detail', async () => {
+    const harness = new IpcHarness();
+    // detail 可能是上游原始响应体:provider 列表那条路径已经剥了,这条独立的返回路径
+    // 必须各自剥,否则等于开了第二个泄漏口。
+    const failure = {
+      kind: 'regionBlocked' as const,
+      at: '2026-07-27T00:00:00.000Z',
+      detail: 'HTTP 403: {"error":{"type":"unsupported_country_region_territory"}}',
+    };
+    registerProviderHandlers(harness, makeDeps({ rediscoverModels: vi.fn(async () => failure) }));
+
+    const res = (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic')) as {
+      ok: boolean;
+      failure?: Record<string, unknown>;
+    };
+    expect(res).toEqual({ ok: false, failure: { kind: 'regionBlocked', at: failure.at } });
+    expect(res.failure).not.toHaveProperty('detail');
+  });
+
+  it('意外异常转结构化 INTERNAL,不以裸 Error 漏给 renderer', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        rediscoverModels: vi.fn(async () => {
+          throw new Error('disk full');
+        }),
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
+    ).rejects.toThrow(/INTERNAL/);
   });
 });
 

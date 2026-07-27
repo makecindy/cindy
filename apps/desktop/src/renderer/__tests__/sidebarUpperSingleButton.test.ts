@@ -110,8 +110,11 @@ describe('Project 行内 + 也对标统一 New(delayed-create)', () => {
 
 describe('inline archive dirty-worktree warning', () => {
   it('preflights archive-now and opens the warning dialog before archiving a dirty worktree', () => {
+    // 钉的是预检顺序,不是排版:末段用 [\s\S]*? 容忍换行。activeSessionId 取
+    // viewedSessionIdRef.current(而非 viewedSessionId)是为了让 handleActionClick
+    // 的 useCallback deps 保持稳定,见 sessionRowRenderIsolation 的行渲染隔离不变量。
     expect(sidebarSource).toMatch(
-      /if \(action === 'archive-now'\) \{[\s\S]*?fetchDirtyWorktreeForRemoval\([\s\S]*?if \(dirtyWorktree\) \{[\s\S]*?setConfirm\(\{ open: true, sessionId, action: 'archive', dirtyWorktree: true \}\);[\s\S]*?return;[\s\S]*?await runSessionAction\(sessionId, 'archive', \{ activeSessionId: viewedSessionId \}\);/,
+      /if \(action === 'archive-now'\) \{[\s\S]*?fetchDirtyWorktreeForRemoval\([\s\S]*?if \(dirtyWorktree\) \{[\s\S]*?setConfirm\(\{ open: true, sessionId, action: 'archive', dirtyWorktree: true \}\);[\s\S]*?return;[\s\S]*?await runSessionAction\(sessionId, 'archive', \{[\s\S]*?activeSessionId: viewedSessionIdRef\.current,[\s\S]*?\}\);/,
     );
   });
 });

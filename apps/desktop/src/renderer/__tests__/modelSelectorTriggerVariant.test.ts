@@ -350,10 +350,21 @@ import {
   ModelSelector,
   ModelSelectorContent,
   modelEffortLabel,
+  modelListMaxHeightForRows,
 } from '@/components/new-chat/ModelSelector';
 import { makerChatStore } from '@/lib/makerChatStore';
 
 describe('ModelSelector trigger variants', () => {
+  it('keeps row-count caps finite and within the shared 300px ceiling', () => {
+    expect(modelListMaxHeightForRows()).toBeUndefined();
+    expect(modelListMaxHeightForRows(Number.NaN)).toBeUndefined();
+    expect(modelListMaxHeightForRows(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(modelListMaxHeightForRows(0)).toBe(44);
+    expect(modelListMaxHeightForRows(6)).toBe(274);
+    expect(modelListMaxHeightForRows(7)).toBe(300);
+    expect(modelListMaxHeightForRows(100)).toBe(300);
+  });
+
   it('shows the intent model and its default source after registering an agent switch', () => {
     const sessionId = 'model-selector-agent-switch-intent';
     providersRef.providers = [
@@ -1088,11 +1099,14 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
           currentProviderId: 'xd',
           onProviderChange: vi.fn(),
+          maxVisibleModelRows: 6,
         }),
       );
 
       // 行内折后价在上、标准价划线在下,折价徽标挂在模型名一侧的 tags 区。
       const row = screen.getByRole('option', { name: /Qwen 3\.7/ });
+      expect(row.className).toContain('min-h-11');
+      expect(screen.getByRole('listbox', { name: 'Model list' }).style.maxHeight).toBe('274px');
       expect(row.textContent).toContain('¥6 / ¥18');
       expect(row.textContent).toContain('¥12 / ¥36');
       const rowBadge = within(row).getByText('立省 50%');

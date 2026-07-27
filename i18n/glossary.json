@@ -13,6 +13,17 @@
   ],
   "terms": [
     {
+      "id": "content-update",
+      "status": "proposed",
+      "en": "Content Update",
+      "translations": {
+        "zh-CN": "内容更新",
+        "ja": "コンテンツ更新",
+        "ko": "콘텐츠 업데이트"
+      },
+      "note": "指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。"
+    },
+    {
       "id": "device-code",
       "status": "proposed",
       "en": "Device Code",
@@ -22,6 +33,17 @@
         "ko": "기기 코드"
       },
       "note": "OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。"
+    },
+    {
+      "id": "cindy-codex-home",
+      "status": "proposed",
+      "en": "Cindy Codex home",
+      "translations": {
+        "zh-CN": "Cindy Codex home",
+        "ja": "Cindy Codex home",
+        "ko": "Cindy Codex home"
+      },
+      "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
       "id": "agent",

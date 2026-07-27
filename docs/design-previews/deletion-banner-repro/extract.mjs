@@ -67,8 +67,11 @@ function readSrc(p) {
     maxBuffer: 32 * 1024 * 1024,
   });
 }
-/** 把本轮读到的全部 pinned 源文件落盘到 _pinned/(先清空再写,保证目录与提取严格一致;
- *  provenance.source 指向这里——skill 校验器按磁盘文件复核 hash,落盘让「修复前证据」自包含可验)。 */
+/** 把本轮读到的全部 pinned 源文件落盘到 _pinned/(先清空再写,保证目录与提取严格一致)。
+ *  本地缓存副作用说明(lead 裁决 A,2026-07-26):内容由 PINNED_SHA 经 git show 确定性再生,
+ *  目录已 gitignore、**故意不入仓**——避免仓内出现产品源文件副本(被 grep 命中或被人误改
+ *  错那份);skill 校验器(truth.mjs / verify.mjs 的 validateTruth)按磁盘文件复核
+ *  provenance.source 与 hash,故落盘是各档检查开箱可用的前提;纯本地、可随时整目录删除。 */
 function dumpPinnedSources() {
   rmSync(pinnedDir, { recursive: true, force: true });
   for (const repoRelPath of hashes.keys()) {

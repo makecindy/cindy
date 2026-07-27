@@ -116,7 +116,7 @@ const log = createLogger('CcAgentChatStore');
 // + setState),用于会话切换卡顿归因;<30ms 不打,避免噪音。
 const perfLog = createLogger('perf/session-switch');
 export const EMPTY_TASK_UPDATES: ReadonlyMap<string, AgentTaskUpdate> = new Map();
-/** Max consecutive auto auth-retries per remote session before surfacing the error. */
+/** Max consecutive legacy CC/XD auto auth-retries per remote session before surfacing the error. */
 const MAX_REMOTE_AUTH_RETRIES = 2;
 /** Bound best-effort main-side /clear guard arming so local cleanup cannot hang forever. */
 const CLEAR_SESSION_GUARD_TIMEOUT_MS = 500;
@@ -359,7 +359,7 @@ export interface ChatMessage {
   /** F-MSG-DOC: document/file attachments (path) for rendering as @path in message stream */
   files?: Array<{ name: string; path: string }>;
   /**
-   * Remote auth-retry / cc-mgr upgrade retry payload: the original send's
+   * Legacy CC/XD remote auth-retry / cc-mgr upgrade retry payload: the original send's
    * attachments + mentions, kept on the user message so an auto-retry (or the
    * UpgradeBanner resend) can replay the exact same turn. Set at send time,
    * not persisted to the server.
@@ -3463,7 +3463,7 @@ function initGlobalListeners(): void {
     // parent_tool_use_id / sdkSessionId / model / ... 提取并塞在 event 顶层, 这里把它转到
     // CCAgentStreamEvent.agentMeta 让 handleStreamEvent 落库 messages.agent_meta 行,
     // fork / rewind 反向找 prior assistant 锚点要靠这个字段。
-    // Remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
+    // Legacy CC/XD remote auth-retry: 在 reducer 写 error 之前拦截,避免 error banner 闪烁。
     if (event.type === 'error') {
       const errData =
         (event.data as { sdkError?: string; message?: string; errorStatus?: number }) ?? {};
@@ -3476,6 +3476,7 @@ function initGlobalListeners(): void {
       if (
         isAuthError &&
         preSnap.remoteHostId &&
+        preSnap.agentKind === 'claude-code' &&
         !preSnap._authRetryInFlight &&
         authRetryCount < MAX_REMOTE_AUTH_RETRIES
       ) {
@@ -3576,13 +3577,22 @@ function initGlobalListeners(): void {
         }
       }
       // guard fall-through（cap 超限 / 已重试同消息）：重试不会发生。
-      // main 侧对所有 remote auth error 均跳过持久化；在此补落。
+      // 仅 legacy CC/XD 在此补落：main 侧只对 CC remote auth error 跳过持久化
+      // （isRemoteAuthRetryErrorEvent 对 codex 直接返回 false），由这里的 deferred
+      // IPC 兜底。Codex remote auth error 在 main 侧走正常 onTurnErrorEvent 热路径
+      // 落库；这里再落会双写——Codex 事件无 agentMeta，main 又在广播后 reset turn
+      // 身份，两次落库的 dedup key 对不上，重开会话会出现重复错误卡。
       // 限制仅当 preSnap.remoteHostId 已加载时才触发：
       //   - 对于已加载的远程会话，能确认无 retry 在途，可安全落库。
       //   - 对于从未打开的后台会话（remoteHostId 为 null），无法判断另一个窗口
       //     是否正在 retry；贸然落库若 retry 成功会留下虚假错误卡，不落库则
       //     等价于旧行为（重启后错误丢失）—— 保守起见不做 deferred。
-      if (isAuthError && preSnap.remoteHostId && !preSnap._authRetryInFlight) {
+      if (
+        isAuthError &&
+        preSnap.remoteHostId &&
+        preSnap.agentKind === 'claude-code' &&
+        !preSnap._authRetryInFlight
+      ) {
         void makerApiFor(sessionId).input.persistTurnErrorDeferred(
           sessionId,
           event.data as Record<string, unknown> | null,
@@ -4435,7 +4445,10 @@ function initGlobalListeners(): void {
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
-      void openUrlInSidebarBrowser(p.sessionId, p.url).catch(() => {
+      // userInitiated:false —— 这是插件在后台干完活自己要求开的页,不是用户点的。
+      // 标签照常落地、内容照常加载,但不得把侧边栏子窗口抢到前台打断用户
+      // (detached 形态 + Windows 上 focus() 即抢前台)。
+      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });
       toast.info(i18n.t('chat.ghostPreview.opened'), {

@@ -172,8 +172,18 @@ describe('mobile account deletion', () => {
     // 浮层定位:frame 由 resolveDeletionBubbleFrame(stage, insets.top) 解析
     // (safe-area 走 insets,不硬编码状态栏高),面板以 absolute 落在 viewport 坐标。
     expect(login).toContain('resolveDeletionBubbleFrame(stage, insets.top)');
-    expect(panel).toContain('{ left: frame.left, top: frame.top, width: frame.width }');
+    expect(panel).toContain('left: frame.left');
+    expect(panel).toContain('top: frame.top');
+    expect(panel).toContain('width: frame.width');
     expect(panel).toContain('styles.deletionBubble');
+    // 内部几何按 frame.scale 折算(设计单位 → 物理 pt),不再写死物理值
+    expect(panel).toContain('const scaled = (designUnits: number) => designUnits * frame.scale');
+    expect(panel).toContain('borderRadius: scaled(B.radius)');
+    expect(panel).toContain('padding: scaled(B.padding)');
+    expect(panel).toContain('fontSize: scaled(B.font)');
+    expect(panel).toContain('lineHeight: scaled(B.lineHeight)');
+    expect(panel).toContain('marginTop: scaled(B.titleBodyGap)');
+    expect(panel).toContain('marginTop: scaled(B.bodyLinkGap)');
 
     // 气泡不再渲染在 680 设计 px 缩放容器内(修「被登录面板覆盖」的结构根因):
     // 缩放容器开标签到 {stateContent} 之间不得再出现面板引用。
@@ -201,7 +211,7 @@ describe('mobile account deletion', () => {
     expect(panel).toContain('accessibilityRole="button"');
     expect(panel).toContain('onPress={onDismiss}');
     expect(panel).toContain('testID="login.accountDeletionDismissButton"');
-    expect(panel).toContain('hitSlop={LOGIN_DELETION_BUBBLE.linkHitSlop}');
+    expect(panel).toContain('hitSlop={resolveDeletionBubbleLinkHitSlop(frame.scale)}');
     expect(panel).toContain('styles.deletionBubbleLinkText');
     expect(login).toContain("textDecorationLine: 'underline'");
 
@@ -209,13 +219,18 @@ describe('mobile account deletion', () => {
     // 全部消费 LOGIN_DELETION_BUBBLE 常量,无固定高、无阴影/elevation、无动画。
     expect(login).toContain('backgroundColor: colors.login.deletionBubbleBg');
     expect(login).toContain('borderColor: colors.login.deletionBubbleBorder');
-    expect(login).toContain('borderRadius: LOGIN_DELETION_BUBBLE.radius');
     expect(login).toContain('borderWidth: LOGIN_DELETION_BUBBLE.borderWidth');
-    expect(login).toContain('padding: LOGIN_DELETION_BUBBLE.padding');
     expect(login).toContain('color: colors.login.controlText');
     expect(login).toContain('color: colors.login.secondaryText');
-    expect(login).toContain('marginTop: LOGIN_DELETION_BUBBLE.titleBodyGap');
-    expect(login).toContain('marginTop: LOGIN_DELETION_BUBBLE.bodyLinkGap');
+    // 缩放相关几何不许留在 StyleSheet 里(会变成未折算的物理值)
+    const styleSlice = login.slice(
+      login.indexOf('deletionBubble: {'),
+      login.indexOf('stepHeader:'),
+    );
+    expect(styleSlice).not.toContain('LOGIN_DELETION_BUBBLE.radius');
+    expect(styleSlice).not.toContain('LOGIN_DELETION_BUBBLE.padding');
+    expect(styleSlice).not.toContain('LOGIN_DELETION_BUBBLE.font');
+    expect(styleSlice).not.toContain('LOGIN_DELETION_BUBBLE.lineHeight');
     const bubbleStyleSlice = login.slice(
       login.indexOf('deletionBubble: {'),
       login.indexOf('stepHeader:'),

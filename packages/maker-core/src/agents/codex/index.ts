@@ -296,8 +296,9 @@ function mapPermissionToCodex(
       return { approvalPolicy: 'never', sandbox: 'danger-full-access' };
     case 'auto':
       if (!approvalsReviewerSupported) {
-        // 旧 app-server 没有 approvalsReviewer 字段时回退到原生 untrusted:
-        // 可信命令自动执行,其余请求交给用户。不能发送未知字段让整次 RPC 失败。
+        // 旧 app-server 或未验证 reviewer 模型路由时回退到原生 untrusted:
+        // 可信命令自动执行,其余请求交给用户。既不能发送未知字段,也不能让
+        // 首个越界动作撞上 provider 不支持的隐藏审核模型。
         return { approvalPolicy: 'untrusted', sandbox: 'workspace-write' };
       }
       // Codex app-server 原生 auto_review 与 Claude Auto 的分工一致:
@@ -309,21 +310,27 @@ function mapPermissionToCodex(
   }
 }
 
-/**
- * `approvalsReviewer` is verified against the app-server bundled with Codex 0.144.6.
- * Remote hosts may keep an older standalone binary across desktop upgrades, so parse the
- * initialize userAgent and conservatively omit the field unless that verified floor is met.
- */
-function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean {
+function codexUserAgentAtLeast(
+  userAgent: string | undefined,
+  minimum: readonly [number, number, number],
+): boolean {
   const match = /\/(\d+)\.(\d+)\.(\d+)(?:[-+ )]|$)/.exec(userAgent ?? '');
   if (!match) return false;
   const version = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
-  const minimum = [0, 144, 6] as const;
   for (let i = 0; i < minimum.length; i += 1) {
     if (version[i]! > minimum[i]!) return true;
     if (version[i]! < minimum[i]!) return false;
   }
   return true;
+}
+
+/**
+ * `approvalsReviewer` is verified against the app-server bundled with Codex 0.144.6.
+ * Remote hosts may keep an older standalone binary across desktop upgrades, so parse the
+ * initialize userAgent and conservatively omit the field unless that verified floor is met.
+ */
+function supportsCodexApprovalsReviewerProtocol(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 144, 6]);
 }
 
 /**
@@ -333,7 +340,16 @@ function supportsCodexApprovalsReviewer(userAgent: string | undefined): boolean 
  * runtime root writable.
  */
 function supportsCodexReadonlyReferenceDirs(userAgent: string | undefined): boolean {
-  return supportsCodexApprovalsReviewer(userAgent);
+  return supportsCodexApprovalsReviewerProtocol(userAgent);
+}
+
+/**
+ * `excludeTurns` was introduced in Codex 0.125.0 and later marked experimental.
+ * Older remote daemons can outlive desktop upgrades, so omit the unknown field
+ * and preserve their legacy full-history resume behavior.
+ */
+function supportsCodexResumeExcludeTurns(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 125, 0]);
 }
 
 const READONLY_REFERENCES_PERMISSION_PROFILE = 'cindy-readonly-references';
@@ -604,6 +620,15 @@ function parseLeadingSlashToken(text: string): { name: string; rest: string } | 
   const match = text.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/);
   if (!match?.[1]) return null;
   return { name: match[1], rest: match[2] ?? '' };
+}
+
+function isExpectedTurnIdMismatchError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
@@ -2074,8 +2099,22 @@ export class CodexAgent extends BaseAgent {
       throw error;
     }
     if (initResp.codexHome) this.codexHome = initResp.codexHome;
-    const approvalsReviewerSupported = supportsCodexApprovalsReviewer(initResp.userAgent);
+    const sessionCredentialMode = opts.remoteHostId
+      ? undefined
+      : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
+    const approvalsReviewerProtocolSupported =
+      supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
+    // Codex's built-in reviewer currently selects the hidden `codex-auto-review`
+    // model through the session's model provider. Cindy's gateway, third-party
+    // providers, and remote daemons do not have a verified route for that model.
+    // Keep Auto usable on those routes by falling back to Codex's native
+    // `untrusted` policy instead of letting the first write fail in the reviewer.
+    const approvalsReviewerRouteSupported =
+      !opts.remoteHostId && sessionCredentialMode === 'oauth-bearer';
+    const approvalsReviewerSupported =
+      approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported;
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
+    const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
       releaseHostBindingLeaseIfNeeded();
       throw new Error(
@@ -2083,8 +2122,12 @@ export class CodexAgent extends BaseAgent {
       );
     }
     if (mutablePermissionMode === 'auto' && !approvalsReviewerSupported) {
-      log.warn('Codex Auto falling back to untrusted approvals: app-server lacks verified auto-review support', {
+      log.warn('Codex Auto falling back to untrusted approvals: automatic reviewer is unavailable on this route', {
         userAgent: initResp.userAgent,
+        providerId: opts.providerId ?? null,
+        credentialMode: sessionCredentialMode ?? 'unknown',
+        remote: Boolean(opts.remoteHostId),
+        protocolSupported: approvalsReviewerProtocolSupported,
       });
     }
     // 闭包 capture 一次, 整个 session 复用 — codexHome 是 server 进程级常量, host 不变就不变。
@@ -2349,44 +2392,6 @@ export class CodexAgent extends BaseAgent {
     let threadId: string;
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
-    const collaborationModeFromText = (text: string): 'plan' | 'default' | null => {
-      const match = /<collaboration_mode>\s*#\s*(Plan|Default)\s+Mode/i.exec(text);
-      if (!match) return null;
-      return match[1]?.toLowerCase() === 'plan' ? 'plan' : 'default';
-    };
-
-    const textFromResponsesItem = (value: unknown): string[] => {
-      if (!value || typeof value !== 'object') return [];
-      if (Array.isArray(value)) return value.flatMap(textFromResponsesItem);
-      const record = value as Record<string, unknown>;
-      const texts: string[] = [];
-      if (typeof record.text === 'string') texts.push(record.text);
-      if (Array.isArray(record.content)) texts.push(...record.content.flatMap(textFromResponsesItem));
-      return texts;
-    };
-
-    const threadHistoryNeedsDefaultModeMarker = (thread: unknown): boolean => {
-      if (!thread || typeof thread !== 'object') return false;
-      const turns = (thread as { turns?: unknown }).turns;
-      if (!Array.isArray(turns)) return false;
-      // Codex 0.142.5 thread/resume includes turns[].items. Only collaboration
-      // markers are authoritative here: ordinary non-Plan-Mode Codex turns can
-      // also persist native `type:'plan'` items.
-      let latestCollaborationMode: 'plan' | 'default' | null = null;
-      for (const turn of turns) {
-        if (!turn || typeof turn !== 'object') continue;
-        const items = (turn as { items?: unknown }).items;
-        if (!Array.isArray(items)) continue;
-        for (const item of items) {
-          if (!item || typeof item !== 'object') continue;
-          for (const text of textFromResponsesItem(item)) {
-            latestCollaborationMode = collaborationModeFromText(text) ?? latestCollaborationMode;
-          }
-        }
-      }
-      return latestCollaborationMode === 'plan';
-    };
-
     /**
      * 会话中途把单个设置 (serviceTier / model / effort) 立即推给 app-server,
      * 写入后续 turn 的 sticky context — 不必等下一个 turn/start 携带 (与官方
@@ -2448,6 +2453,7 @@ export class CodexAgent extends BaseAgent {
       const useProxyChannel = isCodexProxyChannelReady();
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
+        ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
         cwd: opts.workingDir,
         ...currentThreadWorkspaceConfig(),
         ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
@@ -2465,6 +2471,9 @@ export class CodexAgent extends BaseAgent {
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
+        if (mutableModel === 'gpt-5' && resp.model) {
+          mutableModel = resp.model;
+        }
         threadId = resp.thread.id;
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
@@ -2478,7 +2487,10 @@ export class CodexAgent extends BaseAgent {
         // that sticky state lives server-side, conservatively send mode:'default'
         // on future normal turns after any successful resume.
         threadTouchedPlanMode = true;
-        planModeDefaultMarkerNeeded = threadHistoryNeedsDefaultModeMarker(resp.thread);
+        // excludeTurns intentionally loads no history, so we cannot prove whether
+        // the persisted thread last used Plan Mode. Inject the official Default
+        // marker once; markCollaborationModeAccepted() suppresses repeats.
+        planModeDefaultMarkerNeeded = true;
         log.info('thread/resume ok', { threadId, model: resp.model, serviceTier: mutableServiceTier ?? null });
       } catch (e) {
         releaseHostBindingLeaseIfNeeded();
@@ -2702,9 +2714,9 @@ export class CodexAgent extends BaseAgent {
       req: InteractionRequest,
       opts?: { forcePrompt?: boolean },
     ): Promise<ApprovalDecision> {
-      // Full access 的普通审批不应打断用户。Auto 的越界审批由 app-server
-      // auto_review 负责；如果某个请求仍回到客户端，走 UI 是安全的 fail-to-prompt
-      // 兜底，不能绕过 reviewer 直接放行。forcePrompt 高风险 MCP inner tool
+      // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
+      // auto_review 负责；降级路由则由 untrusted 把越界请求发回客户端。两条路径
+      // 只要收到请求都走 UI，不能绕过 reviewer / 降级审批直接放行。forcePrompt 高风险 MCP inner tool
       // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
       if (
         !opts?.forcePrompt &&
@@ -2817,8 +2829,9 @@ export class CodexAgent extends BaseAgent {
     let pendingTightenInterrupt = false;
     /**
      * 最近一次 send 的 turn 是否以无人值守策略发射 (覆盖在飞与运行中两个阶段)。
-     * auto_review / never 发射的 turn 在收紧时需要中断; user reviewer 发射的 turn
-     * 审批请求照常流经本地、收紧即时生效,即使期间 UI 短暂切过宽松档也不得误杀。
+     * Auto (auto_review 或 untrusted 降级) / never 发射的 turn 在收紧时需要中断;
+     * user reviewer 发射的 turn 审批请求照常流经本地、收紧即时生效,即使期间 UI
+     * 短暂切过宽松档也不得误杀。
      */
     let turnLaunchedUnattended = false;
     /**
@@ -4018,10 +4031,10 @@ export class CodexAgent extends BaseAgent {
         // effort 同理: 协议层只能在 turn/start 透传 (v2.rs:5800), thread/start 不接;
         // 用户在 session 创建时选的 effort 也是靠 first turn/start 这里传过去才生效。
         const turnWorkspaceConfig = currentTurnWorkspaceConfig();
-        const { approvalPolicy, approvalsReviewer } = turnWorkspaceConfig;
-        // 记录本 turn 是否由无人值守策略发射。Auto-review 也需要在切回 Ask
-        // 时中断当前 turn,避免 reviewer 继续替用户批准新的越界操作。
-        turnLaunchedUnattended = approvalPolicy === 'never' || approvalsReviewer === 'auto_review';
+        const { approvalPolicy } = turnWorkspaceConfig;
+        // 记录本 turn 是否由无人值守策略发射。Auto 即使因路由能力降级为
+        // untrusted,切回 Ask 时也必须中断当前 turn,避免旧策略继续执行 trusted 操作。
+        turnLaunchedUnattended = mutablePermissionMode === 'auto' || approvalPolicy === 'never';
         let turnInput: TurnStartParams['input'];
         try {
           turnInput = await toTurnInput(message.content);
@@ -4149,16 +4162,26 @@ export class CodexAgent extends BaseAgent {
               host.subscribeThread(threadId, handlers);
               const resumeParams: ThreadResumeParams = {
                 threadId,
+                ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
                 cwd: opts.workingDir,
                 ...currentThreadWorkspaceConfig(),
                 ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
                 ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
               };
               const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams);
+              if (mutableModel === 'gpt-5' && resumeResp.model) {
+                mutableModel = resumeResp.model;
+                turnParams.effort = clampEffortForCodex(mutableModel, mutableEffort);
+                if (turnParams.collaborationMode) {
+                  turnParams.collaborationMode.settings.model = mutableModel;
+                  turnParams.collaborationMode.settings.reasoning_effort =
+                    clampEffortForCodex(mutableModel, mutableEffort);
+                }
+              }
               if (collaborationMode?.mode === 'default') {
-                planModeDefaultMarkerNeeded = threadHistoryNeedsDefaultModeMarker(resumeResp.thread);
+                planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
-                  turnParams.collaborationMode.settings.developer_instructions = planModeDefaultMarkerNeeded ? null : '';
+                  turnParams.collaborationMode.settings.developer_instructions = null;
                 }
               }
               log.info('thread/resume after stale daemon ok, retrying turn/start', { threadId });
@@ -4246,9 +4269,10 @@ export class CodexAgent extends BaseAgent {
         // 没有被打断,它们仍然有效。
         // (历史:2026-06 曾以「模型继续旧工具计划」为由改成 interrupt+follow-up,
         // 那正是注入语义的预期行为,现按统一产品决策回归注入。)
-        // expectedTurnId 是 stale-client 防线:server 端 turn 已结束时报
-        // "no active turn to steer" 而不是伪装成功,coordinator 按 NO_ACTIVE_TURN
-        // fallback 成普通派发,消息不丢。
+        // expectedTurnId 是 stale-client 防线:server 端 turn 已结束时会报
+        // "no active turn to steer",或在当前已有另一 turn 时报告 expected/found
+        // id 不匹配。后者同样是明确的 pre-accept 拒绝,需归一化为 no-active-turn,
+        // 让 coordinator fallback 成普通派发,消息不丢。
         log.debug('steer ▶ inject into active turn', {
           threadId,
           turnId: steeredTurnId,
@@ -4313,6 +4337,14 @@ export class CodexAgent extends BaseAgent {
             );
           });
           ackSettled = true;
+        } catch (error) {
+          if (isExpectedTurnIdMismatchError(error)) {
+            // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
+            // 标记 RPC 已 settle,避免把这类确定性拒绝误当成 timeout/abort 在飞请求。
+            ackSettled = true;
+            throw new Error('No active Codex turn to steer', { cause: error });
+          }
+          throw error;
         } finally {
           if (!ackSettled) {
             // 超时 / abort 后请求仍在飞:迟到成功说明消息已注入但上层已按失败
@@ -4407,7 +4439,8 @@ export class CodexAgent extends BaseAgent {
       async setPermissionMode(newMode: PermissionMode) {
         log.debug('setPermissionMode', { from: mutablePermissionMode, to: newMode });
         // Full access 才能批量放行挂起的 ask。切到 Auto 时，已有请求不能绕过
-        // app-server reviewer，先 fail-closed 关闭；后续重试会按 auto_review 路由。
+        // reviewer / untrusted 降级审批，先 fail-closed 关闭；后续重试按当前路由能力
+        // 选择 auto_review 或 untrusted。
         const allowPending = newMode === 'bypassPermissions';
         dismissAllPending(`permission_mode_changed_to_${newMode}`, allowPending ? 'allow' : 'deny');
         const wasAuto = mutablePermissionMode === 'auto';
@@ -4426,8 +4459,8 @@ export class CodexAgent extends BaseAgent {
         if (!tightensCurrentTurn) {
           pendingTightenInterrupt = false;
         } else if (!closed && turnLaunchedUnattended) {
-          // 只中断 auto_review / never 发射的 turn; user reviewer 发射的 turn 审批请求
-          // 照常流经本地、收紧即时生效,期间 UI 短暂切过宽松档不构成中断理由。
+          // 只中断 Auto (含 untrusted 降级) / never 发射的 turn; user reviewer 发射的
+          // turn 审批请求照常流经本地、收紧即时生效,期间 UI 短暂切过宽松档不构成中断理由。
           if (currentTurnId !== null) {
             await interruptTurnForPermissionTighten(currentTurnId);
           } else if (isTurnStartPending) {

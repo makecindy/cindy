@@ -9,6 +9,7 @@ import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
+import { ensureSystemBinPathForMachineId } from './deviceId.js';
 
 // 同机双装(cn/global):global 构建把 userData 切到区域目录(CindyGlobal),
 // 与 cn 版(productName 默认 'Cindy')彻底分库;数据库 / 登录态 / 单实例锁 /
@@ -36,6 +37,13 @@ const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
 log.debug(`[fix-path] after PATH=${process.env.PATH ?? ''}`);
+
+// Guarantee /usr/sbin:/sbin are on PATH before anything resolves the device id.
+// A Finder/Dock-launched GUI process inherits a minimal PATH without them, so
+// node-machine-id's bare `ioreg` isn't found and machineIdSync() throws — which,
+// read at authManager's module top, crashed the whole app on launch (0.1.14).
+// Must run before bootstrap-electron (and thus authManager) is imported below.
+ensureSystemBinPathForMachineId();
 
 // !! 必须在 dispatch() 之前同步执行 !!
 // 把用户系统(HKCU / shell rc)注入到本进程 process.env 上的 Anthropic / Claude Code

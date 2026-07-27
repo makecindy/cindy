@@ -1251,6 +1251,19 @@ function ExpandedView({
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);
+  // 这三个值 handleSessionClick 只在「点击那一刻」读一次。留在它的 deps 里会让
+  // 每次点击(:setSelectionAnchorSessionId 必触发)和每次切换都重建 handler,
+  // 行的 onClick 跟着换引用 → 整表 memo 失效重画一遍(SessionItem.tsx 不变量 #3)。
+  // 经 ref 读还顺带避开闭包陈旧:拿到的是最新值而非渲染时快照。
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+  // viewedSessionId 同理:handleActionClick 只在触发归档那一刻用它算重定向目标。
+  const viewedSessionIdRef = useRef(viewedSessionId);
+  viewedSessionIdRef.current = viewedSessionId;
+  const selectedSessionIdsRef = useRef(selectedSessionIds);
+  selectedSessionIdsRef.current = selectedSessionIds;
+  const selectionAnchorSessionIdRef = useRef(selectionAnchorSessionId);
+  selectionAnchorSessionIdRef.current = selectionAnchorSessionId;
   const [bulkActionPending, setBulkActionPending] = useState<BulkSessionAction | null>(null);
   const sidebarScrollRef = useRef<HTMLDivElement>(null);
   // 含远程会话:device-link 远程行也渲染在可选行里,bulk 选择/归档/删除必须能解析到它们
@@ -1259,6 +1272,10 @@ function ExpandedView({
     () => new Map([...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
     [sessions, remoteProjectSessions],
   );
+  // 与 sessionsRef 同理:行级 handler 只在「点击那一刻」查表,不该因为表换了引用就
+  // 重建自身 —— 否则 SessionItem 的 memo 会被整表打穿(SessionItem.tsx 不变量第 3 条)。
+  const sessionsByIdRef = useRef(sessionsById);
+  sessionsByIdRef.current = sessionsById;
   const selectedSessions = useMemo(
     () =>
       [...selectedSessionIds]
@@ -1381,10 +1398,9 @@ function ExpandedView({
         if (modifiers?.shiftKey) {
           const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
           const visibleIdSet = new Set(visibleIds);
+          const anchorSessionId = selectionAnchorSessionIdRef.current;
           const anchor =
-            selectionAnchorSessionId && visibleIds.includes(selectionAnchorSessionId)
-              ? selectionAnchorSessionId
-              : id;
+            anchorSessionId && visibleIds.includes(anchorSessionId) ? anchorSessionId : id;
           const anchorIndex = visibleIds.indexOf(anchor);
           const targetIndex = visibleIds.indexOf(id);
           const rangeIds =
@@ -1418,7 +1434,7 @@ function ExpandedView({
         return;
       }
 
-      if (selectedSessionIds.size > 0) {
+      if (selectedSessionIdsRef.current.size > 0) {
         setSelectedSessionIds(new Set());
       }
       setSelectionAnchorSessionId(id);
@@ -1426,20 +1442,15 @@ function ExpandedView({
       clearNotification(id);
       markAutomationSessionRunsRead(id);
       clearSystemSessionAttention(id);
-      if (id === activeSessionId) return; // No duplicate navigate.
+      if (id === activeSessionIdRef.current) return; // No duplicate navigate.
       if (import.meta.env.DEV) perfLog.debug(`sidebar:click sid=${id}`); // 纯诊断,生产剔除
-      const target = sessions.find((s) => s.id === id);
+      const target = sessionsRef.current.find((s) => s.id === id);
       navigate(await resolveSessionRoute(id, target));
     },
-    [
-      activeSessionId,
-      navigate,
-      clearNotification,
-      markAutomationSessionRunsRead,
-      sessions,
-      selectedSessionIds.size,
-      selectionAnchorSessionId,
-    ],
+    // deps 只剩三个天然稳定的引用:navigate(router)、clearNotification(空 deps
+    // useCallback)、markAutomationSessionRunsRead(随 scheduleSessionIndex,仅
+    // schedule 真变时换)。至此 onClick 在运行期与切换时都不再换引用。
+    [navigate, clearNotification, markAutomationSessionRunsRead],
   );
 
   /* ---- Project 行内的 + 按钮：对标顶部 "+ New"——预填该 project 的 workingDir 后进 draft 路由 ----
@@ -1584,13 +1595,15 @@ function ExpandedView({
   /* ---- Rename handler ---- */
   const handleRename = useCallback(
     async (sessionId: string, newTitle: string) => {
-      const session = sessionsById.get(sessionId);
+      const session = sessionsByIdRef.current.get(sessionId);
       if (isRemoteSessionWriteBlocked(session)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
         return;
       }
       // 取旧值用于失败回滚，乐观先 patch（不刷整列表，列表顺序保持稳定）
-      const oldTitle = sessions.find((s) => s.id === sessionId)?.title;
+      // 保持读 sessions(而非 sessionsById):后者含 remoteProjectSessions,换源会连带
+      // 改变远程会话的回滚行为,不在本次修复范围内。
+      const oldTitle = sessionsRef.current.find((s) => s.id === sessionId)?.title;
       patchLocal(sessionId, { title: newTitle });
       try {
         // 远程会话:patch-meta 经隧道写被控端 → 广播 sessions:patched → applyPatch 更新远程分片(纯镜像)。
@@ -1601,7 +1614,7 @@ function ExpandedView({
         if (oldTitle !== undefined) patchLocal(sessionId, { title: oldTitle });
       }
     },
-    [sessions, sessionsById, patchLocal, t],
+    [patchLocal, t],
   );
 
   const handleProjectAliasChange = useCallback(
@@ -1620,12 +1633,13 @@ function ExpandedView({
   /* ---- Pin / Unpin handler ---- */
   const handleTogglePin = useCallback(
     async (sessionId: string, currentlyPinned: boolean) => {
-      const session = sessionsById.get(sessionId);
+      const session = sessionsByIdRef.current.get(sessionId);
       if (isRemoteSessionWriteBlocked(session)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
         return;
       }
-      const oldPinnedAt = sessions.find((s) => s.id === sessionId)?.pinnedAt ?? null;
+      // 同 handleRename:回滚值刻意仍读 sessions,不换成 sessionsById。
+      const oldPinnedAt = sessionsRef.current.find((s) => s.id === sessionId)?.pinnedAt ?? null;
       const newPinnedAt = currentlyPinned ? null : new Date().toISOString();
       patchLocal(sessionId, { pinnedAt: newPinnedAt });
       // pin / re-pin 时把它顶到 manualPinnedOrder 首位，否则带着老 rank 会卡回原位。
@@ -1640,7 +1654,9 @@ function ExpandedView({
         patchLocal(sessionId, { pinnedAt: oldPinnedAt });
       }
     },
-    [filter, patchLocal, sessions, sessionsById, t],
+    // 只依赖 filter.promotePin(useCallback 稳定),不要整个 filter ——
+    // useSidebarFilter 每次调用都返回新对象字面量,带上它等于每渲染换引用。
+    [filter.promotePin, patchLocal, t],
   );
 
   const handleToggleProjectPin = useCallback(
@@ -1658,7 +1674,7 @@ function ExpandedView({
 
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
-      const session = sessionsById.get(sessionId);
+      const session = sessionsByIdRef.current.get(sessionId);
       if (!session) return;
       if (session.remoteHostId || session.deviceLinkDeviceId) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
@@ -1738,7 +1754,16 @@ function ExpandedView({
         );
       }
     },
-    [collapse, effectiveRunningSessionIds, patchLocal, sessionsById, t],
+    // 同理只依赖用到的三个成员,不要整个 collapse —— useCollapsedProjects 也返回
+    // 新对象字面量。collapsed 是 Set,仅用户手动折叠/展开时换引用,频率可忽略。
+    [
+      collapse.collapsed,
+      collapse.expand,
+      collapse.setCollapsed,
+      effectiveRunningSessionIds,
+      patchLocal,
+      t,
+    ],
   );
 
   /* ---- Delete / Archive / Unarchive action handlers ----
@@ -1759,7 +1784,7 @@ function ExpandedView({
 
   const handleActionClick = useCallback(
     async (sessionId: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => {
-      const session = sessionsById.get(sessionId);
+      const session = sessionsByIdRef.current.get(sessionId);
       if (isRemoteSessionWriteBlocked(session)) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
         return;
@@ -1794,8 +1819,11 @@ function ExpandedView({
           return;
         }
         // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
-        // 跳离失效的文件视图(codex review;正常路由下两者恒等)。
-        await runSessionAction(sessionId, 'archive', { activeSessionId: viewedSessionId });
+        // 跳离失效的文件视图(codex review;正常路由下两者恒等)。经 ref 读:它随
+        // 路由切换而变,留在 deps 里会让本 handler 每次切换都重建、打穿整表 memo。
+        await runSessionAction(sessionId, 'archive', {
+          activeSessionId: viewedSessionIdRef.current,
+        });
         return;
       }
       if (action !== 'unarchive') {
@@ -1810,10 +1838,8 @@ function ExpandedView({
       await unarchiveSession(sessionId);
     },
     [
-      viewedSessionId,
       runningSessionIds,
       runSessionAction,
-      sessionsById,
       unarchiveSession,
       t,
     ],

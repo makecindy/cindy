@@ -37,7 +37,7 @@
  * 静默完成不走去抖(见下方分支)。
  */
 
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
 import {
@@ -329,7 +329,11 @@ export function useSessionRunningStatus(
   );
 
   // Derive running set for the return value (outside effect, for rendering).
-  const runningSessionIds = deriveRunningSet(statusMap);
+  // 必须 memo:裸调用每渲染都 new Set,会顺着 effectiveRunningSessionIds →
+  // handleActionClick / handleMoveSession 一路换引用,把 SessionItem 的 memo
+  // 全表打穿(见 sidebar/SessionItem.tsx 的性能不变量第 3 条)。statusMap 来自
+  // useSyncExternalStore,只在真实状态变化时换引用,故这里的缓存是安全的。
+  const runningSessionIds = useMemo(() => deriveRunningSet(statusMap), [statusMap]);
 
   return {
     /** Set of session IDs currently running. */

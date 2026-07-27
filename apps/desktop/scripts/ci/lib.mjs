@@ -178,7 +178,8 @@ export function exec(cmd, opts = {}) {
 // ── package.json 版本号写入 (退出时自动恢复) ────────────────────────────────
 //
 // electron-packager 会把 package.json 拷到 asar 内部，运行时 app.getVersion()
-// 优先读那里。占位符 0.0.0-dev 不改的话热更新版本比较全部失真。
+// 优先读那里。源码里的 0.0.0 是版本无关构建哨兵；正式打包必须在 forge
+// 运行前临时写入真实版本，否则发布包会被 updateService 当成本地包而跳过更新。
 // 任何 exit / SIGINT / SIGTERM 都恢复，保证 git 工作区干净。
 
 const PACKAGE_JSON_PATH = path.join(DESKTOP_ROOT, 'package.json');

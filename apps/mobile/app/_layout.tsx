@@ -153,11 +153,11 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
   useEffect(() => {
     if (otaReady) dispatchHandoff({ type: 'ota-ready' });
   }, [otaReady, dispatchHandoff]);
-  // 自建变体:启动时检查整包更新(runtimeVersion 变化 → 引导跳 NPKG)。
-  // 内部 IS_OTA_SELFHOST gate,EAS 包为 no-op。JS 热更由上面的门 + expo-updates 处理,与此互补。
+  // 符合整包分发策略的自建变体:启动时检查整包更新(runtimeVersion 变化 → 引导安装)。
+  // TestFlight / 审核 / EAS 包为 no-op。JS 热更由上面的门 + expo-updates 处理,与此互补。
   useBundleUpdatePrompt({ auto: true, isCanary });
   // 自建变体:后台切回前台时静默补一次检查(OTA 静默 fetch 不 reload、整包仅强更提示)。
-  // 内部节流 + IS_OTA_SELFHOST gate,非自建为 no-op。见 useResumeUpdateCheck。
+  // TestFlight 保留 OTA、跳过整包分支；非自建为 no-op。见 useResumeUpdateCheck。
   useResumeUpdateCheck(isCanary);
   // 热更门未就绪(自建变体冷启动正在 check/fetch/reload)时不挂载业务树,避免闪旧 UI;
   // 期间根部常驻 splash 覆盖层在上面顶着,这里返回 null 即可。

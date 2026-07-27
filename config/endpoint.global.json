@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "authApiBaseUrl": "https://auth.cindy.app",
+  "authDesktopCallbackUrl": "",
   "deviceLinkApiBaseUrl": "https://device-link.cindy.app",
   "oauthBrokerApiBaseUrl": "https://oauth-broker.cindy.app",
   "ossApiBaseUrl": "https://oss.cindy.app",
@@ -15,5 +16,6 @@
   "pluginApiBaseUrl": "https://plugin.cindy.app",
   "cdnBaseUrl": "https://hotfix.cindy.app/cindy",
   "mobileUpdateBaseUrl": "https://mobile-update.cindy.app",
+  "authDesktopCallbackUrl": "https://auth.cindy.app/api/auth/desktop/callback",
   "review": "0.1.0"
 }

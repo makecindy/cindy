@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { renderGlossaryDoc } from './shared/glossary-doc.mjs';
+import { normalizeDocEol, renderGlossaryDoc } from './shared/glossary-doc.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GLOSSARY_PATH = path.join(repoRoot, 'i18n', 'glossary.json');
@@ -27,7 +27,7 @@ const rendered = renderGlossaryDoc(glossary);
 
 if (checkOnly) {
   const existing = fs.existsSync(DOC_PATH) ? fs.readFileSync(DOC_PATH, 'utf8') : '';
-  if (existing !== rendered) {
+  if (normalizeDocEol(existing) !== normalizeDocEol(rendered)) {
     console.error(
       '[generate-glossary-doc] ❌ i18n/GLOSSARY.md 与 i18n/glossary.json 不同步。\n' +
         '  运行 pnpm i18n:glossary-doc 重新生成。',

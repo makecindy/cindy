@@ -66,8 +66,9 @@
       "awaitingQuestion": "Awaiting your reply",
       "awaitingPlan": "Awaiting plan review",
       "permissionPromptTitle": "Confirm permission",
+      "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
-      "alwaysAllowForSession": "Always allow",
+      "alwaysAllowForSession": "Always allow for this session",
       "deny": "Deny"
     }
   },
@@ -307,9 +308,9 @@
         "confirmTitle": "Push Codex credentials to remote?",
         "confirmPush": "Push",
         "confirmOverwrite": "Overwrite",
-        "descFirstPush": "This will install your local Codex credentials at ~/.codex/auth.json on {{hostId}}.",
-        "descOverwrite": "This will overwrite the existing Codex login on {{hostId}}.",
-        "descOverwriteWithAge": "This will overwrite the existing Codex login on {{hostId}} (last updated {{when}}).",
+        "descFirstPush": "This will install your local Codex credentials in Cindy Codex home on {{hostId}} (~/.xdt-server/v1/codex-home/auth.json).",
+        "descOverwrite": "This will overwrite the existing Codex login in Cindy Codex home on {{hostId}}.",
+        "descOverwriteWithAge": "This will overwrite the existing Codex login in Cindy Codex home on {{hostId}} (last updated {{when}}).",
         "warnOverwrite": "The current remote login will be lost. If someone is using Codex on that machine right now, they will be logged out.",
         "warnShared": "Anyone who can SSH into {{hostId}} will be able to read this file and use your OpenAI account.",
         "daysAgo": "{{n}} day(s) ago",
@@ -1137,7 +1138,9 @@
         "logout": "Sign out",
         "connect": "Connect",
         "disconnect": "Disconnect",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "retry": "Retry model discovery",
+        "retrying": "Retrying discovery…"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -1343,7 +1346,27 @@
         "singleAgentNote": "{{agent}} only",
         "emptyModels": "Models are discovered automatically after you authorize",
         "emptyList": "Click \"Add provider\" below to connect your first model source",
-        "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly."
+        "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly.",
+        "discoveryFailed": {
+          "network": "Can't reach this provider, so its model list is unavailable. Check your network or proxy settings, then retry.",
+          "timeout": "Connection to this provider timed out, so its model list is unavailable. Check your network, then retry.",
+          "upstream": "This provider can't return its model list right now. Try again later.",
+          "regionBlocked": "This provider doesn't offer service in your current region, so its model list is unavailable. You can use a different provider instead.",
+          "unauthorized": "This provider rejected the current authorization, so its model list is unavailable. Disconnect and connect again.",
+          "forbidden": "This provider refused the request, so its model list is unavailable. If you're on a proxy or VPN, switch exits and retry.",
+          "rejected": "This provider refused the request, so its model list is unavailable. Try again later, or use a different provider.",
+          "empty": "This provider returned no usable models. Check your account's access, then retry."
+        },
+        "discoveryFailedStale": {
+          "network": "Can't reach this provider. The list below is from the last successful refresh. Check your network or proxy settings, then retry.",
+          "timeout": "Connection to this provider timed out. The list below is from the last successful refresh. Check your network, then retry.",
+          "upstream": "This provider can't return its model list right now. The list below is from the last successful refresh. Try again later.",
+          "regionBlocked": "This provider doesn't offer service in your current region. The list below is from the last successful refresh. You can use a different provider instead.",
+          "unauthorized": "This provider rejected the current authorization. The list below is from the last successful refresh. Disconnect and connect again.",
+          "forbidden": "This provider refused the request. The list below is from the last successful refresh. If you're on a proxy or VPN, switch exits and retry.",
+          "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
+          "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
+        }
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -2380,10 +2403,11 @@
           "invalidPackage": "This plugin package is invalid or is not supported by this version of Cindy."
         },
         "securityTitle": "Install and permissions",
-        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. New installs stay disabled until you review permissions and enable them.",
+        "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "installConfirmTitle": "Install “{{name}}”?",
-        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility, then installed disabled. Review its setup and enable it when ready."
+        "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
+        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
@@ -2476,6 +2500,7 @@
       "perm": {
         "grantsTitle": "After installing it will have:",
         "toolsGroup": "Registered Tools",
+        "toolsDiffGroup": "Registered Tool Changes",
         "itemCount": "{{count}} total",
         "cindyImageGenerate": "Image generation (delegated to Cindy)",
         "cindyImageEdit": "Image editing (delegated to Cindy, its own images only)",
@@ -3676,7 +3701,7 @@
       "title": "What's New",
       "newFeatures": "New Features",
       "bugFixes": "Bug Fixes",
-      "craftedBy": "Crafted by",
+      "thanksTo": "Thanks to",
       "gotIt": "Got it",
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
@@ -3830,6 +3855,8 @@
         "ACTION_STALE": "This setup changed. Choose the setup action again.",
         "AUTH_CANCELLED": "Authorization was cancelled. Authorize the account again when ready.",
         "AUTH_FAILED": "Couldn't authorize the account. Try again.",
+        "AUTH_NETWORK": "Couldn't reach the authorization service. Check your network and try again.",
+        "AUTH_SERVICE_UNAVAILABLE": "The authorization service is temporarily unavailable. Try again later.",
         "INLINE_INVALID": "This configuration is invalid. Check it and try again.",
         "INLINE_UNAVAILABLE": "This Cindy version can't save this configuration in chat. Update Cindy and try again.",
         "SAVE_FAILED": "Couldn't save this configuration. Try again.",
@@ -4408,7 +4435,7 @@
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
-      "codexAuthMissing": "Remote codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local ~/.codex/auth.json to the remote, then retry.",
+      "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
       "codexSessionExpiredDialog": {
@@ -4420,7 +4447,7 @@
       "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
       "syncAuth": "Sync auth",
       "syncAuthSyncing": "Syncing…",
-      "syncAuthTitle": "Push local ~/.codex/auth.json to remote codex-home",
+      "syncAuthTitle": "Push local Codex credentials to remote Cindy Codex home",
       "syncAuthSuccess": "Synced — click \"Retry\" to resend",
       "syncAuthFailed": "Sync failed: {{msg}}",
       "syncAuthDaemonRestartFailed": "Credentials pushed, but the old daemon did not restart — reconnect to the remote before retrying",
@@ -4959,6 +4986,21 @@
     }
   },
   "ccAgent": {
+    "agentStatus": {
+      "thinking": "Thinking…",
+      "generating": "Generating…",
+      "editingFiles": "Editing files…",
+      "searchingWeb": "Searching the web…",
+      "generatingImage": "Generating an image…",
+      "compacting": "Compacting context…",
+      "done": "Done",
+      "waiting": "Just wait…",
+      "working": "Working…",
+      "running": "Running…",
+      "turnStart": "{{status}}",
+      "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
+      "runningTool": "{{tool}} running…"
+    },
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
@@ -7388,7 +7430,7 @@
     },
     "providers": {
       "alipay": "Alipay",
-      "stripe": "Card"
+      "stripe": "Stripe"
     },
     "currentSubscription": {
       "title": "Current subscription",

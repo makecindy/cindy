@@ -1,7 +1,11 @@
 import Constants from 'expo-constants';
 
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import { VOICE_API_BASE_URL } from '@/config/env';
+import {
+  AUTH_REGION,
+  VOICE_API_BASE_URL,
+  type CindyAuthRegion,
+} from '@/config/env';
 import { i18n } from '@/i18n';
 import type {
   MobileVoiceCredentialSyncAsr,
@@ -231,7 +235,10 @@ const CINDY_MANAGED_REFINER_CHAIN = [
 ] as const satisfies readonly MobileVoiceCredentialSyncRefiner[];
 
 /** Builds the provider-neutral profile graph without persisting any inference key. */
-export function createMobileCindyVoiceCredential(hostDeviceId: string): StoredMobileVoiceCredential {
+export function createMobileCindyVoiceCredential(
+  hostDeviceId: string,
+  region: CindyAuthRegion = AUTH_REGION,
+): StoredMobileVoiceCredential {
   const normalizedHostDeviceId = hostDeviceId.trim();
   if (!normalizedHostDeviceId) throw new Error('host device id is required');
   const baseUrl = requireVoiceBaseUrl();
@@ -247,7 +254,9 @@ export function createMobileCindyVoiceCredential(hostDeviceId: string): StoredMo
     refiner: { ...CINDY_MANAGED_REFINER_CHAIN[0] },
     refinerProviderChain: CINDY_MANAGED_REFINER_CHAIN.map((item) => ({ ...item })),
     settings: {
-      language: 'auto',
+      // Global and dev builds let ASR detect the spoken language. The Mainland
+      // China build keeps Chinese as its product default.
+      language: region === 'cn' ? 'zh-CN' : 'auto',
       refinementEnabled: true,
       playInteractionSound: true,
     },
