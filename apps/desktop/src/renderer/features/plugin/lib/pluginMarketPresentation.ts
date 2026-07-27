@@ -27,6 +27,19 @@ export function pluginPresentationOrigin(
 }
 
 /**
+ * Same-version presentation refreshes are not package updates. Only a market
+ * item with a different installed version may surface the update affordance.
+ */
+export function pluginUpdateForInstalledVersion(
+  item: PluginMarketItem | null | undefined,
+  installedVersion: string,
+): PluginMarketItem | null {
+  return item?.installState === 'update-available' && item.version !== installedVersion
+    ? item
+    : null;
+}
+
+/**
  * Keeps the complete catalog in server order while rendering an installed card
  * for market records already owned by this client. Local-only installs have no
  * server position, so they remain visible after the ordered market catalog.

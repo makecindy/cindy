@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginMarketItem } from '../../../../../shared/pluginMarket';
-import { orderPluginCatalogItems, pluginPresentationOrigin } from '../pluginMarketPresentation';
+import {
+  orderPluginCatalogItems,
+  pluginPresentationOrigin,
+  pluginUpdateForInstalledVersion,
+} from '../pluginMarketPresentation';
 
 function marketItem(
   pluginId: string,
@@ -40,6 +44,24 @@ describe('pluginPresentationOrigin', () => {
 
   it.each([null, undefined])('keeps unmatched installed plugins local', (item) => {
     expect(pluginPresentationOrigin(item)).toBe('local');
+  });
+});
+
+describe('pluginUpdateForInstalledVersion', () => {
+  it('surfaces a real version update', () => {
+    const update = marketItem('plugin-update', 'example', 'update-available');
+    update.version = '2.0.0';
+
+    expect(pluginUpdateForInstalledVersion(update, '1.0.0')).toBe(update);
+  });
+
+  it.each([
+    ['same-version metadata refresh', marketItem('plugin-same', 'same', 'update-available')],
+    ['already installed', marketItem('plugin-installed', 'installed', 'installed')],
+    ['conflict', marketItem('plugin-conflict', 'conflict', 'conflict')],
+    ['missing market record', null],
+  ] as const)('does not surface %s as a package update', (_label, item) => {
+    expect(pluginUpdateForInstalledVersion(item, '1.0.0')).toBeNull();
   });
 });
 

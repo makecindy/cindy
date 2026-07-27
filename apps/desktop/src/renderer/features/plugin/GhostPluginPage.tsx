@@ -55,6 +55,7 @@ import {
   toGhostPluginDetail,
   toGhostPluginListItem,
   filterGhostPluginItems,
+  marketPresentationForInstalledGhost,
   sortGhostPluginItemsByRecentUse,
   type GhostPluginListItem,
 } from './lib/ghostPluginViewModel';
@@ -71,6 +72,7 @@ import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker'
 import {
   orderPluginCatalogItems,
   pluginPresentationOrigin,
+  pluginUpdateForInstalledVersion,
   type PluginPresentationOrigin,
 } from './lib/pluginMarketPresentation';
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
@@ -145,6 +147,7 @@ export function GhostPluginPage() {
     [],
   );
   const marketRefreshRequestRef = useRef(0);
+  const lastMarketRefreshAtRef = useRef(0);
   const marketDetailRequestRef = useRef(0);
   const installedGhostIdsKeyRef = useRef(installedGhostIdsKey);
   const legacyRecoveryStatusRequestRef = useRef(0);
@@ -164,6 +167,7 @@ export function GhostPluginPage() {
         throw new Error(snapshot.unavailableReason);
       }
       setMarketSnapshot(snapshot);
+      lastMarketRefreshAtRef.current = Date.now();
     } catch (error) {
       if (requestId !== marketRefreshRequestRef.current) return;
       setMarketSnapshot((current) =>
@@ -187,6 +191,22 @@ export function GhostPluginPage() {
     marketDetailRequestRef.current += 1;
     void refreshMarket();
   }, [refreshMarket, mode, dataOwnerId]);
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      // Focus/visibility events can fire in pairs when switching between Cindy and
+      // another app. Keep the market fresh without turning every focus event into
+      // a request storm; explicit installs and icon renewal still refresh directly.
+      if (Date.now() - lastMarketRefreshAtRef.current < 30_000) return;
+      void refreshMarket(true).catch(() => undefined);
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [refreshMarket]);
   useEffect(() => {
     if (installedGhostIdsKeyRef.current === installedGhostIdsKey) return;
     installedGhostIdsKeyRef.current = installedGhostIdsKey;
@@ -298,16 +318,13 @@ export function GhostPluginPage() {
         )
         .map((ghost) => {
           const marketItem = marketByGhostId.get(ghost.manifest.id) ?? null;
+          const presentation = marketPresentationForInstalledGhost(ghost, marketItem);
           return {
-            ...toGhostPluginListItem(ghost),
+            ...toGhostPluginListItem(ghost, presentation),
             origin: pluginPresentationOrigin(marketItem),
             // 迁移账本(legacy-unresolved)会让 main 把同版本 release 也判成
             // update-available;列表入口只对版本号确实变化的更新亮牌。
-            marketUpdate:
-              marketItem?.installState === 'update-available' &&
-              marketItem.version !== ghost.manifest.version
-                ? marketItem
-                : null,
+            marketUpdate: pluginUpdateForInstalledVersion(marketItem, ghost.manifest.version),
           };
         }),
     [ghosts, marketByGhostId],
@@ -384,12 +401,21 @@ export function GhostPluginPage() {
   const selectedGhost = selectedId
     ? (ghosts.find((ghost) => ghost.manifest.id === selectedId) ?? null)
     : null;
-  const selectedDetail = selectedGhost ? toGhostPluginDetail(selectedGhost) : null;
+  const selectedPresentation = selectedGhost
+    ? marketPresentationForInstalledGhost(
+        selectedGhost,
+        marketByGhostId.get(selectedGhost.manifest.id),
+      )
+    : null;
+  const selectedDetail = selectedGhost
+    ? toGhostPluginDetail(selectedGhost, selectedPresentation)
+    : null;
   const selectedMarketInstall = selectedDetail
     ? (marketByGhostId.get(selectedDetail.id) ?? null)
     : null;
-  const selectedMarketUpdate =
-    selectedMarketInstall?.installState === 'update-available' ? selectedMarketInstall : null;
+  const selectedMarketUpdate = selectedDetail
+    ? pluginUpdateForInstalledVersion(selectedMarketInstall, selectedDetail.version)
+    : null;
 
   const panelStatus = useMemo(() => {
     if (!selectedDetail || selectedDetail.panelMinWidth === null) return null;
