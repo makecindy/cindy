@@ -286,11 +286,19 @@ async function finishAdoption(
   //    留在原地 = 用户回到 local 模式仍能看到全部原始数据,代价是已导入的那部分
   //    在两边并存;「不丢」优先于「不重复」。
   if (keepLocalDb) {
+    // 导入没能把数据全带过来 → local 模式必须是**完整**的兜底恢复路径:不只是
+    // 不归档库,owner 命名空间与凭证也一并不动。只留个空壳库、配置和凭证却已经
+    // 搬走的话,「回 local 模式还能看到原来的数据」就是句空话(Copilot review)。
     deps.log.warn(
-      'local owner adoption: local db kept in place (not archived) because some rows could not be imported; local mode still shows the original data',
+      'local owner adoption: cleanup skipped entirely (local db, owner files and credentials all left in place) because some rows could not be imported; local mode stays a complete fallback',
     );
-  } else if (await deps.fs.pathExists(localDbPath)) {
+    return true;
+  }
+  if (await deps.fs.pathExists(localDbPath)) {
     try {
+      // 归档是这一步里唯一「抽走别人正在用的库」的动作:入口复查之后到这里仍有
+      // 一小段时间,再强制探一次(不走 500ms 节流,Greptile review)。
+      if (deps.hasConcurrentLiveInstances()) throw new AdoptionInterruptedError();
       const stamp = deps.now().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
       const archivePath = `${localDbPath}${ADOPTED_DB_SUFFIX}${stamp}-${archiveSeq++}`;
       // sidecar 先、db 最后:前置检查已确认此刻没有 -wal/-shm(checkpoint 过),
@@ -499,11 +507,11 @@ export async function runLocalOwnerDataAdoption(
       }
     }
 
-    deps.ui.publish('running');
     try {
       // 4. 确认窗可能停留很久,提交前复查:owner 仍有效(另一窗口可能已登出/切号
       //    ——绝不并进失效账号)、独占仍成立(与 ownerNamespaceMigration 的
-      //    mid-claim 复查同一姿势)。
+      //    mid-claim 复查同一姿势)。复查在 publish('running') **之前**做:否则
+      //    这两条中止路径会让弹窗先闪一下「正在并入…」再立刻消失(Copilot review)。
       if (!deps.isOwnerStillCurrent(userId)) {
         deps.log.info('local owner adoption aborted: owner changed while confirming');
         deps.ui.publish('done');
@@ -511,9 +519,10 @@ export async function runLocalOwnerDataAdoption(
       }
       if (deps.hasConcurrentLiveInstances()) {
         deps.log.info('local owner adoption interrupted: instance appeared while confirming');
-        deps.ui.publish('failed');
+        deps.ui.publish('done');
         return { status: 'deferred', reason: 'concurrent-live-instances' };
       }
+      deps.ui.publish('running');
 
       // 5. 提交点:行级导入。单事务,抛错即零写入,local 库分毫未动。续跑时重跑
       //    一遍也安全(幂等 no-op),省掉一条「跳过导入」的分支。
@@ -570,9 +579,14 @@ export async function runLocalOwnerDataAdoption(
       // 有数据没能并过来时保留 local 库不归档:归档才是让那些行在账号侧与
       // local 模式两边都消失的原因(Greptile review)。unverifiedTables 只是
       // 「无法断言」,不作为保留依据,否则正常路径也可能永不归档。
+      // 任何一种「没能确认数据全带过来」的信号都保留 local 模式兜底。
+      // unverifiedTables 是「无法断言」而非「已确认丢失」,但无主键可核验本身就
+      // 意味着 schema 不对劲,保守处理(Greptile review);正常 schema 下恒为空,
+      // localOwnerDataImport.test.ts 有断言保证每张导入表都有主键。
       const incomplete =
         Object.keys(imported.droppedRows).length > 0 ||
         imported.unimportableTables.length > 0 ||
+        imported.unverifiedTables.length > 0 ||
         imported.conflictedSessions > 0;
       return await commitAdoptionTail(
         deps,

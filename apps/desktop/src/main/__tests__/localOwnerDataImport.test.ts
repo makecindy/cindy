@@ -12,6 +12,7 @@ import fsp from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { Table, getTableName, is } from 'drizzle-orm';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
 
 import {
   IMPORTED_TABLES,
@@ -428,6 +429,23 @@ describe('导入表清单的完整性(防腐)', () => {
     const schemaTables = new Set<string>(schemaTableNames());
     expect([...IMPORTED_TABLES, ...SKIPPED_TABLES].filter((n) => !schemaTables.has(n))).toEqual([]);
     expect(IMPORTED_TABLES.filter((n) => SKIPPED_TABLES.includes(n))).toEqual([]);
+  });
+
+  it('每张导入表在 schema 上都有主键(否则丢行核验无从下手,unverifiedTables 会常态非空)', () => {
+    const byName = new Map<string, unknown>();
+    for (const value of Object.values(schema) as unknown[]) {
+      if (is(value, Table)) byName.set(sqlTableName(value), value);
+    }
+    const noPk = IMPORTED_TABLES.filter((name) => {
+      const table = byName.get(name);
+      if (table == null) return true;
+      const cfg = getTableConfig(table as Parameters<typeof getTableConfig>[0]);
+      return !cfg.columns.some((col) => col.primary) && cfg.primaryKeys.length === 0;
+    });
+    // 有主键才能核验「这一行到底有没有并过来」。新增的导入表若没有主键,要么补
+    // 主键、要么移进 SKIPPED_TABLES——不能让「无法核验」变成常态(那会导致认领
+    // 永远按不完整处理、local 库永不归档)。
+    expect(noPk).toEqual([]);
   });
 
   it('sessions 排在 messages 之前(外键父表先插)', () => {

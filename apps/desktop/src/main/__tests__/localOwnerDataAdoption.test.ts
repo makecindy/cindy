@@ -465,7 +465,8 @@ describe('runLocalOwnerDataAdoption 并入全流程', () => {
     expect(await runLocalOwnerDataAdoption(USER_ID, deps)).toEqual({ status: 'stale-owner' });
     expect(importLocalData).not.toHaveBeenCalled();
     expect(mem.exists(LOCAL_DB)).toBe(true);
-    expect(phases).toEqual(['confirm', 'running', 'done']);
+    // 复查在 publish('running') 之前:中止路径不该让弹窗闪一下「正在并入…」。
+    expect(phases).toEqual(['confirm', 'done']);
   });
 
   it('确认窗停留期间出现并发实例时推迟,不导入不动文件', async () => {
@@ -691,35 +692,46 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
     );
   });
 
-  it('丢行时不归档 local 库(否则那些行在账号侧与 local 模式两边都消失)', async () => {
+  it('丢行时整体跳过收尾:库、owner 文件、凭证全部留在原地(完整兜底)', async () => {
     const { mem, deps } = createHarness({
       importResult: { inserted: 2, droppedRows: { messages: 3 } },
     });
+    const localSecret = path.join(
+      SECRETS_DIR,
+      `${ownerSecretStoragePrefix(LOCAL_DATA_OWNER_ID)}anthropic.enc`,
+    );
     mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
+    mem.addFile(localSecret, 'k');
 
     expect((await runLocalOwnerDataAdoption(USER_ID, deps)).status).toBe('adopted');
 
-    // local 库留在原地 = 回到 local 模式仍能看到全部原始数据。
+    // 只留个空壳库而配置/凭证已搬走 = 兜底是句空话,三者必须都在。
     expect(mem.exists(LOCAL_DB)).toBe(true);
     expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
+    expect(mem.exists(path.join(ACCOUNT_OWNER_DIR, 'learn'))).toBe(false);
+    expect(mem.files.get(path.normalize(localSecret))).toBe('k');
     expect(deps.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining('kept in place (not archived)'),
+      expect.stringContaining('cleanup skipped entirely'),
     );
   });
 
-  it('整表没导入时同样保留 local 库不归档', async () => {
+  it('整表没导入时同样整体跳过收尾', async () => {
     const { mem, deps } = createHarness({
       importResult: { inserted: 1, unimportableTables: ['custom_providers'] },
     });
     mem.addFile(LOCAL_DB);
+    mem.addFile(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'), 'learn');
 
     await runLocalOwnerDataAdoption(USER_ID, deps);
 
     expect(mem.exists(LOCAL_DB)).toBe(true);
     expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(path.join(LOCAL_OWNER_DIR, 'learn', 'runs.json'))).toBe(true);
   });
 
-  it('仅 unverifiedTables 非空时照常归档(「无法断言」不等于丢了)', async () => {
+  it('unverifiedTables 非空时也保守保留兜底(无主键可核验 = schema 不对劲)', async () => {
     const { mem, deps } = createHarness({
       importResult: { inserted: 3, unverifiedTables: ['recent_workdirs'] },
     });
@@ -727,7 +739,8 @@ describe('runLocalOwnerDataAdoption 提交点语义', () => {
 
     await runLocalOwnerDataAdoption(USER_ID, deps);
 
-    expect(archivedDbNames(mem)).toHaveLength(1);
+    expect(archivedDbNames(mem)).toHaveLength(0);
+    expect(mem.exists(LOCAL_DB)).toBe(true);
   });
 
   it('整表没导入 / 无法核验时同样 warn(与丢行同级的「没并过来」信号)', async () => {
