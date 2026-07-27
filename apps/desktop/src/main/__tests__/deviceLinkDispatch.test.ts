@@ -527,6 +527,51 @@ describe('被控端控制链路生命周期', () => {
       expect(busyChanges).toEqual([]);
     },
   );
+
+  it.each([
+    {
+      name: 'remote control disabled',
+      configure: () => {
+        remoteControlEnabled = false;
+      },
+      payload: { channel: 'maker:list-active', args: [] },
+    },
+    {
+      name: 'revoked controller',
+      configure: () => {
+        revokedControllers = ['ctrl-a'];
+      },
+      payload: { channel: 'maker:list-active', args: [] },
+    },
+    {
+      name: 'non-allowlisted channel',
+      configure: () => undefined,
+      payload: { channel: 'shell:open-path', args: [] },
+    },
+    {
+      name: 'malformed payload',
+      configure: () => undefined,
+      payload: undefined,
+    },
+  ])('被拒绝的 $name 不持有更新 busy lease', async ({ configure, payload }) => {
+    configure();
+    const busyChanges: boolean[] = [];
+    setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: `invoke-rejected-${calls.invokeResult.length}`,
+      src: 'ctrl-a',
+      payload,
+    });
+
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(1));
+    expect(hasInFlightRemoteInvokes()).toBe(false);
+    expect(busyChanges).toEqual([]);
+  });
 });
 
 // ─── 订阅 registry + topic-scoped fan-out + set-* 持久化回流(push 驱动重构)──────

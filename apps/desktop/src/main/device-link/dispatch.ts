@@ -314,6 +314,17 @@ function acquireRemoteInvokeBusyLease(): () => void {
   };
 }
 
+function shouldAcquireRemoteInvokeBusyLease(
+  src: string,
+  payload: InvokePayload | undefined,
+): boolean {
+  if (!payload || typeof payload.channel !== 'string') return false;
+  if (!readDeviceLinkSettings().remoteControlEnabled) return false;
+  if (isControllerRevoked(src)) return false;
+  if (!REMOTE_INVOKE_ALLOWLIST.has(payload.channel)) return false;
+  return !UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel);
+}
+
 function notifySessionsSubscribed(controllerDeviceId: string): void {
   try {
     onSessionsSubscribed?.(controllerDeviceId);
@@ -598,10 +609,9 @@ async function handleInvoke(
     client.sendInvokeResult(src, requestId, handleSubscriptionFrame(src, payload));
     return;
   }
-  const releaseBusyLease =
-    payload?.channel && UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS.has(payload.channel)
-      ? () => undefined
-      : acquireRemoteInvokeBusyLease();
+  const releaseBusyLease = shouldAcquireRemoteInvokeBusyLease(src, payload)
+    ? acquireRemoteInvokeBusyLease()
+    : () => undefined;
   try {
     const result = await runInvoke(src, payload);
     sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
