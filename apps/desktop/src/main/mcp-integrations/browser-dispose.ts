@@ -27,8 +27,8 @@ interface QuitInfoLogger extends QuitLogger {
  */
 export interface UsageTrackedBrowserRuntime extends Pick<BrowserControlRuntime, 'call'> {
   /**
-   * True iff at least one NON-stop `call` completed with an ok result — i.e.
-   * the control service provably booted and served real traffic this session.
+   * True iff at least one NON-stop `call` produced an HTTP response — i.e. the
+   * control service provably booted and answered this session.
    */
   everCalled(): boolean;
   /**
@@ -40,34 +40,49 @@ export interface UsageTrackedBrowserRuntime extends Pick<BrowserControlRuntime, 
    * process and its locked user-data-dir.
    */
   settleInFlight(): Promise<void>;
+  /**
+   * Quit gate (review P1): after this, NEW non-stop calls are rejected instead
+   * of dispatched. Without it a call admitted between "settleInFlight saw an
+   * empty set" and "everCalled read" could boot the service mid-shutdown after
+   * the skip decision was already made.
+   */
+  beginQuiescence(): void;
 }
 
 export function trackBrowserRuntimeUsage(
   inner: Pick<BrowserControlRuntime, 'call'>,
 ): UsageTrackedBrowserRuntime {
   let everCalled = false;
+  let quiescing = false;
   const inFlight = new Set<Promise<unknown>>();
   return {
     call(request) {
+      if (quiescing && request.action !== 'stop') {
+        return Promise.reject(
+          new Error('browser runtime is shutting down — new calls are rejected'),
+        );
+      }
       const result = inner.call(request);
-      // Mark "used" only when the call SETTLES successfully, and only for
-      // non-stop actions (review feedback, both P1):
-      //  - marking at dispatch time would treat a still-booting or failed-boot
-      //    call as "service is up", and the quit-time stop would then re-run
-      //    the service boot we are trying to avoid;
+      // Mark "used" only when the response carries an HTTP `status`, and only
+      // for non-stop actions (review feedback, three P1s across two rounds):
+      //  - `status` present means the dispatcher really answered over the
+      //    control service — it booted. This includes ok:false HTTP >=400
+      //    responses (service is up, the action failed) which MUST count,
+      //    otherwise quit skips the stop and leaks the running service.
+      //  - `status` absent covers planDispatch rejections and thrown boots
+      //    (`BROWSER_RUNTIME_UNAVAILABLE` / catch-path failures): service
+      //    liveness unproven — counting those would make the quit-time stop
+      //    re-run the very boot we're avoiding.
       //  - `stop` itself is teardown, not usage — ExternalChromeBackend.dispose
       //    dispatches one during backend switching, and counting it would make
       //    the quit path dispatch a second stop that re-boots the service.
-      // An ok:false result means the dispatch bridge answered but the action
-      // failed (startup failures surface here too) — service liveness is not
-      // proven, so stay conservative; a skipped quit-stop is recovered by the
-      // vendored stale-lock path on next launch (see stopRuntimeForQuit docs).
+      // A wrongly-skipped quit-stop is recovered by the vendored stale-lock
+      // path on next launch (see stopRuntimeForQuit docs).
       if (request.action !== 'stop') {
         const settled = result.then(
           (response) => {
-            if ((response as { ok?: unknown } | null | undefined)?.ok !== false) {
-              everCalled = true;
-            }
+            const status = (response as { status?: unknown } | null | undefined)?.status;
+            if (typeof status === 'number') everCalled = true;
           },
           () => {
             // Rejected dispatch proves nothing about service liveness — ignore.
@@ -86,6 +101,9 @@ export function trackBrowserRuntimeUsage(
         await Promise.all([...inFlight]);
       }
     },
+    beginQuiescence: () => {
+      quiescing = true;
+    },
   };
 }
 
@@ -100,10 +118,13 @@ export async function stopRuntimeForQuitIfUsed(
   logger: QuitInfoLogger,
 ): Promise<void> {
   // Quit can race the very first call (e.g. openBrowserForLogin still awaiting
-  // `start`): wait for in-flight calls to settle before deciding, otherwise a
-  // still-booting Chrome would be misread as "never used" and outlive the app.
+  // `start`): close the gate to NEW calls first, then wait for in-flight ones
+  // to settle before deciding — otherwise a still-booting Chrome would be
+  // misread as "never used" and outlive the app, or a call admitted right
+  // after the settle-check could boot the service mid-shutdown (review P1).
   // Bounded externally: this runs inside the async disposer phase (timeoutMs
   // race) with the hard-kill watchdog behind it.
+  runtime.beginQuiescence();
   await runtime.settleInFlight();
   if (!runtime.everCalled()) {
     logger.info('browser runtime never used this session — skipping quit-time stop');

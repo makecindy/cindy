@@ -105,7 +105,9 @@ describe('stopRuntimeForQuitIfUsed', () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
   });
 
-  it('does not count an ok:false result as usage — startup failures surface as not-ok', async () => {
+  it('counts an ok:false WITH http status as usage — the service answered, it is up (review)', async () => {
+    // HTTP >=400 走的是 dispatcher 真实应答:服务已启动,只是 action 失败;
+    // 跳过 stop 会把已启动的服务/Chrome 留成孤儿(锁住 profile)。
     const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
       async (req) => ({ ok: false, action: req.action, status: 500 }),
     );
@@ -115,8 +117,38 @@ describe('stopRuntimeForQuitIfUsed', () => {
     await tracked.call({ action: 'status' });
     await stopRuntimeForQuitIfUsed(tracked, logger);
 
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][0]).toEqual({ action: 'stop' });
+  });
+
+  it('does not count an ok:false WITHOUT status as usage — thrown boots have no http reply', async () => {
+    // catch 路径(启动 throw / disabled)不带 status:服务存活未证实,不计使用。
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: false, action: req.action, errorCode: 'BROWSER_RUNTIME_UNAVAILABLE', message: 'disabled' }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+    const logger = fakeLogger();
+
+    await tracked.call({ action: 'status' });
+    await stopRuntimeForQuitIfUsed(tracked, logger);
+
     expect(call).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('never used this session'));
+  });
+
+  it('beginQuiescence rejects NEW non-stop calls so nothing can boot mid-shutdown (review P1)', async () => {
+    const call = vi.fn<(req: BrowserControlRequest) => Promise<BrowserControlResult>>(
+      async (req) => ({ ok: true, action: req.action, status: 200 }),
+    );
+    const tracked = trackBrowserRuntimeUsage({ call });
+
+    tracked.beginQuiescence();
+
+    await expect(tracked.call({ action: 'status' })).rejects.toThrow('shutting down');
+    expect(call).not.toHaveBeenCalled();
+    // stop 仍放行(quit 路径自己要发 stop)
+    await tracked.call({ action: 'stop' });
+    expect(call).toHaveBeenCalledTimes(1);
   });
 
   it('does not count a stop dispatch as usage — teardown is not traffic', async () => {

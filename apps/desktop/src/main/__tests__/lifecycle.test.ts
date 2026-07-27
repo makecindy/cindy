@@ -203,7 +203,12 @@ describe('armShutdownHardKillWatchdog', () => {
       await freshLifecycle();
     const { spawn, child } = fakeSpawn();
 
-    armShutdownHardKillWatchdog({ spawn, pid: 12345, platform: 'darwin' });
+    armShutdownHardKillWatchdog({
+      spawn,
+      pid: 12345,
+      platform: 'darwin',
+      execPath: '/Apps/Cindy Test/Electron',
+    });
 
     expect(spawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = spawn.mock.calls[0] as unknown as [
@@ -212,9 +217,13 @@ describe('armShutdownHardKillWatchdog', () => {
       Record<string, unknown>,
     ];
     expect(cmd).toBe('/bin/sh');
+    // 杀前身份校验(review P1):ps 的 command 仍含本进程 execPath 才补刀,
+    // PID 复用给无关进程时校验不过、放弃补刀。
     expect(args).toEqual([
       '-c',
-      `sleep ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; kill -9 12345 2>/dev/null`,
+      `sleep ${SHUTDOWN_HARD_KILL_GRACE_SECONDS}; `
+      + "ps -p 12345 -o command= 2>/dev/null | grep -qF '/Apps/Cindy Test/Electron' && "
+      + 'kill -9 12345 2>/dev/null',
     ]);
     expect(opts).toEqual({ detached: true, stdio: 'ignore' });
     expect(child.unref).toHaveBeenCalledTimes(1);
@@ -228,7 +237,12 @@ describe('armShutdownHardKillWatchdog', () => {
       await freshLifecycle();
     const { spawn, child } = fakeSpawn();
 
-    armShutdownHardKillWatchdog({ spawn, pid: 67890, platform: 'win32' });
+    armShutdownHardKillWatchdog({
+      spawn,
+      pid: 67890,
+      platform: 'win32',
+      execPath: 'C\\Cindy\\Cindy.exe'.replace(/\\\\/g, '\\'),
+    });
 
     expect(spawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = spawn.mock.calls[0] as unknown as [
@@ -236,13 +250,17 @@ describe('armShutdownHardKillWatchdog', () => {
       string[],
       Record<string, unknown>,
     ];
-    // 非 Windows 测试机上没有 comspec 环境变量, 走 'cmd.exe' 兜底
-    expect(cmd).toBe(process.env.comspec ?? 'cmd.exe');
+    // 规范拼写 COMSPEC(Windows env 大小写不敏感, 代码用规范名对齐 shellResolver);
+    // 非 Windows 测试机上没有该变量, 走 'cmd.exe' 兜底。
+    expect(cmd).toBe(process.env.COMSPEC ?? 'cmd.exe');
+    // 杀前身份校验:tasklist 映像名仍匹配本进程 exe 才 taskkill。
     expect(args).toEqual([
       '/d',
       '/s',
       '/c',
-      `ping -n ${SHUTDOWN_HARD_KILL_GRACE_SECONDS + 1} 127.0.0.1 >nul & taskkill /f /pid 67890`,
+      `ping -n ${SHUTDOWN_HARD_KILL_GRACE_SECONDS + 1} 127.0.0.1 >nul & `
+      + 'tasklist /FI "PID eq 67890" /NH | findstr /I /C:"Cindy.exe" >nul && '
+      + 'taskkill /f /pid 67890',
     ]);
     expect(opts).toEqual({ detached: true, windowsHide: true, stdio: 'ignore' });
     expect(child.unref).toHaveBeenCalledTimes(1);

@@ -220,6 +220,8 @@ export function armShutdownHardKillWatchdog(
     pid?: number;
     platform?: NodeJS.Platform;
     graceSeconds?: number;
+    /** 进程身份锚点 (杀前校验用), 默认 process.execPath;测试注入。 */
+    execPath?: string;
   } = {},
 ): void {
   if (_watchdogArmed) return;
@@ -228,21 +230,42 @@ export function armShutdownHardKillWatchdog(
   const pid = options.pid ?? process.pid;
   const platform = options.platform ?? process.platform;
   const graceSeconds = options.graceSeconds ?? SHUTDOWN_HARD_KILL_GRACE_SECONDS;
-  log.info(`arming shutdown hard-kill watchdog: pid=${pid} grace=${graceSeconds}s`);
+  const execPath = options.execPath ?? process.execPath;
   try {
+    // 杀前校验进程身份 (review P1): 宽限期内 OS 复用了该 PID 时, 盲杀会误伤
+    // 无关进程。POSIX 比对 ps 的 command 是否仍含本进程 execPath;Windows 比对
+    // tasklist 的映像名。校验不过 = 本进程已死且 PID 易主, 直接放弃补刀。
     const child =
       platform === 'win32'
-        ? // `timeout /t` 在无控制台的 detached 进程里不可用 ("输入重定向不受支持"),
-          // `ping -n <N+1>` 是标准的 cmd 延时 hack (首个包立即发, 之后每包间隔 1s)。
-          spawnFn(
-            process.env.comspec ?? 'cmd.exe',
-            ['/d', '/s', '/c', `ping -n ${graceSeconds + 1} 127.0.0.1 >nul & taskkill /f /pid ${pid}`],
-            { detached: true, windowsHide: true, stdio: 'ignore' },
-          )
-        : spawnFn('/bin/sh', ['-c', `sleep ${graceSeconds}; kill -9 ${pid} 2>/dev/null`], {
-            detached: true,
-            stdio: 'ignore',
-          });
+        ? (() => {
+            const imageName = execPath.split(/[\\/]/).pop() ?? 'Cindy.exe';
+            // `timeout /t` 在无控制台的 detached 进程里不可用 ("输入重定向不受支持"),
+            // `ping -n <N+1>` 是标准的 cmd 延时 hack (首个包立即发, 之后每包间隔 1s)。
+            // 环境变量规范拼写是 COMSPEC (Windows env 大小写不敏感, 但代码里用规范名,
+            // 对齐 terminal/shellResolver 的既有约定);不能假设 cmd.exe 一定在 PATH。
+            return spawnFn(
+              process.env.COMSPEC ?? 'cmd.exe',
+              [
+                '/d',
+                '/s',
+                '/c',
+                `ping -n ${graceSeconds + 1} 127.0.0.1 >nul & ` +
+                  `tasklist /FI "PID eq ${pid}" /NH | findstr /I /C:"${imageName}" >nul && ` +
+                  `taskkill /f /pid ${pid}`,
+              ],
+              { detached: true, windowsHide: true, stdio: 'ignore' },
+            );
+          })()
+        : spawnFn(
+            '/bin/sh',
+            [
+              '-c',
+              `sleep ${graceSeconds}; ` +
+                `ps -p ${pid} -o command= 2>/dev/null | grep -qF '${execPath.replace(/'/g, `'\\''`)}' && ` +
+                `kill -9 ${pid} 2>/dev/null`,
+            ],
+            { detached: true, stdio: 'ignore' },
+          );
     // spawn 的失败可能在返回后经 'error' 事件异步上报 (ENOENT/EACCES 等);
     // 不挂 listener 会变成 uncaughtException, 且 watchdog 实际未布防却无任何
     // 日志痕迹 —— 这里 warn 留痕, 让退出尸检能看出"补刀兜底当时不在位"。
@@ -250,6 +273,9 @@ export function armShutdownHardKillWatchdog(
       log.warn('shutdown hard-kill watchdog process failed to start (continuing shutdown)', err);
     });
     child.unref();
+    // log 放在 spawn 之后 (review P1): 统一 logger 同步写日志文件, 坏盘/网络盘
+    // 上可能阻塞 —— watchdog 必须在任何可能卡住的盘 IO 之前先布防好。
+    log.info(`arming shutdown hard-kill watchdog: pid=${pid} grace=${graceSeconds}s`);
   } catch (err) {
     log.warn('failed to arm shutdown hard-kill watchdog (continuing shutdown)', err);
   }
@@ -270,11 +296,13 @@ let _disposeStarted: Promise<void> | null = null;
 function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
   if (_disposeStarted) return _disposeStarted;
   _isDisposing = true;
+  // watchdog 必须是 shutdown 的第一个动作 (review P1): log 与 noteShutdownBegin
+  // 都是同步盘 IO (日志文件 / run-marker 的 mkdirSync+writeFileSync), 落在坏盘
+  // 或网络盘上可能无限阻塞 —— 那正是 watchdog 要兜的挂死形态, 不能让布防
+  // 排在它们后面。spawn 本身不做盘写。
+  armShutdownHardKillWatchdog();
   log.info(`beginShutdown timeoutMs=${timeoutMs} reason=${reason}`);
   noteShutdownBegin(reason);
-  // 先布防外部硬杀 watchdog 再跑 disposer chain —— disposer 或 app.exit 挂死时
-  // 由外部进程在宽限期后补刀, 保证退出永远有界。
-  armShutdownHardKillWatchdog();
   _disposeStarted = runQuitDisposers(timeoutMs)
     .then(() => {
       log.info('runQuitDisposers completed');
