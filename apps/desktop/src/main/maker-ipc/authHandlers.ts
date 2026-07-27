@@ -102,6 +102,7 @@ export function registerMakerAuthHandlers(
 ): void {
   const mutationGeneration = new Map<AgentKind, number>();
   const loginRequestGeneration = new Map<AgentKind, number>();
+  const loginCancellationGeneration = new Map<AgentKind, number>();
   const logoutFinalizations = new Map<AgentKind, Promise<void>>();
   const beginMutation = (kind: AgentKind): number => {
     const generation = (mutationGeneration.get(kind) ?? 0) + 1;
@@ -117,6 +118,13 @@ export function registerMakerAuthHandlers(
   };
   const isLoginRequestCurrent = (kind: AgentKind, generation: number): boolean =>
     (loginRequestGeneration.get(kind) ?? 0) === generation;
+  const beginLoginCancellation = (kind: AgentKind): number => {
+    const generation = (loginCancellationGeneration.get(kind) ?? 0) + 1;
+    loginCancellationGeneration.set(kind, generation);
+    return generation;
+  };
+  const currentLoginCancellation = (kind: AgentKind): number =>
+    loginCancellationGeneration.get(kind) ?? 0;
   const waitForLatestLogoutFinalization = async (kind: AgentKind): Promise<void> => {
     while (true) {
       const observed = logoutFinalizations.get(kind);
@@ -146,11 +154,16 @@ export function registerMakerAuthHandlers(
       // 先登记请求再等待注销收尾，使等待期间到达的 Cancel 也能作废这次登录。
       // 此 generation 与 auth mutation 分离，避免排队登录反过来提前作废正在收尾的 logout。
       const loginGeneration = beginLoginRequest(kind);
+      const cancellationGeneration = currentLoginCancellation(kind);
+      const invalidatedState = (): AuthState =>
+        currentLoginCancellation(kind) !== cancellationGeneration
+          ? cancelledAuthState()
+          : supersededAuthState();
       // Adapter 会把注销期间到达的登录排在 CLI logout 后面；这里还必须等主进程完成
       // credential bridge / model snapshot 的注销收尾，再建立新的 mutation generation。
       // 否则新登录会提前作废旧 generation，导致注销回调被跳过。
       await waitForLatestLogoutFinalization(kind);
-      if (!isLoginRequestCurrent(kind, loginGeneration)) return supersededAuthState();
+      if (!isLoginRequestCurrent(kind, loginGeneration)) return invalidatedState();
       const generation = beginMutation(kind);
       const isCurrent = (): boolean =>
         isLoginRequestCurrent(kind, loginGeneration) && isMutationCurrent(kind, generation);
@@ -184,7 +197,7 @@ export function registerMakerAuthHandlers(
           });
         },
       });
-      if (!isCurrent()) return supersededAuthState();
+      if (!isCurrent()) return invalidatedState();
       if (kind === 'codex' && result.authenticated && result.authSource === 'oauth') {
         let liveModelsApplied = false;
         try {
@@ -197,9 +210,9 @@ export function registerMakerAuthHandlers(
             `codex live model refresh threw during login: ${e instanceof Error ? e.message : String(e)}`,
           );
         }
-        if (!isCurrent()) return supersededAuthState();
+        if (!isCurrent()) return invalidatedState();
         await onCodexAuthChange?.(true, liveModelsApplied, isCurrent);
-        if (!isCurrent()) return supersededAuthState();
+        if (!isCurrent()) return invalidatedState();
       }
       broadcast(MAKER_PUSH.AUTH_STATE_CHANGED, { agentKind: kind, ...result });
       return result;
@@ -211,6 +224,7 @@ export function registerMakerAuthHandlers(
     // Cancel is an auth mutation too: invalidate handler-level refresh/finalization work even
     // when the CLI process has already exited and the adapter is reconciling credentials. The
     // separate login request generation also covers a request still queued behind logout.
+    beginLoginCancellation(kind);
     beginLoginRequest(kind);
     beginMutation(kind);
     maker.cancelAgentLogin(kind);
@@ -245,6 +259,10 @@ export function registerMakerAuthHandlers(
 /** 被更新的 auth mutation 作废时，旧 IPC 调用方不得再把过期成功结果写回 UI。 */
 function supersededAuthState(): AuthState {
   return { authenticated: false, errorReason: 'auth_mutation_superseded' };
+}
+
+function cancelledAuthState(): AuthState {
+  return { authenticated: false, errorReason: 'login_cancelled' };
 }
 
 function requireAgentKind(value: unknown): AgentKind {

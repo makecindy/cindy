@@ -6,10 +6,9 @@
  * CODEX_MODELS（其 capabilities.availableModels 起始为空），host 在 bootstrap 时从**同步的**
  * BUNDLED_CATALOG 派生每个 agent 的模型列表，经 capabilityAdditions 注入。
  *
- * union 规则：按 `catalog.providers` 数组序 flatMap 各 provider 的 `models[agent]`，按 id
- * **首见胜出**去重（provider 序即 anthropic → openai → xd）。同一 agent 内同 id 跨 provider
- * 的元数据一致性由 @cindy/model-providers 的 parseCatalog → validateModelConsistency 保证，
- * 因此去重取首个即可，不会丢信息。
+ * union 规则：跳过 `routing[agent].disabled` 的 runtime，再按 `catalog.providers` 数组序
+ * flatMap 各 provider 的 `models[agent]`，按 id **首见胜出**去重（provider 序即
+ * anthropic → openai → xd）。禁用来源不占 seen，同 id 仍可由后续可用来源补上。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
  * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 折扣追加序）。
@@ -46,6 +45,7 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
   const seen = new Set<string>();
   const out: ModelDescriptor[] = [];
   for (const provider of catalog.providers) {
+    if (provider.routing[agent]?.disabled === true) continue;
     for (const m of provider.models[agent] ?? []) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);

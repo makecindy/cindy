@@ -34,6 +34,7 @@ import {
 } from '@/lib/modelPriceFormat';
 import {
   filterChatBridgedCodexProviders,
+  isDeviceModelVisible,
   providerMonogram,
   resolveVisibleModelAgentKind,
   selectVisibleModels,
@@ -740,12 +741,19 @@ function ModelSelectorContentView({
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
-      // device-link 远程会话:被控端目录「是啥就是啥」,绝不套控制端本机的可见性 override
-      // —— modelVisibilityPrefs 是控制端本机 UI 偏好(设置→供应商的隐藏开关),与被控端无关,
-      // 套上去会让远程列表变成「被控端目录 ∩ 控制端隐藏开关」,跟被控端实际清单对不上。
-      // 本机会话仍按用户本机开关过滤(行为不变)。
+      // device-link 远程会话使用被控端随 provider:list 返回的 override 快照，绝不套
+      // 控制端本机 modelVisibilityPrefs。旧被控端不回传快照时 fail-open，保持兼容。
       isVisible: deviceId
-        ? () => true
+        ? (pid, mid) => {
+            const p = connected.find((x) => x.id === pid);
+            const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
+            return isDeviceModelVisible(
+              remoteProviders.modelVisibilityOverrides,
+              currentAgentKind,
+              pid,
+              { id: mid, defaultEnabled: cat?.defaultEnabled },
+            );
+          }
         : (pid, mid) => {
             const p = connected.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
@@ -766,6 +774,7 @@ function ModelSelectorContentView({
     query,
     visibilityVersion,
     deviceId,
+    remoteProviders.modelVisibilityOverrides,
   ]);
 
   const flatModels = useMemo(() => {
@@ -781,9 +790,22 @@ function ModelSelectorContentView({
     // 本地 flat 入口（子代理模型、Worker 等）没有 provider sections 帮忙过滤，必须显式复用
     // 会话选择器 / IM `/model` 的同一套「已连接来源 × 用户可见模型」规则。否则设置页里
     // 已忽略或仅由断开来源提供的目录项仍会被列出来，选中后没有可用路由。
-    // device-link 的目录来自被控端，不能叠加控制端本机的可见性偏好，保持原样。
+    // device-link 使用被控端 override；旧被控端没有快照时保持历史 fail-open。
     const selectableIds = deviceId
-      ? null
+      ? remoteProviders.modelVisibilityOverrides === undefined
+        ? null
+        : new Set(
+            (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
+              visibleModelUnion(providers, agent, (providerId, model) =>
+                isDeviceModelVisible(
+                  remoteProviders.modelVisibilityOverrides,
+                  agent,
+                  providerId,
+                  model,
+                ),
+              ).map((model) => model.id),
+            ),
+          )
       : new Set(
           (agentKind ? [agentKind] : (['claude-code', 'codex'] as const)).flatMap((agent) =>
             visibleModelUnion(providers, agent, (providerId, model) =>
@@ -796,7 +818,17 @@ function ModelSelectorContentView({
     return selectable.filter(
       (m) => m.displayName.toLowerCase().includes(q) || m.id.toLowerCase().includes(q),
     );
-  }, [sections, visibleModels, query, browsing, agentKind, providers, deviceId, visibilityVersion]);
+  }, [
+    sections,
+    visibleModels,
+    query,
+    browsing,
+    agentKind,
+    providers,
+    deviceId,
+    visibilityVersion,
+    remoteProviders.modelVisibilityOverrides,
+  ]);
 
   // 选中判定:flat 模式只比模型 id;分段模式还要比供应商(同模型多供应商下只高亮当前来源那行)。
   // 浏览目标引擎态恒 false:当前会话模型属于旧引擎,目标列表里同 id 行(如 gpt-5.5

@@ -244,7 +244,7 @@ describe('maker auth IPC handlers', () => {
     });
   });
 
-  it('invalidates post-login refresh work when Cancel arrives during finalization', async () => {
+  it('preserves cancellation while invalidating post-login refresh work', async () => {
     const harness = new IpcHarness();
     const broadcast = vi.fn();
     const cancelAgentLogin = vi.fn();
@@ -273,7 +273,7 @@ describe('maker auth IPC handlers', () => {
 
     await expect(login).resolves.toEqual({
       authenticated: false,
-      errorReason: 'auth_mutation_superseded',
+      errorReason: 'login_cancelled',
     });
     expect(cancelAgentLogin).toHaveBeenCalledWith('codex');
     expect(onCodexAuthChange).not.toHaveBeenCalled();
@@ -453,7 +453,7 @@ describe('maker auth IPC handlers', () => {
     await expect(logout).resolves.toBeUndefined();
     await expect(login).resolves.toEqual({
       authenticated: false,
-      errorReason: 'auth_mutation_superseded',
+      errorReason: 'login_cancelled',
     });
     expect(cancelAgentLogin).toHaveBeenCalledWith('codex');
     expect(triggerAgentLogin).not.toHaveBeenCalled();
