@@ -155,6 +155,12 @@ const NATIVE_RUNTIME_DEPS = [
   'undici',
 ];
 
+// Windows 启动期 Claude orphan 扫描:直接走 Win32 Tool Help snapshot,
+// 不再 spawn PowerShell(360 等安全软件会把启动期脚本子进程判成攻击)。
+// main 进程按架构规则使用顶层静态 import，所以各平台都携带平台中立的 JS
+// 入口；只有 win32 目标携带并从锁定补丁后的源码重建 N-API binary。
+const WINDOWS_PROCESS_TREE_RUNTIME_DEP = '@vscode/windows-process-tree';
+
 /**
  * @parcel/watcher 的 prebuilt 二进制按 platform-arch (在 linux 上还分 glibc/musl)
  * 拆进独立子包, 主包运行时按 process.platform/arch 动态 require。打包时只带
@@ -312,6 +318,37 @@ function copySqliteVecBinary(buildPath: string, targetPlatform: string, targetAr
   console.log(`[forge:afterCopy] sqlite-vec ${platformDir}/${ext} -> ${dst}`);
 }
 
+function copyWindowsProcessTreeRuntime(
+  src: string,
+  dst: string,
+  targetPlatform: string,
+): void {
+  fs.mkdirSync(dst, { recursive: true });
+  fs.cpSync(path.join(src, 'lib'), path.join(dst, 'lib'), {
+    recursive: true,
+    dereference: true,
+  });
+  for (const fileName of ['package.json', 'LICENSE']) {
+    fs.copyFileSync(path.join(src, fileName), path.join(dst, fileName));
+  }
+
+  if (targetPlatform !== 'win32') return;
+
+  const runtimeBinary = path.join(src, 'build', 'Release', 'windows_process_tree.node');
+  if (!fs.existsSync(runtimeBinary)) {
+    throw new Error(
+      `[forge:afterCopy] @vscode/windows-process-tree runtime missing: ${runtimeBinary}`,
+    );
+  }
+  fs.copyFileSync(path.join(src, 'binding.gyp'), path.join(dst, 'binding.gyp'));
+  fs.cpSync(path.join(src, 'src'), path.join(dst, 'src'), {
+    recursive: true,
+    dereference: true,
+  });
+  fs.mkdirSync(path.join(dst, 'build', 'Release'), { recursive: true });
+  fs.copyFileSync(runtimeBinary, path.join(dst, 'build', 'Release', 'windows_process_tree.node'));
+}
+
 function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch: string): void {
   const destModules = path.join(buildPath, 'node_modules');
   fs.mkdirSync(destModules, { recursive: true });
@@ -322,6 +359,7 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     ...NATIVE_RUNTIME_DEPS,
     parcelWatcherPlatformPkg(targetPlatform, targetArch),
     ...sharpPlatformPkgs(targetPlatform, targetArch),
+    WINDOWS_PROCESS_TREE_RUNTIME_DEP,
     // loudness 只在 Windows 用 (录音时静音)。它的 Win 后端是个捆绑的 .exe,
     // 必须运行时按 __dirname 找 — 所以走 NATIVE_RUNTIME_DEPS 这条路, 不让 vite
     // bundle。Mac/Linux 完全不带, 避免拖入 execa 这条无用依赖链。
@@ -339,7 +377,11 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
     // dir created before cpSync — cpSync only mkdir's the leaf.
     fs.mkdirSync(path.dirname(dst), { recursive: true });
     fs.rmSync(dst, { recursive: true, force: true });
-    fs.cpSync(src, dst, { recursive: true, dereference: true });
+    if (dep === WINDOWS_PROCESS_TREE_RUNTIME_DEP) {
+      copyWindowsProcessTreeRuntime(src, dst, targetPlatform);
+    } else {
+      fs.cpSync(src, dst, { recursive: true, dereference: true });
+    }
     console.log(`[forge:afterCopy] bundled native dep: ${dep} <- ${src}`);
   }
   copyDiscordRuntimeDeps(destModules);
@@ -353,16 +395,22 @@ async function rebuildNativeDepsInPackage(
   buildPath: string,
   electronVersion: string,
   arch: string,
+  targetPlatform: string,
 ): Promise<void> {
+  const rebuildModules = [
+    'better-sqlite3',
+    'node-pty',
+    ...(targetPlatform === 'win32' ? [WINDOWS_PROCESS_TREE_RUNTIME_DEP] : []),
+  ];
   console.log(
-    `[forge:afterCopy] rebuilding native modules (better-sqlite3, node-pty) for Electron ${electronVersion} (${arch})...`,
+    `[forge:afterCopy] rebuilding native modules (${rebuildModules.join(', ')}) for Electron ${electronVersion} (${arch})...`,
   );
   await electronRebuild({
     buildPath,
     electronVersion,
     arch,
     force: true,
-    onlyModules: ['better-sqlite3', 'node-pty'],
+    onlyModules: rebuildModules,
   });
   const sqliteNative = path.join(
     buildPath,
@@ -393,6 +441,43 @@ async function rebuildNativeDepsInPackage(
     );
   }
 
+  let processTreeNative: string | undefined;
+  if (targetPlatform === 'win32') {
+    processTreeNative = path.join(
+      buildPath,
+      'node_modules',
+      WINDOWS_PROCESS_TREE_RUNTIME_DEP,
+      'build',
+      'Release',
+      'windows_process_tree.node',
+    );
+    if (!fs.existsSync(processTreeNative)) {
+      throw new Error(
+        `[forge:afterCopy] rebuild reported success but ${processTreeNative} is missing`,
+      );
+    }
+
+    // electron-rebuild leaves C++ sources, vcxproj files, .obj/.pdb outputs and
+    // a second ABI-cache copy behind. Runtime only needs lib/ + this N-API
+    // binary, so collapse build/ back to the same minimal shape we ship from
+    // the upstream package.
+    const processTreeDir = path.join(
+      buildPath,
+      'node_modules',
+      WINDOWS_PROCESS_TREE_RUNTIME_DEP,
+    );
+    const rebuiltNative = fs.readFileSync(processTreeNative);
+    for (const relativePath of ['bin', 'build', 'src', 'binding.gyp']) {
+      fs.rmSync(path.join(processTreeDir, relativePath), {
+        recursive: true,
+        force: true,
+      });
+    }
+    fs.mkdirSync(path.dirname(processTreeNative), { recursive: true });
+    fs.writeFileSync(processTreeNative, rebuiltNative);
+    console.log(`[forge:afterCopy] pruned windows-process-tree build intermediates`);
+  }
+
   // node-pty 被整目录纳入 asar.unpack（为放出 spawn-helper / winpty 等运行时二进制），
   // 但 node-gyp 重编会在 build/Release/obj.target/ 留下 .o 编译中间产物（也是 Mach-O）。
   // 若随目录一起解包进 app.asar.unpacked，macOS 发版/公证签名脚本（release-macos.mjs /
@@ -413,7 +498,11 @@ async function rebuildNativeDepsInPackage(
     console.log(`[forge:afterCopy] pruned node-gyp intermediates: ${ptyObjTarget}`);
   }
 
-  console.log(`[forge:afterCopy] rebuild ok: ${sqliteNative}, ${ptyNative}`);
+  console.log(
+    `[forge:afterCopy] rebuild ok: ${[sqliteNative, ptyNative, processTreeNative]
+      .filter(Boolean)
+      .join(', ')}`,
+  );
 }
 
 const isDev = process.env.NODE_ENV !== 'production' && !process.argv.includes('make') && !process.argv.includes('package');
@@ -1252,7 +1341,7 @@ const config: ForgeConfig = {
         (async () => {
           try {
             bundleNativeDeps(buildPath, platform, arch);
-            await rebuildNativeDepsInPackage(buildPath, electronVersion, arch);
+            await rebuildNativeDepsInPackage(buildPath, electronVersion, arch, platform);
             copySqliteVecBinary(buildPath, platform, arch);
             callback();
           } catch (err) {

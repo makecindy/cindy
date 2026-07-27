@@ -6,27 +6,42 @@
  *   abort path only terminates the direct `claude` child. On Windows that kill
  *   is a Win32 TerminateProcess call: it does not propagate to grandchildren,
  *   so stdio MCP servers started below `claude.exe` can survive as orphaned
- *   `node` processes after xdt-maker quits, restarts, or crashes.
+ *   `node` processes after Cindy quits, restarts, or crashes.
  *
  * Timing trap:
  *   On a normal quit, this must run before maker-core asks the SDK to abort the
  *   Claude session. Once the direct `claude` process is dead, its child tree is
  *   reparented to System/init and the PPID chain that proves ownership is gone.
- *   That is why bootstrap-electron registers this reaper in lifecycle's sync
- *   phase before the async `shutdown-maker` disposer.
+ *   That is why bootstrap-electron registers this reaper in lifecycle's
+ *   awaited `pre-async` phase, before any concurrent teardown can stop the
+ *   active sessions or their transports.
  *
  * Safety guarantees:
  *   - Current-session cleanup only targets `claude` processes whose parent is
- *     the current Electron main process.
- *   - Historical cleanup requires both an xdt-maker bundled Claude binary path
- *     marker and a dead parent, so an active second xdt-maker instance is left
- *     alone.
+ *     the current Electron main process, and only at quit time — the startup
+ *     pass (`reapCurrentSession: false`) leaves them alone, so a session launched
+ *     moments after a cold start is not misread as an orphan. The one exception
+ *     is a ppid===self process that provably started before this one: it cannot
+ *     be a child we spawned, so it is a previous instance's orphan whose PID we
+ *     inherited via reuse, and it is reaped like any other historical orphan.
+ *   - Historical cleanup requires both a Cindy-bundled Claude binary path marker
+ *     (matching every current + historical userData dir name, plus dev-checkout
+ *     `apps/claude-code-bin/` binaries) and a dead parent, so an active second
+ *     Cindy instance is left alone.
  *   - External Claude installs (for example `/usr/local/bin/claude`) do not
- *     contain the xdt-maker marker and are not historical-orphan candidates.
+ *     contain the Cindy marker and are not historical-orphan candidates.
  *   - Scan / kill failures are best-effort and never block app startup or quit.
+ *   - Windows enumeration uses the Win32 Tool Help snapshot API through a
+ *     native N-API module. It must not launch PowerShell during app startup:
+ *     security products classify that child-process pattern as script attack.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  getAllProcesses,
+  ProcessDataFlag,
+  type IProcessInfo,
+} from '@vscode/windows-process-tree';
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
@@ -57,7 +72,7 @@ export function buildClaudePathMarkers(dirNames: readonly string[]): string[] {
   });
 }
 
-const XDT_CLAUDE_PATH_MARKERS = [
+const CINDY_CLAUDE_PATH_MARKERS = [
   // 只认领本区域(+ 历史)userData 下的进程:同机双装时另一区域实例的
   // Claude 子进程属于对方,跨区域匹配会把人家活着的 agent 树误杀。
   ...buildClaudePathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION)),
@@ -71,7 +86,32 @@ const XDT_CLAUDE_PATH_MARKERS = [
 
 const POSIX_CLAUDE_CMD_RE = /(^|[\s/"'])claude(\.exe)?($|[\s"'])/;
 const POSIX_CLAUDE_CODE_CMD_RE = /(^|[\s/"'])claude-code($|[\s"'])/;
-const POSIX_PS_ROW_RE = /^(\d+)\s+(\d+)\s+(.+)$/;
+// pid ppid etime command — `etime` is a whitespace-free [[dd-]hh:]mm:ss token, so
+// the command (which may contain spaces) is the greedy tail.
+const POSIX_PS_ROW_RE = /^(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/;
+
+// A ppid===self claude must be OLDER than this process by more than this margin
+// before we treat it as a PID-reuse orphan. Our own children are always spawned
+// after us (younger), so the margin only guards against clock/rounding skew
+// between `ps etime`'s 1-second resolution and process.uptime(); it never lets a
+// real current-session child be misread as an orphan and killed.
+const PID_REUSE_SKEW_MS = 5_000;
+
+/**
+ * Parses a POSIX `ps -o etime=` value ([[dd-]hh:]mm:ss elapsed time) into
+ * seconds. Returns null for anything that does not match, so an unexpected
+ * column layout degrades to "creation time unknown" rather than a bogus age.
+ */
+export function parsePosixEtimeSeconds(value: string): number | null {
+  const match = value.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const days = match[1] ? Number.parseInt(match[1], 10) : 0;
+  const hours = match[2] ? Number.parseInt(match[2], 10) : 0;
+  const minutes = Number.parseInt(match[3], 10);
+  const seconds = Number.parseInt(match[4], 10);
+  if (![days, hours, minutes, seconds].every(Number.isFinite)) return null;
+  return days * 86_400 + hours * 3_600 + minutes * 60 + seconds;
+}
 
 export interface ReaperResult {
   scannedTotal: number;
@@ -84,59 +124,127 @@ interface ProcessRow {
   pid: number;
   ppid: number;
   cmdLine: string;
+  // Epoch milliseconds when the process started, or undefined when the platform
+  // could not supply it (older-than-us classification then stays conservative).
+  createdAtMs?: number;
 }
 
-function parseProcessLine(line: string): ProcessRow | null {
-  const parts = line.split('|');
-  if (parts.length < 3) return null;
+const WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS = 1000;
 
-  const pid = Number.parseInt(parts[0]?.trim() ?? '', 10);
-  const ppid = Number.parseInt(parts[1]?.trim() ?? '', 10);
-  if (!Number.isFinite(pid) || !Number.isFinite(ppid)) return null;
+// Serializes native enumerations. @vscode/windows-process-tree keeps a single
+// module-level in-progress request: issuing getAllProcesses while a prior call is
+// still running coalesces our callback onto that in-flight result. If a startup
+// scan hits WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS and returns [] while its native
+// call is still pending, a later quit-time scan could otherwise receive that
+// stale snapshot — missing a claude.exe spawned after startup, right before
+// `shutdown-maker` tears down transport. Chaining guarantees a fresh native
+// enumeration is issued only after the previous one has actually drained.
+let nativeSnapshotChain: Promise<unknown> = Promise.resolve();
 
-  return {
-    pid,
-    ppid,
-    cmdLine: parts.slice(2).join('|').trim(),
-  };
+function runNativeProcessSnapshot(): Promise<IProcessInfo[]> {
+  return new Promise<IProcessInfo[]>((resolve, reject) => {
+    try {
+      getAllProcesses(resolve, ProcessDataFlag.CommandLine);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
 }
 
-function scanWindowsClaudeProcesses(): ProcessRow[] {
-  // 注意行尾的管道符:没有它,Get-CimInstance 与 ForEach-Object 会被 PowerShell
-  // 当成两条独立语句执行——前者输出格式化表格、后者拿不到管道输入,parse 永远
-  // 得到 0 行,收割器在 Windows 上整体失明(2026-07-14 实锤修复,曾静默失效)。
-  const script = [
-    'Get-CimInstance Win32_Process -Filter "Name=\'claude.exe\'" |',
-    'ForEach-Object {',
-    '  $cmd = ([string]$_.CommandLine) -replace "`r|`n", " "',
-    '  Write-Output ("{0}|{1}|{2}" -f $_.ProcessId, $_.ParentProcessId, $cmd)',
-    '}',
-  ].join('\n');
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  // 冷启动的 powershell.exe 经常超过 1.5s,超时会被上层吞成"扫到 0 个",
-  // 与真实空结果不可区分——放宽到 5s,宁可启动多等一拍也不要静默漏收割。
-  const stdout = execFileSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    { encoding: 'utf8', timeout: 5000, windowsHide: true },
+async function getWindowsProcessSnapshot(): Promise<IProcessInfo[]> {
+  // Phase 1 — wait for any in-flight native enumeration to drain before issuing
+  // ours. The package hands every callback queued during one enumeration the
+  // SAME snapshot and only clears `requestInProgress` after that callback drains,
+  // so a call issued while a prior one is running would receive its (stale) list.
+  // We cap the wait and, on expiry, return [] WITHOUT calling getAllProcesses —
+  // enqueuing then would coalesce onto the stale in-flight scan.
+  const previous = nativeSnapshotChain;
+  const drained = await Promise.race([
+    previous.then(
+      () => true,
+      () => true,
+    ),
+    delay(WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS).then(() => false),
+  ]);
+  if (!drained) {
+    log.debug('windows process snapshot timed out waiting for prior scan', {
+      timeoutMs: WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS,
+    });
+    return [];
+  }
+
+  // Phase 2 — the prior enumeration has drained (`requestInProgress` is false),
+  // so this issues a FRESH native scan. Its deadline is armed only now, so time
+  // spent waiting in phase 1 does not eat into this scan's budget (otherwise a
+  // slow prior scan could make quit resolve [] before its fresh scan even runs,
+  // missing the live Claude tree right before transport teardown).
+  const nativeCall = runNativeProcessSnapshot();
+  nativeSnapshotChain = nativeCall.then(
+    () => undefined,
+    () => undefined,
   );
 
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const rows = lines
-    .map(parseProcessLine)
-    .filter((row): row is ProcessRow => row !== null);
-  // 自检:有输出但一行都解析不出来 = 输出格式漂移(正是管道符缺失的症状形态)。
-  // 这类失效不会抛错、结果与"机器上没有 claude 进程"同形,只能靠这条 warn 暴露。
-  if (lines.length > 0 && rows.length === 0) {
-    log.warn('windows claude scan output unparseable; scan is likely broken', {
-      lineCount: lines.length,
-      firstLine: lines[0]?.slice(0, 120),
-    });
+  return new Promise<IProcessInfo[]>((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      log.debug('windows process snapshot timed out', {
+        timeoutMs: WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS,
+      });
+      resolve([]);
+    }, WINDOWS_PROCESS_SNAPSHOT_TIMEOUT_MS);
+
+    nativeCall.then(
+      (processes) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(processes);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        log.debug('windows process snapshot failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        resolve([]);
+      },
+    );
+  });
+}
+
+// The patched @vscode/windows-process-tree fills `creationTime` (epoch ms) via
+// GetProcessTimes; upstream/unpatched builds and inaccessible processes omit it.
+function readWindowsCreationTime(proc: IProcessInfo): number | undefined {
+  const raw = (proc as { creationTime?: number }).creationTime;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : undefined;
+}
+
+async function scanWindowsClaudeProcesses(): Promise<{
+  rows: ProcessRow[];
+  selfCreatedAtMs?: number;
+}> {
+  const processes = await getWindowsProcessSnapshot();
+  const rows: ProcessRow[] = [];
+  let selfCreatedAtMs: number | undefined;
+  for (const proc of processes) {
+    const createdAtMs = readWindowsCreationTime(proc);
+    // Our own creation time comes from the same native clock as every candidate,
+    // so PID-reuse orphans (from a previous instance) sort strictly before us.
+    if (proc.pid === process.pid && createdAtMs !== undefined) {
+      selfCreatedAtMs = createdAtMs;
+    }
+    if (proc.name.toLowerCase() === 'claude.exe') {
+      rows.push({ pid: proc.pid, ppid: proc.ppid, cmdLine: proc.commandLine ?? '', createdAtMs });
+    }
   }
-  return rows;
+  return { rows, selfCreatedAtMs };
 }
 
 function isClaudeCommandLine(cmdLine: string): boolean {
@@ -156,12 +264,16 @@ function isClaudeCommandLine(cmdLine: string): boolean {
 interface ScanResult {
   rows: ProcessRow[];
   childrenByParent: Map<number, number[]>;
+  // Epoch milliseconds when THIS process started, used to tell PID-reuse orphans
+  // (older than us) apart from children we spawned (younger). Undefined leaves
+  // the classification conservative.
+  selfCreatedAtMs?: number;
 }
 
 function scanPosixAllProcesses(): ScanResult {
   const result = spawnSync(
     'ps',
-    ['-A', '-o', 'pid=,ppid=,command='],
+    ['-A', '-o', 'pid=,ppid=,etime=,command='],
     { encoding: 'utf8', timeout: 1500 },
   );
   if (result.error) throw result.error;
@@ -171,6 +283,8 @@ function scanPosixAllProcesses(): ScanResult {
 
   const rows: ProcessRow[] = [];
   const childrenByParent = new Map<number, number[]>();
+  const nowMs = Date.now();
+  let selfCreatedAtMs: number | undefined;
 
   for (const raw of (result.stdout ?? '').split(/\r?\n/)) {
     const line = raw.trim();
@@ -179,31 +293,42 @@ function scanPosixAllProcesses(): ScanResult {
     if (!match) continue;
     const pid = Number.parseInt(match[1], 10);
     const ppid = Number.parseInt(match[2], 10);
-    const cmdLine = match[3];
+    const etimeSeconds = parsePosixEtimeSeconds(match[3]);
+    const cmdLine = match[4];
     if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue;
+
+    const createdAtMs = etimeSeconds !== null ? nowMs - etimeSeconds * 1000 : undefined;
+    if (pid === process.pid && createdAtMs !== undefined) selfCreatedAtMs = createdAtMs;
 
     const siblings = childrenByParent.get(ppid);
     if (siblings) siblings.push(pid);
     else childrenByParent.set(ppid, [pid]);
 
     if (isClaudeCommandLine(cmdLine)) {
-      rows.push({ pid, ppid, cmdLine });
+      rows.push({ pid, ppid, cmdLine, createdAtMs });
     }
   }
 
-  return { rows, childrenByParent };
+  // Fall back to our own reported uptime if `ps` did not list our row (or gave an
+  // unparseable etime), keeping the comparison on the same "seconds ago" scale.
+  if (selfCreatedAtMs === undefined && Number.isFinite(process.uptime())) {
+    selfCreatedAtMs = nowMs - Math.round(process.uptime() * 1000);
+  }
+
+  return { rows, childrenByParent, selfCreatedAtMs };
 }
 
-function scanClaudeProcesses(): ScanResult {
+async function scanClaudeProcesses(): Promise<ScanResult> {
   if (process.platform === 'win32') {
-    return { rows: scanWindowsClaudeProcesses(), childrenByParent: new Map() };
+    const { rows, selfCreatedAtMs } = await scanWindowsClaudeProcesses();
+    return { rows, childrenByParent: new Map(), selfCreatedAtMs };
   }
   return scanPosixAllProcesses();
 }
 
-function hasXdtClaudeMarker(cmdLine: string): boolean {
+function hasCindyClaudeMarker(cmdLine: string): boolean {
   const haystack = cmdLine.toLowerCase();
-  return XDT_CLAUDE_PATH_MARKERS.some((marker) => haystack.includes(marker));
+  return CINDY_CLAUDE_PATH_MARKERS.some((marker) => haystack.includes(marker));
 }
 
 function isParentAlive(ppid: number): boolean {
@@ -220,6 +345,15 @@ function isParentAlive(ppid: number): boolean {
     // orphans whose parent is just opaque to us.
     return (err as NodeJS.ErrnoException).code !== 'ESRCH';
   }
+}
+
+/**
+ * True only when `childMs` is known to precede `selfMs` by more than the skew
+ * margin — i.e. the process started before this one did. Undefined inputs (no
+ * creation-time source) return false so the caller stays conservative.
+ */
+function startedBefore(childMs: number | undefined, selfMs: number | undefined): boolean {
+  return childMs !== undefined && selfMs !== undefined && childMs < selfMs - PID_REUSE_SKEW_MS;
 }
 
 function killWindowsProcessTree(pid: number): void {
@@ -275,16 +409,34 @@ function killProcessTree(pid: number, childrenByParent: Map<number, number[]>): 
   }
 }
 
+export interface ReapOptions {
+  /**
+   * Kill Claude trees whose parent is the current Electron process.
+   *
+   * Quit-time cleanup sets this true. The startup pass must leave it false: it
+   * runs fire-and-forget while bootstrap continues, so its async snapshot can
+   * complete after a session was launched (interrupted-turn resume, scheduler,
+   * a fast user action). Such a fresh `claude.exe` has `ppid === process.pid`
+   * and would be misread as a self-spawned orphan and killed even though it is a
+   * legitimate, live current session. Historical orphans (dead parent) are still
+   * reaped at startup regardless of this flag; so is a ppid===self process that
+   * provably predates this one (a previous instance's orphan we inherited via PID
+   * reuse), which creation-time comparison distinguishes from a live child.
+   */
+  reapCurrentSession?: boolean;
+}
+
 /**
- * Synchronously reaps Claude Code process trees owned by this app instance, plus
- * historical xdt-maker bundled Claude processes whose parent has already died.
+ * Reaps Claude Code process trees owned by this app instance, plus historical
+ * Cindy-bundled Claude processes whose parent has already died.
  */
-export function reapClaudeOrphansSync(): ReaperResult {
+export async function reapClaudeOrphans(options: ReapOptions = {}): Promise<ReaperResult> {
+  const reapCurrentSession = options.reapCurrentSession ?? true;
   const start = Date.now();
   let scan: ScanResult = { rows: [], childrenByParent: new Map() };
 
   try {
-    scan = scanClaudeProcesses();
+    scan = await scanClaudeProcesses();
   } catch (err) {
     log.debug('failed to scan claude processes', {
       error: err instanceof Error ? err.message : String(err),
@@ -298,11 +450,26 @@ export function reapClaudeOrphansSync(): ReaperResult {
     if (proc.pid === process.pid) continue;
 
     if (proc.ppid === process.pid) {
-      if (killProcessTree(proc.pid, scan.childrenByParent)) killedSelfSpawned += 1;
+      if (reapCurrentSession) {
+        // Quit-time cleanup reaps live current-session children.
+        if (killProcessTree(proc.pid, scan.childrenByParent)) killedSelfSpawned += 1;
+        continue;
+      }
+      // Startup pass. Normally we must NOT touch ppid===self processes: one may be
+      // a session launched moments after cold start (see ReapOptions). But a claude
+      // that provably started BEFORE this process cannot be a child we spawned —
+      // our children are always younger. It is a previous instance's orphan whose
+      // dead parent's PID this process happened to reuse after a crash + relaunch;
+      // ppid alone can no longer prove ownership. Reap it under the same Cindy
+      // marker guard as the dead-parent historical path. When creation time is
+      // unknown the comparison stays false, so we fall back to the safe skip.
+      if (startedBefore(proc.createdAtMs, scan.selfCreatedAtMs) && hasCindyClaudeMarker(proc.cmdLine)) {
+        if (killProcessTree(proc.pid, scan.childrenByParent)) killedHistoricalOrphans += 1;
+      }
       continue;
     }
 
-    if (hasXdtClaudeMarker(proc.cmdLine) && !isParentAlive(proc.ppid)) {
+    if (hasCindyClaudeMarker(proc.cmdLine) && !isParentAlive(proc.ppid)) {
       if (killProcessTree(proc.pid, scan.childrenByParent)) killedHistoricalOrphans += 1;
     }
   }

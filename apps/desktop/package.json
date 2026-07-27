@@ -90,6 +90,7 @@
     "@cindy/model-providers": "workspace:*",
     "@cindy/remote-file-service": "workspace:*",
     "@cindy/voice-input-core": "workspace:*",
+    "@vscode/windows-process-tree": "0.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@paralleldrive/cuid2": "^2.3.1",
     "@parcel/watcher": "^2.5.6",
