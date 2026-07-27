@@ -142,6 +142,19 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body.indexOf('clearReloginFlag();')).toBeGreaterThan(passiveIdx);
   });
 
+  it('legacy 凭证清理:passive 启动不得删掉老构建 primary 可能还在用的文件', () => {
+    const start = authSource.indexOf('// Old Feishu-auth refresh tokens');
+    const end = authSource.indexOf('const storedToken = readSafe(REFRESH_TOKEN_KEY);', start);
+    const body = authSource.slice(start, end);
+
+    // dev + packaged 共库双开是受支持的场景（--preserve-running）：老构建的 primary
+    // 可能仍在消费这两个 legacy 文件，passive 只是启动一下就把它们删了。
+    expect(body).toContain('if (!isPassiveSharedUserDataInstance()) {');
+    const guardIdx = body.indexOf('if (!isPassiveSharedUserDataInstance()) {');
+    expect(body.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
+    expect(body.indexOf('removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
+  });
+
   it('其余整机一份的账号派生状态:canary flag 与账号删除 receipt 都不被 passive 清掉', () => {
     const clearBody = sliceBody('function clearAuth(', 'clearPerAccountIntegrationsInBackground');
     // canary-flag.json 被清 → packaged primary 下次更新轮询按 stable 拉 manifest。
@@ -189,9 +202,14 @@ describe('passive shared-userData instance auth isolation', () => {
     );
     expect(helper).toContain("if (readSafe(key) !== expected) return 'changed';");
     expect(helper).toContain('const before = identity();');
-    expect(helper).toContain("if (before === null) return 'changed';");
-    expect(helper).toContain("if (identity() !== before) return 'changed';");
-    expect(helper.indexOf("if (identity() !== before) return 'changed';")).toBeLessThan(
+    // stat 失败要分开归类：ENOENT = 目标状态已达成（deleted），其它错误 = 不敢动（failed）。
+    // 都折叠成 'changed' 会让调用点打出「token changed meanwhile」这种不实日志。
+    expect(helper).toContain("if (before.kind === 'absent') return 'deleted';");
+    expect(helper).toContain("if (before.kind === 'error') return 'failed';");
+    expect(helper).toContain("if (after.kind === 'absent') return 'deleted';");
+    expect(helper).toContain("if (after.kind === 'error') return 'failed';");
+    expect(helper).toContain("if (after.id !== before.id) return 'changed';");
+    expect(helper.indexOf("if (after.id !== before.id) return 'changed';")).toBeLessThan(
       helper.indexOf('fs.unlinkSync(filepath);'),
     );
 

@@ -397,19 +397,28 @@ type RemoveIfUnchangedResult =
 
 function removeSafeIfUnchanged(key: string, expected: string): RemoveIfUnchangedResult {
   const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
-  const identity = (): string | null => {
+  // 三态:拿到身份 / 文件确定不在(ENOENT) / stat 本身失败。后两者必须分开——
+  // 「已经不在」是目标状态达成,「读不到状态」是我们不敢动它。
+  type Identity = { kind: 'ok'; id: string } | { kind: 'absent' } | { kind: 'error' };
+  const identity = (): Identity => {
     try {
       const s = fs.statSync(filepath);
-      return `${s.ino}:${s.mtimeMs}:${s.size}`;
-    } catch {
-      return null;
+      return { kind: 'ok', id: `${s.ino}:${s.mtimeMs}:${s.size}` };
+    } catch (err) {
+      return (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+        ? { kind: 'absent' }
+        : { kind: 'error' };
     }
   };
   const before = identity();
-  if (before === null) return 'changed';
+  if (before.kind === 'absent') return 'deleted';
+  if (before.kind === 'error') return 'failed';
   if (readSafe(key) !== expected) return 'changed';
   // 读内容期间文件被换掉(另一个实例写入了替换凭证)→ 那枚不在本次判定范围内。
-  if (identity() !== before) return 'changed';
+  const after = identity();
+  if (after.kind === 'absent') return 'deleted';
+  if (after.kind === 'error') return 'failed';
+  if (after.id !== before.id) return 'changed';
   try {
     // 不走 removeSafe():它吞掉所有 unlink 错误,会让调用方把「没删成」当成
     // 「已清理」并据此打日志。这里必须如实区分。
@@ -1707,9 +1716,16 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   }
 
   // Old Feishu-auth refresh tokens are intentionally not portable to auth-server.
-  removeSafe(LEGACY_REFRESH_TOKEN_KEY);
   // 早期测试版曾持久化 account refresh token；该会话现已收窄为登录期内存态。
-  removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+  //
+  // 这两个 legacy 文件同样是整机一份,而 dev + packaged 共库双开是受支持的场景
+  // (--preserve-running):老构建的 primary 可能还在消费它们,passive 只是启动一下
+  // 就把它们删掉,等于删了对方的活凭证。清理属于「搬家式迁移」,留给独占启动的
+  // 非 passive 实例做。
+  if (!isPassiveSharedUserDataInstance()) {
+    removeSafe(LEGACY_REFRESH_TOKEN_KEY);
+    removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);
+  }
   const storedToken = readSafe(REFRESH_TOKEN_KEY);
   if (!storedToken) {
     commitActiveAppSession('signed-out');
