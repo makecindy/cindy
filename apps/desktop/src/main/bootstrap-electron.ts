@@ -268,9 +268,9 @@ import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
 import {
-  getSubscribedControllers,
+  getActiveControllers,
   setSessionsSubscribedListener,
-  setSubscribedControllersChangedListener,
+  setUpdateRelaunchControllersChangedListener,
 } from './device-link/dispatch';
 import {
   registerDeviceLinkIpc,
@@ -2376,7 +2376,11 @@ const registerIpcHandlers = () => {
   setSessionsSubscribedListener(() => {
     getAgentIslandService()?.replaySessionActivity();
   });
-  setSubscribedControllersChangedListener(() => {
+  let hadUpdateRelaunchRemoteController = false;
+  setUpdateRelaunchControllersChangedListener((controllers) => {
+    const hasUpdateRelaunchRemoteController = controllers.length > 0;
+    if (hasUpdateRelaunchRemoteController === hadUpdateRelaunchRemoteController) return;
+    hadUpdateRelaunchRemoteController = hasUpdateRelaunchRemoteController;
     notifyUpdateAutoRelaunchBusyStateChanged();
   });
 
@@ -3521,12 +3525,12 @@ const registerIpcHandlers = () => {
     // 由 prepareCodexExtraSpawnConfig 懒启动(幂等);此处不再按全局开关 eager-start。
     try {
       setUpdateAutoRelaunchBusyProbe(async () => {
-        // A remote operator may be reading the UI without an active agent turn.
-        // Treat any subscribed view/control session as busy so unattended
-        // relaunch cannot cut the only path back into a home-server install.
+        // A remote operator may be reading an active session without an agent turn.
+        // Keep that control path alive, but do not let the lightweight `sessions`
+        // list subscription held by every eligible device block updates forever.
         return hasUpdateRelaunchBusyActivity({
           readSynchronousBusy: () =>
-            getSubscribedControllers().length > 0 || anySessionInTurn(getMakerCore()),
+            getActiveControllers().length > 0 || anySessionInTurn(getMakerCore()),
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });

@@ -246,9 +246,9 @@ let activeClient: DeviceLinkClient | null = null;
 type ControllersChangedListener = (controllers: ActiveController[]) => void;
 let onControllersChanged: ControllersChangedListener | null = null;
 
-/** All remote viewers, including lightweight `sessions` subscriptions. */
-type SubscribedControllersChangedListener = (controllers: ActiveController[]) => void;
-let onSubscribedControllersChanged: SubscribedControllersChangedListener | null = null;
+/** Remote controllers whose active session view must block an unattended update relaunch. */
+type UpdateRelaunchControllersChangedListener = (controllers: ActiveController[]) => void;
+let onUpdateRelaunchControllersChanged: UpdateRelaunchControllersChangedListener | null = null;
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -258,10 +258,10 @@ export function setControllersChangedListener(cb: ControllersChangedListener | n
   onControllersChanged = cb;
 }
 
-export function setSubscribedControllersChangedListener(
-  cb: SubscribedControllersChangedListener | null,
+export function setUpdateRelaunchControllersChangedListener(
+  cb: UpdateRelaunchControllersChangedListener | null,
 ): void {
-  onSubscribedControllersChanged = cb;
+  onUpdateRelaunchControllersChanged = cb;
 }
 
 export function setSessionsSubscribedListener(cb: SessionsSubscribedListener | null): void {
@@ -431,8 +431,9 @@ function truncateRemoteString(value: string, state: TruncationState): string {
  */
 function syncForwarding(): void {
   setBroadcastTapListener(subscriptions.isEmpty() ? null : forwardPush);
-  onControllersChanged?.(subscriptions.getControlControllers());
-  onSubscribedControllersChanged?.(subscriptions.getSubscribedControllers());
+  const controlControllers = subscriptions.getControlControllers();
+  onControllersChanged?.(controlControllers);
+  onUpdateRelaunchControllersChanged?.(controlControllers);
 }
 
 /** 把所有订阅控制端踢掉(被控开关关闭 / 用户一键断开 / 退出时调用) */
@@ -1065,7 +1066,7 @@ export const __testing = {
   reset(): void {
     subscriptions.__testing.reset();
     onControllersChanged = null;
-    onSubscribedControllersChanged = null;
+    onUpdateRelaunchControllersChanged = null;
     onSessionsSubscribed = null;
     activeClient = null;
     setBroadcastTapListener(null);

@@ -92,8 +92,7 @@ function getOrCreate(deviceId: string, name?: string): ControllerEntry {
 
 /** 订阅:把 topics 并入该控制端(name 可选,subscribe/link-open 携带时更新)。 */
 export function subscribe(deviceId: string, topics: readonly string[], name?: string): void {
-  // Empty/fully-filtered subscribe frames must not create a registry entry:
-  // getSubscribedControllers() treats every entry as update-relaunch busy.
+  // Empty/fully-filtered subscribe frames must not create a phantom remote viewer.
   if (topics.length === 0) return;
   const e = getOrCreate(deviceId, name);
   for (const t of topics) e.topics.add(t as StoredTopic);

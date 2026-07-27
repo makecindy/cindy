@@ -377,7 +377,7 @@ describe('dispatchLocalInvoke', () => {
 import {
   wireInboundDispatch,
   setControllersChangedListener,
-  setSubscribedControllersChangedListener,
+  setUpdateRelaunchControllersChangedListener,
   setSessionsSubscribedListener,
   getActiveControllers,
   getSubscribedControllers,
@@ -565,10 +565,10 @@ describe('被控端订阅 registry + topic 转发', () => {
     });
   });
 
-  it('纯 sessions viewer 也进入无人值守更新的远控 busy 集合并触发变更通知', () => {
+  it('无人值守更新只被实际会话控制阻塞，不被纯 sessions viewer 阻塞', () => {
     remoteControlEnabled = true;
     const changes: ActiveController[][] = [];
-    setSubscribedControllersChangedListener((controllers) => changes.push(controllers));
+    setUpdateRelaunchControllersChangedListener((controllers) => changes.push(controllers));
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
@@ -580,6 +580,12 @@ describe('被控端订阅 registry + topic 转发', () => {
 
     expect(getActiveControllers()).toEqual([]);
     expect(getSubscribedControllers()).toEqual([
+      { deviceId: 'ctrl-viewer', name: 'Viewer' },
+    ]);
+    expect(changes.at(-1)).toEqual([]);
+
+    feed(subFrame('ctrl-viewer', SUB, ['session:s1'], 'Viewer'));
+    expect(getActiveControllers()).toEqual([
       { deviceId: 'ctrl-viewer', name: 'Viewer' },
     ]);
     expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-viewer', name: 'Viewer' }]);
