@@ -2931,9 +2931,10 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // Device ID (hardware-based, survives app reinstall). resolveDeviceId() is
-  // crash-safe: it patches PATH for bare `ioreg` and falls back to a persisted
-  // UUID rather than throwing (see deviceId.ts).
+  // Device ID: prefers the hardware fingerprint, else a persisted UUID under
+  // userData (so it may not survive clearing userData / reinstall, and isn't
+  // necessarily hardware-derived). resolveDeviceId() is crash-safe: it patches
+  // PATH for bare `ioreg` and falls back rather than throwing (see deviceId.ts).
   const machineId = resolveDeviceId();
   ipcMain.handle('get-device-id', () => machineId);
 

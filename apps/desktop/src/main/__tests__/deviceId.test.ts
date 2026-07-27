@@ -48,7 +48,10 @@ describe('resolveDeviceId', () => {
   });
 
   afterEach(() => {
-    process.env.PATH = originalPath;
+    // Restore precisely: assigning `undefined` would coerce to the string
+    // "undefined" and pollute PATH for later tests.
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
     if (originalOverride === undefined) delete process.env.XDT_DEVICE_ID_OVERRIDE;
     else process.env.XDT_DEVICE_ID_OVERRIDE = originalOverride;
     fs.rmSync(tmpDir, { recursive: true, force: true });

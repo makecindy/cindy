@@ -125,10 +125,11 @@ if (devFlags.invalidIsolationName !== null) {
   );
 }
 if (devFlags.needsIsolatedDeviceId) {
-  // 必须在 authManager 模块加载(bootstrap 动态 import)之前落到 env——它在模块
-  // 顶层读一次 XDT_DEVICE_ID_OVERRIDE ?? machineIdSync()。机器指纹极小概率取不到
-  // (machineIdSync 抛),兜底用固定串:跨机器同账号双沙箱会撞,但比静默回落物理机
-  // 指纹(必踢正式版)安全方向正确。
+  // 必须在首次 getDeviceId()(authManager 惰性调 resolveDeviceId())之前落到 env——
+  // 设备 ID 解析会优先 XDT_DEVICE_ID_OVERRIDE,否则探测机器指纹。这里在 bootstrap
+  // 动态 import 之前设好,时序上稳妥。机器指纹极小概率取不到(machineIdSync 抛),
+  // 兜底用固定串:跨机器同账号双沙箱会撞,但比静默回落物理机指纹(必踢正式版)
+  // 安全方向正确。
   // 长度硬预算 64:server 端 Slack 设备注册的 deviceId 白名单上限 64 字符
   // (apps/server/src/routes/slack.ts),超长会被静默降级成 legacy 伪设备。
   // 默认沙箱 'dev-' + 60 位指纹 = 64;命名沙箱 'dev-<名字>-' + 剩余预算的指纹
