@@ -77,6 +77,45 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('normalizes a whitespace provider before route and busy-session decisions', async () => {
+    const sessionId = rememberSession('runtime-set-model-normalize-provider');
+    const setModel = vi.fn(async () => {});
+    const registerPendingCredentialSwitch = vi.fn();
+    const clearPendingCredentialSwitch = vi.fn();
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'codex',
+        remoteHostId: null,
+        model: 'gpt-5.4',
+        setModel,
+      }),
+      listActiveSessions: () => [
+        {
+          id: sessionId,
+          agentKind: 'codex',
+          remoteHostId: null,
+          isTurnRunning: () => true,
+        },
+      ],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    const result = await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.4',
+      providerId: '   ',
+      registerPendingCredentialSwitch,
+      clearPendingCredentialSwitch,
+    });
+
+    expect(result).toEqual({ status: 'applied' });
+    expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
+    expect(clearPendingCredentialSwitch).toHaveBeenCalledWith(sessionId);
+    expect(setModel).toHaveBeenCalledWith('gpt-5.4');
+    expect(getSessionProvider(sessionId)).toBeNull();
+  });
+
   it('soft-closes local Codex sessions instead of reusing a host across credential families', async () => {
     const sessionId = rememberSession('runtime-set-model-close-codex');
     setSessionProvider(sessionId, 'openai');

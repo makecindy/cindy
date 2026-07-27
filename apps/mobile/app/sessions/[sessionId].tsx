@@ -65,6 +65,7 @@ import { ConnectionBanner, useShowConnectionBanner } from '@/components/Connecti
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
   describeRemoteError,
   formatRemoteError,
@@ -662,6 +663,7 @@ export default function SessionScreen() {
     unsubscribe,
   } = useDeviceLink();
   const revokedDevices = useRevokedDevices();
+  const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
@@ -1155,11 +1157,13 @@ export default function SessionScreen() {
   );
   const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession);
   const isDeviceAccessRevoked = !!deviceId && revokedDevices.has(deviceId);
+  // 熔断 open:被控电脑「进程活着但不回包」的半死态;relay status 恒 online,必须单独入参。
+  const isDeviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
   const connectionError = isDeviceAccessRevoked
     ? '[ACCESS_REVOKED] access revoked by target device'
     : error;
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
-  const showConnectionBanner = useShowConnectionBanner(status, connectionError, connectionIssue);
+  const showConnectionBanner = useShowConnectionBanner(status, connectionError, connectionIssue, isDeviceUnresponsive);
   const hasCurrentSession = currentSession !== null;
   const currentAgentKind = useMemo(
     () => currentSession ? agentKindForSession(currentSession) : null,
@@ -6464,6 +6468,7 @@ export default function SessionScreen() {
             {showConnectionBanner ? (
               <ConnectionBanner
                 density="compact"
+                deviceUnresponsive={isDeviceUnresponsive}
                 error={connectionError}
                 issue={connectionIssue}
                 lastSyncedAt={lastSyncedAt}

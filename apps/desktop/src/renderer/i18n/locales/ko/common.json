@@ -4303,6 +4303,7 @@
       "refining": "다듬는 중",
       "result": "음성 입력",
       "inputFailed": "입력 실패",
+      "transcriptKept": "인식된 텍스트는 유지됨",
       "permissionRequired": "권한 필요",
       "error": "음성 입력 실패"
     },
@@ -4340,7 +4341,11 @@
     "apiKeyRequired": "음성 입력을 사용하려면 먼저 API Key를 설정하세요.",
     "cindyServiceUnavailable": "Cindy 음성 서비스를 사용할 수 없습니다. 네트워크를 확인하거나 서비스 소스를 전환하세요.",
     "asrServiceUnavailable": "음성 인식 서비스에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
-    "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도하세요."
+    "emptyTranscript": "음성이 감지되었지만 텍스트를 인식하지 못했습니다. 다시 시도하세요.",
+    "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+    "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
+    "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
+    "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요."
   },
   "chat": {
     "askUserQuestion": {

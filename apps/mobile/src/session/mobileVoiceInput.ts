@@ -10,6 +10,7 @@ import {
   extractJsonStringFieldSnapshot,
   type DictationRefinementContext,
   type TextModelClient,
+  type VoiceInputErrorCode,
 } from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
 import type { MobileVoiceCredentialSyncDictionaryEntry as MobileVoiceDictionaryEntry } from '@cindy/maker-shared/device-link-contract';
@@ -24,6 +25,21 @@ export const MOBILE_MAX_VOICE_AUDIO_BYTES = 64 * 1024 * 1024;
 // 语音错误文案:函数而非模块常量,调用时按当前语言取值(常量会把语言冻结在加载时)。
 export function mobileVoiceEmptyTranscriptError(): string {
   return i18n.t('composer.voice.emptyTranscript');
+}
+// controller 自己分类的失败:它的 message 是英文调试串,展示文案必须按 code 取。
+// 没有 code 的失败来自 provider(鉴权、配额、协议),那条 message 才是唯一的描述。
+const MOBILE_VOICE_ERROR_CODE_KEYS: Record<VoiceInputErrorCode, string> = {
+  empty_transcript: 'composer.voice.emptyTranscript',
+  connection_interrupted: 'composer.voice.connectionInterrupted',
+  recognition_stalled: 'composer.voice.recognitionStalled',
+};
+export function mobileVoiceErrorCodeMessage(code: VoiceInputErrorCode): string {
+  return i18n.t(MOBILE_VOICE_ERROR_CODE_KEYS[code]);
+}
+// 失败但已识别的文字已经落进输入框:在原始失败原因后面补一句「没丢」。原因不能被
+// 替换掉——凭证过期、配额用尽和断网需要用户做的事完全不同。
+export function mobileVoiceTranscriptKeptError(message: string): string {
+  return i18n.t('composer.voice.transcriptKept', { message });
 }
 export function mobileVoiceMicPermissionError(): string {
   return i18n.t('composer.voice.micPermission');

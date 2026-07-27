@@ -4303,6 +4303,7 @@
       "refining": "整えています",
       "result": "音声入力",
       "inputFailed": "入力に失敗しました",
+      "transcriptKept": "認識したテキストは保持しています",
       "permissionRequired": "権限が必要です",
       "error": "音声入力に失敗しました"
     },
@@ -4340,7 +4341,11 @@
     "apiKeyRequired": "音声入力を使用するには、先に API Key を設定してください。",
     "cindyServiceUnavailable": "Cindy 音声サービスを利用できません。ネットワークを確認するか、サービス提供元を切り替えてください。",
     "asrServiceUnavailable": "音声認識サービスに接続できません。ネットワークを確認してから再試行してください。",
-    "emptyTranscript": "音声は検出されましたが、テキストを認識できませんでした。もう一度お試しください。"
+    "emptyTranscript": "音声は検出されましたが、テキストを認識できませんでした。もう一度お試しください。",
+    "connectionInterrupted": "音声接続が中断されました。ネットワークを確認してからやり直してください。",
+    "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
+    "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",
+    "transcriptKeptOverlay": "{{message}}（ここまで認識したテキストは保持しており、コピーして続けられます）"
   },
   "chat": {
     "askUserQuestion": {

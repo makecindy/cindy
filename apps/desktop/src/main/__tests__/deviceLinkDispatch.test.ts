@@ -850,6 +850,23 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).toHaveBeenCalledWith('sess-1', { model: 'claude-x' });
   });
 
+  it('set-model 持久化 trim 后的 providerId', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    registry.register('maker:set-model', () => undefined);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'claude-x', '  anthropic  '],
+    });
+
+    expect(r).toMatchObject({ ok: true });
+    expect(persist).toHaveBeenCalledWith('sess-1', {
+      model: 'claude-x',
+      providerId: 'anthropic',
+    });
+  });
+
   it('set-fast-mode → {fastMode}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);

@@ -390,7 +390,11 @@ import {
   refreshCustomProvidersIntoCatalog,
 } from '../maker-host/createDesktopProviderService.js';
 import { connectedProvidersForAgent, effectiveSourceIdForModel } from '@cindy/model-providers';
-import { hydrateSessionProvider, getSessionProvider } from '../maker-host/session-provider-store.js';
+import {
+  getSessionProvider,
+  hydrateSessionProvider,
+  setSessionProvider,
+} from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
@@ -1554,18 +1558,47 @@ const pendingFailedTurnAssistantPersistId = new Map<string, string>();
  */
 const sendToSessionLocks = new Map<string, Promise<unknown>>();
 
-/** Serialize every local send / runtime release for one session. */
-function withSendToSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+/**
+ * Acquire the per-session send/route lock until the returned release callback runs.
+ *
+ * Direct-send callers need this lease form because applying a deferred agent switch,
+ * refreshing the resulting live Session, and calling Session.send happen in different
+ * modules but must remain one atomic route decision.
+ */
+async function acquireSendToSessionLock(sessionId: string): Promise<() => void> {
   const previous = sendToSessionLocks.get(sessionId);
   const waitPrevious = previous ? previous.catch(() => undefined) : Promise.resolve();
-  const run = waitPrevious.then(task);
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const run = waitPrevious.then(() => gate);
   const tracked = run.finally(() => {
     if (sendToSessionLocks.get(sessionId) === tracked) {
       sendToSessionLocks.delete(sessionId);
     }
   });
   sendToSessionLocks.set(sessionId, tracked);
-  return tracked;
+  await waitPrevious;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    releaseGate();
+  };
+}
+
+/** Serialize every local send / runtime release / route mutation for one session. */
+export async function withSendToSessionLock<T>(
+  sessionId: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const release = await acquireSendToSessionLock(sessionId);
+  try {
+    return await task();
+  } finally {
+    release();
+  }
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
@@ -1574,7 +1607,9 @@ const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
 let deferredCodexRestartHolder: DeferredCodexRestartService | null = null;
-let pendingAgentSwitchApplyHolder: ((sessionId: string, signal?: AbortSignal) => Promise<void>) | null = null;
+let pendingAgentSwitchApplyHolder:
+  ((sessionId: string, signal?: AbortSignal) => Promise<() => void>) | null = null;
+let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let gitSnapshotCoordinator: GitSnapshotCoordinator | null = null;
 const sessionTurnActivityTracker = new SessionTurnActivityTracker();
 
@@ -1681,17 +1716,23 @@ export function clearDeferredCodexRestartForOwnerBoundary(): void {
 }
 
 /**
- * Goal / IM / scheduler 直发 `Session.send()` 前的 deferred agent-switch 桥。
+ * Goal / IM / scheduler 直发 `Session.send()` 的 deferred agent-switch 锁桥。
  *
  * 与 renderer 的 makerSendTransaction 不同,这些调用方没有后续 lazy-create 阶段;
- * holder 因此要求 apply 成功时同步 bootstrap 新引擎,调用方再重新读取 live session。
- * 启动期 holder 尚未就绪时不可能已有进程内 pending intent,no-op 即可。
+ * holder 因此先在 session 锁内同步 bootstrap 新引擎,调用方重新读取 live session
+ * 并完成 send 后才 release。启动期 holder 尚未就绪时不可能已有进程内 pending
+ * intent,返回 no-op release 即可。
  */
-export async function applyPendingAgentSwitchForDirectSend(
+export async function acquirePendingAgentSwitchForDirectSend(
   sessionId: string,
   signal?: AbortSignal,
-): Promise<void> {
-  await pendingAgentSwitchApplyHolder?.(sessionId, signal);
+): Promise<() => void> {
+  return pendingAgentSwitchApplyHolder?.(sessionId, signal) ?? (() => {});
+}
+
+/** Later successful model/provider picks supersede an earlier cross-engine intent. */
+export function cancelPendingAgentSwitchForSession(sessionId: string): void {
+  cancelPendingAgentSwitchHolder?.(sessionId);
 }
 
 /**
@@ -4124,6 +4165,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
+  cancelPendingAgentSwitchHolder = (sessionId) => {
+    agentSwitchPending.clear(sessionId);
+    broadcastSessionPatched(sessionId, {
+      agentSwitchIntent: null,
+      agentSwitchIntentCanceled: true,
+    });
+  };
 
   // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts。切换后
   // 残留在 renderer store / 排队项里的旧 agentKind/resumeSessionId 若原样 spawn,
@@ -4183,11 +4231,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
       return row ?? null;
     },
     getLiveSession: (sessionId) => maker.getSession(sessionId),
-    closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
     listMessagesForHandoff: (sessionId, after) => listMessagesForAgentHandoff(sessionId, 400, after),
     findParkedEngineSession: (sessionId, targetDbKind) =>
       findParkedEngineSession(sessionId, targetDbKind),
     applyAgentSwitchToDb: applyAgentSwitchToSessionRow,
+    setSessionProvider,
+    supersedePendingCredentialSwitch: clearPendingCredentialSwitchForSession,
     insertBoundaryMessage: async (sessionId, content) => {
       const clientId = `agent-switch:${createId()}`;
       await createDbMessage(sessionId, {
@@ -4282,11 +4332,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,
   });
-  pendingAgentSwitchApplyHolder = (sessionId, signal) =>
-    applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
-      bootstrapAfterSwitch: true,
-      signal,
-    });
+  pendingAgentSwitchApplyHolder = async (sessionId, signal) => {
+    const release = await acquireSendToSessionLock(sessionId);
+    try {
+      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
+        bootstrapAfterSwitch: true,
+        signal,
+      });
+      return release;
+    } catch (err) {
+      release();
+      throw err;
+    }
+  };
 
   ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE, async (_e, sessionId: unknown, role: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
@@ -6969,15 +7027,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     // 同时覆盖"主动 closeSession"和"内部异常关闭"两条路径。
     // opts.preserveWorkspace=true(/clear、鉴权重连等软重启)时抑制这些重副作用,
     // 业务体与选项解析见 closeSessionRequest.ts。
-    await handleCloseSessionRequest(
-      {
-        closeSession: (sid) => maker.closeSession(sid),
-        withRehydrateCloseSuppressed,
-        cleanupPendingInteractions: (sid) =>
-          cleanupPendingInteractionsForSession(sid, 'session_closed'),
-      },
-      sessionId,
-      opts,
+    await withSendToSessionLock(sessionId, () =>
+      handleCloseSessionRequest(
+        {
+          closeSession: (sid) => maker.closeSession(sid),
+          withRehydrateCloseSuppressed,
+          cleanupPendingInteractions: (sid) =>
+            cleanupPendingInteractionsForSession(sid, 'session_closed'),
+        },
+        sessionId,
+        opts,
+      ),
     );
   });
 
@@ -7061,41 +7121,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions 
     ) {
       throwIpcError('INVALID_PARAMS', 'providerId must be string, null, or undefined');
     }
-    try {
-      const result = await applySetModelThenCancelAgentSwitchIntent(
-        agentSwitchPending,
-        sessionId,
-        () => applyRuntimeSetModelChange({
-          maker,
+    // 与 send 事务共用 session 锁:发送时刻执行的跨引擎切换必须先落定,
+    // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
+    // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
+    return withSendToSessionLock(sessionId, async () => {
+      try {
+        const result = await applySetModelThenCancelAgentSwitchIntent(
+          agentSwitchPending,
           sessionId,
-          model,
-          providerId,
-          isSessionInTurn,
-          registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
-          clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
-          wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
-          getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-          // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
-          // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
-          codexAuthInjection: getCodexProxyAuthInjectionState(),
-          logger: log,
-        }),
-        (id) => broadcastSessionPatched(id, {
-          agentSwitchIntent: null,
-          agentSwitchIntentCanceled: true,
-        }),
-      );
-      // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
-      // "任务结束后生效"而不是当成已即时切换。
-      return { deferred: result.status === 'deferred' };
-    } catch (err) {
-      if (err instanceof CredentialModeSwitchBusyError) {
-        // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
-        // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
-        throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
+          () => applyRuntimeSetModelChange({
+            maker,
+            sessionId,
+            model,
+            providerId,
+            isSessionInTurn,
+            registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+            clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+            wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+            getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+            // 解析隐式来源的凭证家族,精确判定是否跨远端压缩身份边界(见
+            // shouldCloseSessionForCredentialSwitch.codexAuthInjection)。
+            codexAuthInjection: getCodexProxyAuthInjectionState(),
+            logger: log,
+          }),
+          (id) => broadcastSessionPatched(id, {
+            agentSwitchIntent: null,
+            agentSwitchIntentCanceled: true,
+          }),
+        );
+        // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
+        // "任务结束后生效"而不是当成已即时切换。
+        return { deferred: result.status === 'deferred' };
+      } catch (err) {
+        if (err instanceof CredentialModeSwitchBusyError) {
+          // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
+          // renderer toast 走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
+          throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
+        }
+        throw err;
       }
-      throw err;
-    }
+    });
   });
 
   ipcMain.handle(MAKER_INVOKE.SET_EFFORT, async (_e, sessionId: unknown, effort: unknown) => {

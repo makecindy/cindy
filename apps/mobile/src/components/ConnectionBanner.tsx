@@ -11,6 +11,10 @@ import {
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
 import { MainWindowActionButton, StatusDot } from '@/components/MobilePrimitives';
+import {
+  resolveConnectionBannerVisibility,
+  resolveEffectiveConnectionError,
+} from '@/components/connectionBannerVisibility';
 import { fontWeight, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -20,14 +24,17 @@ const OFFLINE_BANNER_DELAY_MS = 1_200;
 /**
  * 条件挂载 ConnectionBanner 的统一可见性判定:
  * - 请求级 error / 可分类连接问题(鉴权失效、被顶号等)→ 立即显示;
+ * - 当前关联设备熔断 open(电脑端未响应,relay 可能仍 online)→ 立即显示;
  * - 普通弱网断线(status 非 online 且无分类 issue)→ 持续超过静默窗口才显示,
  *   既让用户看得到「正在重连」(否则消息流静默停更没有任何信号),又不因
  *   一次快速重连闪一下布局(规则 7:杜绝跳变)。
+ * 判定核在 resolveConnectionBannerVisibility(纯函数,单测覆盖)。
  */
 export function useShowConnectionBanner(
   status: DeviceLinkStatus,
   error: string | null,
   issue: DeviceLinkConnectionIssue | null,
+  deviceUnresponsive = false,
 ): boolean {
   const offline = status !== 'online';
   const [offlineLongEnough, setOfflineLongEnough] = useState(false);
@@ -39,13 +46,22 @@ export function useShowConnectionBanner(
     const timer = setTimeout(() => setOfflineLongEnough(true), OFFLINE_BANNER_DELAY_MS);
     return () => clearTimeout(timer);
   }, [offline]);
-  return Boolean(error) || (offline && (issue !== null || offlineLongEnough));
+  return resolveConnectionBannerVisibility({
+    offline,
+    offlineLongEnough,
+    // 熔断已关后屏幕残留的 DEVICE_UNRESPONSIVE 错误按陈旧丢弃(review P1),
+    // 否则恢复后 banner 会带着"自动重试中"文案常驻到用户手动同步。
+    hasError: Boolean(resolveEffectiveConnectionError(error, deviceUnresponsive)),
+    hasIssue: issue !== null,
+    deviceUnresponsive,
+  });
 }
 
 export function ConnectionBanner({
   status,
   loading,
   density = 'default',
+  deviceUnresponsive = false,
   error,
   issue = null,
   lastSyncedAt,
@@ -55,6 +71,8 @@ export function ConnectionBanner({
   status: DeviceLinkStatus;
   loading: boolean;
   density?: 'default' | 'compact';
+  /** 当前关联设备熔断 open(电脑端未响应);relay 可能仍 online,单独入参 */
+  deviceUnresponsive?: boolean;
   error: string | null;
   /** 连接层失败原因(useDeviceLink().connectionIssue);比请求级 error 更根因,优先展示 */
   issue?: DeviceLinkConnectionIssue | null;
@@ -67,28 +85,40 @@ export function ConnectionBanner({
   // 链路已 online 说明 issue 已过期(client 侧 online 会清除,这里兜底不展示)。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' ? issue : null;
-  const friendlyError = activeIssue ? null : describeRemoteError(error);
+  // 熔断 open 优先于请求级 error:open 期间的请求失败绝大多数就是熔断快速失败本身,
+  // 状态级提示(未响应 + 自动重试中)比单次请求的错误原文更能解释现状。
+  const showUnresponsive = !activeIssue && deviceUnresponsive;
+  // 熔断已关后残留的 DEVICE_UNRESPONSIVE 错误是陈旧快照,按 null 处理(与
+  // useShowConnectionBanner 同一判定,否则会出现可见但无内容的空壳 banner)。
+  const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
+  const friendlyError = activeIssue || showUnresponsive ? null : describeRemoteError(effectiveError);
   const tone = activeIssue
     ? 'off'
-    : friendlyError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+    : showUnresponsive
+      ? 'busy'
+      : friendlyError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const compact = density === 'compact';
   const title = activeIssue
     ? connectionIssueTitle(activeIssue.kind)
-    : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
+    : showUnresponsive
+      ? t('deviceLink.deviceUnresponsiveTitle')
+      : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
   const copy = activeIssue
     ? connectionIssueHint(activeIssue.kind)
-    : friendlyError ?? relayStatusHint(status, lastSyncedAt);
+    : showUnresponsive
+      ? t('deviceLink.deviceUnresponsiveHint')
+      : friendlyError ?? relayStatusHint(status, lastSyncedAt);
   return (
     <View
       style={[
         styles.root,
         compact && styles.rootCompact,
         variant === 'inline' && styles.rootInline,
-        (friendlyError || activeIssue) && styles.rootError,
+        (friendlyError || activeIssue || showUnresponsive) && styles.rootError,
       ]}
       testID="connection.banner"
     >
-      <StatusDot tone={tone} pulsing={!activeIssue && status === 'connecting'} />
+      <StatusDot tone={tone} pulsing={!activeIssue && (status === 'connecting' || showUnresponsive)} />
       <View style={[styles.textBlock, compact && styles.textBlockCompact]}>
         <Text
           ellipsizeMode="tail"
@@ -101,7 +131,7 @@ export function ConnectionBanner({
         {!compact ? (
           <Text
             ellipsizeMode="tail"
-            numberOfLines={friendlyError || activeIssue ? 2 : 1}
+            numberOfLines={friendlyError || activeIssue || showUnresponsive ? 2 : 1}
             style={styles.copy}
             testID="connection.copy"
           >

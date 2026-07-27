@@ -78,6 +78,7 @@ import {
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
 import {
   buildMobileHomePresentation,
@@ -237,7 +238,16 @@ export default function HomeScreen() {
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   // 已展开的自动化组 key(页面级 state:SectionList 虚拟化回收行组件时展开态不丢)。
   const [expandedAutomationGroups, setExpandedAutomationGroups] = useState<string[]>([]);
-  const [deviceConnectionStates, setDeviceConnectionStates] = useState<Record<string, HomeDeviceConnectionState>>({});
+  const [rawDeviceConnectionStates, setDeviceConnectionStates] = useState<Record<string, HomeDeviceConnectionState>>({});
+  // 熔断 open(电脑端未响应)的设备复用既有 failed 渲染路径(红圈),不新增视觉:
+  // 内部态映射覆盖在 hydrate 状态之上,熔断关闭后自动回落到原状态。
+  const unresponsiveDevices = useUnresponsiveDevices();
+  const deviceConnectionStates = useMemo<Record<string, HomeDeviceConnectionState>>(() => {
+    if (unresponsiveDevices.size === 0) return rawDeviceConnectionStates;
+    const merged: Record<string, HomeDeviceConnectionState> = { ...rawDeviceConnectionStates };
+    for (const deviceId of unresponsiveDevices) merged[deviceId] = 'failed';
+    return merged;
+  }, [rawDeviceConnectionStates, unresponsiveDevices]);
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
 
   const updateDeviceConnectionState = useCallback((deviceId: string, state: HomeDeviceConnectionState) => {

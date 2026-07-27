@@ -3,6 +3,8 @@
   "resync": "重新同步",
   "resyncing": "正在重新同步",
   "syncShort": "同步",
+  "deviceUnresponsiveTitle": "电脑端未响应",
+  "deviceUnresponsiveHint": "电脑暂时没有回应请求，正在自动重试。",
   "connectStep1": "在电脑上安装并打开 {{appName}}",
   "connectStep2": "用与手机相同的账号登录",
   "connectStep3": "在「设置 → 远程连接」中开启「允许同账号设备控制本机」",

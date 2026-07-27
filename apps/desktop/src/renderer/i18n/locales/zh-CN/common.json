@@ -4303,6 +4303,7 @@
       "refining": "正在润色",
       "result": "语音输入",
       "inputFailed": "输入失败",
+      "transcriptKept": "已保留识别出的文字",
       "permissionRequired": "需要授权",
       "error": "语音输入失败"
     },
@@ -4340,7 +4341,11 @@
     "apiKeyRequired": "需要先配置 API Key，才能使用语音输入。",
     "cindyServiceUnavailable": "Cindy 官方语音服务暂不可用，请检查网络或切换服务来源。",
     "asrServiceUnavailable": "语音识别服务连接失败，请检查网络或稍后重试。",
-    "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。"
+    "emptyTranscript": "检测到了语音，但没有识别出文字，请重试。",
+    "connectionInterrupted": "语音连接中断了，请检查网络后重试。",
+    "recognitionStalled": "语音识别没有继续返回结果，请重试。",
+    "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
+    "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）"
   },
   "chat": {
     "askUserQuestion": {

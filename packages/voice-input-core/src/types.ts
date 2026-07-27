@@ -8,7 +8,33 @@ export type VoiceInputState =
 
 export type VoiceInputTerminalOutcome = 'success' | 'no_speech' | 'failed' | 'cancelled';
 
-export type VoiceInputErrorCode = 'empty_transcript';
+/**
+ * Classifies the failures this controller raises itself, so hosts can show a
+ * localized sentence instead of the English `message` (which stays as the
+ * log/debug string). Failures originating in a provider have no code — their
+ * message is the only description of an auth, quota or protocol problem, so the
+ * controller passes it through unchanged. How it is presented is the host's
+ * call: current hosts still normalize transport strings and redact credentials
+ * before showing it, so "no code" means "the controller has nothing to add",
+ * not "display this raw".
+ */
+export type VoiceInputErrorCode =
+  | 'empty_transcript'
+  | 'connection_interrupted'
+  | 'recognition_stalled';
+
+/**
+ * Side facts about a failure, kept separate from its classification.
+ *
+ * `transcriptKept` means the text recognized before the failure still reached
+ * the host through onSubmitted. It is deliberately NOT an error code: the run
+ * can fail from an expired credential, an exhausted quota or a dropped socket,
+ * and the host must keep telling the user that actual cause — the retention
+ * note belongs alongside it, not instead of it.
+ */
+export type VoiceInputErrorDetails = {
+  transcriptKept: boolean;
+};
 
 export type AsrEvent =
   | { type: 'connected'; at: number }
@@ -161,7 +187,7 @@ export type VoiceTimelineEvent =
   | { type: 'stable_received'; runId: string; at: number; text: string }
   | { type: 'submitted'; runId: string; at: number; text: string; source: 'stable' | 'partial' }
   | { type: 'refine_requested'; runId: string; at: number; text: string }
-  | { type: 'refine_discarded'; runId: string; at: number; reason: 'final_text_changed' | 'stale_run' | 'cancelled' | 'no_submitted_text' | 'no_editable_range'; basedOnText: string }
+  | { type: 'refine_discarded'; runId: string; at: number; reason: 'final_text_changed' | 'stale_run' | 'cancelled' | 'no_submitted_text' | 'no_editable_range' | 'run_failed'; basedOnText: string }
   | { type: 'refine_accepted'; runId: string; at: number; basedOnText: string; refinedText: string; elapsedMs: number }
   | {
       type: 'refine_rejected';
@@ -198,16 +224,40 @@ export type VoiceTimelineEvent =
   | { type: 'asr_recovery_succeeded'; runId: string; at: number; elapsedMs: number }
   | { type: 'asr_recovery_failed'; runId: string; at: number; elapsedMs: number; reason: string }
   | { type: 'asr_stop_error_ignored'; runId: string; at: number; message: string; textChars: number }
+  // No failure message here: fail() records the 'error' event with the same
+  // runId immediately before salvaging, so the cause is already in the timeline
+  // — and unlike `text`, hosts don't redact this event's other fields.
+  // `accepted` is false when the host refused the text (e.g. the user had
+  // already edited the voice insertion), which is exactly when the retention
+  // flag must NOT be reported to the user.
+  | {
+      type: 'transcript_salvaged';
+      runId: string;
+      at: number;
+      text: string;
+      source: 'stable' | 'partial';
+      accepted: boolean;
+    }
   | { type: 'error'; runId: string; at: number; message: string };
 
 export type VoiceInputCallbacks = {
   onStateChanged?: (state: VoiceInputState, outcome?: VoiceInputTerminalOutcome) => void;
   onDraftChanged: (text: string, segment: SpeechSegment, source: VoiceInputDraftSource) => void;
+  /**
+   * Take the final text. The returned range doubles as the acceptance signal:
+   * return one only when the text actually landed somewhere the user can see,
+   * and `undefined` when it did not (e.g. the user already edited the insertion
+   * region). The controller reports `transcriptKept` from this answer, so a host
+   * that synthesizes a range without knowing the outcome — a bridge that emits
+   * to another process and answers synchronously — will make the controller
+   * promise retention it cannot back. Such hosts must correct the claim on the
+   * side that does know (see the desktop inline composer).
+   */
   onSubmitted: (text: string, segment: SpeechSegment) => EditableRange | undefined;
   isRangeUserTouched?: (range: EditableRange) => boolean;
   onRefinementPreview?: (text: string, segment: SpeechSegment, range: EditableRange) => void;
   applyRefinement?: (range: EditableRange, refinedText: string) => boolean;
-  onError?: (message: string, code?: VoiceInputErrorCode) => void;
+  onError?: (message: string, code?: VoiceInputErrorCode, details?: VoiceInputErrorDetails) => void;
 };
 
 export type RefinementTokenUsage = {
@@ -226,4 +276,4 @@ export type VoiceInputRendererEvent =
   | { type: 'refined'; runId: string; text: string; segment: SpeechSegment; range: EditableRange }
   | { type: 'usage'; runId: string; refinement: RefinementTokenUsage }
   | { type: 'timeline'; runId: string; event: VoiceTimelineEvent }
-  | { type: 'error'; runId: string; message: string; code?: VoiceInputErrorCode };
+  | { type: 'error'; runId: string; message: string; code?: VoiceInputErrorCode; transcriptKept?: boolean };

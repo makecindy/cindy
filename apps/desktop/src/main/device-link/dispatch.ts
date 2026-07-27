@@ -50,6 +50,7 @@ import {
 import { app } from 'electron';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { createLogger } from '../logger';
+import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
 import { dispatchLocalInvoke } from './invoke-registry';
 import { runDeviceLinkInvokeContext } from './invoke-context';
@@ -237,7 +238,7 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   if (channel === 'maker:set-model') {
     const patch: Record<string, unknown> = { model: args[1] };
     if (args.length > 2) {
-      patch.providerId = typeof args[2] === 'string' && args[2].trim() ? args[2] : null;
+      patch.providerId = normalizeSessionProviderId(typeof args[2] === 'string' ? args[2] : null);
     }
     await settingsPersist(sessionId, patch);
     return;

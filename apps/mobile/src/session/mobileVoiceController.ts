@@ -23,7 +23,8 @@ import {
   buildMobileVoiceRefinementContext,
   makeMobileRefinerPromptCacheKey,
   MobileLiteLlmTextModelClient,
-  mobileVoiceEmptyTranscriptError,
+  mobileVoiceErrorCodeMessage,
+  mobileVoiceTranscriptKeptError,
   type MobileVoiceDraftInsertion,
 } from '@/session/mobileVoiceInput';
 import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
@@ -386,10 +387,15 @@ export function createMobileVoiceControllerSession(
           && range.segmentIds.every((id, index) => voiceInsertionSegmentIds[index] === id);
         return sameRange && !isInsertionIntact(readCurrentDraft(), voiceInsertion);
       },
-      onError(message, code: VoiceInputErrorCode | undefined) {
-        const localizedMessage = code === 'empty_transcript'
-          ? mobileVoiceEmptyTranscriptError()
+      onError(message, code: VoiceInputErrorCode | undefined, details) {
+        // 有 code 的是 controller 自己分类的失败(message 是英文调试串),按 code 取
+        // 本地化文案;没有 code 的来自 provider,那条 message 才是唯一的失败描述。
+        const cause = code
+          ? mobileVoiceErrorCodeMessage(code)
           : redactMobileVoiceCredentialText(message, options.credential);
+        const localizedMessage = details?.transcriptKept
+          ? mobileVoiceTranscriptKeptError(cause)
+          : cause;
         controllerError = new Error(localizedMessage);
         options.onError?.(localizedMessage);
       },
@@ -569,7 +575,20 @@ export function createMobileVoiceControllerSession(
 
   function recordSubmittedHistory(text: string): void {
     if (!options.recordHistory) return;
-    historyEntryPromise = Promise.resolve(options.recordHistory(text))
+    // 下面的 .catch 只兜得住异步拒绝;同步抛会顺着 onSubmitted 冒出 controller,
+    // 被当成「宿主没接住这段文本」——文字其实已经写进草稿了,而 controller 还会
+    // 据此认定本次听写失败。历史记录是附带能力,不该有这个权力。
+    let recording: ReturnType<NonNullable<MobileVoiceControllerOptions['recordHistory']>>;
+    try {
+      recording = options.recordHistory(text);
+    } catch (error) {
+      console.warn(
+        '[mobile-voice] record history failed (non-fatal):',
+        error instanceof Error ? error.message : String(error),
+      );
+      return;
+    }
+    historyEntryPromise = Promise.resolve(recording)
       .then((entryId) => {
         if (typeof entryId === 'string' && entryId.trim()) {
           historyEntryId = entryId.trim();

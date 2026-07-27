@@ -356,6 +356,11 @@ export type DeviceLinkRelayStatus = 'online' | 'connecting' | 'stopped';
 const PERMANENT_REMOTE_ERROR_MARKERS = [
   'REMOTE_DISABLED',
   'CHANNEL_NOT_ALLOWED',
+  // 控制端「目标设备无响应」熔断器的快速失败(见 apps/mobile 的
+  // unresponsiveDevicesStore):被控端连续 INVOKE_TIMEOUT 后熔断 open,新请求
+  // 本地直拒。必须归为 permanent——否则 withTransientRemoteRetry 会把熔断
+  // 快速失败再原地重试 6 次,熔断等于白做。
+  'DEVICE_UNRESPONSIVE',
 ] as const;
 
 const TRANSIENT_REMOTE_ERROR_MARKERS = [
@@ -490,6 +495,7 @@ export function describeRemoteError(error: string | null): string | null {
   if (error.includes('REMOTE_DISABLED')) return '被控电脑已关闭允许远程控制。';
   if (error.includes('CHANNEL_NOT_ALLOWED')) return '当前电脑端版本不支持这个远程能力。';
   if (error.includes('ACCESS_REVOKED')) return '这台电脑已撤销手机访问权限。';
+  if (error.includes('DEVICE_UNRESPONSIVE')) return '电脑端未响应，正在自动重试，请稍后再试。';
   if (error.includes('VERSION_MISMATCH')) return '与服务端协议版本不一致，请升级 App 后重试。';
   if (error.includes('PAYLOAD_TOO_LARGE')) return '这次传输的内容过大，请拆分后重试。';
   if (error.includes('MEDIA_FETCH_FAILED')) return '获取电脑端文件失败，可以稍后重试。';
@@ -533,6 +539,14 @@ export function isAccessRevokedRemoteError(error: unknown): boolean {
   if (code === 'ACCESS_REVOKED') return true;
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   return message.includes('ACCESS_REVOKED') || message.includes('DEVICE_LINK_ACCESS_REVOKED');
+}
+
+/** 控制端熔断器快速失败(目标设备无响应)的识别;code 与 message 两种形态都认。 */
+export function isDeviceUnresponsiveRemoteError(error: unknown): boolean {
+  const code = readStringField(error, 'code');
+  if (code === 'DEVICE_UNRESPONSIVE') return true;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return message.includes('DEVICE_UNRESPONSIVE');
 }
 
 export function isPreconditionFailedRemoteError(error: unknown): boolean {

@@ -4304,6 +4304,7 @@
       "refining": "Refining",
       "result": "Voice input",
       "inputFailed": "Input failed",
+      "transcriptKept": "Recognized text kept",
       "permissionRequired": "Permission required",
       "error": "Voice input failed"
     },
@@ -4341,7 +4342,11 @@
     "apiKeyRequired": "Configure an API Key before using voice input.",
     "cindyServiceUnavailable": "The Cindy voice service is unavailable. Check your network or switch service source.",
     "asrServiceUnavailable": "Voice recognition service failed to connect. Check your network and try again.",
-    "emptyTranscript": "Speech was detected, but no text was recognized. Please try again."
+    "emptyTranscript": "Speech was detected, but no text was recognized. Please try again.",
+    "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
+    "recognitionStalled": "Voice recognition stopped returning results. Try again.",
+    "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
+    "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
   },
   "chat": {
     "askUserQuestion": {

@@ -1,4 +1,6 @@
+import { isDeviceUnresponsiveRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { createMobileMakerTransport, type MobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
+import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { normalizeScheduleList, normalizeScheduleRuns } from '@/scheduler/scheduleModel';
 import type { RemoteScheduleRun } from '@/scheduler/types';
@@ -8,6 +10,12 @@ const SCHEDULE_INDEX_RUN_LIMIT = 50;
 
 type LoadSessionScheduleIndexOptions = {
   throwOnTransientRunListError?: boolean;
+  /**
+   * 该目标设备当前是否熔断 open(实时查询)。最后一项 listRuns 的超时恰好把
+   * 熔断打开时,catch 到的还是原始 INVOKE_TIMEOUT 而非快速失败码——只按错误码
+   * 判断会把残缺索引当成功提交进 30s 正缓存(review P1)。
+   */
+  isDeviceUnresponsive?: () => boolean;
 };
 
 export async function loadSessionScheduleIndex(
@@ -28,6 +36,15 @@ export async function loadSessionScheduleIndex(
       runs = normalizeScheduleRuns(await maker.schedule.listRuns(schedule.id, SCHEDULE_INDEX_RUN_LIMIT));
     } catch (error) {
       if (options.throwOnTransientRunListError && isTransientRemoteError(error)) throw error;
+      // 目标设备熔断 open(DEVICE_UNRESPONSIVE 快速失败):剩余 N-1 个 listRuns 会
+      // 同样逐个失败,立即止损。**上抛而不是截断成功**(review P1):把部分索引当
+      // 成功返回会被调用方提交并进入 30s 正缓存——首页/详情页拿着不完整徽标还
+      // 以为是新鲜数据;上抛让节流层走失败负缓存,熔断恢复后重拉全量。
+      // isDeviceUnresponsive 兜住末项竞态(review P1):最后一项的超时恰好凑满
+      // 阈值开熔断时,抛的是 INVOKE_TIMEOUT,只看错误码会漏判。
+      if (isDeviceUnresponsiveRemoteError(error) || options.isDeviceUnresponsive?.()) {
+        throw error;
+      }
       runs = [];
     }
     pairs.push([schedule.id, runs] as const);
@@ -42,33 +59,104 @@ export async function loadSessionScheduleIndex(
  *  - 同 key 在途请求直接复用(单飞);
  *  - 完成后 TTL 内的触发复用上次结果(index 只喂次要徽标,短暂陈旧无感);
  *  - `force`(用户显式操作,如标记已读后的重建)绕过 TTL 立即重拉;
- *  - 失败不占坑:reject 后清除条目,下次触发正常重试。
+ *  - 失败负缓存:reject 后失败 TTL 内复用同一个 rejected promise,不重放 1+N 批次
+ *    (参照 remoteMediaResolveQueue)。旧的「失败即清坑」+ 多触发源交叠,是 2026-07
+ *    被控端无响应事故里首页反复全量重放、堆积请求风暴的放大器之一;`force` 照常穿透。
  */
 export const SCHEDULE_INDEX_THROTTLE_TTL_MS = 30_000;
+/** 失败负缓存时长:窗口内的被动触发直接吃上次失败,不再压请求上管道。 */
+export const SCHEDULE_INDEX_FAILURE_TTL_MS = 30_000;
 
 interface ScheduleIndexThrottleEntry {
   at: number;
   promise: Promise<Map<string, RemoteSessionScheduleInfo>>;
+  /** 该轮加载失败的时刻;非 null 表示条目处于负缓存态。 */
+  failedAt: number | null;
+  /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
+  failedUnresponsive: boolean;
+  /** 失败原因是瞬态链路问题(NOT_CONNECTED 等);重连失效判定用。 */
+  failedTransient: boolean;
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
 
+/** 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复的失败类别。 */
+function isLocalLinkDownError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return code === 'NOT_CONNECTED' || code === 'LINK_NOT_OPEN';
+}
+
 export function loadSessionScheduleIndexThrottled(
   key: string,
   load: () => Promise<Map<string, RemoteSessionScheduleInfo>>,
-  options: { force?: boolean; ttlMs?: number; now?: () => number } = {},
+  options: { force?: boolean; ttlMs?: number; failureTtlMs?: number; now?: () => number } = {},
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
   const now = options.now ?? Date.now;
   const ttlMs = options.ttlMs ?? SCHEDULE_INDEX_THROTTLE_TTL_MS;
+  const failureTtlMs = options.failureTtlMs ?? SCHEDULE_INDEX_FAILURE_TTL_MS;
   const existing = scheduleIndexThrottleEntries.get(key);
-  if (!options.force && existing && now() - existing.at < ttlMs) return existing.promise;
+  if (!options.force && existing) {
+    // 熔断恢复旁路(review P1):DEVICE_UNRESPONSIVE 负缓存的存在意义是「open
+    // 期间别再压请求」,设备一旦恢复(移出 unresponsive 集合)就立刻失效——
+    // 否则熔断关闭触发的 reseed/重载会在失败 TTL 内吃到同一个 rejected
+    // promise,把索引替换成空集,且无任何定时器在 TTL 过期后补拉,徽标要等
+    // 无关触发源才回来。key 即 deviceId(两处调用方约定,见 devices 页注释)。
+    const failedUnresponsiveButRecovered =
+      existing.failedAt !== null
+      && existing.failedUnresponsive
+      && !unresponsiveDevicesStore.has(key);
+    const withinTtl = existing.failedAt !== null
+      ? now() - existing.failedAt < failureTtlMs
+      : now() - existing.at < ttlMs;
+    if (withinTtl && !failedUnresponsiveButRecovered) return existing.promise;
+  }
   const promise = load();
-  const entry: ScheduleIndexThrottleEntry = { at: now(), promise };
+  const entry: ScheduleIndexThrottleEntry = {
+    at: now(),
+    promise,
+    failedAt: null,
+    failedUnresponsive: false,
+    failedTransient: false,
+  };
   scheduleIndexThrottleEntries.set(key, entry);
-  promise.catch(() => {
-    if (scheduleIndexThrottleEntries.get(key) === entry) scheduleIndexThrottleEntries.delete(key);
-  });
+  promise.then(
+    () => {
+      // TTL 语义是「完成后 TTL 内复用」:一轮 load 本身耗时较长(1+N 串行)时,
+      // 若从启动时刻起算,可复用窗口会被吃掉大半甚至直接过期(review 反馈)。
+      // 成功落定时把基准挪到 resolve 时刻;在途期间的复用由单飞(同一 promise)保证。
+      if (scheduleIndexThrottleEntries.get(key) === entry) entry.at = now();
+    },
+    (error) => {
+      if (scheduleIndexThrottleEntries.get(key) === entry) {
+        entry.failedAt = now();
+        // 末项竞态下抛出的是原始 INVOKE_TIMEOUT(见 loadSessionScheduleIndex
+        // 注释),此时熔断已 open——补查 store(key 即 deviceId),保证这类失败
+        // 同样享受「恢复即旁路」而不是干等 30s TTL。
+        entry.failedUnresponsive =
+          isDeviceUnresponsiveRemoteError(error) || unresponsiveDevicesStore.has(key);
+        // 收窄为真正的本机链路失败(review):isTransientRemoteError 把
+        // INVOKE_TIMEOUT(目标不回包)也算 transient,若沿用,重连失效钩子会把
+        // 「设备不回包」的负缓存也当断线恢复清掉,削弱止损效果。
+        entry.failedTransient = !entry.failedUnresponsive && isLocalLinkDownError(error);
+      }
+    },
+  );
   return promise;
+}
+
+/**
+ * 重连恢复钩子(review P1):普通断线(NOT_CONNECTED 等瞬态失败)产生的负缓存
+ * 在链路恢复后立即失效——否则 30s 失败 TTL 内重连触发的 reseed 会吃到旧的
+ * rejected promise,设备详情页把索引替换成空集、首页保留陈旧数据,且没有任何
+ * 定时器在 TTL 过期后补拉。由 DeviceLinkContext 在每轮 rehydrate(只在 online
+ * 时运行,重连必经)开始时调用;熔断类负缓存不受影响(走各自的恢复旁路)。
+ */
+export function invalidateTransientScheduleIndexFailures(): void {
+  for (const [key, entry] of scheduleIndexThrottleEntries) {
+    if (entry.failedAt !== null && entry.failedTransient) {
+      scheduleIndexThrottleEntries.delete(key);
+    }
+  }
 }
 
 /** 测试用:清空节流登记表。 */
@@ -80,7 +168,9 @@ export function loadDeviceSessionScheduleIndex(
   deviceId: string,
   invoke: RemoteInvoke,
 ): Promise<Map<string, RemoteSessionScheduleInfo>> {
-  return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }));
+  return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }), {
+    isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
+  });
 }
 
 export function replaceSessionScheduleIndexEntries(
