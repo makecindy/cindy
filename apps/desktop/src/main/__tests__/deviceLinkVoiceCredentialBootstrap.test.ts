@@ -19,8 +19,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const bootstrap = readFileSync(resolve(mainRoot, 'bootstrap-electron.ts'), 'utf8');
 
     expect(bootstrap).toMatch(/import \{[^}]*\binitDeviceLinkService\b[^}]*\} from '\.\/device-link';/);
-    expect(bootstrap).toContain('initDeviceLinkService();');
-    expect(bootstrap.indexOf('initDeviceLinkService();')).toBeLessThan(
+    expect(bootstrap).toContain('initDeviceLinkService({');
+    expect(bootstrap.indexOf('initDeviceLinkService({')).toBeLessThan(
       bootstrap.indexOf('registerDeviceLinkIpc();'),
     );
   });

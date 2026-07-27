@@ -54,7 +54,7 @@ import {
 } from './dispatch';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import { resetAll as resetSubscriptionRefs, snapshotSubscriptions } from './subscriptionRefcount';
-import { getControllersForTopic } from './subscriptions';
+import { getControllersForTopic, type ActiveController } from './subscriptions';
 import {
   MobileNotifyDeduper,
   buildSessionNotifyPayload,
@@ -188,7 +188,12 @@ function wsUrl(): string {
   return deviceLinkApiBase().replace(/^http/, 'ws') + WS_PATH;
 }
 
-export function initDeviceLinkService(): void {
+/** Host integrations that consume device-link lifecycle state. */
+export interface DeviceLinkServiceOptions {
+  onControllersChanged?: (controllers: readonly ActiveController[]) => void;
+}
+
+export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   // 「保持电脑唤醒」按持久化偏好在启动时应用(与登录 / relay 无关,幂等)。
   const initialKeepAwake = readDeviceLinkSettings().keepAwake;
   keepAwakeController.apply(initialKeepAwake);
@@ -263,6 +268,7 @@ export function initDeviceLinkService(): void {
   // 被控端可见性:控制端集合变化 → 广播给 renderer 状态条
   setControllersChangedListener((controllers) => {
     broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
+    options.onControllersChanged?.(controllers);
   });
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)

@@ -377,10 +377,8 @@ describe('dispatchLocalInvoke', () => {
 import {
   wireInboundDispatch,
   setControllersChangedListener,
-  setUpdateRelaunchControllersChangedListener,
   setSessionsSubscribedListener,
   getActiveControllers,
-  getSubscribedControllers,
   dropAllControllers,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
@@ -565,23 +563,30 @@ describe('被控端订阅 registry + topic 转发', () => {
     });
   });
 
-  it('无人值守更新只被实际会话控制阻塞，不被纯 sessions viewer 阻塞', () => {
+  it('无人值守更新忽略纯 sessions viewer，但保护文件浏览和实际会话控制', () => {
     remoteControlEnabled = true;
     const changes: ActiveController[][] = [];
-    setUpdateRelaunchControllersChangedListener((controllers) => changes.push(controllers));
+    setControllersChangedListener((controllers) => changes.push(controllers));
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
     feed(subFrame('ctrl-empty', SUB, []));
     feed(subFrame('ctrl-invalid', SUB, ['*', 'garbage', 'session:', 'fs-watch:']));
-    expect(getSubscribedControllers()).toEqual([]);
+    expect(getActiveControllers()).toEqual([]);
 
     feed(subFrame('ctrl-viewer', SUB, ['sessions'], 'Viewer'));
 
     expect(getActiveControllers()).toEqual([]);
-    expect(getSubscribedControllers()).toEqual([
+    expect(changes.at(-1)).toEqual([]);
+
+    feed(subFrame('ctrl-viewer', SUB, ['fs-watch:/repo'], 'Viewer'));
+    expect(getActiveControllers()).toEqual([
       { deviceId: 'ctrl-viewer', name: 'Viewer' },
     ]);
+    expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-viewer', name: 'Viewer' }]);
+
+    feed(subFrame('ctrl-viewer', UNSUB, ['fs-watch:/repo']));
+    expect(getActiveControllers()).toEqual([]);
     expect(changes.at(-1)).toEqual([]);
 
     feed(subFrame('ctrl-viewer', SUB, ['session:s1'], 'Viewer'));

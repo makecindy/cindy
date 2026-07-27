@@ -144,6 +144,7 @@ import {
 } from './updateService';
 import {
   createUpdatePresentationRecoveryController,
+  decideUpdateRelaunchBusyTransition,
   hasUpdateRelaunchBusyActivity,
   isMacOSUpdateRelaunch,
   readUpdateRelaunchScheduleBusy,
@@ -270,7 +271,6 @@ import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from '.
 import {
   getActiveControllers,
   setSessionsSubscribedListener,
-  setUpdateRelaunchControllersChangedListener,
 } from './device-link/dispatch';
 import {
   registerDeviceLinkIpc,
@@ -2375,13 +2375,6 @@ const registerIpcHandlers = () => {
   })?.setAppFocused(hasFocusedAppWindow());
   setSessionsSubscribedListener(() => {
     getAgentIslandService()?.replaySessionActivity();
-  });
-  let hadUpdateRelaunchRemoteController = false;
-  setUpdateRelaunchControllersChangedListener((controllers) => {
-    const hasUpdateRelaunchRemoteController = controllers.length > 0;
-    if (hasUpdateRelaunchRemoteController === hadUpdateRelaunchRemoteController) return;
-    hadUpdateRelaunchRemoteController = hasUpdateRelaunchRemoteController;
-    notifyUpdateAutoRelaunchBusyStateChanged();
   });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
@@ -5556,7 +5549,17 @@ app.on('ready', async () => {
   // 在线人数心跳:App 启动即上报,内部走 deviceId / userId 兜底,登录前后都活
   initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
-  initDeviceLinkService();
+  let updateRelaunchRemoteBusy = false;
+  initDeviceLinkService({
+    onControllersChanged: (controllers) => {
+      const transition = decideUpdateRelaunchBusyTransition(
+        updateRelaunchRemoteBusy,
+        controllers.length > 0,
+      );
+      updateRelaunchRemoteBusy = transition.nextBusy;
+      if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();
+    },
+  });
   registerDeviceLinkIpc();
   // 注:invoke-capture 自检(assertCaptureHealthy)不在这里——maker:create-session / maker:send
   // 由 splash 后的 registerMakerIpcsAfterSplash 延迟注册,此刻尚未注册。自检已挪到该函数末尾

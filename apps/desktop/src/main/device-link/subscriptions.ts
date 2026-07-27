@@ -137,14 +137,6 @@ export function getControllerIds(): string[] {
   return [...registry.keys()];
 }
 
-/** All subscribed controllers, including lightweight `sessions` viewers. */
-export function getSubscribedControllers(): ActiveController[] {
-  return [...registry].map(([deviceId, entry]) => ({
-    deviceId,
-    name: entry.name,
-  }));
-}
-
 /** 持有该 topic(或 legacy `'*'`)的控制端 deviceId 列表 —— topic-scoped fan-out 依据。 */
 export function getControllersForTopic(topic: Topic): string[] {
   const out: string[] = [];
@@ -155,12 +147,12 @@ export function getControllersForTopic(topic: Topic): string[] {
 }
 
 function isControlTopic(t: StoredTopic): boolean {
-  return t === LEGACY_TOPIC || t.startsWith('session:');
+  return t === LEGACY_TOPIC || t.startsWith('session:') || t.startsWith('fs-watch:');
 }
 
 /**
- * 持有任意 `session:<id>` 或 legacy `'*'` 的控制端 —— 被控横幅展示这些(=活跃控制)。
- * 纯 `sessions`(只看列表)订阅者**不**触发横幅。
+ * 持有具体 session、文件树 watch 或 legacy `'*'` 的控制端 —— 被控横幅展示这些，
+ * 无人值守更新也把它们视为活跃远程操作。纯 `sessions` 列表订阅不算。
  */
 export function getControlControllers(): ActiveController[] {
   const out: ActiveController[] = [];

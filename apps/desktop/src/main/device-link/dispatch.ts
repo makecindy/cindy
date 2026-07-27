@@ -246,10 +246,6 @@ let activeClient: DeviceLinkClient | null = null;
 type ControllersChangedListener = (controllers: ActiveController[]) => void;
 let onControllersChanged: ControllersChangedListener | null = null;
 
-/** Remote controllers whose active session view must block an unattended update relaunch. */
-type UpdateRelaunchControllersChangedListener = (controllers: ActiveController[]) => void;
-let onUpdateRelaunchControllersChanged: UpdateRelaunchControllersChangedListener | null = null;
-
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
 let onSessionsSubscribed: SessionsSubscribedListener | null = null;
@@ -258,22 +254,12 @@ export function setControllersChangedListener(cb: ControllersChangedListener | n
   onControllersChanged = cb;
 }
 
-export function setUpdateRelaunchControllersChangedListener(
-  cb: UpdateRelaunchControllersChangedListener | null,
-): void {
-  onUpdateRelaunchControllersChanged = cb;
-}
-
 export function setSessionsSubscribedListener(cb: SessionsSubscribedListener | null): void {
   onSessionsSubscribed = cb;
 }
 
 export function getActiveControllers(): ActiveController[] {
   return subscriptions.getControlControllers();
-}
-
-export function getSubscribedControllers(): ActiveController[] {
-  return subscriptions.getSubscribedControllers();
 }
 
 function notifySessionsSubscribed(controllerDeviceId: string): void {
@@ -427,13 +413,11 @@ function truncateRemoteString(value: string, state: TruncationState): string {
 /**
  * 同步「转发 tap 开关」与「被控横幅」到当前 registry 状态。任何 registry 变更后调用:
  *  - registry 非空 → 注册 forwardPush tap(无监听时 broadcast-tap 是 O(1) no-op);空 → 注销。
- *  - 横幅控制端集 = 持 session:<id> / legacy '*' 的订阅者。
+ *  - 活跃控制端集 = 持 session:<id> / fs-watch:<workdir> / legacy '*' 的订阅者。
  */
 function syncForwarding(): void {
   setBroadcastTapListener(subscriptions.isEmpty() ? null : forwardPush);
-  const controlControllers = subscriptions.getControlControllers();
-  onControllersChanged?.(controlControllers);
-  onUpdateRelaunchControllersChanged?.(controlControllers);
+  onControllersChanged?.(subscriptions.getControlControllers());
 }
 
 /** 把所有订阅控制端踢掉(被控开关关闭 / 用户一键断开 / 退出时调用) */
@@ -1066,13 +1050,11 @@ export const __testing = {
   reset(): void {
     subscriptions.__testing.reset();
     onControllersChanged = null;
-    onUpdateRelaunchControllersChanged = null;
     onSessionsSubscribed = null;
     activeClient = null;
     setBroadcastTapListener(null);
   },
   getActiveControllers,
-  getSubscribedControllers,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
   forwardPush,
