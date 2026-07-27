@@ -19,8 +19,8 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
   命令超时）。
 - **你的编辑对运行中的 app 无效**：Vite HMR 只 watch 启动 dev 实例的那个 checkout，
   worktree 下的改动既不热更也不随重启生效。「改了没反应」不是 bug。开发过程中的增量验证在本
-  worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**提交前仍须通过
-  第 2 节的提交前测试门禁**。需要运行时验证时 commit + push 后交用户（你无法重启宿主）。
+  worktree 内跑 `pnpm --filter desktop typecheck` / 定向 `vitest run`；**push 前仍须通过
+  第 2 节的推送前测试门禁**。需要运行时验证时 commit + push 后交用户（你无法重启宿主）。
 - **宿主 app 日志不在你的 cwd 下**：dev 日志在启动 checkout（通常是 baseRepo）的
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
 - **结束前必须 commit**：会话被删除或归档时脏 worktree 会先存内容快照再删目录。**PR
@@ -57,15 +57,19 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     改这个脚本时不要放宽 name／邮箱比对，否则会出现「本地绿、PR 红」。
   - 漏签不要重新造一份提交：用 `git commit --amend -s --no-edit` 或
     `git rebase --signoff <base>` 补签后 `git push --force-with-lease`。
-- **提交前测试门禁（硬性要求）**：无论是提 PR 还是直接 commit，提交前都必须在本地跑完
-  仓库根 `pnpm test:unit`（全部单元测试），并对本次改动涉及的每个 package 跑
+- **推送前测试门禁（硬性要求）**：每次 push 或提 PR 前，都必须对本批全部改动在本地跑完
+  仓库根 `pnpm test:unit`（全部单元测试），并对本批改动涉及的每个 package 跑
   `pnpm --filter <包名> run --if-present typecheck`（`<包名>` 用该 package 在
   `package.json` 里的 `name`，如 `desktop`、`@cindy/maker-core`；没有 `typecheck`
-  script 的 package 该步自动跳过），全部通过后才允许提交；任何一项失败都不得提交，
-  必须先修复。worktree 会话内的 commit 同样适用。唯一例外是**防丢数据的兜底保存**：
-  宿主删除／归档会话时自动存的内容快照（见第 1 节），以及会话必须收尾、测试却来不及
-  修好时的收尾 commit——后者 commit message 必须标注 `WIP`，且在门禁通过前不得
-  push、不得提 PR。
+  script 的 package 该步自动跳过），全部通过后才允许 push；任何一项失败都不得 push，
+  必须先修复。worktree 会话内同样适用。**批次内的中间 commit** 用定向验证（相关
+  package 的 typecheck、精确 `vitest run` 文件）即可，不要求每个 commit 重复全量套件
+  ——门禁按 push 批次执行，配合「一轮 review 修复合批成一次 push」，全量验证与推送
+  一一对应（2026-07 实测：commit 级全量门禁在多轮 review 修复下两头失守——要么被
+  跳过「34 个 commit 只配 9 次全量」，要么空转「单会话 90 次全量重跑」）。唯一例外是
+  **防丢数据的兜底保存**：宿主删除／归档会话时自动存的内容快照（见第 1 节），以及
+  会话必须收尾、测试却来不及修好时的收尾 commit——后者 commit message 必须标注
+  `WIP`，且在门禁通过前不得 push、不得提 PR。
   - **完整单测的外层超时**：`pnpm test:unit` 是全仓完整门禁，正常执行可能超过数分钟。
     调用它的 agent／自动化工具不得使用 120 秒或更短的绝对超时；未知当前耗时时，外层
     兜底超时至少设为 15 分钟。工具支持后台运行或 yielded process handle 时优先使用该
